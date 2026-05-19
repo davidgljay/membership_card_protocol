@@ -1,6 +1,6 @@
 # Chitt Protocol — Feature Specification
 
-**Version:** 0.2 (draft)
+**Version:** 0.3 (draft)
 **Date:** 2026-05-19
 **Status:** In Review
 
@@ -47,10 +47,10 @@ Every issued chitt contains a fixed set of immutable protocol-required fields se
 |---|---|---|
 | `policy_id` | `cid` | CID of the policy chitt at time of issuance |
 | `press_chitt` | `chitt-pointer` | Mutable pointer of the press sub-chitt that issued this chitt |
-| `recipient_pubkey` | `text` | The recipient's Ed25519 public key |
+| `recipient_pubkey` | `text` | The recipient's ML-DSA-44 public key (1,312 bytes) |
 | `issued_at` | `timestamp` | Timestamp of issuance |
-| `offer_signature` | `text` | The press's Ed25519 signature over the canonical offer payload |
-| `holder_signature` | `text` | The recipient's Ed25519 countersignature over the completed chitt |
+| `offer_signature` | `text` | The press's ML-DSA-44 signature over the canonical offer payload |
+| `holder_signature` | `text` | The recipient's ML-DSA-44 countersignature over the completed chitt |
 
 These fields cannot be modified by any update, regardless of the chitt's update policy.
 
@@ -305,7 +305,7 @@ Example — a student chitt policy with three fields:
 }
 ```
 
-**`auditors`** is a `chitt-pointer-array`. Each auditor chitt's current public key (resolved via mutable pointer) is used by the press to encrypt a copy of each issuance log entry via ECDH. If an auditor chitt is revoked, the press stops encrypting new entries for that auditor; their existing entries remain. Multiple auditors each receive their own independently-encrypted copy of each entry.
+**`auditors`** is a `chitt-pointer-array`. Each auditor chitt's current public key (resolved via mutable pointer) is used by the press to encrypt a copy of each issuance log entry via ML-KEM (FIPS 203). If an auditor chitt is revoked, the press stops encrypting new entries for that auditor; their existing entries remain. Multiple auditors each receive their own independently-encrypted copy of each entry.
 
 **`approved_presses`** is a `chitt-pointer-array` listing the mutable pointers of press sub-chitts authorized to issue under this policy. A press whose sub-chitt pointer does not appear here must not be accepted by the smart contract.
 
@@ -472,7 +472,7 @@ This check does not prevent issuance from proceeding if the press is already reg
 8. The recipient reviews the offer (see §4), generates a keypair, adds their public key, and countersigns the completed chitt.
 9. The completed chitt — containing both the press's offer signature and the recipient's countersignature — is posted to IPFS. Either the recipient's client or the press may perform this posting.
 10. The press creates a registry entry on Arbitrum One for the new chitt, with the initial log head CID, signed with its press sub-chitt key.
-11. The press constructs an issuance log entry containing the new chitt's CID, encrypted separately to each auditor chitt's current public key via ECDH. The press operator cannot read these entries.
+11. The press constructs an issuance log entry containing the new chitt's CID, encrypted separately to each auditor chitt's current public key via ML-KEM (FIPS 203). The press operator cannot read these entries.
 12. The press appends the log entry to the policy chitt's IPFS log and updates the policy chitt's Arbitrum One registry entry to point to the new log head.
 13. The press produces a **Signed Chitt Inclusion Proof (SCIP)**: a small signed object binding the new chitt's CID to its log entry index and the log root at time of inclusion. The SCIP is signed with the press's sub-chitt key.
 14. The press sends the SCIP and a confirmation to the recipient, and an audit record (chitt CID + SCIP) to the administrator, both encrypted to their respective chitts via Nym.
@@ -573,7 +573,6 @@ A chitt holder's private keys are the root of their identity in the protocol. Lo
 #### Future Considerations (P2)
 
 - Guardian-quorum social recovery (M-of-N trusted parties initiate time-windowed key rotation).
-- Post-quantum key migration: algorithm-agile keyring format; hybrid signatures (Ed25519 + ML-DSA) for long-lived master chitts.
 
 ### Open Questions
 
@@ -619,7 +618,7 @@ A chitt recipient — whether a first-time participant or an existing holder —
 4. The recipient opens the link. If no keychain exists, the client presents the keychain setup flow (§3) before proceeding.
 5. The client decodes the offer and walks the press sub-chitt's chain to a trusted root. If the chain fails verification, the offer is rejected before being shown to the user.
 6. The client presents a review screen: issuer identity (chain summary), chitt content and field values, the policy and schema governing it, and what countersigning commits the recipient to.
-7. If the recipient accepts: the client generates a fresh Ed25519 keypair for this chitt, stores the private key in the keyring, adds the public key to the chitt JSON, and signs the canonical serialization with the new private key.
+7. If the recipient accepts: the client generates a fresh ML-DSA-44 keypair for this chitt, stores the private key in the keyring, adds the public key to the chitt JSON, and signs the canonical serialization with the new private key.
 8. The completed chitt — containing the press's offer signature, the recipient's public key, and the recipient's countersignature — is posted to IPFS. Either the recipient's client or the press may post it.
 9. The press creates the chitt's registry entry on Arbitrum One and logs the issuance.
 10. The press delivers the SCIP and confirmation to the recipient via Nym.
@@ -706,7 +705,7 @@ After issuance, authorized parties need to append information, change field valu
   "signatures": [
     {
       "signer_chitt": "<on-chain registry address of signer's sub-chitt>",
-      "public_key": "<Ed25519 public key>",
+      "public_key": "<ML-DSA-44 public key>",
       "signature": "<sig over canonical serialization of this entry>"
     }
   ]
@@ -803,7 +802,7 @@ Chitt holders need to sign arbitrary messages using their chitt identity. Signat
   "signatures": [
     {
       "signer_chitt": "<on-chain registry address of signing sub-chitt>",
-      "public_key": "<Ed25519 public key>",
+      "public_key": "<ML-DSA-44 public key>",
       "signature": "<sig over canonical serialization of payload>"
     }
   ]
@@ -814,7 +813,7 @@ Chitt holders need to sign arbitrary messages using their chitt identity. Signat
 1. The sender assembles the payload: content, recipient mutable pointers, timestamp, and optional reply/edit/retraction fields.
 2. The client canonically serializes the payload (RFC 8785 canonical JSON).
 3. The client signs the canonical serialization using the current device's sub-chitt private key. The master key is not accessed.
-4. The signature, sub-chitt registry address, and Ed25519 public key are added to the `signatures` array.
+4. The signature, sub-chitt registry address, and ML-DSA-44 public key are added to the `signatures` array.
 5. For parallel co-signing, each additional signer independently repeats steps 3–4 and appends their entry.
 6. The message ID is the hash of the canonical payload serialization. There is no separate ID field.
 
@@ -841,7 +840,6 @@ Chitt holders need to sign arbitrary messages using their chitt identity. Signat
 #### Future Considerations (P2)
 
 - Threshold signing: M of N designated parties must sign before the message is considered valid.
-- Post-quantum signature support (ML-DSA or SLH-DSA).
 
 ### Open Questions
 
@@ -966,7 +964,6 @@ ChittAuth.deliverResponse(request, signedResponse)
 #### Future Considerations (P2)
 
 - Subscription-based revocation notification via Nym: services receive push notification when a chitt they care about is revoked, enabling mid-session revocation without polling.
-- Post-quantum signature verification.
 - W3C Verifiable Credential compatibility layer.
 
 ### Open Questions
@@ -1000,7 +997,7 @@ ChittAuth.deliverResponse(request, signedResponse)
 ## Timeline Considerations
 
 - **Canonical serialization format** (RFC 8785 canonical JSON vs. CBOR) must be standardized before the npm package API is locked — it affects all signature interoperability.
-- **Arbitrum One registry contract** design (Ed25519 signature verification via Stylus vs. an alternative curve for cheaper on-chain verification) must be decided before contract deployment.
+- **Arbitrum One registry contract** must implement ML-DSA-44 signature verification via Stylus, performed in full on-chain. The hash-commitment shortcut pattern (store only a hash of the press public key, verify signature off-chain) is explicitly rejected: it degrades the contract from a write gatekeeper to a passive log, enabling spam writes from anyone who knows a valid press public key. Full on-chain verification is required before contract deployment.
 - **Trusted root configuration UX** is a dependency for client-side verification and keychain setup — design work should begin in parallel with protocol engineering.
-- Post-quantum migration and TEE hardening are explicitly P2 and do not gate v1 work.
-- The Arbitrum One substrate is resolved. Gas cost estimates should be finalized against current Arbitrum One blob-era pricing (~$0.001–0.05 per registry write).
+- TEE hardening is explicitly P2 and does not gate v1 work.
+- The Arbitrum One substrate is resolved. Gas cost estimates should be finalized against current Arbitrum One blob-era pricing; ML-DSA-44 signature calldata (~2,420 bytes per registry write vs. 64 bytes for Ed25519) will increase per-write cost by an estimated 3–8x, expected to remain under $0.25 per write.
