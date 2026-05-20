@@ -307,7 +307,7 @@ The protocol needs a metadata-private communication channel for inbound message 
 
 Use the **Nym mixnet** for inbound message delivery. Each chitt has a Nym gateway address as a field in its metadata. Senders route encrypted payloads through Nym so the message server cannot observe who sent a message or when.
 
-**Nym does exactly one job:** hiding sender metadata on the inbound leg. It does not handle storage, multi-device delivery, or outbound communication.
+**Nym does two jobs:** hiding sender metadata on the inbound leg for chitt delivery, and providing an anonymous response channel for the authentication flow (§8). In the authentication flow, the wallet sends the signed response to the Nym gateway address carried in the requester's chitt metadata — the requester's chitt is therefore a prerequisite for any site that wants to request chitt-based authentication. Nym does not handle storage, multi-device delivery, or outbound communication beyond these two roles.
 
 ### Message Server
 
@@ -504,6 +504,54 @@ Verifiers
   → verify authorization against policy's field_definitions / revocation_permissions
 ```
 
+### 4. Chitt Authentication (Site Requesting a Signed Statement)
+
+```
+Requesting site (must hold a chitt with a Nym gateway)
+  → creates authentication request object:
+      session_id, purpose, requester_chitt (mutable pointer),
+      payload (content + nonce), required_predicate, callbacks.https,
+      optional callbacks.ohttp
+  → signs request with requester's chitt key (request_signature)
+  → hosts request object at a single-use HTTPS URL
+  → calls CHAPI with the request URL (not the payload)
+
+CHAPI mediator
+  → receives request URL (does not see payload content)
+  → opens user's registered wallet service credential handler
+  → wallet service URL not exposed to requesting site
+
+Wallet service
+  → fetches request object via HTTPS from single-use URL
+  → verifies request_signature against requester's chitt public key
+  → walks requester's chitt chain to trusted root, checks revocation (per §7)
+  → evaluates required_predicate against user's available chitts
+  → presents to user: requester's verified chain identity, purpose,
+      payload content, required predicate summary
+  → [user approves or declines]
+
+On approval:
+  → wallet selects qualifying chitt (or user chooses from chooser)
+  → generates signed message envelope (§6) over canonical payload + nonce
+  → sends authentication response to requester:
+      preferred: Nym → requester's chitt Nym gateway (full sender anonymity)
+      fallback:  OHTTP → callbacks.ohttp (IP privacy, lower latency)
+      fallback:  HTTPS → callbacks.https (no anonymity, always available)
+
+Requesting site
+  → receives authentication response via Nym / OHTTP / HTTPS
+  → runs full §7 verification: chain walk, revocation, predicate, nonce match
+  → on success: generates single-use confirmation_code, returns it in response
+
+Wallet service
+  → receives confirmation_code
+  → redirects user's browser to redirect_uri?code={confirmation_code}
+
+Requesting site page
+  → receives code from URL, looks up associated verified signed statement
+  → session is now authenticated
+```
+
 ---
 
 ## Open Questions
@@ -524,6 +572,7 @@ These are engineering and design questions from the spec that have not yet been 
 | OQ-10 | Design | Recovery UX when the holder has both a lost primary service and a lost YubiKey. Out of scope for v1? | Medium |
 | OQ-11 | Design | What is the UX when a recipient declines an offer? Should a decline notification be sent to the press? | Low |
 | OQ-12 | Engineering | Is a transparency log of approved press implementations operated by the protocol foundation needed? Relevant if TEE attestation is added in P2. | Low (P2 dependency) |
+| OQ-13 | Design | Should wallet services publish a `/.well-known/chitt-wallet.json` manifest advertising their supported transports (HTTPS, OHTTP gateway, Nym availability)? If yes, requesting sites can construct the correct `callbacks` block without trial-and-error; if no, sites advertise all transports they support and wallets pick. | Medium |
 
 ---
 
