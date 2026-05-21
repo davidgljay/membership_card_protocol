@@ -2,16 +2,27 @@
  * Revocation semantics per the Chitt Protocol "Revocation Model" section.
  *
  * Code ranges:
- *   7xx — Friendly revocation. Things before effective_date remain valid; new issuances rejected.
- *   8xx — Key compromise. Things after effective_date are suspect; things before are trusted.
- *   9xx — Malicious/bad-faith. Things after effective_date are invalid; things before are trusted.
+ *   7xx — Privilege reduction. Things before effective_date remain valid; new issuances rejected.
+ *   8xx — Quiet revocation. Things after effective_date are suspect; things before are trusted.
+ *   9xx — Loud revocation. Things after effective_date are invalid; things before are trusted.
  *
+ * The `code` field lives on the LogEntry itself (top level), not inside RevocationEntry.
  * Multiple revocation entries: the one with the earliest effective_date governs.
  */
 
 import type { LogEntry, RevocationEntry } from './types.js';
 
-/** Returns 7, 8, or 9 for the century of a revocation code (700-999). */
+/**
+ * A governing revocation combines the entry-level `code` with the
+ * `revocation` sub-object's fields.
+ */
+export interface GoverningRevocation {
+  code: number;
+  effective_date: string;
+  note?: string;
+}
+
+/** Returns 7, 8, or 9 for the century of a revocation code (700–999). */
 function codeCentury(code: number): 7 | 8 | 9 | null {
   if (code >= 700 && code < 800) return 7;
   if (code >= 800 && code < 900) return 8;
@@ -20,25 +31,29 @@ function codeCentury(code: number): 7 | 8 | 9 | null {
 }
 
 /**
- * Given the list of revocation log entries for a chitt, find the governing
- * revocation: the one with the earliest effective_date.
+ * Given the list of log entries for a chitt, find the governing
+ * revocation: the 8xx/9xx entry with the earliest effective_date.
+ * 7xx entries (privilege reductions) are included since they also
+ * carry an effective_date that gates future issuance.
  */
 export function findGoverningRevocation(
   entries: LogEntry[],
-): RevocationEntry | null {
-  let governing: RevocationEntry | null = null;
+): GoverningRevocation | null {
+  let governing: GoverningRevocation | null = null;
 
   for (const entry of entries) {
     if (entry.entry_type !== 'revocation' || !entry.revocation) continue;
-    const rev = entry.revocation;
+    const candidate: GoverningRevocation = {
+      code: entry.code,
+      effective_date: entry.revocation.effective_date,
+      note: entry.revocation.note,
+    };
     if (governing === null) {
-      governing = rev;
+      governing = candidate;
       continue;
     }
-    const effectiveDate = Date.parse(rev.effective_date);
-    const currentBest = Date.parse(governing.effective_date);
-    if (effectiveDate < currentBest) {
-      governing = rev;
+    if (Date.parse(candidate.effective_date) < Date.parse(governing.effective_date)) {
+      governing = candidate;
     }
   }
 
@@ -49,11 +64,11 @@ export function findGoverningRevocation(
  * Determine whether a chitt was valid at a given signing time,
  * given the governing revocation (if any).
  *
- * @param revocation     The governing revocation entry (or null if none).
+ * @param revocation     The governing revocation (or null if none).
  * @param signingTimeMs  The signing timestamp in milliseconds since epoch.
  */
 export function wasValidAtSigningTime(
-  revocation: RevocationEntry | null,
+  revocation: GoverningRevocation | null,
   signingTimeMs: number,
 ): boolean {
   if (!revocation) return true;
@@ -63,13 +78,13 @@ export function wasValidAtSigningTime(
 
   switch (century) {
     case 7:
-      // Friendly: things before effective_date remain valid
+      // Privilege reduction: things before effective_date remain valid
       return signingTimeMs < effectiveMs;
     case 8:
-      // Key compromise: things before effective_date are trusted
+      // Quiet revocation: things before effective_date are trusted
       return signingTimeMs < effectiveMs;
     case 9:
-      // Malicious: things before effective_date are trusted
+      // Loud revocation: things before effective_date are trusted
       return signingTimeMs < effectiveMs;
     default:
       // Unknown code range: treat as invalid for safety
@@ -80,11 +95,11 @@ export function wasValidAtSigningTime(
 /**
  * Determine whether the chitt is currently valid (as of now).
  *
- * @param revocation   The governing revocation entry (or null if none).
+ * @param revocation   The governing revocation (or null if none).
  * @param nowMs        Current time in milliseconds since epoch.
  */
 export function isCurrentlyValid(
-  revocation: RevocationEntry | null,
+  revocation: GoverningRevocation | null,
   nowMs: number,
 ): boolean {
   if (!revocation) return true;
@@ -94,13 +109,13 @@ export function isCurrentlyValid(
 
   switch (century) {
     case 7:
-      // Friendly: after effective_date, new issuances are rejected; existing ok
+      // Privilege reduction: after effective_date, new issuances are rejected
       return nowMs < effectiveMs;
     case 8:
-      // Key compromise: after effective_date, marked as suspect → not currently valid
+      // Quiet revocation: after effective_date, marked as suspect
       return nowMs < effectiveMs;
     case 9:
-      // Malicious: after effective_date, invalid
+      // Loud revocation: after effective_date, invalid
       return nowMs < effectiveMs;
     default:
       return false;
@@ -111,7 +126,7 @@ export function isCurrentlyValid(
  * Summarize revocation status for the structured result.
  */
 export function revocationStatus(
-  revocation: RevocationEntry | null,
+  revocation: GoverningRevocation | null,
   fetchedAt: Date,
 ): {
   status: 'none' | 'revoked';

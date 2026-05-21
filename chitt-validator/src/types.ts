@@ -29,7 +29,7 @@ export interface MessagePayload {
  * One signer's entry in the signatures array of a message envelope.
  */
 export interface SignatureEntry {
-  /** On-chain registry address of the signing sub-chitt (base64url). */
+  /** Mutable pointer in registry of the signing sub-chitt (base64url). */
   signer_chitt: string;
   /** ML-DSA-44 public key (base64url, 1312 bytes). */
   public_key: string;
@@ -44,7 +44,7 @@ export interface SignatureEntry {
 export interface ChittDocument {
   /** CID of the policy chitt at time of issuance (base64url). */
   policy_id: string;
-  /** Mutable pointer of the press sub-chitt that issued this chitt (base64url). */
+  /** Mutable pointer in registry of the press sub-chitt that issued this chitt (base64url). */
   press_chitt: string;
   /** Recipient's ML-DSA-44 public key (base64url, 1312 bytes). */
   recipient_pubkey: string;
@@ -60,22 +60,50 @@ export interface ChittDocument {
 
 /**
  * A log entry in a chitt's append-only IPFS log.
+ *
+ * Every entry carries a top-level `code` field (100–999) signalling the
+ * semantic nature of the update.  `entry_type` is a convenience discriminator
+ * derived from the code range (1xx–7xx → field_update; 8xx–9xx → revocation).
+ *
+ * `intent_signature` covers the canonical CBOR of the UpdateIntentPayload
+ * submitted by the updater.  `press_signature` covers the canonical CBOR of
+ * the complete LogEntry document excluding the `press_signature` field itself.
  */
 export interface LogEntry {
   /** Monotonically increasing integer; prevents replay. */
   version: number;
+  /**
+   * Three-digit update/revocation code (100–999).
+   * Present in ALL entries — not only revocations.
+   * Determines trust semantics; see the code system in the spec Background Concepts.
+   */
+  code: number;
+  /** Convenience discriminator derived from code range. */
   entry_type: 'field_update' | 'revocation';
   /** CID of the prior log root (base64url). */
   prev_log_root: string;
+  /** Present for codes 1xx–7xx; absent for 8xx–9xx. */
   field_updates?: Array<{ field: string; value: unknown }>;
+  /** Present for codes 8xx–9xx; absent for 1xx–7xx. */
   revocation?: RevocationEntry;
-  signatures: SignatureEntry[];
+  /** Default true; false suppresses the holder Nym notification. */
+  notify_holder?: boolean;
+  /** Optional message forwarded to the holder in the Nym notification. */
+  updater_message?: string;
+  /** Updater's signature over the canonical CBOR of the UpdateIntentPayload. */
+  intent_signature: SignatureEntry;
+  /**
+   * Press's signature over the canonical CBOR of the complete LogEntry
+   * excluding the `press_signature` field itself.
+   */
+  press_signature: SignatureEntry;
 }
 
 export interface RevocationEntry {
-  /** 7xx friendly, 8xx key compromise, 9xx malicious. */
-  code: number;
-  /** ISO 8601 timestamp; may predate the recording date. */
+  /**
+   * ISO 8601 timestamp of when the revocation condition began.
+   * May predate the date the entry was posted to IPFS.
+   */
   effective_date: string;
   note?: string;
 }
@@ -112,6 +140,69 @@ export interface SignatureResult {
 }
 
 /**
+ * One entry in the update history of a chitt in the policy creation chain.
+ */
+export interface ChainUpdate {
+  /** Monotonically increasing log version number. */
+  version: number;
+  entryType: 'field_update' | 'revocation';
+  /**
+   * Revocation code (7xx friendly, 8xx key compromise, 9xx malicious).
+   * null for field_update entries.
+   */
+  statusCode: number | null;
+  /** ipfs:// URL of this specific log entry's CID. */
+  cid: string;
+}
+
+/**
+ * One chitt in a policy creation chain, with its full update history.
+ */
+export interface PolicyChainLink {
+  /** Arbitrum One registry address of this chitt. */
+  chittAddress: string;
+  /** ipfs:// URL of the current log head CID (the chitt's present state). */
+  logHeadUrl: string | null;
+  /**
+   * All update log entries for this chitt, newest first.
+   * Empty when the chitt has never been updated since issuance.
+   */
+  updates: ChainUpdate[];
+}
+
+/**
+ * The three policy creation chains returned with every validation result.
+ * Each chain walks upward via press_chitt links, collecting the full update
+ * history of each chitt encountered.
+ */
+export interface ValidationChains {
+  /**
+   * Policy creation chain starting from the signed chitt's holder (the message
+   * sender's master chitt), walking upward through each chitt's press_chitt.
+   */
+  chitt: PolicyChainLink[];
+  /**
+   * Policy creation chain starting from the press that signed and issued the
+   * chitt to the holder (the "person who signed the creation of the chitt").
+   */
+  chittAuthorizer: PolicyChainLink[];
+  /**
+   * Policy creation chain starting from the entity that created the policy chitt
+   * itself (the "person who signed the creation of the policy").
+   * Resolved from the policy chitt's own press_chitt field.
+   */
+  policyCreator: PolicyChainLink[];
+}
+
+/**
+ * A log entry plus the CID at which it was fetched from IPFS.
+ */
+export interface LogEntryWithCid {
+  entry: LogEntry;
+  cid: string;
+}
+
+/**
  * The result returned by validateChitt().
  */
 export interface ValidationResult {
@@ -140,6 +231,13 @@ export interface ValidationResult {
   policyCreator: string | null;
   /** Per-signature validation details (§7 structured result). */
   signatures: SignatureResult[];
+  /**
+   * Policy creation chains for the chitt holder, the chitt's authorizer (press),
+   * and the policy's creator. Each chain contains the full update history of
+   * every chitt walked, with CID links and status codes.
+   * null if chain resolution failed (e.g. IPFS/Arbitrum unavailable).
+   */
+  chains: ValidationChains | null;
 }
 
 /**
@@ -166,14 +264,18 @@ export interface ChittProvider {
   getSubChittRegistration(subChittAddress: string): Promise<SubChittRegistration | null>;
 
   /**
-   * Fetch all revocation log entries for a registry address from IPFS
-   * (following the prev_log_root chain from the current log head).
-   * Returns entries sorted with most recent first.
+   * Walk the IPFS log from logHeadCid backward through prev_log_root links,
+   * returning ALL log entries (field updates and revocations) with their CIDs,
+   * plus the genesis ChittDocument at the root of the log.
+   *
+   * Entries are returned newest-first (head → genesis direction).
+   * The genesis document is the original chitt JSON (no entry_type field).
+   * It contains press_chitt and policy_id used for upward chain walking.
    */
-  getRevocationEntries(
+  getAllLogEntries(
     registryAddress: string,
     logHeadCid: string,
-  ): Promise<{ entries: LogEntry[]; fetchedAt: Date }>;
+  ): Promise<{ entries: LogEntryWithCid[]; genesis: ChittDocument | null; fetchedAt: Date }>;
 }
 
 /**

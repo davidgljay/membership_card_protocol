@@ -7,7 +7,7 @@
  * contract address is configured and the ABI is finalized.
  */
 
-import type { ChittProvider, LogEntry, SubChittRegistration } from './types.js';
+import type { ChittDocument, ChittProvider, LogEntry, LogEntryWithCid, SubChittRegistration } from './types.js';
 
 const DEFAULT_IPFS_GATEWAY = 'https://ipfs.io';
 const DEFAULT_ARBITRUM_RPC = 'https://arb1.arbitrum.io/rpc';
@@ -103,28 +103,32 @@ export class HttpChittProvider implements ChittProvider {
 
   /**
    * Walk the IPFS log from logHeadCid backward through prev_log_root links,
-   * collecting all revocation entries.
+   * returning ALL log entries with their CIDs plus the genesis ChittDocument.
+   *
+   * Entries are returned newest-first (head → genesis direction).
+   * The genesis document is identified by the absence of an entry_type field.
    */
-  async getRevocationEntries(
+  async getAllLogEntries(
     _registryAddress: string,
     logHeadCid: string,
-  ): Promise<{ entries: LogEntry[]; fetchedAt: Date }> {
-    const entries: LogEntry[] = [];
+  ): Promise<{ entries: LogEntryWithCid[]; genesis: ChittDocument | null; fetchedAt: Date }> {
+    const entries: LogEntryWithCid[] = [];
+    let genesis: ChittDocument | null = null;
     let currentCid: string | null = logHeadCid;
     const fetchedAt = new Date();
 
     while (currentCid !== null) {
-      const entry = (await this.fetchIPFS(currentCid)) as LogEntry;
-      if (entry.entry_type === 'revocation') {
-        entries.push(entry);
+      const doc = (await this.fetchIPFS(currentCid)) as Record<string, unknown>;
+      if ('entry_type' in doc) {
+        entries.push({ entry: doc as unknown as LogEntry, cid: currentCid });
+        currentCid = (doc.prev_log_root as string | undefined | null) ?? null;
+      } else {
+        genesis = doc as unknown as ChittDocument;
+        break;
       }
-      // Walk back through the chain
-      currentCid = entry.prev_log_root ?? null;
-      // Genesis entry has no prev_log_root
-      if (!currentCid) break;
     }
 
-    return { entries, fetchedAt };
+    return { entries, genesis, fetchedAt };
   }
 }
 

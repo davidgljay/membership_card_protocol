@@ -22,6 +22,7 @@ export const BINARY_FIELDS = new Set([
   'policy_id',
   'press_chitt',
   'signer_chitt',
+  'issuer_chitt',
   'prev_log_root',
   'in_reply_to',
   'edit_of',

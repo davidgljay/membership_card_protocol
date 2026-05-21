@@ -47,11 +47,11 @@ Every issued chitt contains a fixed set of immutable protocol-required fields se
 | Field | Type | Description |
 |---|---|---|
 | `policy_id` | `cid` | CID of the policy chitt at time of issuance |
-| `press_chitt` | `chitt-pointer` | Mutable pointer of the press sub-chitt that issued this chitt |
-| `recipient_pubkey` | `text` | The recipient's ML-DSA-44 public key (1,312 bytes) |
+| `press_chitt` | `chitt-pointer` | Mutable pointer in registry of the press sub-chitt that issued this chitt |
+| `recipient_pubkey` | `base64url` | The recipient's ML-DSA-44 public key (1,312 bytes) |
 | `issued_at` | `timestamp` | Timestamp of issuance |
-| `offer_signature` | `text` | The press's ML-DSA-44 signature over the canonical offer payload |
-| `holder_signature` | `text` | The recipient's ML-DSA-44 countersignature over the completed chitt |
+| `offer_signature` | `base64url` | The press's ML-DSA-44 signature over the canonical offer payload |
+| `holder_signature` | `base64url` | The recipient's ML-DSA-44 countersignature over the completed chitt |
 
 These fields cannot be modified by any update, regardless of the chitt's update policy.
 
@@ -62,6 +62,7 @@ All chitt fields — whether in policy chitts or in issued chitts — use a comm
 | Type | Validation options |
 |---|---|
 | `text` | `regex` (optional — pattern the value must match) |
+| `base64url` | — (value is a base64url-encoded binary field per RFC 4648 §5, no padding; encoded as CBOR byte string in canonical serialization) |
 | `integer` | `min`, `max` |
 | `number` | `min`, `max` |
 | `boolean` | — |
@@ -145,37 +146,64 @@ Combinators may be nested to arbitrary depth.
 
 Predicates are finite and non-recursive. Evaluation is deterministic from publicly-available chain data; any verifier can re-evaluate independently.
 
-### The Revocation Model
+### The Update & Revocation Code System
 
-Every revocation entry carries two required fields:
-
-- **`code`** — a three-digit integer describing the nature of the revocation.
-- **`effective_date`** — an ISO 8601 timestamp representing when the revocation takes effect. May be earlier than the date the revocation is recorded. Everything signed or issued after the effective date by the revoked chitt is considered suspect or invalid, depending on the code.
+Every log entry carries a required `code` field — a three-digit integer signaling the semantic nature of the update to verifiers and downstream systems. Codes are grouped into ranges by their trust implication. Within each range, lower subcodes indicate more favorable outcomes and higher subcodes indicate less favorable ones.
 
 **Code ranges:**
 
-| Range | Semantics | Historical signatures |
-|---|---|---|
-| 7xx | Friendly revocation. Credential retired on good terms (role ended, voluntary surrender, policy expiry). | Fully trusted before effective date. |
-| 8xx | Key compromise. The signing key was compromised at or after the effective date. Often self-reported; effective date may significantly predate the recording date. | Trusted before effective date; suspect on or after it. |
-| 9xx | Malicious or bad-faith actor. Credential was obtained or used under false pretenses beginning at the effective date. Issued by the authorizer, not the holder. | Trusted before effective date; invalid on or after it. |
+| Range | Semantics | Entry type | Chitt status after |
+|---|---|---|---|
+| 1xx | Positive update — the holder has earned additional standing, often by linking to a new chitt (e.g. a promotion). | `field_update` | Active |
+| 2xx | Positive context — an annotation indicating the holder is deserving of additional trust; no field changes implied. | `field_update` | Active |
+| 3xx | Neutral update — a field change with no trust implication (e.g. a `valid_until` refresh). | `field_update` | Active |
+| 4xx | Neutral context — pertinent information added for verifiers that carries no positive or negative trust signal. | `field_update` | Active |
+| 5xx | Programmatic update — an automated field change triggered by protocol or policy logic, not a human decision. | `field_update` | Active |
+| 6xx | Negative context — an annotation suggesting reduced trustworthiness that does not yet warrant revocation. | `field_update` | Active |
+| 7xx | Negative update — a field change that reduces the holder's privileges (e.g. removing admin rights). Within the 7xx range, lower subcodes indicate the reduction is honorable (retiring with distinction); higher subcodes indicate it is less so. | `field_update` | Active |
+| 8xx | Quiet revocation — the chitt is revoked; the holder is not considered an active risk to other communities. The holder's standing in other contexts is unaffected by this revocation alone. | `revocation` | Revoked |
+| 9xx | Loud revocation — the chitt is revoked and the holder may pose risks to other communities. Verifiers operating multi-chitt communities may wish to notify issuers of other chitts they have seen this holder use. | `revocation` | Revoked |
+
+Entries with codes 1xx–7xx use `field_updates` to record changes and do not carry an `effective_date`; the update takes effect at the time it is posted. Entries with codes 8xx–9xx are revocations and carry an `effective_date` that may be earlier than the posting date — the issuer is asserting when the relevant condition began.
 
 **Initial defined codes:**
 
 | Code | Meaning |
 |---|---|
-| 700 | Standard friendly revocation (role ended, credential retired) |
-| 701 | Voluntary surrender by holder |
-| 800 | Key compromise (general) |
-| 801 | Device lost or stolen |
-| 900 | Credential obtained under false pretenses |
-| 901 | Policy violation identified post-issuance |
+| 100 | Positive update — linked to successor or additional chitt (e.g. promotion) |
+| 200 | Positive annotation — general commendation or trust endorsement |
+| 300 | Neutral field update — general |
+| 301 | Valid-until refresh |
+| 400 | Neutral annotation — informational note for verifiers |
+| 500 | Programmatic field update |
+| 600 | Negative annotation — concern noted; revocation not yet warranted |
+| 700 | Privilege reduction, honorable — retiring from a role after exemplary service |
+| 750 | Privilege reduction, procedural — termed out of a responsibility; no negative implication |
+| 760 | Privilege reduction, unfavorable — rights removed following misconduct, short of revocation |
+| 800 | Quiet revocation — role ended; departed in good standing |
+| 801 | Quiet revocation — voluntary surrender by holder |
+| 810 | Quiet revocation — this chitt's signing key compromised |
+| 811 | Quiet revocation — device sub-chitt lost or stolen (this chitt only) |
+| 900 | Loud revocation — credential obtained under false pretenses |
+| 901 | Loud revocation — policy violation identified post-issuance |
+| 910 | Loud revocation — full wallet compromise suspected |
+| 911 | Loud revocation — bad actor or harmful conduct |
 
 Additional codes within each range may be defined as use cases arise.
 
-**Verification rule:** When evaluating any chitt or signature, walk the full chain. For each link, check: is there a revocation entry with an effective date at or before the timestamp of the thing being evaluated? If so, the thing is invalid (for 9xx) or suspect (for 8xx). For 7xx, things issued before the effective date remain valid; new issuances are rejected. If multiple revocation entries exist, the one with the earliest effective date governs.
+**Verification rule for revocations:** When evaluating any chitt or signature, walk the full chain. For each link, check whether any 8xx or 9xx entry exists with an `effective_date` at or before the timestamp of the thing being evaluated. If so, apply the appropriate semantics: for 8xx, things before the effective date remain trusted; for 9xx, things on or after the effective date are invalid or suspect. If multiple revocation entries exist, the one with the earliest effective date governs. 1xx–7xx entries do not affect the chitt's revocation status.
 
-**Un-revocation:** The append-only log cannot remove a revocation entry. To restore standing after an erroneous revocation, the authorizer issues a new **successor chitt** with a `supersedes` field pointing to the old chitt's mutable pointer, and a `supersession_note` field explaining the context. The successor chitt has a clean history; the old revocation remains visible in the old chitt's log for auditability.
+**Historical signature semantics by code range:**
+
+| Range | Historical signatures |
+|---|---|
+| 1xx–7xx | Fully trusted; the chitt was not revoked at any point. |
+| 8xx | Trusted before effective date. The revocation signals a change of state, not a claim that prior actions were invalid. |
+| 9xx | Trusted before effective date; suspect or invalid on or after it. Verifiers should apply judgment based on the subcode and context. |
+
+**Propagation of loud revocations.** A 9xx revocation is a signal, not an automatic action, against other chitts the holder may hold. Presses and community operators who observe a 9xx entry may choose to notify issuers of other chitts they have interacted with from the same holder — but this is a social protocol, not a cryptographic one. No automatic cascading revocation occurs.
+
+**Un-revocation.** The append-only log cannot remove a revocation entry. To restore standing after an erroneous 8xx or 9xx revocation, the authorizer issues a new **successor chitt** with a `supersedes` field pointing to the old chitt's mutable pointer, and a `supersession_note` field explaining the context. The successor chitt has a clean history; the old revocation remains visible in the old chitt's log for auditability.
 
 ### The Press Model
 
@@ -313,17 +341,16 @@ Example — a student chitt policy with three fields:
 
 **`allow_open_offers`** is a boolean flag that, when `true`, permits issuers to create open chitt offers under this policy — pre-signed batch authorizations that any bearer may claim up to a stated limit or expiry window, without individual issuer review at claim time. When absent or `false`, only targeted issuance (press-initiated, addressed to a specific recipient) is permitted. See §2 for the open offer issuance flow.
 
-**`revocation_permissions`** defines who may publish revocation entries to chitts issued under this policy, by code range:
+**`revocation_permissions`** defines who may publish revocation entries (8xx and 9xx codes) to chitts issued under this policy. Non-revocation updates (1xx–7xx) are governed by the relevant field's `update_policy`, not by `revocation_permissions`.
 
 ```json
 "revocation_permissions": {
-  "7xx": { "any_of": [{ "is_issuer": true }, { "chain_includes": "<HR-chitt-pointer>" }] },
   "8xx": { "any_of": [{ "is_holder": true }, { "is_issuer": true }] },
   "9xx": { "is_issuer": true }
 }
 ```
 
-If absent, the default is: 8xx by holder or issuer; all other codes by issuer only.
+If absent, the default is: 8xx by holder or issuer; 9xx by issuer only.
 
 **The `policy_creation` field.** A policy chitt may include a `policy_creation` field that constrains the policies which holders of chitts issued under this policy are permitted to create. This is an opt-in governance mechanism: without it, holders are unconstrained in what policies they create. With it, any new policy created by such a holder must satisfy the stated restrictions.
 
@@ -500,7 +527,7 @@ This check does not prevent issuance from proceeding if the press is already reg
 }
 ```
 
-`max_acceptances` and `expires_at` may each be null (unconstrained), but an offer with both null is valid only if the policy constrains issuance in some other way. An open chitt offer with no constraints whatsoever requires explicit acknowledgment from the issuer at creation time. The `offer_id` used for on-chain counter tracking is `hash(canonical serialization of the open chitt offer document)`.
+`max_acceptances` and `expires_at` may each be null (unconstrained), but an offer with both null is valid only if the policy constrains issuance in some other way. An open chitt offer with no constraints whatsoever requires explicit acknowledgment from the issuer at creation time. The `offer_id` used for on-chain counter tracking is `hash(canonical CBOR of the complete open chitt offer document including `issuer_signature`)`. This binds the offer ID to the issuer's key, making it unforgeable and unique per issuance.
 
 **Open offer issuance flow.**
 
@@ -509,8 +536,8 @@ This check does not prevent issuance from proceeding if the press is already reg
 3. The issuer distributes the claim link via any channel (private message, QR code, email, etc.). The security of the resulting chitts is bounded by the channel's trustworthiness.
 4. A recipient follows the claim link. The wallet service presents an offer review screen: issuer identity and chain summary, proposed field values, acceptance constraints (slots remaining if `max_acceptances` is set, expiry if `expires_at` is set), and the redirect destination URL.
 5. The recipient's client verifies the issuer's chitt chain to a trusted root and confirms the named press sub-chitt appears in the policy's `approved_presses`. If either check fails, the offer is rejected before display.
-6. If the recipient accepts: the client generates a fresh ML-DSA-44 keypair for this chitt, stores the private key in the keyring, and signs the canonical serialization of the open chitt offer document (including the recipient's newly-generated public key appended to the payload).
-7. The wallet service submits the countersigned offer — containing the open chitt offer document, the recipient's public key, and the recipient's countersignature — to the approved press via HTTPS.
+6. If the recipient accepts: the client generates a fresh ML-DSA-44 keypair for this chitt, stores the private key in the keyring, and assembles an **open offer claim payload**: `{ "offer": <verbatim OpenChittOffer document>, "recipient_pubkey": <new public key> }`. The client signs the canonical CBOR of this claim payload with the new private key, producing a `recipient_signature`.
+7. The wallet service submits an **OpenOfferClaimSubmission** to the approved press via HTTPS POST: `{ "claim_payload": { "offer": ..., "recipient_pubkey": ... }, "recipient_signature": ... }`. See `protocol-objects.md` §7 for the full schema.
 8. The press validates: (a) the issuer's signature over the offer document is valid; (b) the press's own sub-chitt is listed in `approved_presses`; (c) the policy chitt has `allow_open_offers: true`; (d) on-chain open offer constraints are not violated (see below). If validation fails at any step, the press rejects with a specific error code.
 9. The press signs the per-recipient chitt with its press sub-chitt key (producing `offer_signature`), submits an atomic on-chain transaction registering the chitt and incrementing the open offer counter, then posts the completed chitt to IPFS.
 10. The press confirms completion to the wallet service. The wallet service updates the recipient's keyring to include the new chitt address and presents a confirmation screen, then redirects the recipient to `redirect_url` (displaying the destination URL to the recipient first).
@@ -735,13 +762,15 @@ A chitt recipient — whether a first-time participant or an existing holder —
 
 ### Problem Statement
 
-After issuance, authorized parties need to append information, change field values, or revoke a chitt. Authority is field-granular: different parties may update different fields. Revocation is governed by the policy's `revocation_permissions`. The append-only log preserves full history; nothing is silently removed.
+After issuance, authorized parties need to record changes to a chitt — from positive endorsements to field edits to revocations. The full range of update types is codified in the 1xx–9xx code system. Authority is field-granular: different parties may update different fields, and revocation rights are separately controlled by `revocation_permissions`. The append-only log preserves full history; nothing is silently removed. Holders are notified of updates by default so they remain aware of their credential's state.
 
 ### Goals
 
-- Support field-level update authorization using the same predicate system as everywhere else.
-- Enforce the revocation code taxonomy (7xx / 8xx / 9xx) and effective date semantics.
-- Allow holders to self-revoke (8xx by default) without requiring press involvement.
+- Support the full update code taxonomy (1xx–9xx) with a single unified log entry structure.
+- Enforce field-level update authorization using the same predicate system as everywhere else.
+- Route all updates through an authorized press, which acts as neutral submission infrastructure: it validates, countersigns, and posts, but does not exercise independent authority over what gets updated.
+- Ensure every update is independently re-verifiable by any observer: the updater's identity and signature are part of the log entry.
+- Notify the holder of updates by default; allow suppression for automated or adversarial scenarios.
 - Preserve full update history in the append-only log; make every update independently verifiable.
 
 ### Non-Goals
@@ -749,87 +778,135 @@ After issuance, authorized parties need to append information, change field valu
 - **Not:** Allowing unilateral holder updates to fields not authorized by the update policy.
 - **Not:** Silent updates. Every update is a visible, signed log entry.
 - **Not:** Retroactive removal of prior log entries (except `erasable: true` chitts, opt-in at issuance).
+- **Not:** Special direct-write paths for any code range. All updates, including self-revocations, go through an approved press. Resilience against press downtime is achieved by listing multiple approved presses in `approved_presses`.
 
 ### User Stories
 
-**As an administrator with update authority,** I want to append a note to a student's chitt, so that the note is visible to verifiers as an official annotation.
+**As an administrator with update authority,** I want to submit a 2xx update intent to add a positive annotation to a student's chitt, so that verifiers see an official endorsement on the credential.
 
-**As an administrator,** I want to publish a `700` revocation entry to a chitt whose holder left the organization, so that future authentications are rejected while historical signatures remain valid.
+**As an administrator,** I want to submit an 800 revocation intent to a press for a chitt whose holder departed the organization, so that future authentications are rejected while historical signatures remain valid.
 
-**As a holder,** I want to self-revoke my chitt with an `800` code and an effective date three months ago (when I believe my key was compromised), so that signatures I made in that window are flagged as suspect.
+**As a holder,** I want to submit an 810 self-revocation intent to any approved press for my policy, so that my compromised signing key is invalidated without requiring the issuer's involvement.
 
-**As a verifier,** I want to fetch the current log head, walk back to the original issuance, and confirm each update's authorization against the policy's field definitions and `revocation_permissions`, so that I can determine the chitt's current state without trusting any intermediary.
+**As a verifier,** I want to fetch the current log head, walk back to the original issuance, and confirm each entry's authorization against the policy's field definitions and `revocation_permissions` — including confirming the updater's chitt satisfies the relevant predicate — so that I can determine the chitt's current state without trusting the press.
+
+**As a holder,** I want to receive a Nym notification whenever my chitt is updated by a third party, optionally including a message from the updater, so that I am not surprised by changes to my credential.
 
 ### Requirements
 
 #### Must-Have (P0)
 
-**Update entry structure.** Each log entry is a signed JSON object:
+**Update entry structure.** Each log entry is a signed JSON object assembled by the press from the updater's signed intent:
 
 ```json
 {
   "version": <monotonically increasing integer>,
-  "entry_type": "field_update" | "revocation",
+  "code": <integer 100–999>,
   "prev_log_root": "<CID of prior log root>",
   "field_updates": [
     { "field": "<field name>", "value": <new value> }
   ],
   "revocation": {
-    "code": <7xx | 8xx | 9xx integer>,
     "effective_date": "<ISO 8601 timestamp>",
     "note": "<optional human-readable explanation>"
   },
-  "signatures": [
-    {
-      "signer_chitt": "<on-chain registry address of signer's sub-chitt>",
-      "public_key": "<ML-DSA-44 public key>",
-      "signature": "<sig over canonical serialization of this entry>"
-    }
-  ]
+  "notify_holder": true | false,
+  "updater_message": "<optional — included in the holder notification if notify_holder is true>",
+  "intent_signature": {
+    "signer_chitt": "<mutable pointer in registry of updater's chitt>",
+    "public_key": "<ML-DSA-44 public key>",
+    "signature": "<ML-DSA-44 sig over canonical serialization of the update intent payload>"
+  },
+  "press_signature": {
+    "signer_chitt": "<mutable pointer in registry of press sub-chitt>",
+    "public_key": "<ML-DSA-44 public key>",
+    "signature": "<ML-DSA-44 sig over canonical serialization of the complete entry>"
+  }
 }
 ```
 
-`field_updates` and `revocation` are mutually exclusive; an entry is either a field update or a revocation.
+`field_updates` is present for codes 1xx–7xx. `revocation` is present for codes 8xx–9xx. The two are mutually exclusive. `notify_holder` defaults to `true`; the updater may set it to `false` in the intent. The policy may suppress notification for specific code prefixes (see below).
 
-**Field update authorization.** For each field being updated, the signer's chitt chain must satisfy the field's `update_policy` in the policy's `field_definitions`. If multiple fields are updated in one entry, all field update policies must be satisfied by the same signer (or co-signers). If a field has no update policy specified, the policy's default applies; if no default is specified, only the issuer may update.
+**The update intent payload** is what the updater signs before submitting to the press:
 
-**Holder co-signing.** The chitt holder may optionally co-sign any update entry alongside an authorized updater. Holder co-signing does not substitute for update authority — the authorized updater's signature is still required — but its presence is recorded and visible to verifiers as an indication of the holder's acknowledgment.
+```json
+{
+  "target_chitt": "<mutable pointer of the chitt being updated>",
+  "updater_chitt": "<mutable pointer of the updater's chitt>",
+  "code": <integer 100–999>,
+  "field_updates": [...] | null,
+  "revocation": { "effective_date": "...", "note": "..." } | null,
+  "notify_holder": true | false,
+  "updater_message": "<optional>",
+  "timestamp": "<ISO 8601>"
+}
+```
 
-**Revocation authorization.** The signer's chitt chain must satisfy the `revocation_permissions` predicate for the code range being applied. If `revocation_permissions` is absent from the policy, the default is: 8xx may be applied by the holder or the issuer; all other ranges require the issuer.
+The intent does not include `version` or `prev_log_root` — those are added by the press when it assembles the complete entry.
+
+**Update flow.**
+
+1. The updater assembles the update intent, signs it with their chitt key, and sends the signed intent to any press listed in `approved_presses` for the chitt's policy — via Nym preferably, HTTPS as fallback. The client discovers available presses from `approved_presses` on the policy chitt.
+2. The press fetches the chitt's current log head from IPFS and confirms the on-chain registry pointer matches.
+3. The press validates the intent:
+   - Intent signature is cryptographically valid.
+   - Updater's chitt is not revoked (effective date check against current time).
+   - For codes 1xx–7xx: the updater's chitt satisfies the `update_policy` predicate for each field in `field_updates`. If multiple fields are updated in one entry, all `update_policy` predicates must be satisfied by the same updater.
+   - For codes 8xx–9xx: the updater's chitt satisfies the `revocation_permissions` predicate for the code range. If `revocation_permissions` is absent from the policy, the default is: 8xx by holder or issuer; 9xx by issuer only.
+   - No fields in `field_updates` are protocol-required immutable fields.
+   - The code range is consistent with the entry content (8xx–9xx entries must include `revocation`; 1xx–7xx entries must include `field_updates`).
+   - If any check fails, the press rejects the intent with a specific error code and does not post.
+4. The press assembles the complete entry: intent payload verbatim + `version` (current head version + 1) + `prev_log_root` (current head CID). The press signs the complete entry with its press sub-chitt key, producing `press_signature`.
+5. The press posts the new log entry to IPFS and updates the on-chain registry pointer for the chitt with its press sub-chitt key.
+6. If `notify_holder` is `true` and the policy does not suppress notification for this code prefix: the press sends a Nym notification to the holder's registered Nym gateway containing the update code, the `updater_message` if present, and the CID of the new log entry. If the holder has no registered Nym gateway, the notification is silently dropped.
+7. The press confirms success to the updater (via Nym or HTTPS, matching the submission channel).
+
+**Presses as neutral infrastructure.** Approved presses are community infrastructure: they hold a funded Arbitrum One wallet, maintain a reputation for policy compliance, and receive update submissions. Any press listed in `approved_presses` may process any update for a chitt governed by that policy. The press does not exercise independent judgment about whether an update is desirable — it validates predicates mechanically and posts if valid. This means issuers should list multiple presses in `approved_presses` to ensure availability; the likelihood that all listed presses are simultaneously unreachable is the practical bound on update resilience.
+
+**Holder notification suppression.** A policy may declare code prefixes for which holder notification is always suppressed, regardless of the `notify_holder` field in the intent:
+
+```json
+"suppress_notification_for_codes": [5]
+```
+
+This suppresses notification for all 5xx entries (programmatic updates). The updater may also suppress notification per-intent by setting `notify_holder: false`. If either the policy suppression or the per-intent flag suppresses notification, no notification is sent. For adversarial scenarios — such as a 9xx revocation where tipping off the holder would be harmful — the issuer should configure the policy accordingly or set `notify_holder: false` in the intent.
+
+**Field update authorization.** For each field in `field_updates`, the updater's chitt chain must satisfy that field's `update_policy` in the policy's `field_definitions`. If a field has no `update_policy` specified, the policy's default applies; if no default is specified, only the issuer may update.
 
 **Revocation semantics.**
-- The `effective_date` may be set to any point in time, including before the recording date. The signer is asserting when the relevant condition began.
-- Verifiers apply the effective date as described in the Revocation Model: for 7xx, things before the effective date remain valid; for 8xx, things after the effective date are suspect; for 9xx, things after the effective date are invalid.
-- If multiple revocation entries exist, the one with the earliest effective date governs.
-- The append-only log cannot remove a revocation. Un-revocation requires a successor chitt (see Background Concepts).
+- The `effective_date` in a revocation entry may be earlier than the posting date. The updater is asserting when the relevant condition began.
+- If multiple revocation entries exist on a chitt, the one with the earliest effective date governs.
+- The append-only log cannot remove a revocation entry. Un-revocation requires a successor chitt (see Background Concepts).
 
-**History erasure.** If the policy specifies `erasable: true` for a chitt, a revocation entry with `erasure: true` may redact prior log entries, leaving only the revocation statement. This is the nuclear option: cached copies held by others become unauthenticatable. Chitts without `erasable: true` may be revoked but not erased.
+**History erasure.** If the policy specifies `erasable: true` for a chitt, a revocation entry with `erasure: true` may redact prior log entries, leaving only the revocation statement. Cached copies held by others become unauthenticatable. Chitts without `erasable: true` may be revoked but not erased.
 
-**On-chain anchoring.** After each update, the Arbitrum One registry entry for the chitt is updated to point to the new log head CID, providing a trusted timestamp and rollback resistance.
+**On-chain anchoring.** After each update, the Arbitrum One registry entry for the chitt is updated to point to the new log head CID, providing a trusted timestamp and rollback resistance. Only the press sub-chitt key is required for this write; the contract verifies the press is in `approved_presses` for the policy.
 
 **Acceptance criteria:**
-- [ ] An update entry whose signer does not satisfy the relevant field's `update_policy` is rejected by verifiers.
-- [ ] A revocation entry whose signer does not satisfy `revocation_permissions` for the given code range is rejected by verifiers.
-- [ ] A revocation entry with code `800` published by the holder (satisfying `is_holder`) is accepted even without issuer involvement.
-- [ ] An erasure update on a chitt whose policy does not have `erasable: true` is rejected.
-- [ ] The monotonic version number prevents replay of old entries.
-- [ ] A verifier can reconstruct the full current state of a chitt by reading the append-only log from first entry to the current head.
+- [ ] An update intent whose updater does not satisfy the relevant field's `update_policy` is rejected by the press.
+- [ ] A revocation intent whose updater does not satisfy `revocation_permissions` for the given code range is rejected by the press.
+- [ ] An 810 intent signed by the holder (satisfying `is_holder`) is accepted by the press without issuer involvement.
+- [ ] A verifier re-checking an update entry can independently confirm the updater's chitt satisfies the relevant `update_policy` or `revocation_permissions` predicate by evaluating the predicate against the updater's chitt chain.
+- [ ] An erasure update on a chitt whose policy does not have `erasable: true` is rejected by the press.
+- [ ] The monotonic version number and `prev_log_root` chain prevent replay and out-of-order posting of stale entries.
+- [ ] A verifier can reconstruct the full current state of a chitt by reading the append-only log from the first entry to the current head.
+- [ ] The press sends a Nym notification to the holder after posting any update where `notify_holder` is true and the code prefix is not suppressed by the policy.
+- [ ] A concurrent update submission that arrives after a conflicting entry has already been posted is rejected by the press due to a stale `prev_log_root`; the submitter receives a clear error and can resubmit against the new head.
 
 #### Nice-to-Have (P1)
 
-- Multi-party update approval: a field's update policy can require M-of-N co-signers; the press or a coordinator collects signatures before posting.
-- Holder notification via Nym when a third party publishes an update to their chitt.
-- Revocation notification to services the holder has authenticated with (via Nym to stored gateway addresses).
+- Multi-party update approval: a field's `update_policy` can require M-of-N co-signers; the press collects partial intent signatures before assembling and posting the complete entry.
+- Revocation notification to services the holder has authenticated with (via Nym to stored gateway addresses from prior auth sessions).
+- Per-press submission receipts: the press returns a signed acknowledgment of the intent before posting, so the updater has proof of submission independent of the on-chain write.
 
 #### Future Considerations (P2)
 
-- Cascading revocation: revoking a policy chitt triggers batch revocation entries on all chitts issued under it (per `revocation_cascade` setting in the policy).
-- Update dispute: the holder can publish a counter-statement to a contested annotation.
+- Cascading revocation: revoking a policy chitt triggers batch revocation intents on all chitts issued under it (per `revocation_cascade` setting in the policy).
+- Update dispute: the holder can publish a counter-statement (a 4xx annotation) to a contested annotation or revocation, visible to verifiers alongside the original entry.
 
 ### Open Questions
 
 - **[Engineering]** How does the client efficiently detect new log entries since its last check — polling the Arbitrum One registry pointer, or subscribing via Nym?
-- **[Design]** Should the holder be notified before an update is published to their chitt (e.g., for non-self-initiated updates), or only after?
 - **[Engineering]** When a policy's `field_definitions` are updated (a new field added), how are previously-issued chitts that lack that field treated by verifiers?
 
 ---
@@ -878,7 +955,7 @@ Chitt holders need to sign arbitrary messages using their chitt identity. Signat
   },
   "signatures": [
     {
-      "signer_chitt": "<on-chain registry address of signing sub-chitt>",
+      "signer_chitt": "<mutable pointer in registry of signing sub-chitt>",
       "public_key": "<ML-DSA-44 public key>",
       "signature": "<sig over canonical serialization of payload>"
     }
@@ -963,11 +1040,11 @@ A recipient or service needs to determine: whether each signature is cryptograph
 
 3. **Chain walk (historical).** Using the cached chain array in the chitt's signed metadata, fetch all ancestor version CIDs from IPFS in parallel. For each link: verify the issuer's signature, confirm scope attenuation, confirm the chain array matches the per-link issuer references (array is a hint; per-link references are authoritative).
 
-4. **Revocation check (current).** Resolve all mutable pointers in the chain on Arbitrum One in parallel. For each link, read the append-only log for revocation entries. Apply semantics by code range:
-   - **7xx:** Things before the effective date remain valid; new actions rejected.
-   - **8xx:** Things after the effective date are suspect; things before are trusted.
-   - **9xx:** Things after the effective date are invalid; things before are trusted.
-   - If multiple revocation entries exist, the one with the earliest effective date governs.
+4. **Revocation check (current).** Resolve all mutable pointers in the chain on Arbitrum One in parallel. For each link, read the append-only log for entries with codes 8xx or 9xx. Apply semantics by code range:
+   - **1xx–7xx entries:** Not revocations; do not affect the chitt's validity status.
+   - **8xx:** Quiet revocation. Things before the effective date remain trusted; new actions are rejected.
+   - **9xx:** Loud revocation. Things on or after the effective date are suspect or invalid; things before the effective date are trusted. Verifiers should note the 9xx signal may warrant notifying issuers of other chitts from the same holder.
+   - If multiple 8xx or 9xx entries exist, the one with the earliest effective date governs.
    - If revocation data is stale beyond an acceptable freshness window, flag as stale (default: treat as rejection).
 
 5. **Policy match (for authentication flows).** Evaluate the policy's `requester_predicate` and `recipient_predicate` against the presented chain. If any predicate fails, reject.
@@ -1025,9 +1102,10 @@ ChittAuth.deliverResponse(request, signedResponse)
 
 **Acceptance criteria:**
 - [ ] A 5-link chain verifies in the same order of magnitude as a 1-link chain (parallel fetch via cached chain array).
-- [ ] A signature from a currently-revoked chitt with a 7xx code and an effective date after the signing timestamp returns `was_valid_at_signing_time: true` and `is_currently_valid: false`.
-- [ ] A signature from a chitt with an 8xx revocation and an effective date before the signing timestamp returns `was_valid_at_signing_time: false`.
+- [ ] A signature from a currently-revoked chitt with an 8xx code and an effective date after the signing timestamp returns `was_valid_at_signing_time: true` and `is_currently_valid: false`.
+- [ ] A signature from a chitt with an 8xx revocation and an effective date before the signing timestamp returns `was_valid_at_signing_time: false` and `is_currently_valid: false`.
 - [ ] A signature from a chitt with a 9xx revocation and an effective date before the signing timestamp returns `was_valid_at_signing_time: false` and `is_currently_valid: false`.
+- [ ] A 1xx–7xx log entry on a chitt does not affect `is_currently_valid`; the chitt is still active.
 - [ ] Stale revocation data beyond the freshness window is flagged in the result.
 - [ ] A previously-seen payload hash is flagged as a replay.
 - [ ] A policy chitt whose `field_definitions` violate an ancestor's `policy_creation` restrictions is flagged as non-compliant, and chitts issued under it inherit the flag.
@@ -1246,12 +1324,12 @@ Fields carrying cryptographic material are accepted as **base64url strings** (RF
 
 | Field name | Logical type | JSON input form | CBOR encoding |
 |---|---|---|---|
-| `public_key` | ML-DSA-44 public key | base64url string | Major type 2 byte string |
+| `recipient_pubkey`, `public_key` | ML-DSA-44 public key | base64url string | Major type 2 byte string |
 | `offer_signature`, `holder_signature`, `signature` | ML-DSA-44 signature | base64url string | Major type 2 byte string |
 | `policy_id` | CID | base64url string | Major type 2 byte string |
-| `press_chitt`, `signer_chitt` | Mutable registry pointer | base64url string | Major type 2 byte string |
+| `press_chitt`, `signer_chitt`, `issuer_chitt` | Mutable pointer in registry | base64url string | Major type 2 byte string |
 | `prev_log_root` | CID | base64url string | Major type 2 byte string |
-| Any field of type `cid` or `chitt-pointer` | CID / pointer | base64url string | Major type 2 byte string |
+| Any field of type `cid` or `chitt-pointer` | CID / mutable pointer in registry | base64url string | Major type 2 byte string |
 | `in_reply_to`, `edit_of`, `retracts` | Payload hash | base64url string | Major type 2 byte string |
 
 #### A.2.2 Timestamp Fields
@@ -1262,7 +1340,7 @@ Fields of type `timestamp` are accepted as ISO 8601 strings in the JSON input su
 |---|---|---|
 | `issued_at` | `"2026-05-19T14:30:00Z"` | Tag 1 + uint (e.g., `0xc1 0x1a ...`) |
 | `effective_date` | ISO 8601 string | Tag 1 + uint |
-| `expires`, `valid_until` | ISO 8601 string | Tag 1 + uint |
+| `expires`, `expires_at`, `valid_until` | ISO 8601 string | Tag 1 + uint |
 | Any field of type `timestamp` | ISO 8601 string | Tag 1 + uint |
 
 Fields of type `date` (e.g., `enrollment_date`) are **not** Tag 1. They remain **CBOR text strings** in `YYYY-MM-DD` format.
@@ -1276,6 +1354,7 @@ Optional fields that are absent MUST be omitted from the CBOR map entirely. A fi
 | Protocol field type | JSON input form | CBOR encoding |
 |---|---|---|
 | `text` | String | Major type 3 text string (UTF-8, no NFC normalization required) |
+| `base64url` | base64url string (RFC 4648 §5, no padding) | Major type 2 byte string |
 | `integer` | Number (whole) | Major type 0 (unsigned) or 1 (negative), shortest form |
 | `number` | Number | Major type 7 float, shortest round-trippable form |
 | `boolean` | `true` / `false` | Simple value `0xf5` / `0xf4` |
