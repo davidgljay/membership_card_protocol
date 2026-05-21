@@ -152,23 +152,30 @@ The press log records each issuance event, encrypted to each auditor chitt's pub
 ```json
 {
   "version": <monotonically increasing integer>,
+  "code": <100–999 — semantic update code; 1xx–7xx for field updates, 8xx–9xx for revocations>,
   "entry_type": "field_update" | "revocation",
-  "prev_log_root": "<CID of prior log root>",
+  "prev_log_root": "<CID of prior log root — base64url>",
   "field_updates": [ { "field": "<name>", "value": <new value> } ],
   "revocation": {
-    "code": <7xx | 8xx | 9xx>,
     "effective_date": "<ISO 8601>",
     "note": "<optional>"
   },
-  "signatures": [
-    {
-      "signer_chitt": "<on-chain registry address of signer's sub-chitt>",
-      "public_key": "<ML-DSA-44 public key>",
-      "signature": "<sig over canonical serialization>"
-    }
-  ]
+  "notify_holder": true,
+  "updater_message": "<optional message forwarded to holder>",
+  "intent_signature": {
+    "signer_chitt": "<mutable pointer in registry of updater's sub-chitt — base64url>",
+    "public_key": "<ML-DSA-44 public key — base64url>",
+    "signature": "<sig over canonical CBOR of UpdateIntentPayload — base64url>"
+  },
+  "press_signature": {
+    "signer_chitt": "<mutable pointer in registry of press's sub-chitt — base64url>",
+    "public_key": "<ML-DSA-44 public key — base64url>",
+    "signature": "<sig over canonical CBOR of complete LogEntry — base64url>"
+  }
 }
 ```
+
+`code` is present on **every** log entry. `field_updates` is populated for 1xx–7xx codes; `revocation` is populated for 8xx–9xx codes. `intent_signature` covers the `UpdateIntentPayload` the updater submitted; `press_signature` covers the assembled `LogEntry` document.
 
 The monotonic version number prevents replay. The `prev_log_root` CID creates a content-addressed chain. On-chain anchoring of the head CID provides a trusted timestamp and rollback resistance.
 

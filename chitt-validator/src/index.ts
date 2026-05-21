@@ -14,10 +14,11 @@
  *   registryContractAddress: '<deployed-contract-address>',
  * });
  *
- * console.log(result.valid);       // true | false
- * console.log(result.policy);      // 'ipfs://...'
- * console.log(result.authorizer);  // 'ipfs://...'
+ * console.log(result.valid);         // true | false
+ * console.log(result.policy);        // 'ipfs://...'
+ * console.log(result.authorizer);    // 'ipfs://...'
  * console.log(result.policyCreator); // 'ipfs://...'
+ * console.log(result.chains);        // ValidationChains | null
  * ```
  */
 
@@ -28,7 +29,11 @@ import type {
   ValidationResult,
 } from './types.js';
 import { HttpChittProvider } from './provider.js';
-import { verifySignatureEntry, resolvePointerToIpfsUrl } from './verify.js';
+import {
+  verifySignatureEntry,
+  resolvePointerToIpfsUrl,
+  resolveValidationChains,
+} from './verify.js';
 
 export type {
   SignedMessageEnvelope,
@@ -36,9 +41,13 @@ export type {
   SignatureEntry,
   ChittDocument,
   LogEntry,
+  LogEntryWithCid,
   RevocationEntry,
   SubChittRegistration,
   SignatureResult,
+  ChainUpdate,
+  PolicyChainLink,
+  ValidationChains,
   ValidationResult,
   ValidationOptions,
   ChittProvider,
@@ -47,6 +56,8 @@ export type {
 export { canonicalize, base64urlDecode, base64urlEncode, toHex, fromHex } from './serialization.js';
 
 export { HttpChittProvider } from './provider.js';
+
+export { walkPolicyCreationChain } from './verify.js';
 
 /**
  * Validate a signed message envelope (§6) per the full §7 verification flow.
@@ -58,8 +69,9 @@ export { HttpChittProvider } from './provider.js';
  *   4. Current revocation check (Arbitrum One + IPFS log)
  *   5. Recipient-set check
  *
- * Returns a `valid` boolean, per-signature details, and ipfs:// URLs for
- * the policy, the press that authorized this chitt, and the policy's creator.
+ * Returns a `valid` boolean, per-signature details, ipfs:// URLs for
+ * the policy, press, and policy creator, and three policy creation chains
+ * with the full update history of every chitt encountered.
  *
  * **Note:** On-chain reads require the Chitt registry contract to be deployed.
  * Until then, pass a custom `provider` in options for testing, or expect errors
@@ -90,6 +102,7 @@ export async function validateChitt(
       policy: null,
       policyCreator: null,
       signatures: [],
+      chains: null,
     };
   }
 
@@ -120,19 +133,23 @@ export async function validateChitt(
   // Collect links from the first successfully resolved signature.
   // All signatures on a well-formed envelope should resolve to the same policy.
   const firstResolved = outputs.find(
-    o => o.policyCid !== null || o.pressChittPointer !== null || o.policyCreatorPointer !== null,
+    o => o.masterChittAddress !== null,
   );
 
   const policyCid = firstResolved?.policyCid ?? null;
   const pressPointer = firstResolved?.pressChittPointer ?? null;
   const policyCreatorPointer = firstResolved?.policyCreatorPointer ?? null;
+  const masterChittAddress = firstResolved?.masterChittAddress ?? null;
 
-  // Resolve mutable pointers to ipfs:// URLs via current log head
-  const [authorizer, policyCreator] = await Promise.all([
+  // Resolve mutable pointers to ipfs:// URLs and walk the three policy creation chains.
+  const [authorizer, policyCreator, chains] = await Promise.all([
     pressPointer ? resolvePointerToIpfsUrl(pressPointer, provider) : Promise.resolve(null),
     policyCreatorPointer
       ? resolvePointerToIpfsUrl(policyCreatorPointer, provider)
       : Promise.resolve(null),
+    resolveValidationChains(masterChittAddress, pressPointer, policyCreatorPointer, provider).catch(
+      () => null,
+    ),
   ]);
 
   const policy = policyCid ? `ipfs://${policyCid}` : null;
@@ -143,5 +160,6 @@ export async function validateChitt(
     policy,
     policyCreator,
     signatures: signatureResults,
+    chains,
   };
 }
