@@ -19,8 +19,9 @@
 8. [ADR-007: Transport Layer — Nym Mixnet](#adr-007-transport-layer--nym-mixnet)
 9. [ADR-008: Annotation Layer — EAS on Arbitrum One](#adr-008-annotation-layer--eas-on-arbitrum-one)
 10. [ADR-009: Key Management — Two-Tier with YubiKey Recovery](#adr-009-key-management--two-tier-with-yubikey-recovery)
-10. [ADR-010: Canonical Serialization — RFC 8785 vs. CBOR](#adr-010-canonical-serialization--rfc-8785-vs-cbor)
-11. [Component Map](#component-map)
+11. [ADR-010: Canonical Serialization — RFC 8785 vs. CBOR](#adr-010-canonical-serialization--rfc-8785-vs-cbor)
+12. [ADR-011: On-Chain Press Authorization and Protocol Governance](#adr-011-on-chain-press-authorization-and-protocol-governance)
+13. [Component Map](#component-map)
 12. [Key Data Flows](#key-data-flows)
 13. [Open Questions](#open-questions)
 14. [Risk Register](#risk-register)
@@ -247,7 +248,9 @@ Policy chitt (held by administrator/authorizer)
        └── Issued chitts (held by recipients)
 ```
 
-The press sub-chitt's mutable pointer must appear in the policy chitt's `approved_presses` field. The Arbitrum One registry contract enforces this: writes are rejected unless signed by an active, non-revoked press sub-chitt key listed in `approved_presses`. Revoking a press sub-chitt removes the press's write authority; previously-issued chitts are unaffected (they pre-date revocation).
+The Arbitrum One registry contract enforces press authorization via two on-chain tables defined in ADR-011: `PolicyAuthorizerKeys` (mapping each policy to its governance-assigned authorizer key) and `PressAuthorizations` (mapping (policyAddress, pressAddress) pairs to the press's active public key). A registry write is accepted only if it is signed by a key that appears in `PressAuthorizations` for the target policy and is marked active. Revoking a press removes its write authority; previously-issued chitts are unaffected.
+
+> **Amendment note (ADR-011):** Earlier versions of this document stated that the registry contract enforces authorization by checking whether a press sub-chitt pointer appears in the IPFS-stored `approved_presses` field of the policy chitt. That mechanism was under-specified: the Stylus contract cannot fetch or verify IPFS content at write time. ADR-011 replaces it with the on-chain tables described above. The `approved_presses` field in the policy chitt's IPFS content is retained as an audit surface that tooling should keep in sync with on-chain state; in the event of a discrepancy, on-chain state is authoritative.
 
 ### Privacy Properties of the Press
 
@@ -580,6 +583,7 @@ These are engineering and design questions from the spec that have not yet been 
 | OQ-11 | Design | What is the UX when a recipient declines an offer? Should a decline notification be sent to the press? | Low |
 | OQ-12 | Engineering | Is a transparency log of approved press implementations operated by the protocol foundation needed? Relevant if TEE attestation is added in P2. | Low (P2 dependency) |
 | OQ-13 | Design | Should wallet services publish a `/.well-known/chitt-wallet.json` manifest advertising their supported transports (HTTPS, OHTTP gateway, Nym availability)? If yes, requesting sites can construct the correct `callbacks` block without trial-and-error; if no, sites advertise all transports they support and wallets pick. | Medium |
+| OQ-14 | Governance | **Coercion resistance / governance key holder identity.** Should governance body key holders be pseudonymous (organizations or anonymous participants, harder to coerce) or identifiable (named individuals/organizations with public accountability, easier to hold accountable but more coercible)? Deferred pending governance charter design. See also red-team Finding 1.4-B (press legal compulsion). | Medium |
 
 ---
 
@@ -591,7 +595,9 @@ These are engineering and design questions from the spec that have not yet been 
 | **IPFS content not pinned / unavailable** | Medium | High | Presses are contractually responsible for pinning. Filecoin archival (web3.storage/w3up) provides long-term backup. Clients cache recently-fetched CIDs locally. |
 | **ML-DSA-44 Stylus verification too expensive on-chain** | Medium | High | **Blocking risk before contract deployment.** Gas estimates must be finalized. Batched registry writes (multiple log updates per Arbitrum transaction) reduce per-chitt cost during high-volume periods. |
 | **Canonical serialization incompatibility** | Medium | High | **Blocking risk before npm package API lock.** RFC 8785 vs. CBOR must be decided. All signature interoperability depends on this. |
-| **Press key compromise** | Low | Medium | Revoking the press sub-chitt removes its write authority. Previously-issued chitts are unaffected. The press cannot forge user signatures (user-sovereign key custody). |
+| **Press authorization enforcement gap** | ~~High~~ Closed | ~~High~~ | **Closed by ADR-011.** The original design relied on the contract checking the IPFS-stored `approved_presses` field, which is unreachable at write time. ADR-011 replaces this with two on-chain tables (`PolicyAuthorizerKeys`, `PressAuthorizations`) that the Stylus contract can verify directly. |
+| **Unauthorized press/policy registration (spam)** | Low | Medium | `RegisterPolicy` and `AuthorizePress` both require governance quorum signatures. No party can unilaterally create root policies or register presses. |
+| **Press key compromise** | Low | Medium | Revoking the press entry via `RevokePress` (governance quorum required) removes its write authority. Previously-issued chitts are unaffected. The press cannot forge user signatures (user-sovereign key custody). |
 | **YubiKey stolen before 72-hour cancellation window** | Low | Medium | Multi-channel notifications give holder 72 hours to cancel. After recovery, old YubiKey should be treated as potentially compromised; holder should rotate backup registration. |
 | **OrbitDB legacy references causing confusion** | Medium | Low | Some early raw notes reference OrbitDB. This architecture supersedes those notes. OrbitDB is **not** part of the trust model; the linked-CID-chain + on-chain anchoring pattern is authoritative. |
 | **Post-quantum transition risk for Ed25519 legacy tooling** | Low | Medium | ML-DSA-44 is FIPS 204 standardized. YubiKey hardware support is emerging. Where necessary, hybrid signatures (Ed25519 + ML-DSA) can be used during transition. |
@@ -758,6 +764,123 @@ Regardless of which format is chosen, these constraints must be enforced:
 - [x] Produce a serialization conformance test corpus: `specs/serialization-conformance.json` — 22 cases with verified CBOR hex, covering binary fields, Tag 1 timestamps, `date` text fields, integer boundary values (23/24/256), optional field omission, nested map key ordering, Unicode, arrays, booleans, and two full representative payloads.
 - [ ] Implement the npm package JSON input surface: all signing and verification helpers accept JSON-shaped objects; RFC 8949 §6.1 conversion + protocol overrides are internal. State in documentation that CBOR bytes are what is signed.
 - [ ] Validate Stylus WASM CBOR implementation against the full conformance test corpus before contract deployment.
+
+---
+
+## ADR-011: On-Chain Press Authorization and Protocol Governance
+
+**Status:** Accepted  
+**Date:** 2026-05-22  
+**Addresses:** Red-team Finding 1.1-A (approved_presses enforcement gap)  
+**Amends:** ADR-001 (registry contract write-gate logic), ADR-005 (press authorization structure)
+
+### Context
+
+Red-team analysis identified that the contract description in earlier versions of this document — "writes are rejected unless signed by a press sub-chitt key listed in `approved_presses`" — was unimplementable as written. The Stylus contract verifies on-chain state at write time; it cannot fetch or verify the IPFS-stored `approved_presses` array in the policy chitt's content. This created an unenforced authorization boundary: any party holding a valid ML-DSA-44 keypair could write to the registry against any policy without the contract having a way to reject them.
+
+Separately, the question of who can register a new root policy and who can authorize presses was left implicit. Without access controls on these entry points, the registry is open to spam policy creation and unauthorized press registration.
+
+### Decision
+
+Add two on-chain tables to the Arbitrum One registry contract, with three new write operations governed by two distinct governance bodies.
+
+### On-Chain Tables
+
+**`PolicyAuthorizerKeys`**
+
+Maps each registered root policy address to the ML-DSA-44 public key whose signatures are recognized as authoritative for press management under that policy.
+
+```
+PolicyAuthorizerKeys:
+  policyAddress (bytes32)  →  authorizerPublicKey (bytes[1312], ML-DSA-44)
+```
+
+A policy address is the on-chain identifier for the policy — the Arbitrum One address associated with the policy chitt's registry entry. An entry in `PolicyAuthorizerKeys` is what makes a policy address a recognized root policy in the contract's view. The entry is created by `RegisterPolicy`.
+
+**`PressAuthorizations`**
+
+Maps (policyAddress, pressAddress) pairs to the press's active signing key and a boolean active flag.
+
+```
+PressAuthorizations:
+  (policyAddress (bytes32), pressAddress (bytes32))
+    →  pressPublicKey (bytes[1312], ML-DSA-44)
+       active (bool)
+```
+
+The registry contract's write-gate check: for any registry write signed by `pressAddress` under `policyAddress`, look up this table. Accept the write if and only if an entry exists, `active == true`, and the signature verifies against the stored `pressPublicKey`.
+
+### Write Operations
+
+**`RegisterPolicy(policyAddress, authorizerPublicKey)`**
+
+Creates a new entry in `PolicyAuthorizerKeys`. Callable only with a valid quorum signature from the **Root Policy Governance Body** (see Governance below). Once registered, `policyAddress` is a recognized root in the contract, and its `authorizerPublicKey` is the key that authorizes presses.
+
+**`AuthorizePress(policyAddress, pressAddress, pressPublicKey)`**
+
+Creates or updates an entry in `PressAuthorizations`, setting `active = true` and recording `pressPublicKey`. Callable only with a valid quorum signature from the **Press Registry Governance Body** (see Governance below). The `policyAddress` must already be registered in `PolicyAuthorizerKeys`; attempts to authorize a press against an unregistered policy are rejected.
+
+**`RevokePress(policyAddress, pressAddress)`**
+
+Sets `active = false` for the given (policyAddress, pressAddress) pair. Callable only with a valid quorum signature from the Press Registry Governance Body. The entry is retained with `active = false` rather than deleted, preserving the on-chain audit trail for prior press authorizations.
+
+### Key Rotation
+
+**Press key rotation.** When a press needs to rotate its signing key, the Press Registry Governance Body calls `AuthorizePress` with the same `pressAddress` and the new `pressPublicKey`. This overwrites the stored key and resets `active = true`. The press's prior signatures remain verifiable against the old key (which verifiers may cache); the contract will accept new writes only from the new key.
+
+**Authorizer key rotation.** When the authorizer key for a policy needs to change — due to key compromise, governance body change, or periodic rotation — the Root Policy Governance Body calls a `RotateAuthorizerKey(policyAddress, newAuthorizerPublicKey)` operation, signed by the current authorizer key plus governance quorum. The `PolicyAuthorizerKeys` entry is updated in place.
+
+**Governance key rotation.** Each governance body manages its own key rotation through its defined quorum process. The contract encodes the current active governance key set for each body; quorum rotation requires a supermajority of the current key set to sign the rotation.
+
+### Integration with IPFS `approved_presses`
+
+The policy chitt's IPFS content includes an `approved_presses` array listing the mutable pointers of authorized press sub-chitts. This field is retained as an **audit surface**: tooling (press operators, policy administrators, monitoring agents) should keep it in sync with the on-chain `PressAuthorizations` table. However:
+
+- **On-chain state is authoritative** for contract enforcement. A press listed in `approved_presses` but absent from `PressAuthorizations` cannot write to the registry. A press in `PressAuthorizations` with `active = false` cannot write even if it still appears in `approved_presses`.
+- **Discrepancies between IPFS and on-chain state are a monitoring signal**, not a protocol error. They indicate that tooling has failed to sync the IPFS content after an on-chain authorization change.
+- The press service's reference implementation should update `approved_presses` as part of its `AuthorizePress` and `RevokePress` workflows, immediately after the on-chain transaction confirms.
+
+### Governance
+
+The protocol's governance model separates two functions with different operational cadences and risk profiles into two distinct governing bodies.
+
+**Root Policy Governance Body**
+
+Controls root policy creation via `RegisterPolicy`. This is an infrequent, high-stakes operation: creating a new root policy establishes a new trust anchor for all chitts that derive from it. The Root Policy Governance Body's remit is narrow:
+
+- Evaluate whether proposed root policies meet the protocol's published ethics criteria.
+- Register approved root policies via `RegisterPolicy`.
+- Rotate authorizer keys for registered policies when warranted.
+
+The quorum requirement for this body is set higher than for the Press Registry Governance Body, reflecting the higher impact of its decisions. Specific quorum thresholds are deferred to the governance specification.
+
+**Press Registry Governance Body**
+
+Controls press registration and revocation via `AuthorizePress` and `RevokePress`. Press authorization changes are more frequent than root policy creation — presses are added as new organizations adopt the protocol and revoked when they violate ethics requirements or cease operation. The Press Registry Governance Body's remit is narrow:
+
+- Evaluate whether proposed presses meet the protocol's published ethics criteria.
+- Authorize approved presses via `AuthorizePress`.
+- Revoke presses that have violated the ethics criteria via `RevokePress`.
+
+The quorum requirement for this body is set to reflect operational cadence while maintaining meaningful accountability. Specific quorum thresholds are deferred to the governance specification.
+
+**Shared principles for both bodies**
+
+Both bodies share a narrow, defined remit: ensuring that root policies and presses operate within the published ethics criteria. Neither body has authority over the content of policies, the terms of issuance, or the behavior of individual chitts. Both bodies operate with published membership lists, quorum requirements, and decision logs. Both bodies are self-perpetuating or elected per a governance charter whose design is out of scope for the current protocol specification.
+
+**Scope note.** The protocol's current risk analysis treats the governance bodies themselves as trusted. Attacks targeting the governance bodies — coercion of key holders, quorum subversion, capture of the membership composition process — are out of scope for Phase 1 red-teaming and are deferred to a later analysis phase.
+
+### Open Questions
+
+**OQ-14 (Coercion resistance / governance key holder identity).** Should governance body key holders be pseudonymous (keys held by organizations or anonymous participants) or identifiable (keys tied to named individuals or organizations with public accountability)? Pseudonymous holders are harder to coerce but harder to hold accountable if they misbehave. Identifiable holders provide accountability at the cost of coercibility. This is deferred pending governance charter design. See also the broader question of legal compulsion (press service Finding 1.4-B in the Phase 1 red-team report).
+
+### Consequences
+
+- The registry contract's write-gate is now fully on-chain and verifiable at write time. No IPFS fetch is required to enforce press authorization.
+- Press authorization changes (add, revoke) require governance quorum, making unauthorized press registration significantly harder than in the open-registry model.
+- Both governance bodies introduce a trusted third party in the authorization path. The protocol's decentralized properties hold for verification (chain walking, revocation checks) but not for policy/press registration, which is intentionally governed. This matches the design philosophy stated in the original spec: "give tools for communities with governance," not a trustless system.
+- Key rotation paths (press keys, authorizer keys, governance keys) are defined at the table level but the operational workflows must be specified in the governance charter.
+- Specific quorum thresholds, governance body composition rules, and membership processes are out of scope for this ADR and belong in a separate governance specification.
 
 ---
 
