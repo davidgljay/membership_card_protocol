@@ -1,0 +1,198 @@
+# Mark Validation from a Signed Statement — Process Spec
+
+**Version:** 0.1 (draft)  
+**Date:** 2026-05-25  
+**Status:** Draft  
+
+> **Terminology note.** This spec uses "mark" for "chitt." The rename is in progress; treat the terms as interchangeable.
+
+---
+
+## Overview
+
+Mark validation is the process by which a recipient or service verifies a `SignedMessageEnvelope` produced by the mark signing process. Validation answers four questions per signature: Is the signature cryptographically valid? Was the signing mark valid at the time of signing? Is the signing mark currently valid? Does the signed statement meet the relying party's policy requirements?
+
+The process is fully independent — any party with access to IPFS and the Arbitrum One registry can perform it without contacting the signer, press, or any intermediary.
+
+---
+
+## Actors
+
+| Actor | Role |
+|---|---|
+| **Verifier** | The recipient or service evaluating the signed statement |
+| **Signer** | The mark holder who produced the envelope (passive — no action required during verification) |
+
+---
+
+## Preconditions
+
+- The verifier holds the `SignedMessageEnvelope` to be verified.
+- The verifier has connectivity to IPFS (for chain and policy document fetches) and the Arbitrum One RPC (for current registry state and revocation data).
+- The verifier has a configured list of trusted roots.
+
+---
+
+## Stages
+
+Verification is executed per `SignatureEntry` in the envelope's `signatures` array. All stages should be run; the structured result is assembled from the outcomes of all stages.
+
+### Stage 1: Signature Validity
+
+1. Extract the `public_key` from the `SignatureEntry`.
+2. Canonically serialize the `payload` object per the same rules used during signing (canonical CBOR, RFC 8949 §4.2 with protocol-specific overrides).
+3. Verify the `signature` field against the canonical serialization using the `public_key`. **No network call is required for this stage.**
+4. If verification fails, record `signature_valid: false` and proceed to next stages (the chain may still be informative).
+
+### Stage 2: Sub-Mark to Master Link
+
+5. Resolve the `signer_mark` pointer from the `SignatureEntry` using the Arbitrum One registry.
+6. Fetch the sub-mark's registration: confirm the sub-mark appears in the active sub-mark list of its claimed master mark's current metadata.
+7. Verify the master mark's ML-DSA-44 signature on the sub-mark registration.
+8. If the link cannot be confirmed, record `scope_clean: false`.
+
+### Stage 3: Chain Walk (Historical Validity)
+
+9. Fetch the master mark document from IPFS using the CID registered on Arbitrum One.
+10. Walk the issuer chain to a trusted root using the **cached chain array** in the mark's signed metadata (enables parallel IPFS fetches). For each link:
+    - Verify the issuer's ML-DSA-44 signature.
+    - Confirm scope attenuation: the sub-mark's registered scope does not exceed the master mark's scope at time of registration (using `registrationLogHeadCid` from the `SubMarkRegistration`).
+    - Confirm the chain array entry matches the per-link issuer reference (array is a hint; per-link references are authoritative).
+11. If the chain reaches a trusted root, record `chain_reaches_trusted_root: true`.
+12. If any link fails verification or the chain terminates without reaching a trusted root, record `chain_reaches_trusted_root: false`.
+
+### Stage 4: Revocation Check (Current Validity)
+
+13. Resolve all mutable pointers in the chain on Arbitrum One **in parallel**.
+14. For each mark in the chain, read the append-only log for any 8xx or 9xx entries. Apply revocation semantics:
+    - **1xx–7xx entries:** Not revocations; do not affect validity status.
+    - **8xx (quiet revocation):** Things before `effective_date` remain trusted; the mark is not currently valid.
+    - **9xx (loud revocation):** Things on or after `effective_date` are suspect or invalid; things before are trusted. Verifiers should note the 9xx signal may warrant notifying issuers of other marks held by the same holder.
+    - If multiple 8xx or 9xx entries exist, the one with the earliest `effective_date` governs.
+15. Determine `was_valid_at_signing_time`:
+    - Check whether any revocation entry has `effective_date` ≤ the envelope's `payload.timestamp`.
+    - If no such entry exists, `was_valid_at_signing_time: true`.
+16. Determine `is_currently_valid`:
+    - Check whether any revocation entry has `effective_date` ≤ now.
+    - If no such entry exists, `is_currently_valid: true`.
+17. If revocation data is stale beyond the configured freshness window, flag `revocation.data_freshness_seconds` accordingly and — per default policy — treat as rejection.
+
+### Stage 5: Policy Match (For Authentication Flows)
+
+18. Resolve the mark's governing policy using the `policy_id` CID **embedded in the MarkDocument** (not the policy's current mutable pointer head). The policy snapshot at issuance governs.
+19. If the verifier requires a specific `required_predicate` or `required_policy` (e.g., in an authentication flow):
+    - Evaluate the predicate(s) from the policy snapshot against the signer's chain.
+    - Confirm the signing press sub-mark appears in the `approved_presses` array from the same `policy_id` snapshot.
+    - If any predicate fails or the press is not in `approved_presses`, record policy match failure.
+
+### Stage 5a: Policy Creation Compliance (For Policy-Level Verification)
+
+20. When verifying a policy mark itself (rather than an ordinary issued mark):
+    - Walk the policy creation chain — alternating between the policy mark's holder mark and that mark's own policy — collecting all `policy_creation` field restrictions. At each step, use the `policy_id` CID from the mark under evaluation to fetch the policy snapshot in effect at issuance.
+    - Confirm the policy's `field_definitions` satisfy every collected restriction.
+    - If any restriction is violated, flag as non-compliant. Marks issued under a non-compliant policy inherit this flag.
+
+### Stage 6: Annotation Lookup (Optional)
+
+21. Query EAS (Ethereum Attestation Service) on Arbitrum One for third-party annotations on marks in the chain.
+22. Filter annotations by whether the annotation signer's chain validates to a trusted root.
+23. Assemble annotation context for inclusion in the result.
+
+### Stage 7: Recipient-Set Check
+
+24. Confirm the verifier's mark mutable pointer appears in the `payload.recipients` array.
+25. If absent, flag as `addressed_to_verifier: false` (the message is valid but was forwarded to this party rather than addressed directly).
+
+### Stage 8: Replay and Freshness Check
+
+26. Compute the message ID: `SHA3-256(canonical CBOR of payload)`.
+27. Confirm the `payload.timestamp` is within the verifier's acceptable freshness window.
+28. Confirm this message ID has not been seen before (replay prevention). If the ID has been seen, flag as replay.
+
+---
+
+## Structured Result (Per Signature)
+
+```json
+{
+  "signer_mark":              "<mutable pointer>",
+  "signature_valid":          true | false,
+  "chain_reaches_trusted_root": true | false,
+  "scope_clean":              true | false,
+  "revocation": {
+    "status":                 "none" | "revoked",
+    "code":                   <integer | null>,
+    "effective_date":         "<ISO 8601 | null>",
+    "data_freshness_seconds": <integer>
+  },
+  "was_valid_at_signing_time": true | false,
+  "is_currently_valid":        true | false,
+  "addressed_to_verifier":     true | false,
+  "annotations":               [ ... ]
+}
+```
+
+---
+
+## Common Result Interpretations
+
+| Scenario | `was_valid_at_signing_time` | `is_currently_valid` |
+|---|---|---|
+| Mark has no revocation entries | true | true |
+| 8xx revocation, `effective_date` after signing timestamp | true | false |
+| 8xx revocation, `effective_date` before signing timestamp | false | false |
+| 9xx revocation, `effective_date` after signing timestamp | true | false |
+| 9xx revocation, `effective_date` before signing timestamp | false | false |
+| 1xx–7xx entry only (no revocation) | true | true |
+
+---
+
+## Postconditions
+
+- A structured result is produced per signature in the envelope.
+- The verifier has not contacted the signer, press, or any intermediary.
+- The verifier retains the result for application-layer decision-making. Validation returns facts; the application acts on them.
+
+---
+
+## Error Paths
+
+| Condition | Resolution |
+|---|---|
+| IPFS fetch for a chain link times out | Retry; if persistent, flag chain as unverifiable and record in result |
+| Arbitrum RPC unavailable (revocation data) | Flag `data_freshness_seconds` as exceeding the freshness window; per default policy, treat as rejection |
+| Cached chain array version CIDs differ from current link state | Per-link issuer references are authoritative; use those and flag the discrepancy |
+| Policy snapshot at `policy_id` CID unavailable on IPFS | Policy match stage cannot complete; treat as policy match failure |
+| Message ID seen before (replay) | Flag as replay; reject for authentication flows |
+
+---
+
+## npm API Reference
+
+```javascript
+// Message verification
+ChittAuth.verifyEnvelope(signedEnvelope, trustedRoots, freshnessPolicy)
+  // → Array<SignatureVerificationResult> (one per signatures entry)
+
+// Authentication request lifecycle
+ChittAuth.createRequest({ requesterMark, policyCid, purpose, callback, sessionId })
+ChittAuth.verifyResponse(request, response, policy)
+  // → SignatureVerificationResult
+
+// Keyring integration
+ChittAuth.parseRequest(deepLinkOrQrPayload)
+ChittAuth.findMatchingMarks(request, localKeyring)
+ChittAuth.signResponse(request, chosenMark, subMarkKey)
+ChittAuth.deliverResponse(request, signedResponse)
+```
+
+---
+
+## Related Specs
+
+- `mark_signing.md` — how the envelope being validated was produced
+- `chitt_protocol_spec.md §7` — full feature spec for validating a signed statement
+- `chitt_protocol_spec.md §8` — authentication flow (uses this validation process)
+- `protocol-objects.md §5` — `SignedMessageEnvelope` object reference
+- `protocol-objects.md §8` — `AuthenticationRequest` object reference
+- `protocol-objects.md §9` — `AuthenticationResponse` object reference
