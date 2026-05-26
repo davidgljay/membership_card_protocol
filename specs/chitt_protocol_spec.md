@@ -53,6 +53,10 @@ Every issued chitt contains a fixed set of immutable protocol-required fields se
 | `offer_signature` | `base64url` | The press's ML-DSA-44 signature over the canonical offer payload |
 | `holder_signature` | `base64url` | The recipient's ML-DSA-44 countersignature over the completed chitt |
 
+**Policy compliance is always anchored to `policy_id`.** When verifying that a chitt conforms to its governing policy — checking `field_definitions`, `recipient_predicate`, `requester_predicate`, or `approved_presses` membership — verifiers MUST use the content at the `policy_id` CID (the immutable content snapshot embedded at issuance), not the policy's current mutable pointer head. Subsequent changes to the live policy chitt cannot retroactively invalidate marks issued under a prior policy snapshot.
+
+This rule has one explicit carve-out: **update authorization** (§5 update and revocation flow) evaluates `update_policy` predicates and `revocation_permissions` against the **current live policy**, since these govern present-time operations. Whether a given party may submit an update intent today is a question about the policy's current state, not the policy as it existed when the mark was issued.
+
 These fields cannot be modified by any update, regardless of the chitt's update policy.
 
 ### The Field Type System
@@ -335,7 +339,11 @@ Example — a student chitt policy with three fields:
 }
 ```
 
-**`auditors`** is a `chitt-pointer-array`. Each auditor chitt's current public key (resolved via mutable pointer) is used by the press to encrypt a copy of each issuance log entry via ML-KEM (FIPS 203). If an auditor chitt is revoked, the press stops encrypting new entries for that auditor; their existing entries remain. Multiple auditors each receive their own independently-encrypted copy of each entry.
+**`auditors`** is a `chitt-pointer-array`. Audit log access is organized into **epochs** — time-bounded periods each secured by a single Audit Encryption Key (AEK). At the start of each epoch, the press generates a fresh random AEK and wraps it under each auditor's current ML-KEM (FIPS 203) public key, posting the resulting key packages as an `AuditEpochEntry` in the policy log. Issuance records during that epoch are encrypted under the shared AEK (AES-GCM with a per-entry random nonce) rather than individually encapsulated under each auditor's key; each auditor's wrapped copy of the AEK is their decryption entry point.
+
+When an epoch closes — at a calendar boundary, on auditor key rotation, or on auditor addition or removal — the auditor decrypts all entries from that epoch, produces a signed `AuditEpochCommitment` attesting to the entry count, a hash commitment over all decrypted entry CIDs, and any findings, and then destroys the AEK. Entries from closed epochs become permanently undecryptable by anyone, providing forward secrecy scoped to the epoch boundary. The commitment stands as the permanent audit record for that epoch.
+
+If an auditor chitt is revoked, the press stops wrapping new epoch AEKs for that auditor. The current epoch closes — the departing auditor produces a final commitment — and a new epoch opens without key packages for the removed auditor. Multiple auditors each receive their own independently-wrapped copy of each epoch's AEK. See **Audit Epoch Lifecycle** below for the full open/close procedure.
 
 **`approved_presses`** is a `chitt-pointer-array` listing the mutable pointers of press sub-chitts authorized to issue under this policy. A press whose sub-chitt pointer does not appear here must not be accepted by the smart contract.
 
@@ -505,7 +513,7 @@ This check does not prevent issuance from proceeding if the press is already reg
 8. The recipient reviews the offer (see §4), generates a keypair, adds their public key, and countersigns the completed chitt.
 9. The completed chitt — containing both the press's offer signature and the recipient's countersignature — is posted to IPFS. Either the recipient's client or the press may perform this posting.
 10. The press creates a registry entry on Arbitrum One for the new chitt, with the initial log head CID, signed with its press sub-chitt key.
-11. The press constructs an issuance log entry containing the new chitt's CID, encrypted separately to each auditor chitt's current public key via ML-KEM (FIPS 203). The press operator cannot read these entries.
+11. The press constructs an issuance log entry containing the new chitt's CID and the current `epoch_id`, and encrypts it under the current audit epoch's AEK (AES-GCM). If no epoch is open for this policy, the press opens one first — generating a fresh AEK and posting an `AuditEpochEntry` to the policy log — before encrypting the entry. The press operator cannot read these entries.
 12. The press appends the log entry to the policy chitt's IPFS log and updates the policy chitt's Arbitrum One registry entry to point to the new log head.
 13. The press produces a **Signed Chitt Inclusion Proof (SCIP)**: a small signed object binding the new chitt's CID to its log entry index and the log root at time of inclusion. The SCIP is signed with the press's sub-chitt key.
 14. The press sends the SCIP and a confirmation to the recipient, and an audit record (chitt CID + SCIP) to the administrator, both encrypted to their respective chitts via Nym.
@@ -558,13 +566,49 @@ If any check fails, the transaction reverts and the chitt is not registered. The
 
 **Key separation.** The policy authorizer's chitt key and any auditor's chitt key must be separate from each other. A compromised auditor key must not grant policy control.
 
+**Audit Epoch Lifecycle.**
+
+Audit log entries are secured by a per-epoch Audit Encryption Key (AEK) rather than by per-entry ML-KEM encapsulations. This design provides epoch-scoped forward secrecy: once an epoch closes and its AEK is destroyed, those entries are permanently undecryptable — including by the auditor — regardless of any future key compromise. The commitment produced at epoch close is the permanent record.
+
+*Opening an epoch.* Before posting the first issuance entry of a new epoch, the press:
+
+1. Generates a fresh 256-bit AEK at random for this epoch.
+2. For each active auditor in the policy's `auditors` array: runs ML-KEM.Encaps(auditor_pubkey) to produce a `(kem_ciphertext, kem_shared_secret)` pair, then derives a wrapping key from `kem_shared_secret` (HKDF-SHA3-256) and computes `wrapped_aek = AES-GCM.Encrypt(wrapping_key, AEK)`.
+3. Posts an `AuditEpochEntry` (see `protocol-objects.md` §12) to the policy log containing all per-auditor key packages, the epoch's `epoch_id` and `epoch_start`, and the press's ML-DSA-44 signature.
+4. Discards the raw AEK from memory immediately after distributing the wrapped copies. The press never retains plaintext access to the AEK.
+
+During the epoch, the press encrypts each `PressIssuanceRecord` with the epoch AEK: `AES-GCM.Encrypt(AEK, record, nonce)` where `nonce` is a fresh 96-bit random value per entry. The encrypted record is stored on IPFS. Each entry's `epoch_id` field identifies which epoch key the auditor should use to decrypt it.
+
+*Closing an epoch.* An epoch closes on any of the following triggers:
+
+- **Calendar boundary:** The epoch's defined period ends (annual epochs close on December 31 UTC).
+- **Auditor key rotation:** An auditor updates their ML-KEM public key via the standard update flow.
+- **Auditor added or removed:** Any change to the `auditors` array closes the current epoch and opens a new one with key packages for the updated auditor set.
+
+On epoch close, the procedure is:
+
+1. The auditor fetches all `PressIssuanceRecord` entries for the epoch from the policy log. For each entry: decapsulates the `kem_ciphertext` using their private key to recover `kem_shared_secret`, derives the wrapping key, unwraps the AEK from `wrapped_aek`, then decrypts the entry body with the AEK.
+2. The auditor produces an `AuditEpochCommitment` (see `protocol-objects.md` §13): a signed IPFS document containing the `epoch_id`, `entry_count`, a SHA3-256 hash commitment over all decrypted entry CIDs in log order, and a free-text `findings` field (any anomalies or compliance issues observed; "no issues found" if clean). The auditor signs the commitment with their chitt key.
+3. The auditor publishes the `AuditEpochCommitment` to IPFS and sends its CID to the press via Nym.
+4. The press posts an `AuditEpochEntry` with `status: "closed"` and `commitment_cid` to the policy log, recording the closed epoch and the commitment's location.
+5. The auditor destroys the epoch AEK. This step is irreversible — entries from this epoch are now permanently undecryptable by anyone.
+
+*Forward secrecy boundary.* A compromised auditor key exposes only the current open epoch's AEK — and only entries within that epoch. Closed epochs' AEKs have been destroyed; their records are permanently inaccessible. Shorter epoch durations (e.g., quarterly) reduce the maximum exposure window at the cost of more frequent commitment operations.
+
+*Auditor key rotation within an epoch.* When an auditor's ML-KEM public key changes, the current epoch must close before the new key is used. The auditor produces an `AuditEpochCommitment` under their old key, destroys the old AEK, and the press opens a new epoch with key packages generated under the auditor's new public key. The press must not post issuance entries under the old epoch AEK after observing the auditor's key update on-chain.
+
+*Adding a new auditor.* When a new auditor is added to the `auditors` array, the current epoch closes, the existing auditor(s) produce commitments, and a new epoch opens with key packages for all active auditors including the new one. The new auditor has no access to prior epochs' entries — their AEKs were destroyed at prior epoch close. This is by design: audit access is not retroactively granted.
+
 **Acceptance criteria:**
 
 - [ ] A press whose sub-chitt pointer does not appear in `approved_presses` cannot write to the Arbitrum One registry.
 - [ ] A press whose sub-chitt is revoked with an effective date at or before now cannot write to the Arbitrum One registry.
 - [ ] A completed chitt contains both the press's offer signature and the recipient's countersignature; any verifier can confirm both independently without contacting the press.
-- [ ] Each auditor receives an independently-encrypted copy of each log entry decryptable only with their chitt's private key.
-- [ ] A post-hoc verifier can confirm: (a) the chitt's content conforms to the policy's `field_definitions`, (b) the press sub-chitt that signed it appears in `approved_presses`, and (c) the recipient's chain satisfies `recipient_predicate` if one is specified.
+- [ ] At epoch open, each active auditor receives an independently-wrapped copy of the epoch AEK, decryptable only with their chitt's private key; the AEK wrappings are posted in an `AuditEpochEntry` in the policy log.
+- [ ] Issuance log entries are encrypted under the epoch AEK; neither the press operator nor any party without an auditor's private key can read them.
+- [ ] On epoch close, the auditor produces a signed `AuditEpochCommitment` (entry count + hash commitment over all entry CIDs + findings) before destroying the AEK; the commitment CID is recorded in the policy log.
+- [ ] A future compromise of an auditor's chitt key cannot decrypt entries from epochs whose AEKs have been destroyed.
+- [ ] A post-hoc verifier can confirm: (a) the chitt's content conforms to the `field_definitions` in the policy snapshot at `policy_id` CID, (b) the press sub-chitt that signed it appears in the `approved_presses` array from that same snapshot, and (c) the recipient's chain satisfies `recipient_predicate` from that snapshot if one is specified.
 - [ ] The SCIP is delivered to recipient and administrator within one Nym round-trip of the chitt being posted.
 - [ ] A press refuses to accept an open chitt offer submission when the policy chitt does not have `allow_open_offers: true`.
 - [ ] A press refuses to accept an open chitt offer submission when the issuer's signature over the offer document does not verify.
@@ -1047,9 +1091,9 @@ A recipient or service needs to determine: whether each signature is cryptograph
    - If multiple 8xx or 9xx entries exist, the one with the earliest effective date governs.
    - If revocation data is stale beyond an acceptable freshness window, flag as stale (default: treat as rejection).
 
-5. **Policy match (for authentication flows).** Evaluate the policy's `requester_predicate` and `recipient_predicate` against the presented chain. If any predicate fails, reject.
+5. **Policy match (for authentication flows).** Resolve the chitt's governing policy using the `policy_id` CID embedded in the ChittDocument — not the policy's current mutable pointer head. Evaluate `requester_predicate` and `recipient_predicate` from that snapshot against the presented chain. If any predicate fails, reject. Confirm the signing press sub-chitt appears in the `approved_presses` array from that same `policy_id` snapshot; a press added or removed from the live policy after issuance does not affect the validity of marks issued before that change.
 
-5a. **Policy creation compliance check (for policy-level verification).** When verifying a policy chitt itself (rather than an ordinary issued chitt), walk the policy creation chain — alternating between the policy chitt's holder chitt and that chitt's own policy — and collect all `policy_creation` field restrictions. Confirm the policy's `field_definitions` satisfy every collected restriction. If any restriction is violated, the policy is flagged as non-compliant; chitts issued under it inherit this flag. Verifiers may apply their own tolerance policy for non-compliant policies (e.g., reject entirely, warn, or accept with reduced trust).
+5a. **Policy creation compliance check (for policy-level verification).** When verifying a policy chitt itself (rather than an ordinary issued chitt), walk the policy creation chain — alternating between the policy chitt's holder chitt and that chitt's own policy — and collect all `policy_creation` field restrictions. At each step, use the `policy_id` CID from the chitt under evaluation to fetch the policy snapshot in effect at issuance. Confirm the policy's `field_definitions` satisfy every collected restriction drawn from those snapshots. If any restriction is violated, the policy is flagged as non-compliant; chitts issued under it inherit this flag. Verifiers may apply their own tolerance policy for non-compliant policies (e.g., reject entirely, warn, or accept with reduced trust).
 
 6. **Annotation lookup (optional).** Query EAS on Arbitrum One for third-party annotations on chitts in the chain. Filter by whether the annotation signer's chain validates to a trusted root. Assemble annotation context.
 

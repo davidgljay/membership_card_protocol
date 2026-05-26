@@ -21,8 +21,10 @@ This document is the canonical reference for every structured object in the Chit
 9. [AuthenticationResponse](#9-authenticationresponse)
 10. [SCIP](#10-scip)
 11. [PressIssuanceRecord](#11-pressissuancerecord)
-12. [RegistryEntry](#12-registryentry)
-13. [SubChittRegistration](#13-subchittregistration)
+12. [AuditEpochEntry](#12-auditepochentry)
+13. [AuditEpochCommitment](#13-auditepochcommitment)
+14. [RegistryEntry](#14-registryentry)
+15. [SubChittRegistration](#15-subchittregistration)
 
 ---
 
@@ -344,7 +346,7 @@ When a recipient accepts, their wallet wraps this document in an `OpenOfferClaim
 | `proposed_fields` | object | Yes | Issuer-populated field values for issued chitts |
 | `issuer_signature` | `base64url` | Yes | Covers canonical CBOR of all fields except itself |
 
-The **offer ID** used for on-chain counter tracking is `hash(canonical CBOR of the complete document including issuer_signature)`. This binds the offer ID to the issuer's signature, making it unique per issuer and unforgeable. The contract stores a per-offer-ID acceptance counter in `openOfferUseCounts` (see §12).
+The **offer ID** used for on-chain counter tracking is `hash(canonical CBOR of the complete document including issuer_signature)`. This binds the offer ID to the issuer's signature, making it unique per issuer and unforgeable. The contract stores a per-offer-ID acceptance counter in `openOfferUseCounts` (see §14).
 
 ---
 
@@ -515,13 +517,14 @@ A small signed object that binds a newly-issued chitt's CID to its position in t
 ## 11. PressIssuanceRecord
 
 **Stored on:** IPFS, within the policy chitt's append-only press log  
-**Encrypted to:** Each auditor's current ML-KEM (FIPS 203) public key individually  
-**Access:** Only by auditors; press operator cannot decrypt
+**Encrypted with:** The current audit epoch's AEK (AES-GCM, per-entry random nonce)  
+**Access:** Only by auditors holding a wrapped copy of the epoch AEK; press operator cannot decrypt
 
-The plaintext content of each press log entry before encryption. Each auditor receives their own independently-encrypted ciphertext of this record.
+The plaintext content of each press log entry. Entries are encrypted under the epoch AEK shared across all auditors for that epoch (see `AuditEpochEntry` §12). Each entry carries `epoch_id` in plaintext so that auditors can identify which epoch key to use for decryption without reading the ciphertext.
 
 ```json
 {
+  "epoch_id":        "<string — identifies the audit epoch this entry belongs to>",
   "chitt_cid":       "<base64url — CID of the issued ChittDocument>",
   "scip_cid":        "<base64url — CID of the SCIP posted to IPFS>",
   "issued_at":       "<ISO 8601 timestamp>",
@@ -530,8 +533,19 @@ The plaintext content of each press log entry before encryption. Each auditor re
 }
 ```
 
+The on-IPFS storage format for each encrypted entry:
+
+```json
+{
+  "epoch_id":   "<string — plaintext; identifies epoch key>",
+  "nonce":      "<base64url — 96-bit random nonce>",
+  "ciphertext": "<base64url — AES-GCM.Encrypt(AEK, PressIssuanceRecord plaintext, nonce)>"
+}
+```
+
 | Field | Type | Required | Notes |
 |---|---|---|---|
+| `epoch_id` | `text` | Yes | Identifies which epoch AEK decrypts this entry; stored in plaintext |
 | `chitt_cid` | `cid` | Yes | Links to the issued chitt; enables auditor-assisted recovery if holder loses capability bundle |
 | `scip_cid` | `cid` | Yes | Links to the SCIP for this issuance |
 | `issued_at` | `timestamp` | Yes | Must match the chitt's `issued_at` |
@@ -540,7 +554,95 @@ The plaintext content of each press log entry before encryption. Each auditor re
 
 ---
 
-## 12. RegistryEntry
+## 12. AuditEpochEntry
+
+**Stored on:** IPFS, within the policy chitt's append-only press log  
+**Written by:** Press (at epoch open and epoch close)  
+**Signed by:** Press sub-chitt key
+
+Posted to the policy log at the start and end of each audit epoch. On open, it distributes the epoch AEK wrapped under each active auditor's ML-KEM public key. On close, it records the epoch's `AuditEpochCommitment` CID and marks the epoch as permanently closed.
+
+```json
+{
+  "type":           "audit_epoch_entry",
+  "status":         "open | closed",
+  "epoch_id":       "<string — e.g. '2026' for annual epochs, or sequential integer>",
+  "epoch_start":    "<ISO 8601 timestamp — set on open; null on close>",
+  "epoch_end":      "<ISO 8601 timestamp — set on close; null on open>",
+  "auditor_key_packages": [
+    {
+      "auditor_chitt":  "<base64url — mutable pointer of the auditor's chitt>",
+      "kem_ciphertext": "<base64url — ML-KEM.Encaps(auditor_pubkey) ciphertext; 1088 bytes for ML-KEM-768>",
+      "wrapped_aek":    "<base64url — AES-GCM.Encrypt(HKDF-SHA3-256(kem_shared_secret), AEK)>"
+    }
+  ],
+  "commitment_cid": "<base64url — CID of the AuditEpochCommitment on IPFS; present only when status is 'closed'>",
+  "close_reason":   "<text — 'calendar_boundary' | 'key_rotation' | 'auditor_change'; present only when status is 'closed'>",
+  "press_signature": "<ML-DSA-44 signature over canonical CBOR of all above fields>"
+}
+```
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `type` | `text` | Yes | Always `"audit_epoch_entry"` |
+| `status` | `text` | Yes | `"open"` when starting an epoch; `"closed"` when recording epoch closure |
+| `epoch_id` | `text` | Yes | Unique per epoch within a policy; convention is ISO year string for annual epochs |
+| `epoch_start` | `timestamp` | On open | UTC timestamp when this epoch began |
+| `epoch_end` | `timestamp` | On close | UTC timestamp when this epoch closed |
+| `auditor_key_packages` | `array` | On open | One entry per active auditor; empty array on close entry |
+| `auditor_key_packages[].auditor_chitt` | `chitt-pointer` | Yes (per package) | Identifies the auditor |
+| `auditor_key_packages[].kem_ciphertext` | `bytes` | Yes (per package) | ML-KEM.Encaps output; auditor decapsulates with their private key to recover `kem_shared_secret` |
+| `auditor_key_packages[].wrapped_aek` | `bytes` | Yes (per package) | AEK wrapped under `HKDF-SHA3-256(kem_shared_secret, "audit-epoch-aek-v1")`; 32-byte AEK + 12-byte nonce + 16-byte GCM tag |
+| `commitment_cid` | `cid` | On close | Points to the `AuditEpochCommitment` IPFS document |
+| `close_reason` | `text` | On close | Why the epoch closed; informational |
+| `press_signature` | `SignatureEntry` | Yes | Binds all fields; signed with the press sub-chitt key |
+
+The press must not generate issuance entries for an epoch after posting a `status: "closed"` entry for it.
+
+---
+
+## 13. AuditEpochCommitment
+
+**Stored on:** IPFS (standalone document, not part of the policy log directly)  
+**Written by:** Auditor  
+**Signed by:** Auditor chitt key  
+**Referenced by:** The `AuditEpochEntry` with `status: "closed"` in the policy log
+
+The permanent audit record for a closed epoch. The auditor produces this document after decrypting all entries in the epoch, then destroys the epoch AEK. The commitment is the only remaining evidence of what the epoch contained; it is signed by the auditor and publicly verifiable.
+
+```json
+{
+  "type":             "audit_epoch_commitment",
+  "epoch_id":         "<string — matches the epoch_id in the corresponding AuditEpochEntry>",
+  "policy_chitt":     "<base64url — mutable pointer of the policy chitt>",
+  "auditor_chitt":    "<base64url — mutable pointer of this auditor's chitt>",
+  "period_start":     "<ISO 8601 timestamp>",
+  "period_end":       "<ISO 8601 timestamp>",
+  "entry_count":      <integer>,
+  "entries_hash":     "<base64url — SHA3-256 of the concatenated CIDs of all decrypted entries in log order>",
+  "findings":         "<free text — summary of audit findings; 'no issues found' if clean>",
+  "auditor_signature": "<ML-DSA-44 signature over canonical CBOR of all above fields>"
+}
+```
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `type` | `text` | Yes | Always `"audit_epoch_commitment"` |
+| `epoch_id` | `text` | Yes | Must match the epoch being committed |
+| `policy_chitt` | `chitt-pointer` | Yes | Identifies the policy this commitment covers |
+| `auditor_chitt` | `chitt-pointer` | Yes | Identifies the signing auditor |
+| `period_start` | `timestamp` | Yes | Must match the `epoch_start` from the opening `AuditEpochEntry` |
+| `period_end` | `timestamp` | Yes | Must match the `epoch_end` from the closing `AuditEpochEntry` |
+| `entry_count` | `integer` | Yes | Number of `PressIssuanceRecord` entries decrypted; enables detection of missing entries |
+| `entries_hash` | `bytes` | Yes | SHA3-256(concat of all entry CIDs in log order); a verifier with the raw entries can confirm the auditor processed all of them |
+| `findings` | `text` | Yes | Human-readable audit summary; required even if empty |
+| `auditor_signature` | `SignatureEntry` | Yes | Binds all fields; signed with the auditor's chitt key |
+
+The `entries_hash` is a completeness commitment: it proves the auditor saw all entries in sequence and did not skip any. A verifier who later obtains the decrypted entries (through any channel) can recompute the hash and confirm it matches the commitment. The commitment does not prove the auditor correctly classified each entry — it proves they processed them.
+
+---
+
+## 14. RegistryEntry
 
 **Stored on:** Arbitrum One (on-chain)  
 **Written by:** Press sub-chitt key (verified on-chain via Stylus ML-DSA-44)
@@ -574,7 +676,7 @@ The contract performs the following checks atomically with chitt registration fo
 
 ---
 
-## 13. SubChittRegistration
+## 15. SubChittRegistration
 
 **Stored on:** Arbitrum One (on-chain)  
 **Written by:** Master chitt key at sub-chitt creation time
