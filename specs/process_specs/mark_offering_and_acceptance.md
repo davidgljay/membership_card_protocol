@@ -41,7 +41,7 @@ Mark offering and acceptance is the process by which a press issues a targeted m
 1. The requester submits an issuance request to the press. The request includes:
    - The target policy's mutable pointer or CID.
    - The requester's mark pointer (for predicate evaluation).
-   - The intended recipient's identity (mark pointer, Nym gateway address, or invitation link delivery method).
+   - The intended recipient's identity (mark pointer or invitation link delivery method).
    - Any issuer-specified field values allowed by the policy.
 
 2. The press loads and validates the policy mark:
@@ -72,9 +72,9 @@ Mark offering and acceptance is the process by which a press issues a targeted m
 
 ### Phase 4: Offer Delivery
 
-9. **First-time recipient (invitation link):** The offer is encoded as `mark://invite?o=<base64>` and delivered out of band (Nym, email, QR code, etc.).
+9. **First-time recipient (invitation link):** The offer is encoded as `mark://invite?o=<base64>` and delivered out of band (email, QR code, etc.).
 
-10. **Existing recipient (Nym delivery):** The signed offer is sent directly to the recipient's registered Nym gateway.
+10. **Existing recipient (HTTPS delivery):** The signed offer is POSTed directly to the recipient's wallet service endpoint.
 
 ### Phase 5: Recipient Review and Acceptance
 
@@ -121,9 +121,9 @@ Mark offering and acceptance is the process by which a press issues a targeted m
     - `issued_at` — matching the mark's `issued_at`.
     - `press_signature` — ML-DSA-44 signature over all above fields.
 
-22. The press sends the SCIP and a confirmation to the recipient via Nym.
+22. The press sends the SCIP and a confirmation to the recipient via HTTPS to their wallet service endpoint.
 
-23. The press sends an audit record (mark CID + SCIP) to the administrator via Nym.
+23. The press sends an audit record (mark CID + SCIP) to the administrator via HTTPS to their wallet service endpoint.
 
 ---
 

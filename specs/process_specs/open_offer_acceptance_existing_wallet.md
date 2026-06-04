@@ -110,7 +110,7 @@ For first-time recipients who need to create a wallet, see `open_offer_acceptanc
 
 14. The press logs the issuance in the policy's encrypted audit log (see `log_auditing.md`) with `offer_type: "open"`.
 
-15. The press sends a confirmation to the wallet service. Optionally, the press sends a courtesy notification to the issuer via HTTPS (or Nym if the issuer has configured a Nym gateway).
+15. The press sends a confirmation to the wallet service. Optionally, the press sends a courtesy notification to the issuer via HTTPS to their wallet service endpoint.
 
 ### Phase 5: Completion
 

@@ -22,7 +22,7 @@ Updates are classified by a three-digit code (1xx–9xx) that signals the semant
 |---|---|
 | **Updater** | The party submitting the update intent (holder, issuer, or another authorized party) |
 | **Press** | Validates authorization, assembles the log entry, posts to IPFS and Arbitrum One |
-| **Holder** | Receives a Nym notification if `notify_holder` is true and the code prefix is not suppressed |
+| **Holder** | Receives an HTTPS notification via their wallet service if `notify_holder` is true and the code prefix is not suppressed |
 
 ---
 
@@ -59,7 +59,7 @@ Updates are classified by a three-digit code (1xx–9xx) that signals the semant
      "field_updates":  [{ "field": "<name>", "value": <new value> }],
      "revocation":     { "effective_date": "<ISO 8601>", "note": "<optional>" },
      "notify_holder":  true,
-     "updater_message":"<optional — forwarded to holder in Nym notification>",
+     "updater_message":"<optional — forwarded to holder in HTTPS notification>",
      "timestamp":      "<ISO 8601 — replay prevention>"
    }
    ```
@@ -73,11 +73,7 @@ Updates are classified by a three-digit code (1xx–9xx) that signals the semant
 
 ### Phase 2: Submission
 
-5. The updater sends the signed intent to any press listed in `approved_presses` for the mark's policy:
-   - Preferred: via Nym (privacy-preserving).
-   - Fallback: HTTPS POST to the press endpoint.
-
-   The press is neutral infrastructure — any listed press may process any update; the updater does not need to use the original issuing press.
+5. The updater sends the signed intent via HTTPS POST to any press listed in `approved_presses` for the mark's policy. The press is neutral infrastructure — any listed press may process any update; the updater does not need to use the original issuing press.
 
 ### Phase 3: Press Validation
 
@@ -110,8 +106,8 @@ Updates are classified by a three-digit code (1xx–9xx) that signals the semant
 ### Phase 5: Notification and Confirmation
 
 12. If `notify_holder` is `true` and the policy does not suppress notification for this code prefix:
-    - The press sends a Nym notification to the holder's registered Nym gateway containing: the update code, the `updater_message` (if present), and the CID of the new log entry.
-    - If the holder has no registered Nym gateway, the notification is silently dropped.
+    - The press sends an HTTPS notification to the holder's wallet service endpoint containing: the update code, the `updater_message` (if present), and the CID of the new log entry.
+    - If the holder's wallet service endpoint is unreachable, the notification is dropped; the holder will discover the update on next poll.
 
 13. The press sends a success confirmation to the updater via the submission channel.
 
@@ -122,7 +118,7 @@ Updates are classified by a three-digit code (1xx–9xx) that signals the semant
 - A new `LogEntry` is appended to the target mark's IPFS log, chained via `prev_log_root`.
 - The Arbitrum One registry entry for the target mark points to the new log head.
 - The updater's identity and intent signature are permanently recorded in the log entry.
-- If `notify_holder` was true and the holder has a Nym gateway, the holder received a notification.
+- If `notify_holder` was true, an HTTPS notification was sent to the holder's wallet service endpoint.
 - Any verifier can re-derive the complete current state of the mark by reading the append-only log from the genesis document to the current head.
 
 ---

@@ -466,7 +466,7 @@ Once a policy chitt is live and a press is authorized, the press must accept iss
 ### Non-Goals
 
 - **Not:** Cryptographic enforcement of rate limits. Rate limits stated in a policy are a social and legal commitment enforced by the press; they are auditable by the policy authorizer (who holds the audit key) but not verifiable by outside parties without the audit key.
-- **Not:** Guaranteeing delivery of chitt offers. Delivery is best-effort via invitation link or Nym.
+- **Not:** Guaranteeing delivery of chitt offers. Delivery is best-effort via invitation link or HTTPS to the recipient's wallet service.
 - **Not:** Hardware attestation in v1. This is a future consideration for high-stakes policies.
 
 ### User Stories
@@ -509,14 +509,14 @@ This check does not prevent issuance from proceeding if the press is already reg
 4. For each chitt in both chains, the press checks for revocation entries. For each revocation found, the press confirms the effective date is after the current time (i.e., the chitt was valid when evaluated). If any ancestor is revoked with an effective date at or before now, the press refuses to issue.
 5. The press assembles the proposed chitt JSON: all protocol-required fields populated (with `recipient_pubkey` left empty), and all `field_definitions` fields populated per the policy.
 6. The press signs the canonical serialization of the proposed chitt JSON with its press sub-chitt key, producing the **signed offer**. This signature attests that this press verified policy compliance and generated this offer.
-7. The offer is delivered to the recipient: as an invitation link (base64 payload in a URL, e.g., `chitt://invite?o=<base64>`) for first-time recipients, or via Nym to an existing chitt gateway.
+7. The offer is delivered to the recipient: as an invitation link (base64 payload in a URL, e.g., `chitt://invite?o=<base64>`) for first-time recipients, or via HTTPS POST to the recipient's wallet service endpoint for existing holders.
 8. The recipient reviews the offer (see §4), generates a keypair, adds their public key, and countersigns the completed chitt.
 9. The completed chitt — containing both the press's offer signature and the recipient's countersignature — is posted to IPFS. Either the recipient's client or the press may perform this posting.
 10. The press creates a registry entry on Arbitrum One for the new chitt, with the initial log head CID, signed with its press sub-chitt key.
 11. The press constructs an issuance log entry containing the new chitt's CID and the current `epoch_id`, and encrypts it under the current audit epoch's AEK (AES-GCM). If no epoch is open for this policy, the press opens one first — generating a fresh AEK and posting an `AuditEpochEntry` to the policy log — before encrypting the entry. The press operator cannot read these entries.
 12. The press appends the log entry to the policy chitt's IPFS log and updates the policy chitt's Arbitrum One registry entry to point to the new log head.
 13. The press produces a **Signed Chitt Inclusion Proof (SCIP)**: a small signed object binding the new chitt's CID to its log entry index and the log root at time of inclusion. The SCIP is signed with the press's sub-chitt key.
-14. The press sends the SCIP and a confirmation to the recipient, and an audit record (chitt CID + SCIP) to the administrator, both encrypted to their respective chitts via Nym.
+14. The press sends the SCIP and a confirmation to the recipient, and an audit record (chitt CID + SCIP) to the administrator, both encrypted and delivered via HTTPS to their respective wallet service endpoints.
 
 **Open chitt offer document structure.** An open chitt offer is a signed JSON document created by an issuer (not a press) and hosted on a wallet service. It serves as a pre-signed batch authorization: any recipient who countersigns and submits to the named press is authorized to receive a chitt, subject to the stated constraints. The policy chitt must have `allow_open_offers: true` for the press to accept submissions under an open offer.
 
@@ -549,7 +549,7 @@ This check does not prevent issuance from proceeding if the press is already reg
 8. The press validates: (a) the issuer's signature over the offer document is valid; (b) the press's own sub-chitt is listed in `approved_presses`; (c) the policy chitt has `allow_open_offers: true`; (d) on-chain open offer constraints are not violated (see below). If validation fails at any step, the press rejects with a specific error code.
 9. The press signs the per-recipient chitt with its press sub-chitt key (producing `offer_signature`), submits an atomic on-chain transaction registering the chitt and incrementing the open offer counter, then posts the completed chitt to IPFS.
 10. The press confirms completion to the wallet service. The wallet service updates the recipient's keyring to include the new chitt address and presents a confirmation screen, then redirects the recipient to `redirect_url` (displaying the destination URL to the recipient first).
-11. An issuance log entry is encrypted to each auditor and appended to the policy chitt's IPFS log, as in the targeted issuance flow. A courtesy notification is sent to the issuer via HTTPS (or Nym if the issuer has configured a Nym gateway).
+11. An issuance log entry is encrypted to each auditor and appended to the policy chitt's IPFS log, as in the targeted issuance flow. A courtesy notification is sent to the issuer via HTTPS to their wallet service endpoint.
 
 **Open offer smart contract enforcement.** For chitts submitted under an open chitt offer, the Arbitrum One registry contract performs additional inline validation. No separate registration transaction is required; the counter is lazily initialized on first use.
 
@@ -589,7 +589,7 @@ On epoch close, the procedure is:
 
 1. The auditor fetches all `PressIssuanceRecord` entries for the epoch from the policy log. For each entry: decapsulates the `kem_ciphertext` using their private key to recover `kem_shared_secret`, derives the wrapping key, unwraps the AEK from `wrapped_aek`, then decrypts the entry body with the AEK.
 2. The auditor produces an `AuditEpochCommitment` (see `protocol-objects.md` §13): a signed IPFS document containing the `epoch_id`, `entry_count`, a SHA3-256 hash commitment over all decrypted entry CIDs in log order, and a free-text `findings` field (any anomalies or compliance issues observed; "no issues found" if clean). The auditor signs the commitment with their chitt key.
-3. The auditor publishes the `AuditEpochCommitment` to IPFS and sends its CID to the press via Nym.
+3. The auditor publishes the `AuditEpochCommitment` to IPFS and sends its CID to the press via HTTPS.
 4. The press posts an `AuditEpochEntry` with `status: "closed"` and `commitment_cid` to the policy log, recording the closed epoch and the commitment's location.
 5. The auditor destroys the epoch AEK. This step is irreversible — entries from this epoch are now permanently undecryptable by anyone.
 
@@ -609,7 +609,7 @@ On epoch close, the procedure is:
 - [ ] On epoch close, the auditor produces a signed `AuditEpochCommitment` (entry count + hash commitment over all entry CIDs + findings) before destroying the AEK; the commitment CID is recorded in the policy log.
 - [ ] A future compromise of an auditor's chitt key cannot decrypt entries from epochs whose AEKs have been destroyed.
 - [ ] A post-hoc verifier can confirm: (a) the chitt's content conforms to the `field_definitions` in the policy snapshot at `policy_id` CID, (b) the press sub-chitt that signed it appears in the `approved_presses` array from that same snapshot, and (c) the recipient's chain satisfies `recipient_predicate` from that snapshot if one is specified.
-- [ ] The SCIP is delivered to recipient and administrator within one Nym round-trip of the chitt being posted.
+- [ ] The SCIP is delivered to recipient and administrator via HTTPS within a reasonable latency window of the chitt being posted.
 - [ ] A press refuses to accept an open chitt offer submission when the policy chitt does not have `allow_open_offers: true`.
 - [ ] A press refuses to accept an open chitt offer submission when the issuer's signature over the offer document does not verify.
 - [ ] An on-chain transaction submitting a chitt under an open offer whose `max_acceptances` has been reached is reverted by the registry contract.
@@ -680,7 +680,7 @@ A chitt holder's private keys are the root of their identity in the protocol. Lo
 
 **Recovery flow.**
 1. Holder presents their YubiKey to a backup service.
-2. Backup service simultaneously sends notifications to all configured channels (Nym gateway, email, SMS, secondary contacts).
+2. Backup service simultaneously sends notifications to all configured channels (email, SMS, HTTPS webhook, secondary contacts).
 3. Backup service waits 72 hours for a cancellation signed by any registered cancellation credential.
 4. If cancellation is received: the service aborts and notifies the holder to rotate their backup registration and treat the old YubiKey as potentially compromised.
 5. If no cancellation after 72 hours: the service releases the CID of the encrypted keyring blob plus the wrapped decryption key blob. The holder's device presents the wrapped blob to the YubiKey (PIN required); the YubiKey unwraps it locally; the resulting key fetches and decrypts the keyring from IPFS.
@@ -733,7 +733,7 @@ A chitt recipient — whether a first-time participant or an existing holder —
 
 **As a first-time recipient,** I want to open an invitation link, set up my keychain, review the offer, and countersign, so that I own the resulting chitt immediately and can use it without understanding IPFS or Arbitrum.
 
-**As an existing holder receiving an offer via Nym,** I want to review who is offering the chitt and what it contains, generate a fresh keypair, countersign, and have my client post the result, so that I hold a new credential under my existing identity.
+**As an existing holder receiving an offer via my wallet service,** I want to review who is offering the chitt and what it contains, generate a fresh keypair, countersign, and have my client post the result, so that I hold a new credential under my existing identity.
 
 **As a first-time recipient following a claim link,** I want to set up my keychain, review the open chitt offer's constraints and issuer identity, and countersign, so that I receive the chitt without the issuer needing to be online or approve my specific request.
 
@@ -753,9 +753,9 @@ A chitt recipient — whether a first-time participant or an existing holder —
 7. If the recipient accepts: the client generates a fresh ML-DSA-44 keypair for this chitt, stores the private key in the keyring, adds the public key to the chitt JSON, and signs the canonical serialization with the new private key.
 8. The completed chitt — containing the press's offer signature, the recipient's public key, and the recipient's countersignature — is posted to IPFS. Either the recipient's client or the press may post it.
 9. The press creates the chitt's registry entry on Arbitrum One and logs the issuance.
-10. The press delivers the SCIP and confirmation to the recipient via Nym.
+10. The press delivers the SCIP and confirmation to the recipient via HTTPS to the wallet service endpoint.
 
-**Existing recipient flow (Nym delivery).** Steps 1–2 as above. The press sends the signed offer to the recipient's existing chitt Nym gateway. Steps 4–10 as above, omitting keychain setup.
+**Existing recipient flow (HTTPS delivery).** Steps 1–2 as above. The press sends the signed offer via HTTPS to the recipient's wallet service endpoint, identified from the recipient's registered wallet address. Steps 4–10 as above, omitting keychain setup.
 
 **Open chitt offer receipt flow.**
 
@@ -834,7 +834,7 @@ After issuance, authorized parties need to record changes to a chitt — from po
 
 **As a verifier,** I want to fetch the current log head, walk back to the original issuance, and confirm each entry's authorization against the policy's field definitions and `revocation_permissions` — including confirming the updater's chitt satisfies the relevant predicate — so that I can determine the chitt's current state without trusting the press.
 
-**As a holder,** I want to receive a Nym notification whenever my chitt is updated by a third party, optionally including a message from the updater, so that I am not surprised by changes to my credential.
+**As a holder,** I want to receive a notification via my wallet service whenever my chitt is updated by a third party, optionally including a message from the updater, so that I am not surprised by changes to my credential.
 
 ### Requirements
 
@@ -890,7 +890,7 @@ The intent does not include `version` or `prev_log_root` — those are added by 
 
 **Update flow.**
 
-1. The updater assembles the update intent, signs it with their chitt key, and sends the signed intent to any press listed in `approved_presses` for the chitt's policy — via Nym preferably, HTTPS as fallback. The client discovers available presses from `approved_presses` on the policy chitt.
+1. The updater assembles the update intent, signs it with their chitt key, and sends the signed intent via HTTPS to any press listed in `approved_presses` for the chitt's policy. The client discovers available presses from `approved_presses` on the policy chitt.
 2. The press fetches the chitt's current log head from IPFS and confirms the on-chain registry pointer matches.
 3. The press validates the intent:
    - Intent signature is cryptographically valid.
@@ -902,8 +902,8 @@ The intent does not include `version` or `prev_log_root` — those are added by 
    - If any check fails, the press rejects the intent with a specific error code and does not post.
 4. The press assembles the complete entry: intent payload verbatim + `version` (current head version + 1) + `prev_log_root` (current head CID). The press signs the complete entry with its press sub-chitt key, producing `press_signature`.
 5. The press posts the new log entry to IPFS and updates the on-chain registry pointer for the chitt with its press sub-chitt key.
-6. If `notify_holder` is `true` and the policy does not suppress notification for this code prefix: the press sends a Nym notification to the holder's registered Nym gateway containing the update code, the `updater_message` if present, and the CID of the new log entry. If the holder has no registered Nym gateway, the notification is silently dropped.
-7. The press confirms success to the updater (via Nym or HTTPS, matching the submission channel).
+6. If `notify_holder` is `true` and the policy does not suppress notification for this code prefix: the press sends an HTTPS notification to the holder's wallet service endpoint containing the update code, the `updater_message` if present, and the CID of the new log entry. If the holder's wallet service endpoint is unreachable, the notification is dropped and the holder will discover the update on next poll.
+7. The press confirms success to the updater via HTTPS.
 
 **Presses as neutral infrastructure.** Approved presses are community infrastructure: they hold a funded Arbitrum One wallet, maintain a reputation for policy compliance, and receive update submissions. Any press listed in `approved_presses` may process any update for a chitt governed by that policy. The press does not exercise independent judgment about whether an update is desirable — it validates predicates mechanically and posts if valid. This means issuers should list multiple presses in `approved_presses` to ensure availability; the likelihood that all listed presses are simultaneously unreachable is the practical bound on update resilience.
 
@@ -934,13 +934,13 @@ This suppresses notification for all 5xx entries (programmatic updates). The upd
 - [ ] An erasure update on a chitt whose policy does not have `erasable: true` is rejected by the press.
 - [ ] The monotonic version number and `prev_log_root` chain prevent replay and out-of-order posting of stale entries.
 - [ ] A verifier can reconstruct the full current state of a chitt by reading the append-only log from the first entry to the current head.
-- [ ] The press sends a Nym notification to the holder after posting any update where `notify_holder` is true and the code prefix is not suppressed by the policy.
+- [ ] The press sends an HTTPS notification to the holder's wallet service endpoint after posting any update where `notify_holder` is true and the code prefix is not suppressed by the policy.
 - [ ] A concurrent update submission that arrives after a conflicting entry has already been posted is rejected by the press due to a stale `prev_log_root`; the submitter receives a clear error and can resubmit against the new head.
 
 #### Nice-to-Have (P1)
 
 - Multi-party update approval: a field's `update_policy` can require M-of-N co-signers; the press collects partial intent signatures before assembling and posting the complete entry.
-- Revocation notification to services the holder has authenticated with (via Nym to stored gateway addresses from prior auth sessions).
+- Revocation notification to services the holder has authenticated with (via HTTPS to callback URLs registered during prior auth sessions).
 - Per-press submission receipts: the press returns a signed acknowledgment of the intent before posting, so the updater has proof of submission independent of the on-chain write.
 
 #### Future Considerations (P2)
@@ -950,7 +950,7 @@ This suppresses notification for all 5xx entries (programmatic updates). The upd
 
 ### Open Questions
 
-- **[Engineering]** How does the client efficiently detect new log entries since its last check — polling the Arbitrum One registry pointer, or subscribing via Nym?
+- **[Engineering]** How does the client efficiently detect new log entries since its last check — polling the Arbitrum One registry pointer, or subscribing via HTTPS webhook?
 - **[Engineering]** When a policy's `field_definitions` are updated (a new field added), how are previously-issued chitts that lack that field treated by verifiers?
 
 ---
@@ -1162,7 +1162,7 @@ ChittAuth.deliverResponse(request, signedResponse)
 
 #### Future Considerations (P2)
 
-- Subscription-based revocation notification via Nym: services receive push notification when a chitt they care about is revoked, enabling mid-session revocation without polling.
+- Subscription-based revocation notification via HTTPS webhook: services register a callback URL and receive push notification when a chitt they care about is revoked, enabling mid-session revocation without polling.
 - W3C Verifiable Credential compatibility layer.
 
 ### Open Questions
@@ -1184,7 +1184,7 @@ A service needs to verify that a user holds a chitt satisfying some predicate, o
 
 - Allow a requesting site to initiate a chitt authentication or signing request without knowing the user's wallet service in advance.
 - Route the request to the user's wallet via a thin intermediary (CHAPI or future browser-native API) that sees only metadata, not payload content.
-- Support the wallet fetching and responding to the request via a direct channel, with optional transport-layer anonymity for the wallet service.
+- Support the wallet fetching and responding to the request via a direct channel, with optional IP-level privacy via OHTTP.
 - Provide a confirmation code mechanism that ties the browser session to the signed response received out-of-band.
 - Make the resulting signed statement independently verifiable by any party, using the standard verification flow in §7.
 
@@ -1204,7 +1204,7 @@ A service needs to verify that a user holds a chitt satisfying some predicate, o
 
 **As a privacy-conscious user,** I want the wallet service's identity to remain hidden from the requesting site where possible, so that the requesting site cannot learn which wallet service I use.
 
-**As a wallet service,** I want to respond to signing requests over Nym by default, using the requester's chitt Nym gateway, so that the requester does not learn my server identity from the response.
+**As a wallet service,** I want to respond to signing requests over HTTPS, with the option to use OHTTP for additional IP privacy where the requester supports it.
 
 ### Requirements
 
@@ -1239,7 +1239,7 @@ A service needs to verify that a user holds a chitt satisfying some predicate, o
 }
 ```
 
-`requester_chitt` and `request_signature` are required. A request without either must be rejected by the wallet before being shown to the user. The requester's chitt serves two purposes: it provides a Nym gateway address the wallet uses to send the response (see transport options below), and it gives the user a verifiable trust chain for the requesting site. `callbacks.https` is required as a fallback; `callbacks.ohttp` is optional. There is no separate `callbacks.nym` field — the Nym address is taken from the requester's chitt metadata.
+`requester_chitt` and `request_signature` are required. A request without either must be rejected by the wallet before being shown to the user. The requester's chitt gives the user a verifiable trust chain for the requesting site. `callbacks.https` is required; `callbacks.ohttp` is optional for deployments that want IP-level privacy on the response leg.
 
 The request URL is single-use and expires at `expires_at`. Requests must not be reused across sessions. The `nonce` in the payload is incorporated into the signed statement and must be verified by the requesting site to prevent replay.
 
@@ -1256,7 +1256,7 @@ If no wallet is registered in CHAPI, the wallet's credential handler page is not
 5. The wallet confirms the `required_predicate` against the user's available chitts. If no qualifying chitt exists, the wallet shows a clear explanation rather than a generic error.
 6. The wallet presents the signing request to the user: the `purpose`, the requester's verified chitt identity and chain summary, `payload.content`, and a summary of the `required_predicate` if set. The wallet must clearly show what will be signed and who is asking — including the requester's trust lineage, not just their domain name.
 7. If the user approves: the wallet selects a qualifying chitt (or presents a chooser if multiple qualify), generates a signed message envelope per §6 over the canonical serialization of `payload`, and assembles the authentication response.
-8. The wallet sends the authentication response to the requester via the preferred transport (see below). On success, the requester returns a `confirmation_code` — a short-lived, single-use opaque token — in the response body (for HTTPS) or in a Nym reply.
+8. The wallet sends the authentication response to the requester via the preferred transport (see below). On success, the requester returns a `confirmation_code` — a short-lived, single-use opaque token — in the response body.
 9. The wallet redirects the user's browser to `redirect_uri` with `{code}` replaced by the `confirmation_code`. The requesting site's page picks up the code, looks up the associated signed response, and considers the session authenticated.
 
 **Authentication response object** (posted by wallet to requester):
@@ -1269,13 +1269,11 @@ If no wallet is registered in CHAPI, the wallet's credential handler page is not
 }
 ```
 
-**Transport options.** Because every requester must hold a chitt — and every chitt carries a Nym gateway address — Nym is always available as a response channel. The wallet selects the most private transport available, in preference order: Nym > OHTTP > HTTPS.
+**Transport options.** The wallet selects the most private transport available, in preference order: OHTTP > HTTPS. Because badges are associated with wallet addresses on-chain, the wallet service's identity is not considered sensitive, and HTTPS is acceptable as the primary transport.
 
-- **Nym (default)** — The wallet sends the authentication response to the Nym gateway address in the requester's chitt metadata. The requester sends the `confirmation_code` back via Nym. Full sender anonymity: the requester never learns the wallet service's IP or identity. No separate `callbacks.nym` field is needed; the address is resolved from the requester's chitt. Adds mixnet latency (~3–10 seconds for the round trip).
+- **OHTTP (Oblivious HTTP, RFC 9458)** — If the requester advertises an OHTTP gateway in `callbacks.ohttp`, the wallet may use it for IP-level privacy. The relay knows the wallet's IP but not the content; the requester's gateway sees the content but not the wallet's IP. No single party observes both. Latency is near-HTTPS (single relay hop).
 
-- **OHTTP (Oblivious HTTP, RFC 9458)** — If the requester advertises an OHTTP gateway in `callbacks.ohttp`, the wallet may use it for lower latency with IP privacy. The relay knows the wallet's IP but not the content; the requester's gateway sees the content but not the wallet's IP. No single party observes both. Latency is near-HTTPS (single relay hop).
-
-- **HTTPS** — The wallet posts the response to `callbacks.https`. The requester can observe the wallet service's server IP. This is the least private option and should only be used as a fallback if Nym is unavailable or if the latency is unacceptable for the use case. The requester must still advertise `callbacks.https` since it is the universally-supported fallback.
+- **HTTPS** — The wallet posts the response to `callbacks.https`. The requester can observe the wallet service's server IP. This is the standard transport and is required for all conforming implementations.
 
 **Verification.** On receiving an authentication response, the requesting site verifies the signed statement per §7: signature validity, chain walk to a trusted root, revocation check, predicate evaluation, and nonce match. The confirmation code is only issued after successful verification.
 
@@ -1291,7 +1289,7 @@ If no wallet is registered in CHAPI, the wallet's credential handler page is not
 - [ ] A confirmation code is only issued after the signed statement passes full §7 verification.
 - [ ] The confirmation code is single-use: presenting the same code twice is rejected.
 - [ ] A user who declines the signing request in the wallet UI is redirected to `redirect_uri?error=declined`.
-- [ ] The wallet sends the authentication response via Nym by default, using the Nym gateway in the requester's chitt metadata; HTTPS is used only as a fallback.
+- [ ] The wallet sends the authentication response via HTTPS to `callbacks.https`; OHTTP is used instead if `callbacks.ohttp` is present and the wallet supports it.
 - [ ] The wallet presents the requester's verified chitt chain summary to the user before they approve or decline.
 
 #### Nice-to-Have (P1)
@@ -1310,8 +1308,7 @@ If no wallet is registered in CHAPI, the wallet's credential handler page is not
 
 - **[Design]** Should `required_predicate` be evaluated by the wallet before showing the request to the user (hiding requests the user can't fulfill), or shown regardless with a clear explanation of why no qualifying chitt is available?
 - **[Engineering]** How does the requesting site manage confirmation code expiry and cleanup for sessions where the user never completes the redirect?
-- **[Engineering]** For the Nym transport path, what is the maximum acceptable round-trip latency before the wallet should fall back to HTTPS?
-- **[Design]** Should the wallet service advertise its supported transports in a well-known manifest (e.g., `/.well-known/chitt-wallet.json`) so requesting sites can know which `callbacks` fields to populate before constructing the request?
+- **[Design]** Should the wallet service advertise its supported transports in a well-known manifest (e.g., `/.well-known/chitt-wallet.json`) so requesting sites can know whether to populate `callbacks.ohttp` before constructing the request?
 
 ---
 

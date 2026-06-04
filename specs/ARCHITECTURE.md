@@ -16,7 +16,7 @@
 5. [ADR-004: Cryptographic Primitives — ML-DSA-44 and ML-KEM](#adr-004-cryptographic-primitives--ml-dsa-44-and-ml-kem)
 6. [ADR-005: Press Model and Key Custody](#adr-005-press-model-and-key-custody)
 7. [ADR-006: Privacy Model — Client-Side, Private by Default](#adr-006-privacy-model--client-side-private-by-default)
-8. [ADR-007: Transport Layer — Nym Mixnet](#adr-007-transport-layer--nym-mixnet)
+8. [ADR-007: Transport Layer — HTTPS](#adr-007-transport-layer--https)
 9. [ADR-008: Annotation Layer — EAS on Arbitrum One](#adr-008-annotation-layer--eas-on-arbitrum-one)
 10. [ADR-009: Key Management — Two-Tier with YubiKey Recovery](#adr-009-key-management--two-tier-with-yubikey-recovery)
 11. [ADR-010: Canonical Serialization — RFC 8785 vs. CBOR](#adr-010-canonical-serialization--rfc-8785-vs-cbor)
@@ -305,33 +305,31 @@ The policy control key and the audit log encryption key are **separate keypairs*
 
 ---
 
-## ADR-007: Transport Layer — Nym Mixnet
+## ADR-007: Transport Layer — HTTPS
 
-**Status:** Accepted
+**Status:** Accepted (revised — Nym mixnet requirement removed)
 
 ### Context
 
-The protocol needs a metadata-private communication channel for inbound message delivery (offers, SCIPs, server-to-user notifications). Standard HTTPS leaks sender identity and timing.
+The protocol needs a reliable communication channel for inbound message delivery (offers, SCIPs, server-to-user notifications) between wallet services and presses. An earlier version of this ADR required the Nym mixnet to hide which wallet service holds a given badge. That requirement has been dropped: because every badge is associated with a wallet address on-chain, the identity of the wallet service holding a badge is already observable. Attempting to hide it via a mixnet adds significant operational complexity and latency with limited practical benefit in a world with relatively few wallet services.
 
 ### Decision
 
-Use the **Nym mixnet** for inbound message delivery. Each chitt has a Nym gateway address as a field in its metadata. Senders route encrypted payloads through Nym so the message server cannot observe who sent a message or when.
+Use **HTTPS** for all wallet-service-to-wallet-service and press-to-wallet-service communication. Each wallet service exposes a stable HTTPS endpoint. Senders POST encrypted payloads directly; end-to-end encryption (ML-KEM + ML-DSA-44) ensures the message server cannot read content even though it can observe delivery timing and sender IP.
 
-**Nym does two jobs:** hiding sender metadata on the inbound leg for chitt delivery, and providing an anonymous response channel for the authentication flow (§8). In the authentication flow, the wallet sends the signed response to the Nym gateway address carried in the requester's chitt metadata — the requester's chitt is therefore a prerequisite for any site that wants to request chitt-based authentication. Nym does not handle storage, multi-device delivery, or outbound communication beyond these two roles.
+OHTTP (Oblivious HTTP, RFC 9458) remains an optional transport upgrade for deployments where IP-level metadata privacy is desirable, but is not required for protocol conformance.
 
 ### Message Server
 
-A **message server** (operator's own infrastructure) bridges inbound Nym messages to offline devices:
+A **message server** (operator's own infrastructure) accepts inbound HTTPS messages and queues them for offline devices:
 
-1. Maintains a persistent Nym client connection to receive inbound messages.
+1. Accepts authenticated HTTPS POST requests at a well-known endpoint.
 2. Holds **proxy re-encryption keys** (UMBRAL) for each active sub-chitt, generated at sub-chitt creation.
 3. Transforms inbound ciphertexts (encrypted to master chitt public key) into per-device sub-chitt ciphertexts — without seeing plaintext.
 4. Queues re-encrypted ciphertexts in a per-sub-chitt queue for device pickup.
 5. Authenticates devices via sub-chitt signature challenge before delivering queued messages.
 
-The message server observes that messages arrived and approximately when, but not their content (ciphertexts only) or senders (Nym hides this). Operators who distrust even this metadata can self-host a message server — the Nym gateway address is just a field in chitt metadata.
-
-**Upgrade path:** If device check-in metadata becomes a concern, devices can connect via Nym rather than plain HTTP. Architecture otherwise unchanged.
+The message server observes delivery timing and sender IP, but not message content (ciphertexts only). Operators who wish to reduce IP metadata exposure can deploy an OHTTP relay in front of the message server endpoint.
 
 ---
 
@@ -422,12 +420,12 @@ A stolen YubiKey cannot complete recovery if a valid cancellation is submitted b
 
 ┌──────────────────────────────────┐  ┌──────────────────────────────┐
 │          Chitt Press             │  │         Message Server        │
-│  - Policy compliance check       │  │  - Nym gateway endpoint       │
+│  - Policy compliance check       │  │  - HTTPS endpoint             │
 │  - Signs offers (press sub-chitt)│  │  - UMBRAL proxy re-encryption │
 │  - Posts to IPFS + Arbitrum      │  │  - Per-device message queue   │
 │  - Logs issuance (encrypted)     │  └───────────────┬──────────────┘
 └──────────────────────────────────┘                  │
-                                         Nym mixnet (inbound only)
+                                         HTTPS (optional: OHTTP relay)
                                                       │
 ┌──────────────────────────────────────────────────── ▼ ──────────────┐
 │                          Client (Holder)                              │
@@ -474,7 +472,7 @@ Press
   → constructs issuance log entry, encrypted to each auditor via ML-KEM
   → appends to policy chitt's IPFS log + updates policy chitt's registry pointer
   → produces Signed Chitt Inclusion Proof (SCIP)
-  → sends SCIP + confirmation to recipient via Nym
+  → sends SCIP + confirmation to recipient via HTTPS (to wallet service endpoint)
 ```
 
 ### 2. Chain Verification
@@ -517,7 +515,7 @@ Verifiers
 ### 4. Chitt Authentication (Site Requesting a Signed Statement)
 
 ```
-Requesting site (must hold a chitt with a Nym gateway)
+Requesting site
   → creates authentication request object:
       session_id, purpose, requester_chitt (mutable pointer),
       payload (content + nonce), required_predicate, callbacks.https,
@@ -544,12 +542,11 @@ On approval:
   → wallet selects qualifying chitt (or user chooses from chooser)
   → generates signed message envelope (§6) over canonical payload + nonce
   → sends authentication response to requester:
-      preferred: Nym → requester's chitt Nym gateway (full sender anonymity)
-      fallback:  OHTTP → callbacks.ohttp (IP privacy, lower latency)
-      fallback:  HTTPS → callbacks.https (no anonymity, always available)
+      preferred: OHTTP → callbacks.ohttp (IP privacy, lower latency)
+      fallback:  HTTPS → callbacks.https (always available)
 
 Requesting site
-  → receives authentication response via Nym / OHTTP / HTTPS
+  → receives authentication response via OHTTP / HTTPS
   → runs full §7 verification: chain walk, revocation, predicate, nonce match
   → on success: generates single-use confirmation_code, returns it in response
 
@@ -575,14 +572,14 @@ These are engineering and design questions from the spec that have not yet been 
 | OQ-3 | Engineering | Minimum IPFS replication count for a policy chitt's log before the Arbitrum One registry pointer update is considered safe. | High |
 | OQ-4 | Engineering | For recipient-initiated registry writes (e.g., self-revocations): always mediated by press, or direct writes from holder via paymaster? | High |
 | OQ-5 | Engineering | Field definition changes to a running policy (adding a new field): are previously-issued chitts that lack the field non-conforming or still valid? | High |
-| OQ-6 | Engineering | How does the client efficiently detect new log entries since its last check — polling Arbitrum One registry pointer, or subscribing via Nym? | Medium |
+| OQ-6 | Engineering | How does the client efficiently detect new log entries since its last check — polling Arbitrum One registry pointer, or push notification via HTTPS webhook? | Medium |
 | OQ-7 | Engineering | Fetch budget and caching strategy for chain and annotation lookups on mobile clients with limited connectivity. | Medium |
 | OQ-8 | Engineering | When the cached chain array's version CIDs differ from a link's current state (because an ancestor was updated post-issuance), how should verifiers resolve the discrepancy? | Medium |
 | OQ-9 | Design | Trusted root configuration UX: how are trusted roots configured by the user and synced across devices? Design work should begin in parallel with protocol engineering. | High |
 | OQ-10 | Design | Recovery UX when the holder has both a lost primary service and a lost YubiKey. Out of scope for v1? | Medium |
 | OQ-11 | Design | What is the UX when a recipient declines an offer? Should a decline notification be sent to the press? | Low |
 | OQ-12 | Engineering | Is a transparency log of approved press implementations operated by the protocol foundation needed? Relevant if TEE attestation is added in P2. | Low (P2 dependency) |
-| OQ-13 | Design | Should wallet services publish a `/.well-known/chitt-wallet.json` manifest advertising their supported transports (HTTPS, OHTTP gateway, Nym availability)? If yes, requesting sites can construct the correct `callbacks` block without trial-and-error; if no, sites advertise all transports they support and wallets pick. | Medium |
+| OQ-13 | Design | Should wallet services publish a `/.well-known/chitt-wallet.json` manifest advertising their supported transports (HTTPS, OHTTP gateway)? If yes, requesting sites can construct the correct `callbacks` block without trial-and-error; if no, sites advertise all transports they support and wallets pick. | Medium |
 | OQ-14 | Governance | **Coercion resistance / governance key holder identity.** Should governance body key holders be pseudonymous (organizations or anonymous participants, harder to coerce) or identifiable (named individuals/organizations with public accountability, easier to hold accountable but more coercible)? Deferred pending governance charter design. See also red-team Finding 1.4-B (press legal compulsion). | Medium |
 
 ---

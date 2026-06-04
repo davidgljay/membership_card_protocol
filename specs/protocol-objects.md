@@ -183,7 +183,7 @@ Every post-genesis state change to a chitt — field updates, annotations, and r
   },
 
   "notify_holder":   true,
-  "updater_message": "<optional text — included in holder Nym notification if notify_holder is true>",
+  "updater_message": "<optional text — included in holder notification if notify_holder is true>",
 
   "intent_signature": {
     "signer_chitt": "<base64url — mutable pointer in registry of updater's sub-chitt>",
@@ -209,7 +209,7 @@ Every post-genesis state change to a chitt — field updates, annotations, and r
 | `revocation.effective_date` | `timestamp` | Yes (if revocation) | May predate the posting date |
 | `revocation.note` | `text` | No | Human-readable context |
 | `notify_holder` | `boolean` | Yes | Defaults to `true`; set `false` to suppress holder notification |
-| `updater_message` | `text` | No | Forwarded to holder in the Nym notification |
+| `updater_message` | `text` | No | Forwarded to holder in the HTTPS notification |
 | `intent_signature` | SignatureEntry | Yes | Updater's signature over the UpdateIntentPayload |
 | `press_signature` | SignatureEntry | Yes | Press's signature over the complete LogEntry |
 
@@ -224,7 +224,7 @@ Every post-genesis state change to a chitt — field updates, annotations, and r
 
 ## 4. UpdateIntentPayload
 
-**Transmitted to:** Press (via Nym preferred, HTTPS fallback)  
+**Transmitted to:** Press (via HTTPS)  
 **Signed by:** Updater  
 **Serialized for signing:** Canonical CBOR of this object; becomes the `intent_signature` payload
 
@@ -265,7 +265,7 @@ The intent does **not** include `version` or `prev_log_root` — those are added
 
 ## 5. SignedMessageEnvelope
 
-**Transmitted via:** Nym / OHTTP / HTTPS  
+**Transmitted via:** OHTTP (optional) / HTTPS  
 **Signed by:** One or more chitt holders (parallel co-signing)  
 **Serialized for signing:** Canonical CBOR of the `payload` object only (not the outer envelope)
 
@@ -428,7 +428,7 @@ The object a site creates when it wants a user to authenticate with a chitt. Hos
 | `version` | `text` | Yes | Always `"1"` in v1 |
 | `purpose` | `text` | Yes | Displayed to user in wallet UI |
 | `requesting_site` | `text` | Yes | Display-only origin |
-| `requester_chitt` | `chitt-pointer` | Yes | Wallet uses this for chain verification and Nym response address |
+| `requester_chitt` | `chitt-pointer` | Yes | Wallet uses this for chain verification |
 | `payload.content` | `text` | Yes | The statement the user will countersign |
 | `payload.nonce` | `text` | Yes | Incorporated into signed statement; must be verified to prevent replay |
 | `required_predicate` | predicate | No | Chain predicate the user's chitt must satisfy |
@@ -443,7 +443,7 @@ The object a site creates when it wants a user to authenticate with a chitt. Hos
 
 ## 9. AuthenticationResponse
 
-**Transmitted via:** Nym (preferred) → OHTTP → HTTPS  
+**Transmitted via:** OHTTP (optional) / HTTPS  
 **Sent by:** Wallet service  
 **Contains:** A `SignedMessageEnvelope` (§5) over `payload` from the request
 
@@ -485,7 +485,7 @@ The requesting site verifies `signed_statement` per §7 (chain walk, revocation 
 
 **Signed Chitt Inclusion Proof**  
 **Produced by:** Press  
-**Delivered to:** Recipient (and courtesy copy to administrator) via Nym  
+**Delivered to:** Recipient (and courtesy copy to administrator) via HTTPS to wallet service endpoints  
 **Serialized for signing:** Canonical CBOR of all fields except `press_signature`
 
 A small signed object that binds a newly-issued chitt's CID to its position in the policy's issuance log at time of inclusion. The recipient retains this as verifiable proof of issuance.
