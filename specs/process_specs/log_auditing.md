@@ -86,7 +86,7 @@ An epoch closes on any of the following:
 
 **Auditor side:**
 
-1. Upon receiving a close signal (from the press via Nym, or upon detecting the trigger condition), the auditor fetches all encrypted `PressIssuanceRecord` entries for the closing epoch from the policy log.
+1. Upon receiving a close signal (from the press via HTTPS, or upon detecting the trigger condition), the auditor fetches all encrypted `PressIssuanceRecord` entries for the closing epoch from the policy log.
 
 2. For each entry, the auditor decrypts:
    - Locate their own `auditor_key_packages` entry in the epoch's `AuditEpochEntry`.
@@ -115,7 +115,7 @@ An epoch closes on any of the following:
 
 5. The auditor publishes the `AuditEpochCommitment` to IPFS.
 
-6. The auditor sends the commitment CID to the press via Nym.
+6. The auditor sends the commitment CID to the press via HTTPS.
 
 7. **The auditor destroys the epoch AEK.** This step is irreversible. Entries from this epoch are now permanently undecryptable by anyone, including the auditor.
 

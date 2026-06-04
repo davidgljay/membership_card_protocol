@@ -93,7 +93,7 @@ This flow runs when the holder needs to recover their wallet — for example, af
 
 - The holder has a registered YubiKey and knows its PIN.
 - The backup service is reachable.
-- The holder has configured at least one notification channel (Nym gateway, email, or SMS).
+- The holder has configured at least one notification channel (email, SMS, or HTTPS webhook).
 
 ### Steps
 
@@ -102,9 +102,9 @@ This flow runs when the holder needs to recover their wallet — for example, af
 1. The holder presents their YubiKey to the backup service (via the wallet client or a recovery web interface).
 
 2. The backup service simultaneously sends recovery initiation notifications to all configured channels:
-   - Nym gateway (if configured).
    - Email.
    - SMS.
+   - HTTPS webhook (if configured).
    - Secondary contacts (if configured).
 
    Notifications include: timestamp, backup service identity, and a cancellation link/code.

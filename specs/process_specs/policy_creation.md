@@ -53,7 +53,7 @@ Policy creation is the process by which an authorizer defines and publishes the 
    - All `update_policy` predicates use valid predicate syntax.
    - No field name collides with protocol-required fields (`policy_id`, `press_mark`, `recipient_pubkey`, `issued_at`, `offer_signature`, `holder_signature`).
 
-3. The drafter delivers the proposed policy JSON to the authorizer out of band (e.g., via Nym, email, or in-person review).
+3. The drafter delivers the proposed policy JSON to the authorizer out of band (e.g., via email, secure file transfer, or in-person review).
 
 ### Phase 2: Authorize
 

@@ -98,7 +98,7 @@ Mark signing is the process by which a mark holder signs an arbitrary message us
 
 ### Phase 5: Sending
 
-8. The completed `SignedMessageEnvelope` is transmitted to recipients via the appropriate channel (Nym preferred; HTTPS fallback). For authentication flows, the signed statement is wrapped in an `AuthenticationResponse` (see `chitt_protocol_spec.md §8`).
+8. The completed `SignedMessageEnvelope` is transmitted to recipients via HTTPS (optionally via OHTTP for IP privacy). For authentication flows, the signed statement is wrapped in an `AuthenticationResponse` (see `chitt_protocol_spec.md §8`).
 
 ---
 

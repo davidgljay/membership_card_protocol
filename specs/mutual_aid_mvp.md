@@ -39,7 +39,7 @@ Small WhatsApp-based communities — churches, neighborhood mutual aid groups, d
 
 5. **Not aggregating offers across multiple communities in v1.** Multi-community Chitt support — where a member can access offer pools from several communities they belong to — is a meaningful future feature but introduces significant complexity around privacy and trust context. Out of scope for v1.
 
-6. **Not building the Chitt Protocol itself.** The underlying credential infrastructure (Chitt issuance, chain verification, revocation, Nym messaging) is provided by the Chitt Protocol npm package. [Product Name] is a consumer of that protocol, not its implementation.
+6. **Not building the Chitt Protocol itself.** The underlying credential infrastructure (Chitt issuance, chain verification, revocation, HTTPS messaging) is provided by the Chitt Protocol npm package. [Product Name] is a consumer of that protocol, not its implementation.
 
 ---
 
@@ -76,7 +76,7 @@ An ordinary community participant. They joined because someone they trust invite
 - As a Member, I want to post an offer — a skill, a good, a bit of time, or a financial contribution — signed with my Chitt so that other members can see it comes from a verified community participant.
 - As a Member, I want to browse the community offer board without needing to log in every time so that checking what's available feels natural and low-friction.
 - As a Member, I want to accept an offer by attaching my Chitt so that the offerer is notified, our exchange is on record, and neither of us had to share personal contact information publicly.
-- As a Member, I want to receive a private message through Nym when someone accepts my offer so that I can begin the logistics conversation without my contact details being publicly visible.
+- As a Member, I want to receive a private message through the app when someone accepts my offer so that I can begin the logistics conversation without my contact details being publicly visible.
 - As a Member, I want to invite someone I trust to the community so that the network grows through relationships, not open signups.
 - As a Member making a financial ask, I want to post a request for resources from the community fund so that I can ask for support without the vulnerability of a public post requiring immediate response.
 
@@ -101,9 +101,9 @@ An ordinary community participant. They joined because someone they trust invite
 **Offer acceptance**
 - A member with a valid Chitt can accept an open offer
 - Acceptance attaches the accepting member's Chitt to the exchange record
-- Acceptance triggers a Nym message to the offerer notifying them of the acceptance and the acceptor's Chitt pointer
+- Acceptance triggers a notification to the offerer notifying them of the acceptance and the acceptor's Chitt pointer
 - The exchange record (offer Chitt + acceptance Chitt + timestamp) is created and stored
-- *Acceptance criteria:* The offerer receives a Nym message within 60 seconds of acceptance; the exchange record is independently verifiable; a member cannot accept their own offer
+- *Acceptance criteria:* The offerer receives a notification within 60 seconds of acceptance; the exchange record is independently verifiable; a member cannot accept their own offer
 
 **Chitt verification display**
 - Every offer on the board shows a visible verification badge indicating the offerer's Chitt is valid and in good standing
@@ -129,8 +129,8 @@ An ordinary community participant. They joined because someone they trust invite
 **Offer moderation queue**  
 Stewards can review offers before they appear publicly on the board. Organizer can configure whether moderation is required or optional per community.
 
-**Nym chat thread on acceptance**  
-Rather than just sending a single Nym notification, the acceptance flow opens a Nym-mediated chat thread between offerer and acceptor. This creates an accountable channel for the logistics conversation that both parties can optionally share with Stewards if needed. Off-Nym conversation remains the expected norm; this is an opt-in accountability feature.
+**In-app chat thread on acceptance**  
+Rather than just sending a single notification, the acceptance flow opens an in-app chat thread between offerer and acceptor. This creates an accountable channel for the logistics conversation that both parties can optionally share with Stewards if needed. Off-app conversation remains the expected norm; this is an opt-in accountability feature.
 
 **Offer categories and filtering**  
 Skill, Good, Time, and Financial Ask categories are filterable on the offer board. Members can search by keyword.
@@ -199,7 +199,7 @@ A lightweight mobile app or PWA that stores sub-Chitt keys in the device's secur
 | WhatsApp onboarding mechanism: does this flow through Rhizal, a standalone Chitt Protocol bot, or a hybrid? | Engineering | Yes — determines onboarding architecture |
 | Monetization model: free for communities, grant-funded, freemium with paid tiers, or something else? | David | No — but affects scope of impact measurement features |
 | First pilot community: which specific community will run the first test, and what offer types will they start with? | David | No — but must be identified before design begins |
-| Nym messaging reliability at MVP scale: what are the failure modes and fallbacks if a Nym message doesn't deliver? | Engineering | No — but should inform P0 acceptance criteria |
+| HTTPS notification reliability at MVP scale: what are the failure modes and retry strategy if a notification doesn't deliver? | Engineering | No — but should inform P0 acceptance criteria |
 | Data residency: where do exchange records and offer content live? (IPFS? Hosted DB?) What are the privacy implications for sensitive communities? | Engineering | No — but should be decided before any security-sensitive community onboards |
 
 ---
@@ -209,13 +209,13 @@ A lightweight mobile app or PWA that stores sub-Chitt keys in the device's secur
 No hard external deadlines are currently known. Suggested phasing:
 
 **Phase 0 — Protocol foundation (parallel track, separate codebase)**  
-Chitt Protocol npm package reaches a working proof-of-concept: Chitt issuance, verification, revocation, and Nym message send/receive. This is a prerequisite for building the product on a real credential layer rather than a mock. May use simplified key custody in early versions.
+Chitt Protocol npm package reaches a working proof-of-concept: Chitt issuance, verification, revocation, and HTTPS message delivery. This is a prerequisite for building the product on a real credential layer rather than a mock. May use simplified key custody in early versions.
 
 **Phase 1 — Private pilot with one community**  
-Build P0 requirements against the Chitt Protocol PoC. Onboard one known, trusted community (likely a mutual aid or community organizing group David has an existing relationship with). Goal is to validate the offer-accept-Nym flow with real people, not to achieve polished UX.
+Build P0 requirements against the Chitt Protocol PoC. Onboard one known, trusted community (likely a mutual aid or community organizing group David has an existing relationship with). Goal is to validate the offer-accept-notification flow with real people, not to achieve polished UX.
 
 **Phase 2 — Expanded pilot (3–5 communities)**  
-Incorporate feedback from Phase 1, add key P1 features (moderation, Nym chat thread, financial ask flow), and onboard a small cohort of diverse communities (at least one church-type group, one activist/mutual aid group). Begin measuring against success metrics.
+Incorporate feedback from Phase 1, add key P1 features (moderation, in-app chat thread, financial ask flow), and onboard a small cohort of diverse communities (at least one church-type group, one activist/mutual aid group). Begin measuring against success metrics.
 
 **Phase 3 — Public availability**  
 Address open questions around data residency, recovery flows, and moderation tooling. Publish the Chitt Protocol as a stable, documented npm package with this product as the reference implementation.

@@ -58,14 +58,14 @@ The app sends a **sub-mark request** to the user's wallet. The request contains:
       "predicate": <chitt-predicate expression — see chitt_protocol_spec.md §Background>
     }
   ],
-  "delivery_channel": "nym" | "https",
-  "delivery_address": "<Nym gateway address or HTTPS callback URL for offer delivery>",
+  "delivery_channel": "https",
+  "delivery_address": "<HTTPS callback URL for offer delivery>",
   "timestamp": "<ISO 8601>",
   "request_signature": "<ML-DSA-44 signature over canonical CBOR of above fields, signed by installation_mark_pubkey>"
 }
 ```
 
-**Delivery channel.** The app specifies whether to receive the offer via Nym (preferred, for metadata privacy) or HTTPS callback. The wallet sends the offer to the address specified; the app must be listening.
+**Delivery channel.** The app specifies an HTTPS callback URL to receive the offer. The wallet POSTs the offer to that address; the app must be listening.
 
 **App attestation.** A platform-native integrity proof that the requesting binary is the authentic, unmodified app — not a repackaged or patched version. iOS uses App Attest; Android uses Play Integrity. The wallet verifies this proof before proceeding. An app that cannot produce a valid attestation is rejected.
 
