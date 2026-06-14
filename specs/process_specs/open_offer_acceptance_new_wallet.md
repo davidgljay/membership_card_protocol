@@ -29,7 +29,7 @@ For recipients who already have a wallet, see `open_offer_acceptance_existing_wa
 
 ## Preconditions
 
-- The recipient has followed a valid claim link (`mark://claim?o=<base64>` or hosted URL).
+- The recipient has followed a valid claim link — a URL hosted by the wallet service (e.g., `https://<wallet-service>/claim/<offer-id>`). This is the wallet service around which the new user's wallet will be initialized; in most cases it is the same service the issuer used to create the open offer.
 - The open offer has not expired (`expires_at` is null or in the future).
 - The open offer has not reached `max_acceptances` (or `max_acceptances` is null).
 - The policy mark has `allow_open_offers: true`.
@@ -41,7 +41,7 @@ For recipients who already have a wallet, see `open_offer_acceptance_existing_wa
 
 ### Phase 1: Offer Display and Verification
 
-1. The recipient follows the claim link. The wallet service fetches and decodes the `OpenMarkOffer` document.
+1. The recipient follows the claim link — a URL hosted by the wallet service (e.g., `https://<wallet-service>/claim/<offer-id>`). The wallet service resolves the offer by ID and decodes the `OpenMarkOffer` document. Because the link is hosted by the wallet service, the service that serves this page is also the service around which the recipient's wallet will be created.
 
 2. The wallet service verifies the offer before displaying it:
    - Verify `issuer_signature` over the canonical CBOR of all offer fields (excluding the signature itself).

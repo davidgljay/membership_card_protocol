@@ -1,11 +1,9 @@
-# Chitt Protocol — Registry Contract Spec
+# Mark Protocol — Registry Contract Spec
 
 **Version:** 0.1 (draft)  
 **Date:** 2026-05-25  
 **Status:** Draft  
 **Contract target:** Arbitrum One (Stylus / WASM-compiled Rust)
-
-> **Terminology note.** This spec uses "mark" for "chitt" and "press" for the issuance service. The rename is in progress; treat the terms as interchangeable throughout.
 
 ---
 
@@ -43,7 +41,7 @@
 
 ## 1. Overview
 
-The Chitt Protocol registry contract is the single Arbitrum One contract that tracks the current state of every registered mark. It is the canonical, tamper-resistant source of truth for:
+The Mark Protocol registry contract is the single Arbitrum One contract that tracks the current state of every registered mark. It is the canonical, tamper-resistant source of truth for:
 
 - **Mark state:** the current log head CID for each mark (the pointer verifiers follow to read a mark's full history on IPFS).
 - **Mark provenance:** the policy under which each mark was issued and the press that last wrote to it.
@@ -80,7 +78,7 @@ MarkEntry {
                                       Private mode: ML-KEM-encrypted CID bytes.
                                       Updated on every successful RegisterMark or UpdateMarkHead call.
 
-    policy_address    bytes32       — On-chain registry address of the policy chitt under which
+    policy_address    bytes32       — On-chain registry address of the policy mark under which
                                       this mark was issued. Set at RegisterMark time; immutable
                                       thereafter. Used by the write gate to look up
                                       PressAuthorizations[policy_address, press_address].
@@ -101,7 +99,7 @@ MarkEntry {
 | Privacy mode | Address derivation |
 |---|---|
 | Public | `keccak256(recipient_pubkey)` |
-| Private | `keccak256(sign(recipient_private_key, "chitt-log-v1"))` |
+| Private | `keccak256(sign(recipient_private_key, "mark-log-v1"))` |
 
 The contract does not distinguish between public and private addresses; both are `bytes32` keys. The privacy properties are enforced by the client's choice of derivation and by whether `log_head_cid` is stored as plaintext or encrypted bytes.
 
@@ -186,12 +184,12 @@ SubMarkEntry {
 
 ### 3.5 OpenOfferUseCounts
 
-Tracks acceptance counts for open chitt offers. Keyed by the offer's canonical ID.
+Tracks acceptance counts for open mark offers. Keyed by the offer's canonical ID.
 
 ```
 OpenOfferUseCounts: mapping (bytes32 → uint64)
 
-key:   offer_id (bytes32)   — keccak256(canonical CBOR of the complete OpenChittOffer document
+key:   offer_id (bytes32)   — keccak256(canonical CBOR of the complete OpenMarkOffer document
                                including issuer_signature). Lazily initialized on first accepted claim.
 value: use_count (uint64)   — Number of accepted claims under this offer. Atomically incremented
                                by ClaimOpenOffer (§4.5).
@@ -403,13 +401,13 @@ DeregisterSubMark(
 
 ```
 ClaimOpenOffer(
-    offer_id           bytes32,     — keccak256(canonical CBOR of OpenChittOffer including issuer_sig)
+    offer_id           bytes32,     — keccak256(canonical CBOR of OpenMarkOffer including issuer_sig)
     max_acceptances    uint64,      — 0 means unconstrained; carried from the signed offer
     expires_at         uint64,      — Unix timestamp; 0 means unconstrained
     mark_address       bytes32,     — New mark to register
     initial_log_cid    bytes,       — CID of genesis ChittDocument
     policy_address     bytes32,
-    issuer_sig_payload bytes,       — Canonical CBOR of the OpenChittOffer (for issuer sig verification)
+    issuer_sig_payload bytes,       — Canonical CBOR of the OpenMarkOffer (for issuer sig verification)
     issuer_signature   bytes[2420], — ML-DSA-44 sig from offer issuer over issuer_sig_payload
     press_sig_payload  bytes,
     press_signature    bytes[2420]
