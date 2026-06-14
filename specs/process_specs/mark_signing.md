@@ -1,7 +1,7 @@
 # Mark Signing — Process Spec
 
-**Version:** 0.1 (draft)  
-**Date:** 2026-05-25  
+**Version:** 0.2 (draft)  
+**Date:** 2026-06-09  
 **Status:** Draft  
 
 > **Terminology note.** This spec uses "mark" for "chitt." The rename is in progress; treat the terms as interchangeable.
@@ -39,20 +39,24 @@ Mark signing is the process by which a mark holder signs an arbitrary message us
 1. The signer assembles the `payload` object:
    ```json
    {
-     "content":     "<message body>",
-     "recipients":  ["<mutable pointer>", "<mutable pointer>", ...],
-     "timestamp":   "<ISO 8601 timestamp>",
-     "in_reply_to": "<hash of prior payload — optional>",
-     "edit_of":     "<hash of prior payload — optional; mutually exclusive with retracts>",
-     "retracts":    "<hash of prior payload — optional; mutually exclusive with edit_of>"
+     "message_type": "<string — see Message Types below>",
+     "content":      "<message body — optional when forwards is set>",
+     "recipients":   ["<mutable pointer>", "<mutable pointer>", ...],
+     "timestamp":    "<ISO 8601 timestamp>",
+     "in_reply_to":  "<hash of prior payload — optional>",
+     "edit_of":      "<hash of prior payload — optional; mutually exclusive with retracts and forwards>",
+     "retracts":     "<hash of prior payload — optional; mutually exclusive with edit_of and forwards>",
+     "forwards":     "<hash of original payload being forwarded — optional; mutually exclusive with edit_of and retracts>"
    }
    ```
+   - `message_type` is required. It distinguishes human communication from programmatic messages. See [Message Types](#message-types) below.
    - `recipients` must include at least the intended recipient(s)' mutable pointers. Including the signer's own pointer is optional but conventional for self-addressed records.
    - `timestamp` is the signing time; it must be within the acceptable freshness window as defined by the verifying party.
-   - `in_reply_to`, `edit_of`, and `retracts` are optional. `edit_of` and `retracts` are mutually exclusive — a payload with both set must be rejected at the client before signing.
+   - `in_reply_to`, `edit_of`, `retracts`, and `forwards` are optional. `edit_of`, `retracts`, and `forwards` are mutually exclusive — a payload with more than one of these set must be rejected at the client before signing.
 
 2. The client validates the payload locally:
-   - Confirm `edit_of` and `retracts` are not both set.
+   - Confirm `message_type` is a known value.
+   - Confirm at most one of `edit_of`, `retracts`, `forwards` is set.
    - Confirm `recipients` is non-empty.
    - Confirm `timestamp` is current.
 
@@ -71,11 +75,11 @@ Mark signing is the process by which a mark holder signs an arbitrary message us
 5. The signer constructs a `SignatureEntry`:
    ```json
    {
-     "signer_mark": "<base64url — mutable pointer of the signing sub-mark in the registry>",
-     "public_key":  "<base64url — ML-DSA-44 public key, 1312 bytes raw>",
-     "signature":   "<base64url — ML-DSA-44 signature over canonical CBOR of payload, 2420 bytes raw>"
+     "public_key": "<base64url — ML-DSA-44 public key, 1312 bytes raw>",
+     "signature":  "<base64url — ML-DSA-44 signature over canonical CBOR of payload, 2420 bytes raw>"
    }
    ```
+   The signer's address (and thus their mark identity) is derived from `public_key` by verifiers; it is not included in the entry.
 
 6. The signer assembles the `SignedMessageEnvelope`:
    ```json
@@ -102,6 +106,93 @@ Mark signing is the process by which a mark holder signs an arbitrary message us
 
 ---
 
+## Message Types
+
+The `message_type` field classifies what a signed payload represents. Verifiers and clients use it to route, display, and apply policy to messages correctly — for example, suppressing auth challenges from a user's inbox, or rejecting a `text` message where an `auth_response` is expected.
+
+The canonical type definitions (content schemas, field constraints, and notes) live in `messaging_protocol.md`. This table is the authoritative list of valid values for the `message_type` field.
+
+### Human communication
+
+| Value | Description |
+|---|---|
+| `text` | Free-form human-readable message |
+| `reaction` | Emoji or short symbolic response to a prior message |
+| `reply` | Text message explicitly threaded under a prior message |
+| `edit` | Signed revision to a prior message (`edit_of` required) |
+| `announcement` | One-to-many broadcast to a group of recipients |
+| `introduction` | Introduces two marks that don't yet share a trust path |
+| `read_receipt` | Acknowledges a message was delivered and opened (opt-in) |
+| `delete` | Request to remove a message from one or more stores |
+| `flag` | Reports a message to the issuing press; entry to the 6xx/9xx pipeline |
+
+### Mark lifecycle
+
+| Value | Description |
+|---|---|
+| `mark_offer` | Press delivers a targeted mark offer to a prospective holder |
+| `mark_offer_accepted` | Holder returns the countersigned, completed mark document |
+| `mark_offer_declined` | Holder declines an offer |
+| `mark_update_notification` | Press notifies a holder of a post-issuance update to one of their marks |
+| `capability_grant` | Shares a capability bundle (address + decryption key) for a private mark |
+
+### Authentication
+
+| Value | Description |
+|---|---|
+| `auth_request` | Service requests authentication from a mark holder |
+| `auth_response` | Holder responds to an `auth_request` |
+
+### Programmatic / machine-to-machine
+
+| Value | Description |
+|---|---|
+| `api.advertise` | Mark declares the API capabilities it exposes |
+| `api.invoke` | Mark requests execution of a capability on a remote API mark |
+| `api.response` | API mark returns the result of an invocation |
+| `mcp.tool_call` | AI agent invokes a tool (includes `delegated_by` human mark) |
+| `mcp.tool_result` | Tool returns a result to the agent |
+| `mcp.prompt` | Sends a named prompt to a model mark |
+| `mcp.resource` | Delivers a resource from a model mark |
+
+### System
+
+| Value | Description |
+|---|---|
+| `error` | Structured error response to any message type that requires a reply |
+
+The list of defined types will grow as new protocol features are added. Clients MUST reject payloads with an unrecognized `message_type` rather than silently treat them as a known type.
+
+---
+
+## Forwarding
+
+A forwarded message must be transmitted as a **ForwardPackage** — a pair of envelopes that together identify the original sender, the forwarder, and the new recipients unambiguously. Delivering only the original envelope to a party not listed in its `recipients` is not a valid forward; it is an unauthenticated relay and MUST be rejected by verifiers.
+
+A `ForwardPackage` has the following structure:
+
+```json
+{
+  "original_envelope": { <original SignedMessageEnvelope, unmodified> },
+  "forward_envelope":  { <new SignedMessageEnvelope signed by the forwarder> }
+}
+```
+
+The **forward envelope's payload** MUST satisfy:
+- `forwards` is set to the hash of `original_envelope.payload` (the canonical CBOR hash, same derivation as the message ID).
+- `recipients` lists the mutable pointers of the new recipients (who the message is being forwarded to).
+- `content` is optional and contains any commentary the forwarder wishes to add.
+- `timestamp` is current at the time of forwarding.
+
+From these two envelopes the following are unambiguously established:
+- **Forwarded from:** the addresses derived from `public_key` entries in `original_envelope.signatures`.
+- **Forwarded by:** the addresses derived from `public_key` entries in `forward_envelope.signatures`.
+- **Forwarded to:** `forward_envelope.payload.recipients`.
+
+The original envelope is not modified; all its signatures remain independently verifiable. The forwarder's signature commits only to the fact of forwarding and the new recipient set — not to the original content. The forwarder is not a co-signer of the original payload.
+
+---
+
 ## Edits and Retractions
 
 **Edit:** A new `SignedMessageEnvelope` with `edit_of` set to the hash of the prior payload. The original message is not mutated. The edit is only valid if the signer's master mark chains to the same master as the original signer.
@@ -114,7 +205,7 @@ Mark signing is the process by which a mark holder signs an arbitrary message us
 
 ## Recipient Binding
 
-The `recipients` array is part of the signed `payload`. Modifying it after signing invalidates all signatures. A message whose `recipients` list does not include the receiving party's mark pointer is valid but flagged as **forwarded** by verifiers.
+The `recipients` array is part of the signed `payload`. Modifying it after signing invalidates all signatures. A receiving party whose mark pointer does not appear in `recipients` MUST NOT treat the envelope as a valid direct message — it is only valid if delivered as part of a `ForwardPackage` whose `forward_envelope.payload.recipients` includes that party's pointer (see Forwarding above).
 
 ---
 
@@ -131,7 +222,10 @@ The `recipients` array is part of the signed `payload`. Modifying it after signi
 
 | Condition | Resolution |
 |---|---|
-| `edit_of` and `retracts` both set | Client rejects before signing; the signer must choose one or neither |
+| `message_type` is missing or unrecognized | Client rejects before signing; verifier rejects on receipt |
+| More than one of `edit_of`, `retracts`, `forwards` set | Client rejects before signing; the signer must choose at most one |
+| `forwards` hash does not match `original_envelope.payload` | Verifier rejects the ForwardPackage; the hash must be the canonical CBOR hash of the original payload |
+| Original envelope delivered to a party not in its `recipients`, without a ForwardPackage | Verifier rejects as an unauthenticated relay; the receiving party has no verified forwarder identity |
 | `recipients` is empty | Client rejects before signing |
 | Sub-mark key not available on device (e.g., device was wiped) | Signer must register a new sub-mark from their master key before signing |
 | Signing key's sub-mark has been revoked | Verifiers will flag the signature; signer should rotate to a new sub-mark and resign |

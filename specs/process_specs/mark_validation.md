@@ -1,7 +1,7 @@
 # Mark Validation from a Signed Statement — Process Spec
 
-**Version:** 0.1 (draft)  
-**Date:** 2026-05-25  
+**Version:** 0.2 (draft)  
+**Date:** 2026-06-09  
 **Status:** Draft  
 
 > **Terminology note.** This spec uses "mark" for "chitt." The rename is in progress; treat the terms as interchangeable.
@@ -77,13 +77,19 @@ Verification is executed per `SignatureEntry` in the envelope's `signatures` arr
     - If no such entry exists, `is_currently_valid: true`.
 17. If revocation data is stale beyond the configured freshness window, flag `revocation.data_freshness_seconds` accordingly and — per default policy — treat as rejection.
 
-### Stage 5: Policy Match (For Authentication Flows)
+### Stage 5: Policy Compliance Check
 
 18. Resolve the mark's governing policy using the `policy_id` CID **embedded in the MarkDocument** (not the policy's current mutable pointer head). The policy snapshot at issuance governs.
-19. If the verifier requires a specific `required_predicate` or `required_policy` (e.g., in an authentication flow):
-    - Evaluate the predicate(s) from the policy snapshot against the signer's chain.
-    - Confirm the signing press sub-mark appears in the `approved_presses` array from the same `policy_id` snapshot.
-    - If any predicate fails or the press is not in `approved_presses`, record policy match failure.
+19. **Always** evaluate the mark's field values against the `field_definitions` in the policy snapshot. Confirm the signing press sub-mark appears in the `approved_presses` array from the same `policy_id` snapshot. This check runs for every verified mark regardless of flow type — presses are trusted to issue compliant marks, but that trust is audited here.
+    - If any field value violates a `field_definitions` constraint, record `policy_compliant: false`.
+    - If the signing press is not in `approved_presses`, record `policy_compliant: false`.
+    - If both pass, record `policy_compliant: true`.
+20. **Non-compliance reporting:** If `policy_compliant: false`, the verifier MUST submit a non-compliance report to the press certification authority identified in the policy snapshot's `certification_authority` field. The report MUST include:
+    - The full `SignedMessageEnvelope` (as evidence of the issued mark).
+    - The `policy_id` CID used for evaluation.
+    - The specific field(s) or press approval check that failed.
+    - The verifier's own mark mutable pointer (so the authority can authenticate the report source).
+21. If the verifier additionally requires a specific `required_predicate` or `required_policy` (e.g., in an authentication flow), evaluate those predicates against the signer's chain. Predicate failure is a separate `policy_match` result and does not affect `policy_compliant` (a mark can be policy-compliant but not match a relying party's specific predicate requirements).
 
 ### Stage 5a: Policy Creation Compliance (For Policy-Level Verification)
 
@@ -127,10 +133,15 @@ Verification is executed per `SignatureEntry` in the envelope's `signatures` arr
   },
   "was_valid_at_signing_time": true | false,
   "is_currently_valid":        true | false,
+  "policy_compliant":          true | false | null,
+  "policy_match":              true | false | null,
+  "non_compliance_reported":   true | false | null,
   "addressed_to_verifier":     true | false,
   "annotations":               [ ... ]
 }
 ```
+
+`policy_compliant` is `null` if the policy snapshot could not be fetched (see Error Paths). `policy_match` is `null` when no relying-party predicate was specified. `non_compliance_reported` is `true` if a report was submitted to the press certification authority, `false` if submission failed, and `null` if no non-compliance was detected.
 
 ---
 
@@ -150,7 +161,8 @@ Verification is executed per `SignatureEntry` in the envelope's `signatures` arr
 ## Postconditions
 
 - A structured result is produced per signature in the envelope.
-- The verifier has not contacted the signer, press, or any intermediary.
+- The verifier has not contacted the signer or any intermediary other than the press certification authority (in the event of non-compliance).
+- If any mark was found `policy_compliant: false`, a non-compliance report has been submitted to the press certification authority identified in that mark's policy snapshot.
 - The verifier retains the result for application-layer decision-making. Validation returns facts; the application acts on them.
 
 ---
@@ -162,7 +174,8 @@ Verification is executed per `SignatureEntry` in the envelope's `signatures` arr
 | IPFS fetch for a chain link times out | Retry; if persistent, flag chain as unverifiable and record in result |
 | Arbitrum RPC unavailable (revocation data) | Flag `data_freshness_seconds` as exceeding the freshness window; per default policy, treat as rejection |
 | Cached chain array version CIDs differ from current link state | Per-link issuer references are authoritative; use those and flag the discrepancy |
-| Policy snapshot at `policy_id` CID unavailable on IPFS | Policy match stage cannot complete; treat as policy match failure |
+| Policy snapshot at `policy_id` CID unavailable on IPFS | Policy compliance check cannot complete; set `policy_compliant: null` and treat as policy match failure. Non-compliance reporting is skipped (cannot determine authority). |
+| Non-compliance report submission to certification authority fails | Set `non_compliance_reported: false` in result; verifier SHOULD retry. The mark's `policy_compliant: false` status stands regardless. |
 | Message ID seen before (replay) | Flag as replay; reject for authentication flows |
 
 ---

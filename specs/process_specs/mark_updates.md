@@ -58,6 +58,7 @@ Updates are classified by a three-digit code (1xx–9xx) that signals the semant
      "code":           <integer 100–999>,
      "field_updates":  [{ "field": "<name>", "value": <new value> }],
      "revocation":     { "effective_date": "<ISO 8601>", "note": "<optional>" },
+     "note":           "<optional free text — appended to the mark's notes array>",
      "notify_holder":  true,
      "updater_message":"<optional — forwarded to holder in HTTPS notification>",
      "timestamp":      "<ISO 8601 — replay prevention>"
@@ -65,6 +66,7 @@ Updates are classified by a three-digit code (1xx–9xx) that signals the semant
    ```
    - For codes 1xx–7xx: populate `field_updates`; omit `revocation`.
    - For codes 8xx–9xx: populate `revocation` with an `effective_date` (may predate posting); omit `field_updates`.
+   - `note` is optional and may be included with any update code. If present, it is appended to the mark's notes array (see Notes Array below). It is distinct from `revocation.note`, which is internal to the revocation record and not surfaced in the notes array.
    - Set `notify_holder: false` for adversarial scenarios (e.g., a 9xx revocation where notification would be harmful). The policy may also suppress notification for specific code prefixes.
 
 3. The updater canonically serializes the `UpdateIntentPayload` (canonical CBOR per RFC 8949 §4.2 with protocol-specific overrides).
@@ -113,13 +115,34 @@ Updates are classified by a three-digit code (1xx–9xx) that signals the semant
 
 ---
 
+## Notes Array
+
+A mark's notes array is not stored as a mutable field. It is derived by verifiers and clients by walking the append-only log from genesis to the current head and collecting every `LogEntry` whose intent payload contains a non-empty `note` field. The result is an ordered list of note objects, one per qualifying entry, in chronological order.
+
+Each entry in the derived notes array has the following shape:
+
+```json
+{
+  "text":         "<the note string from UpdateIntentPayload.note>",
+  "timestamp":    "<ISO 8601 — the intent timestamp from the same payload>",
+  "updater_mark": "<mutable pointer of the updater's mark>",
+  "log_entry_cid":"<IPFS CID of the LogEntry that carried this note>",
+  "update_code":  <integer — the code from the same log entry>
+}
+```
+
+Notes are immutable once posted — they are part of the signed log and cannot be edited or removed (subject to the mark's erasure policy). A note may accompany any update code; the `update_code` field in the derived object lets readers understand the context in which the note was written (e.g., a 2xx commendation note vs. a 6xx concern note).
+
+---
+
 ## Postconditions
 
 - A new `LogEntry` is appended to the target mark's IPFS log, chained via `prev_log_root`.
 - The Arbitrum One registry entry for the target mark points to the new log head.
 - The updater's identity and intent signature are permanently recorded in the log entry.
+- If the intent payload included a `note`, it is now part of the immutable log and will appear in the mark's derived notes array, attributed to `updater_mark` with the intent timestamp.
 - If `notify_holder` was true, an HTTPS notification was sent to the holder's wallet service endpoint.
-- Any verifier can re-derive the complete current state of the mark by reading the append-only log from the genesis document to the current head.
+- Any verifier can re-derive the complete current state of the mark — including the full notes array — by reading the append-only log from the genesis document to the current head.
 
 ---
 

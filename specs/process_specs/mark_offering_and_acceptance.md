@@ -10,7 +10,7 @@
 
 ## Overview
 
-Mark offering and acceptance is the process by which a press issues a targeted mark to a specific recipient. The press commits to the offer by signing it first; the recipient reviews, generates a fresh keypair, and countersigns to accept. Neither party can unilaterally forge the other's commitment. The process applies to all targeted marks including policy marks and press sub-marks.
+Mark offering and acceptance is the process by which a press issues a targeted mark to a specific recipient. The issuer's wallet service assembles and signs the offer blob and delivers it to the recipient; the recipient generates a fresh keypair and countersigns to accept; the press then validates the completed mark and posts it as the final step. Neither party can unilaterally forge the other's commitment. The process applies to all targeted marks including policy marks and press sub-marks.
 
 ---
 
@@ -19,7 +19,8 @@ Mark offering and acceptance is the process by which a press issues a targeted m
 | Actor | Role |
 |---|---|
 | **Requester** | Initiates the issuance request (may be the administrator, the recipient, or a third party, depending on policy) |
-| **Press** | Verifies predicates, signs the offer, posts to IPFS, registers on-chain |
+| **Issuer's wallet service** | Assembles the mark offer blob, signs it with the press sub-mark key, and delivers it to the recipient |
+| **Press** | Verifies predicates; validates the completed mark; posts to IPFS and registers on-chain |
 | **Recipient** | Reviews the offer, generates a keypair, countersigns to accept ownership |
 | **Administrator** | Receives SCIP courtesy copy; may be notified of issuance |
 
@@ -61,20 +62,20 @@ Mark offering and acceptance is the process by which a press issues a targeted m
 
 ### Phase 3: Offer Assembly and Signing
 
-6. The press assembles the proposed mark JSON (`MarkDocument`):
+6. The **issuer's wallet service** assembles the proposed mark JSON (`MarkDocument`):
    - Populates all protocol-required fields: `policy_id`, `press_mark`, `issued_at`.
    - Leaves `recipient_pubkey` and `holder_signature` absent (offer phase).
    - Populates all required `field_definitions` fields per the policy.
 
-7. The press canonically serializes the offer document (canonical CBOR per RFC 8949 §4.2 with protocol-specific overrides for binary fields and timestamps).
+7. The **issuer's wallet service** canonically serializes the offer document (canonical CBOR per RFC 8949 §4.2 with protocol-specific overrides for binary fields and timestamps).
 
-8. The press signs the canonical serialization with its press sub-mark private key → `offer_signature`.
+8. The **issuer's wallet service** signs the canonical serialization with its press sub-mark private key → `offer_signature`.
 
 ### Phase 4: Offer Delivery
 
-9. **First-time recipient (invitation link):** The offer is encoded as `mark://invite?o=<base64>` and delivered out of band (email, QR code, etc.).
+9. **First-time recipient (invitation link):** The **issuer's wallet service** encodes the offer as `mark://invite?o=<base64>` and delivers it out of band (email, QR code, etc.).
 
-10. **Existing recipient (HTTPS delivery):** The signed offer is POSTed directly to the recipient's wallet service endpoint.
+10. **Existing recipient (HTTPS delivery):** The **issuer's wallet service** POSTs the signed offer directly to the recipient's wallet service endpoint.
 
 ### Phase 5: Recipient Review and Acceptance
 
@@ -99,7 +100,7 @@ Mark offering and acceptance is the process by which a press issues a targeted m
 
 ### Phase 6: Completion and Registration
 
-16. The completed mark — containing `offer_signature`, `recipient_pubkey`, and `holder_signature` — is posted to IPFS. Either the recipient's client or the press may post it.
+16. The recipient's client sends the completed mark — containing `offer_signature`, `recipient_pubkey`, and `holder_signature` — to the press. The press validates the completed mark: confirms both signatures verify against their respective keys, all required fields are present, and field values conform to the policy schema. If validation passes, the press posts the mark to IPFS.
 
 17. The press creates a new Arbitrum One registry entry for the mark, with the genesis CID as the initial log head. This write is signed with the press sub-mark key and verified on-chain against `approved_presses`.
 
