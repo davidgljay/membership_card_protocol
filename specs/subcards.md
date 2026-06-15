@@ -58,7 +58,9 @@ The app assembles a `SubCardDocument` (see `protocol-objects.md §16`):
   "capabilities":        ["<message type>", "..."],
   "recipient_pubkey":    "<base64url — new ML-DSA-44 public key>",
   "issued_at":           "<ISO 8601>",
-  "valid_until":         "<ISO 8601 — optional>"
+  "valid_until":         "<ISO 8601 — optional>",
+  "attestation_level":   "T2",
+  "attestation_proof":   "<base64url — App Attest / Play Integrity assertion, omitted if T1>"
 }
 ```
 
@@ -74,6 +76,7 @@ Before presenting the request to the user, the wallet:
 2. Walks the `app_card` chain to confirm it reaches the governance authority's app-certification policy root.
 3. Checks the app card's log for any revocation entries.
 4. Queries the EAS annotation layer for third-party annotations on the app's card.
+5. Verifies the attestation: if `attestation_level` is `"T2"`, verifies the `attestation_proof` assertion against the platform's attestation service and confirms the attested key hash matches `recipient_pubkey`. If `attestation_level` is `"T1"`, confirms the platform keystore reports the key as hardware-backed. If the policy does not accept T1 and the level is not T2, blocks the request.
 
 **Outcomes:**
 
@@ -105,7 +108,9 @@ The holder's primary card key signs canonical CBOR of the partially-signed docum
 
 ### Step 5: Registration On-Chain
 
-The sub-card is registered on Arbitrum One, creating a `SubCardRegistration` entry (see `protocol-objects.md §15`) linking the sub-card's address to both `holder_primary_card` and `app_card`. Who submits the registration — the wallet, the app, or a press — is an open question (INC-10 / OQ-16); the on-chain verification logic is independent of the submitter.
+The completed `SubCardDocument` is submitted to an approved press for the primary card's policy. The press calls `RegisterSubCard` on the Arbitrum One registry contract, creating a `SubCardRegistration` entry (see `protocol-objects.md §15`) linking the sub-card's address to both `holder_primary_card` and `app_card`.
+
+**Gas** is paid from the app's pre-funded gas account with the press (see `registry_contract.md §4.11`). The press rejects the registration request if the app's gas balance is insufficient before submitting any transaction. The app is responsible for maintaining a funded balance; the issuing organization's press does not cover sub-card registration costs.
 
 The sub-card is now a live, independently-verifiable credential in the registry.
 
@@ -121,6 +126,23 @@ The sub-card private key is generated inside the hardware keystore and is scoped
 - **Android:** Key is generated with `KeyPairGenerator` using the `AndroidKeyStore` provider with `setIsStrongBoxBacked(true)` for the highest assurance tier. The key cannot be extracted.
 
 Signing operations are executed by the platform keystore API; private key bytes are never exposed to app code.
+
+### Attestation Tiers
+
+App attestation verifies that the sub-card key was generated inside genuine, unmodified app code on genuine device hardware — not inside a modified binary or an emulated environment. The protocol defines two tiers:
+
+| Tier | Mechanism | Guarantees |
+|---|---|---|
+| **T1** | Hardware-backed key storage only (iOS Secure Enclave / Android StrongBox) | The private key was generated inside hardware; it cannot be extracted. Does not verify the app binary. |
+| **T2** | Full app attestation (iOS App Attest + DCAP / Android Play Integrity) | Both the private key is hardware-bound AND the app binary is the genuine published version running on a non-rooted, non-emulated device. |
+
+**T2 is the default and required for all sub-cards.** The `SubCardDocument` MUST include an `attestation_level` field with value `"T2"` unless the governing policy explicitly accepts `"T1"`.
+
+**T1 is available as a policy exception.** Some devices — including older hardware and Android devices without Google Play Services (an estimated 25–30% of Android devices globally) — cannot generate a Play Integrity token or an App Attest certificate. Policy bodies that serve populations where this is significant may explicitly declare that they accept T1-attested sub-cards. This is a policy decision, not a protocol default; absent explicit acceptance, T2 is required.
+
+**How attestation is presented in a SubCardDocument.** When T2 attestation is used, the app requests an App Attest (iOS) or Play Integrity (Android) assertion scoped to the newly-generated sub-card public key hash. The assertion is attached to the `SubCardDocument` before it is sent to the wallet. The wallet verifies the assertion before countersigning. The `attestation_level` field records the tier used; the `attestation_proof` field carries the raw assertion or certificate (for independent audit).
+
+When T1 is used (permitted by policy), `attestation_level: "T1"` is recorded and `attestation_proof` is omitted. The wallet still verifies hardware-backed key provenance via the platform keystore API.
 
 ### Approved Keystore Library
 
@@ -169,6 +191,23 @@ Sub-cards follow the standard 8xx/9xx revocation model.
 - **Automatic revocation on annotation escalation:** If an app's card receives a blocking annotation (8xx/9xx equivalent) after sub-card issuance, the wallet SHOULD automatically revoke all sub-cards for that app on next sync and notify the user.
 
 Sub-card revocations are submitted to an approved press (for the primary card's policy), as with all card updates.
+
+### Authorization for Deregistration
+
+Sub-card deregistration (the on-chain `DeregisterSubCard` call that marks a sub-card inactive) requires a signature from the holder's **primary card key** — not from the sub-card key itself, and not from the app. The press verifies this signature off-chain before submitting the transaction; gas is paid by the issuing organization's press.
+
+This means sub-card keys cannot unilaterally deregister themselves. An app that wants to revoke its own sub-card (e.g., on uninstall) must request deregistration through the press, which requires the holder's primary key to be available. In practice, the holder's wallet signs the deregistration request; the app triggers the flow by notifying the wallet.
+
+### Deregistration After Key Recovery
+
+If the holder's primary card key is lost and later recovered:
+
+1. The holder should treat all previously authorized sub-cards as potentially compromised — the old primary key that authorized them may have been accessible to an attacker during the window of loss.
+2. After recovery, the holder should deregister all existing sub-cards (using the newly recovered primary key).
+3. Sub-card keys are hardware-bound and non-exportable — the sub-cards themselves were not compromised by the loss of the primary key. However, an attacker who held the old primary key could have deregistered and re-registered their own sub-cards, so all existing sub-card bindings should be considered suspect.
+4. Each app should be prompted to re-request a new sub-card, which the holder approves with the recovered key.
+
+The press handles deregistration of multiple sub-cards in sequence; the holder signs each individually or the wallet produces a batch of signed deregistration requests.
 
 ---
 
@@ -220,6 +259,9 @@ The wallet is the enforcement point. It:
 - [ ] A wallet that discovers a blocking annotation for an app automatically revokes all that app's sub-cards on next sync and notifies the user.
 - [ ] An app receives only the capabilities the user authorized; it cannot escalate to un-granted capabilities post-issuance.
 - [ ] The wallet self-signing flow (wallet creates its own sub-cards without user approval) uses the same `SubCardDocument` schema as third-party apps.
+- [ ] A `SubCardDocument` with `attestation_level: "T2"` is accepted only if the `attestation_proof` verifies against the platform's attestation service and the attested key hash matches `recipient_pubkey`.
+- [ ] A `SubCardDocument` with `attestation_level: "T1"` is rejected unless the governing policy explicitly declares T1 acceptable.
+- [ ] The wallet blocks issuance if the `attestation_level` is missing or unrecognized.
 
 ---
 
@@ -227,7 +269,7 @@ The wallet is the enforcement point. It:
 
 - **[Design — SM-SHARE-ALL]** Should the wallet support a "share all cards" option, or should per-card selection be mandatory? The latter is more privacy-preserving but may be friction-heavy for apps that legitimately need access to many cards.
 - **[Engineering — SM-OFFLINE]** How should the wallet handle a sub-card request that arrives while the user is offline? Queue and present on next open, or reject with a retry instruction?
-- **[Engineering — SM-GAS]** Gas sponsorship: should the wallet offer to sponsor gas for sub-card registration, or is it always the app's responsibility? Intersects OQ-4.
+- ~~**[Engineering — SM-GAS]** Gas sponsorship: should the wallet offer to sponsor gas for sub-card registration, or is it always the app's responsibility?~~ ✅ **RESOLVED 2026-06-14** — Gas for `RegisterSubCard` and app-initiated `DeregisterSubCard` is always the requesting app's responsibility. The app pre-funds a gas account with the press; the press rejects the request if the balance is insufficient. The wallet does not sponsor sub-card registration gas.
 - **[Trust-and-Safety — SM-CADENCE]** What is the minimum audit cadence for apps to maintain their app card's standing? Per-version? Per-major-version? Time-based (every 90 days)?
 - **[Design — SM-RENEW]** When a user sets `valid_until` on a sub-card, should the wallet send a renewal reminder before expiry, or should the app re-request authorization?
 - **[Security — SM-SPAM]** The app pays gas for sub-card registration. Could a malicious app exploit this to spam the registry? Rate limiting per app card should be considered.

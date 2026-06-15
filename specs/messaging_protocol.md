@@ -156,7 +156,7 @@ A press delivers a targeted card offer to a prospective holder.
 
 ---
 
-### 5. `card_offer_accepted`
+### 6. `card_offer_accepted`
 
 The holder sends back the countersigned, completed card document.
 
@@ -176,7 +176,7 @@ The holder sends back the countersigned, completed card document.
 
 ---
 
-### 6. `card_offer_declined`
+### 7. `card_offer_declined`
 
 The holder declines an offer.
 
@@ -194,7 +194,7 @@ The holder declines an offer.
 
 ---
 
-### 7. `card_update_notification`
+### 8. `card_update_notification`
 
 The press notifies a holder of a post-issuance update to one of their cards.
 
@@ -215,7 +215,7 @@ The press notifies a holder of a post-issuance update to one of their cards.
 
 ---
 
-### 8. `auth_request`
+### 9. `auth_request`
 
 A service requests authentication from a card holder — "Sign in with your card."
 
@@ -240,7 +240,7 @@ Also deliverable as a deep link: `card://auth?r=<base64(envelope)>` or QR code f
 
 ---
 
-### 9. `auth_response`
+### 10. `auth_response`
 
 The holder responds to an `auth_request`.
 
@@ -258,7 +258,7 @@ The holder responds to an `auth_request`.
 
 ---
 
-### 10. `api`
+### 11. `api`
 
 A message to or from a card that instruments an API capability. Subtypes handle the full request/response cycle.
 
@@ -314,7 +314,7 @@ The API card returns the result.
 
 ---
 
-### 11. `mcp`
+### 12. `mcp`
 
 A message to or from a card attached to an LLM or other AI model, following the Model Context Protocol message shape. Enables AI agent identities to be card-anchored.
 
@@ -375,7 +375,7 @@ A message to or from a card attached to an LLM or other AI model, following the 
 
 ---
 
-### 12. `capability_grant`
+### 13. `capability_grant`
 
 Shares a capability bundle (address + decryption key) for a private card, enabling selective disclosure.
 
@@ -396,7 +396,7 @@ Shares a capability bundle (address + decryption key) for a private card, enabli
 
 ---
 
-### 13. `introduction`
+### 14. `introduction`
 
 A card introduces two cards that don't yet share a trust path, bootstrapping their mutual discovery.
 
@@ -416,7 +416,7 @@ A card introduces two cards that don't yet share a trust path, bootstrapping the
 
 ---
 
-### 14. `announcement`
+### 15. `announcement`
 
 A one-to-many broadcast from a card to a group of recipients, such as a press or community announcement.
 
@@ -436,7 +436,7 @@ A one-to-many broadcast from a card to a group of recipients, such as a press or
 
 ---
 
-### 15. `read_receipt`
+### 16. `read_receipt`
 
 Acknowledges that a message was delivered and opened.
 
@@ -455,7 +455,7 @@ Acknowledges that a message was delivered and opened.
 
 ---
 
-### 16. `delete`
+### 17. `delete`
 
 A recipient's request to remove a message from one or more stores. Not guaranteed — the request may be declined, and is always declined if the target message has an active `flag` against it.
 
@@ -483,7 +483,7 @@ A recipient's request to remove a message from one or more stores. Not guarantee
 
 ---
 
-### 17. `flag`
+### 18. `flag`
 
 Reports a message to the press (or any authorized card) that issued a card attached to that message. Flags are the entry point to the 6xx/9xx revocation pipeline and serve as a community safety mechanism.
 
@@ -524,7 +524,7 @@ Reports a message to the press (or any authorized card) that issued a card attac
 
 ---
 
-### 18. `error`
+### 19. `error`
 
 A structured error response to any message type that requires a reply.
 

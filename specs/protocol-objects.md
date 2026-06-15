@@ -1,8 +1,9 @@
 # Card Protocol — Object Reference
 
-**Version:** 0.1 (draft)  
-**Date:** 2026-05-21  
-**Status:** In Review
+**Version:** 0.2 (draft)  
+**Date:** 2026-06-14  
+**Status:** In Review  
+**Amends:** v0.1 — §14 write authorization updated from ML-DSA-44/Stylus to secp256r1/RIP-7212 per ADR-012. Press dual-key model note added.
 
 This document is the canonical reference for every structured object in the Card Protocol. Each object is shown as an annotated JSON template (the developer-facing input surface). Objects that are signed or hashed use **canonical CBOR** (RFC 8949 deterministic encoding with protocol-specific overrides) as the byte sequence over which signatures are computed — see Appendix A of `card_protocol_spec.md` for the full serialization rules.
 
@@ -89,6 +90,12 @@ The genesis document of a card. Every card — including policy cards, press sub
 4. Holder signs canonical CBOR of the complete document → `holder_signature`.
 5. Completed document is posted to IPFS.
 
+**Press dual-key model:** Each press card carries two distinct public keys with separate roles:
+- `recipient_pubkey` (ML-DSA-44, 1312 bytes) — the press's IPFS identity key. Used for `offer_signature` above and for all content stored on IPFS. Quantum-resistant from day one because IPFS content is permanent.
+- secp256r1 key (64 bytes, uncompressed x||y) — the press's on-chain write authorization key. Registered separately in the on-chain `PressAuthorizations` table (not in this CardDocument). Verified via RIP-7212 precompile on each `RegisterCard` / `UpdateMarkHead` call. Rotatable; upgradeable to ML-DSA-44 via ADR-012 upgrade path.
+
+These are independent keys. Rotating the secp256r1 on-chain key does not affect the ML-DSA-44 IPFS identity key, and vice versa.
+
 ### 1.1 Protocol-Reserved Updatable Fields
 
 These fields are NOT present at genesis. They are added to an existing card via a 1xx `LogEntry` and are enforced by the press and verifiers regardless of the card's policy `field_definitions`. They may not be redefined or overridden by any policy.
@@ -157,7 +164,7 @@ A policy card is a CardDocument whose content defines the rules for a class of c
 | `field_definitions` | array | Yes | Schema for cards issued under this policy |
 | `recipient_predicate` | predicate | No | Chain predicate the recipient must satisfy; absent = unconstrained |
 | `requester_predicate` | predicate | No | Chain predicate the requester must satisfy; absent = unconstrained |
-| `auditors` | `card-pointer-array` | No | Auditors receive ML-KEM-encrypted copies of each issuance log entry |
+| `auditors` | `card-pointer-array` | No | Auditors receive a per-epoch AEK (wrapped via ML-KEM-768 per auditor) giving them read access to all issuance log entries in that epoch. See `PressIssuanceRecord` §11 and `AuditEpochEntry` §12. |
 | `approved_presses` | `card-pointer-array` | No | Presses whose sub-card pointers may write to this policy's cards |
 | `valid_until` | `timestamp` | No | Press rejects issuance requests after this time |
 | `allow_open_offers` | `boolean` | No | Default `false`; must be `true` to permit open card offers under this policy |
@@ -668,7 +675,7 @@ The `entries_hash` is a completeness commitment: it proves the auditor saw all e
 ## 14. CardEntry (on-chain)
 
 **Stored on:** Arbitrum One (on-chain)  
-**Written by:** Press sub-card key (verified on-chain via Stylus ML-DSA-44)  
+**Written by:** Press sub-card key (verified on-chain via secp256r1 / RIP-7212 precompile in Phase 1; upgradeable to ML-DSA-44 via ADR-012 upgrade path)  
 **Authoritative spec:** `specs/object_specs/registry_contract.md §3` — that document takes precedence over this section for all implementation details.
 
 The on-chain records managed by the Card registry contract. Not JSON documents — this is the conceptual structure of the Stylus contract state.
@@ -705,7 +712,7 @@ CardEntry {
 | Public | `keccak256(recipient_pubkey)` |
 | Private | `keccak256(sign(recipient_private_key, "card-address-v1"))` |
 
-**Write authorization:** A write to `log_head_cid` requires a valid ML-DSA-44 signature from a press whose key is registered in the on-chain `PressAuthorizations` table for the card's `policy_address`. The contract verifies this on-chain before accepting the write. (Note: the IPFS-stored `approved_presses` field in the policy card is an audit surface kept in sync with on-chain state; in the event of a discrepancy, on-chain state is authoritative — see ADR-011 in `ARCHITECTURE.md`.)
+**Write authorization:** A write to `log_head_cid` requires a valid secp256r1 signature (r||s, 64 bytes) from a press whose key is registered in the on-chain `PressAuthorizations` table for the card's `policy_address`. The contract verifies this signature via the RIP-7212 precompile before accepting the write. The press also registers an `mldsa44_key_hash` at authorization time to support the future on-chain key scheme upgrade to ML-DSA-44 (see ADR-012 in `ARCHITECTURE.md`). Note: the `recipient_pubkey` in the IPFS-stored `CardDocument` is always ML-DSA-44 (IPFS identity key) — the secp256r1 key is a separate on-chain-only authorization key. (Note: the IPFS-stored `approved_presses` field in the policy card is an audit surface kept in sync with on-chain state; in the event of a discrepancy, on-chain state is authoritative — see ADR-011 in `ARCHITECTURE.md`.)
 
 **Open offer counter table** (`OpenOfferUseCounts` mapping, keyed by offer ID):
 
@@ -717,7 +724,7 @@ OpenOfferUseCounts (mapping: bytes32 → uint64)
                            successful card registration under this offer
 ```
 
-The contract performs the following checks atomically with card registration for open offer submissions: (1) verifies the issuer's ML-DSA-44 signature over the offer payload; (2) confirms `block.timestamp < expires_at` (skipped if `expires_at` is null); (3) confirms `OpenOfferUseCounts[offer_id] < max_acceptances` (skipped if `max_acceptances` is null); (4) atomically increments the counter and registers the card. If any check fails, the transaction reverts.
+The contract performs the following checks atomically with card registration for open offer submissions: (1) verifies the issuer's ML-DSA-44 signature over the offer payload (issuer keys are IPFS identity keys — always ML-DSA-44); (2) verifies the press's secp256r1 signature via RIP-7212; (3) confirms `block.timestamp < expires_at` (skipped if `expires_at` is null); (4) confirms `OpenOfferUseCounts[offer_id] < max_acceptances` (skipped if `max_acceptances` is null); (5) atomically increments the counter and registers the card. If any check fails, the transaction reverts.
 
 For the full storage layout, write operations, read operations, governance tables, events, and error codes, see `specs/object_specs/registry_contract.md`.
 
@@ -726,7 +733,7 @@ For the full storage layout, write operations, read operations, governance table
 ## 15. SubCardRegistration
 
 **Stored on:** Arbitrum One (on-chain)  
-**Written by:** Holder's primary card key or press (open — see INC-10 / OQ-16)  
+**Written by:** Press (authorized for the card's policy), on behalf of the holder — see `registry_contract.md §4.3` for the authoritative on-chain schema, preconditions, and state changes. §15 here is a high-level summary only.  
 **IPFS document:** See §16 (SubCardDocument) for the full off-chain record; §15 describes only the on-chain registration entry.
 
 Maps a sub-card's registry address to its holder's primary card and the requesting app's card. Also records the primary card's log head CID at registration time, enabling scope-attenuation checks — a sub-card cannot use authority the primary card did not have at the time of registration.
@@ -763,6 +770,8 @@ The genesis document for a sub-card — a device-bound, app-specific credential 
   "recipient_pubkey":    "<base64url — sub-card ML-DSA-44 public key, 1312 bytes raw>",
   "issued_at":           "<ISO 8601 timestamp>",
   "valid_until":         "<ISO 8601 timestamp — optional; absent means no expiry>",
+  "attestation_level":   "T2 | T1",
+  "attestation_proof":   "<base64url — App Attest / Play Integrity assertion scoped to recipient_pubkey hash; omitted if attestation_level is T1>",
   "app_signature":       "<base64url — app card key ML-DSA-44 signature over canonical CBOR of document without both signature fields>",
   "holder_signature":    "<base64url — holder primary card key ML-DSA-44 signature over canonical CBOR of document including app_signature, without holder_signature>"
 }
@@ -776,23 +785,26 @@ The genesis document for a sub-card — a device-bound, app-specific credential 
 | `recipient_pubkey` | `base64url` | Yes | ML-DSA-44 public key generated in device hardware-backed secure storage; 1312 bytes raw |
 | `issued_at` | `timestamp` | Yes | Set by the app at document assembly time |
 | `valid_until` | `timestamp` | No | Optional expiry; verifiers must reject signatures from expired sub-cards |
+| `attestation_level` | `text` | Yes | `"T2"` (full app attestation; default and required) or `"T1"` (hardware-backed key storage only; permitted only if the governing policy explicitly accepts it). See `subcards.md §Attestation Tiers`. |
+| `attestation_proof` | `base64url` | Conditional | Present when `attestation_level` is `"T2"`: the platform attestation assertion (iOS App Attest certificate / Android Play Integrity token) scoped to the hash of `recipient_pubkey`. Omitted when `attestation_level` is `"T1"`. |
 | `app_signature` | `base64url` | Yes | App's card key signature over canonical CBOR of the document without `app_signature` or `holder_signature` |
 | `holder_signature` | `base64url` | Yes | Holder's primary card key signature over canonical CBOR of the document including `app_signature`, without `holder_signature` |
 
 **Signing sequence:**
 
 1. App generates a fresh ML-DSA-44 keypair in device hardware-backed secure storage → `recipient_pubkey`. The private key is scoped to the app's signing identity; it cannot be exported.
-2. App assembles the document with `holder_primary_card`, `app_card`, `capabilities`, `recipient_pubkey`, `issued_at` (and optionally `valid_until`), leaving both signature fields absent.
-3. App signs canonical CBOR of that document → `app_signature`.
-4. App sends the partially-signed document to the wallet.
-5. Wallet verifies `app_signature` and walks the `app_card` chain to confirm it chains to the governance authority's app-certification policy root.
-6. Wallet presents to the user: app identity (from `app_card`), requested `capabilities`, and optional `valid_until`. User approves or denies.
-   - **Wallet self-signing exception:** When the wallet is the requesting app (i.e. `app_card` is the wallet's own card), step 6 is skipped. The user already trusts the wallet with their primary key.
-7. Holder's primary card key signs canonical CBOR of the document including `app_signature`, without `holder_signature` → `holder_signature`.
-8. Completed SubCardDocument is posted to IPFS.
-9. Sub-card is registered on Arbitrum One via `RegisterSubCard` (see §15).
+2. App requests an attestation assertion scoped to `hash(recipient_pubkey)` from the platform (iOS App Attest / Android Play Integrity for T2; or skips for T1) → `attestation_proof`.
+3. App assembles the document with all fields except the two signature fields.
+4. App signs canonical CBOR of that document → `app_signature`.
+5. App sends the partially-signed document to the wallet.
+6. Wallet verifies `app_signature`, walks the `app_card` chain to confirm it chains to the governance authority's app-certification policy root, and verifies the `attestation_proof` (or confirms T1 is policy-permitted if `attestation_level` is `"T1"`).
+7. Wallet presents to the user: app identity (from `app_card`), requested `capabilities`, and optional `valid_until`. User approves or denies.
+   - **Wallet self-signing exception:** When the wallet is the requesting app (i.e. `app_card` is the wallet's own card), step 7 is skipped. The user already trusts the wallet with their primary key.
+8. Holder's primary card key signs canonical CBOR of the document including `app_signature`, without `holder_signature` → `holder_signature`.
+9. Completed SubCardDocument is posted to IPFS.
+10. Sub-card is registered on Arbitrum One via `RegisterSubCard` (see §15).
 
-**Verifier chain walk.** A verifier encountering a signature from a sub-card must confirm: (1) the message type appears in the sub-card's `capabilities`; (2) `valid_until` has not passed; (3) `app_signature` is valid; (4) `holder_signature` is valid; (5) `app_card` chains to the governance app-certification policy root; (6) the sub-card is not revoked in the on-chain registry.
+**Verifier chain walk.** A verifier encountering a signature from a sub-card must confirm: (1) the message type appears in the sub-card's `capabilities`; (2) `valid_until` has not passed; (3) `app_signature` is valid; (4) `holder_signature` is valid; (5) `app_card` chains to the governance app-certification policy root; (6) the sub-card is not revoked in the on-chain registry; (7) `attestation_level` is `"T2"` unless the governing policy explicitly accepts `"T1"`.
 
 ---
 

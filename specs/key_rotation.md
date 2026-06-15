@@ -1,8 +1,9 @@
 # Key Rotation — Feature Specification
 
-**Version:** 0.1 (draft)
-**Date:** 2026-05-25
+**Version:** 0.2 (draft)
+**Date:** 2026-06-14
 **Status:** Draft
+**Amends:** v0.1 — §6 updated for press dual-key model (secp256r1 on-chain + ML-DSA-44 IPFS); §6.5 added for on-chain key scheme upgrade path per ADR-012.
 
 > **Terminology note.** This spec now uses "card" as the canonical term per the Naming Convention.
 
@@ -322,29 +323,82 @@ Press sub-cards are authorized to write to the Arbitrum One registry on behalf o
 
 ### 6.2 Planned Press Key Rotation
 
-1. **Generate new keypair.** The press generates a fresh ML-DSA-44 keypair for the new sub-card key.
-2. **Issue new press sub-card.** The press operator requests a new press sub-card from the policy holder. The new sub-card has a new mutable pointer and the new public key as `recipient_pubkey`.
-3. **Update `approved_presses`.** The policy holder submits a 3xx update intent to add the new press sub-card pointer to the policy's `approved_presses` array.
-4. **Update `PressAuthorizations` on-chain.** The policy governance body updates the `PressAuthorizations` table on Arbitrum One to register the new press sub-card key as active for this policy.
-5. **Drain and switch.** The press completes any in-flight issuance operations with the old key, then switches to signing with the new key.
-6. **Revoke old press sub-card.** The old press sub-card is revoked (code 801) and removed from `approved_presses` via a further 3xx update to the policy.
-7. **Update `PressAuthorizations` on-chain.** Remove or deactivate the old press sub-card key from the `PressAuthorizations` table.
+Press sub-cards carry two independent public keys with separate roles:
+- **ML-DSA-44 key** (`recipient_pubkey` in the CardDocument on IPFS) — used for IPFS content signatures (offer signatures, etc.). Rotated by issuing a new press sub-card with a new ML-DSA-44 keypair.
+- **secp256r1 key** (registered on-chain in `PressAuthorizations`) — used for on-chain write authorization (`RegisterCard`, `UpdateMarkHead`, etc.). Rotated independently via `AuthorizePress`.
 
-**Previously issued cards are unaffected.** The old press sub-card's signature on historical cards remains valid because those cards were issued while the sub-card was active.
+These can be rotated independently. The procedures below apply to both; where they differ, each step notes which key is affected.
+
+**Full press rotation (both keys):**
+
+1. **Generate new keypairs.** The press generates a fresh secp256r1 keypair (for on-chain writes) and a fresh ML-DSA-44 keypair (for IPFS content). Both private keys are stored in operator-managed hardware-backed storage.
+2. **Issue new press sub-card.** The press operator requests a new press sub-card from the policy holder. The new sub-card has a new mutable pointer and the new ML-DSA-44 public key as `recipient_pubkey`.
+3. **Update `approved_presses`.** The policy holder submits a 3xx update intent to add the new press sub-card pointer to the policy's `approved_presses` array.
+4. **Update `PressAuthorizations` on-chain.** The policy governance body calls `AuthorizePress` with the new `press_pubkey` (secp256r1, 64 bytes x||y) and `mldsa44_key_hash` (keccak256 of the new ML-DSA-44 pubkey). This registers both the new secp256r1 on-chain key and the hash of the new ML-DSA-44 IPFS key.
+5. **Drain and switch.** The press completes any in-flight issuance operations with the old keys, then switches to signing with the new keys for both on-chain writes and IPFS content.
+6. **Revoke old press sub-card.** The old press sub-card is revoked (code 801) and removed from `approved_presses` via a further 3xx update to the policy.
+7. **Deactivate old entry on-chain.** Call `RevokePress` to deactivate the old press address in `PressAuthorizations`. The entry is retained with `active = false` for the audit trail.
+
+**Rotating only the secp256r1 on-chain key** (e.g., routine key hygiene without reissuing the press sub-card): call `AuthorizePress` with the same `press_address` and new `press_pubkey`. The `press_public_key` is overwritten; the `mldsa44_key_hash` and all other fields are preserved.
+
+**Previously issued cards are unaffected.** The old press sub-card's IPFS-stored ML-DSA-44 signature on historical cards remains valid because those cards were issued while the sub-card was active.
 
 ### 6.3 Emergency Press Key Rotation (Suspected Compromise)
 
-1. Immediately deactivate the old press sub-card in the `PressAuthorizations` table. This blocks further registry writes from the compromised key even before the press sub-card itself is formally revoked.
+1. Immediately call `RevokePress` on-chain to deactivate the old press address in `PressAuthorizations`. This blocks further registry writes using the compromised secp256r1 key even before the press sub-card itself is formally revoked.
 2. Investigate what cards, if any, were fraudulently issued using the compromised key. Coordinate with the policy holder to revoke fraudulent cards.
-3. Issue new press sub-card and proceed with standard rotation (steps 2–7 above).
+3. Issue new press sub-card and proceed with standard rotation (steps 1–7 above).
 
 **Detecting fraudulent issuances.** The press's signed issuance log (encrypted to auditors) provides a record of what the press legitimately issued. Any registry entry not present in that log is a candidate for fraudulent issuance. Auditors play a critical role in post-compromise forensics.
 
 ### 6.4 Acceptance Criteria
 
-- [ ] After the old press sub-card is removed from `PressAuthorizations`, the Arbitrum One registry contract rejects further writes from the old key.
+- [ ] After the old press sub-card is removed from `PressAuthorizations`, the Arbitrum One registry contract rejects further writes from the old secp256r1 key.
 - [ ] Previously issued cards remain verifiable after the press key rotation.
 - [ ] The window between the `PressAuthorizations` deactivation and the formal sub-card revocation is minimized; the on-chain deactivation is the effective security boundary.
+- [ ] Rotating only the secp256r1 on-chain key does not affect the press sub-card's ML-DSA-44 IPFS identity key or previously issued IPFS content.
+
+---
+
+### 6.5 On-Chain Key Scheme Upgrade (secp256r1 → ML-DSA-44)
+
+This section documents the press-initiated portion of the ADR-012 three-phase upgrade from secp256r1 to ML-DSA-44 for on-chain write authorization. Governance decisions (activating Phase 2, setting Phase 3 deadline) are described in `ARCHITECTURE.md ADR-012`.
+
+**Background.** At authorization time (§6.2 step 4), a press registers both a secp256r1 key for on-chain use and a `mldsa44_key_hash` (keccak256 of its ML-DSA-44 public key) for the future upgrade. No additional re-registration is required when the upgrade is triggered — the hash already on-chain binds the upgrade to the correct ML-DSA-44 key.
+
+**When to act.** Governance activates Phase 2 by upgrading the verifier module to accept both secp256r1 and ML-DSA-44 signatures. All presses must complete their individual `RotateOnChainKeyScheme` rotation before the Phase 3 deadline. After the deadline, the contract accepts only ML-DSA-44 for new writes; secp256r1 is accepted only for rotation operations during the grace period.
+
+**Per-press upgrade flow:**
+
+1. **Retrieve ML-DSA-44 public key.** The press retrieves the full ML-DSA-44 public key (1312 bytes) corresponding to the `mldsa44_key_hash` it registered at authorization time. This is the same ML-DSA-44 key used for IPFS content signatures — no new key generation is needed.
+2. **Construct and sign the rotation payload.** The press constructs:
+   ```json
+   {
+     "op":                 "rotate_on_chain_key_scheme",
+     "press_address":      "<base64url — bytes32>",
+     "policy_address":     "<base64url — bytes32>",
+     "new_mldsa44_pubkey": "<base64url — 1312 bytes, the full ML-DSA-44 public key>",
+     "nonce":              "<base64url>",
+     "deadline_block":     <uint64 — block number cutoff for this payload>
+   }
+   ```
+   The payload is signed with **both**:
+   - `secp256r1_sig` — secp256r1 signature (r||s) over keccak256(payload), using the current registered secp256r1 private key
+   - `mldsa44_sig` — ML-DSA-44 signature over keccak256(payload), using the new ML-DSA-44 private key (proves possession)
+3. **Submit `RotateOnChainKeyScheme`.** Call the contract (see `registry_contract.md §4.11`). The contract verifies both signatures, confirms `keccak256(new_mldsa44_pubkey) == mldsa44_key_hash`, and migrates the press's `key_scheme` to `1` (ML-DSA-44).
+4. **Confirm and switch.** After the transaction confirms, the press switches all new on-chain writes to use ML-DSA-44 signatures.
+
+**No disruption to IPFS operations.** The ML-DSA-44 key was already in use for IPFS content signing before this upgrade. The upgrade simply promotes it to on-chain authorization use as well.
+
+**Presses that miss the Phase 3 deadline** become write-locked. They can still submit a `RotateOnChainKeyScheme` transaction during the grace period (the contract accepts secp256r1 signatures for rotation-only purposes during this window). After the grace period closes, the press must contact governance to restore write access via a fresh `AuthorizePress` with a new ML-DSA-44 key.
+
+### 6.6 Acceptance Criteria (Key Scheme Upgrade)
+
+- [ ] A `RotateOnChainKeyScheme` call rejected because `keccak256(new_mldsa44_pubkey) != mldsa44_key_hash` returns error E-26.
+- [ ] A `RotateOnChainKeyScheme` call while `key_scheme_phase == 0` (Phase 1) returns error E-24.
+- [ ] After a successful `RotateOnChainKeyScheme`, the contract accepts ML-DSA-44 write signatures from the press and rejects secp256r1 write signatures.
+- [ ] Previously issued cards and their IPFS-stored content are unaffected by the on-chain key scheme upgrade.
+- [ ] A press that has not yet upgraded can still rotate its secp256r1 key during Phase 2 via `AuthorizePress`.
 
 ---
 
@@ -380,9 +434,11 @@ The `successor` field may be appended at most once. A code-102 entry is pending 
 
 ### 8.2 1xx Update Codes for Key Rotation
 
+The canonical definitions for these codes are in `specs/update_codes.md`. The codes used in this spec are:
+
 | Code | Meaning |
 |---|---|
-| 100 | Linked successor — planned key rotation (holder-initiated) |
+| 100 | Linked successor — planned key rotation or advancement (holder-initiated) |
 | 101 | Linked successor — emergency rotation (holder-initiated; prior key potentially compromised) |
 | 102 | Linked successor — issuer-initiated card recovery (72-hour pending window; see §3.5) |
 | 103 | Issuer-initiated recovery rotation cancelled by holder |

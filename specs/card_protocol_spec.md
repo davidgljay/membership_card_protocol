@@ -66,7 +66,7 @@ All card fields — whether in policy cards or in issued cards — use a common 
 | Type | Validation options |
 |---|---|
 | `text` | `regex` (optional — pattern the value must match) |
-| `base64url` | — (value is a base64url-encoded binary field per RFC 4648 §5, no padding; encoded as CBOR byte string in canonical serialization) |
+| `base64url` | — (value is a base64url-encoded binary field per RFC 4648 §5, no padding; serialized as a JSON string in canonical serialization) |
 | `integer` | `min`, `max` |
 | `number` | `min`, `max` |
 | `boolean` | — |
@@ -170,11 +170,14 @@ Every log entry carries a required `code` field — a three-digit integer signal
 
 Entries with codes 1xx–7xx use `field_updates` to record changes and do not carry an `effective_date`; the update takes effect at the time it is posted. Entries with codes 8xx–9xx are revocations and carry an `effective_date` that may be earlier than the posting date — the issuer is asserting when the relevant condition began.
 
-**Initial defined codes:**
+**Defined codes.** The canonical code registry is `specs/update_codes.md`. Selected codes for reference:
 
 | Code | Meaning |
 |---|---|
-| 100 | Positive update — linked to successor or additional card (e.g. promotion) |
+| 100 | Linked successor — planned key rotation or advancement (holder-initiated) |
+| 101 | Linked successor — emergency rotation (holder-initiated; prior key potentially compromised) |
+| 102 | Linked successor — issuer-initiated card recovery (72-hour pending window) |
+| 103 | Issuer-initiated recovery rotation cancelled by holder |
 | 200 | Positive annotation — general commendation or trust endorsement |
 | 300 | Neutral field update — general |
 | 301 | Valid-until refresh |
@@ -187,13 +190,13 @@ Entries with codes 1xx–7xx use `field_updates` to record changes and do not ca
 | 800 | Quiet revocation — role ended; departed in good standing |
 | 801 | Quiet revocation — voluntary surrender by holder |
 | 810 | Quiet revocation — this card's signing key compromised |
-| 811 | Quiet revocation — device sub-card lost or stolen (this card only) |
+| 811 | Quiet revocation — sub-card lost or stolen (this card only) |
 | 900 | Loud revocation — credential obtained under false pretenses |
 | 901 | Loud revocation — policy violation identified post-issuance |
 | 910 | Loud revocation — full wallet compromise suspected |
 | 911 | Loud revocation — bad actor or harmful conduct |
 
-Additional codes within each range may be defined as use cases arise.
+See `specs/update_codes.md` for the full registry, authority rules per code, and extended notes. Additional codes within each range may be defined as use cases arise.
 
 **Verification rule for revocations:** When evaluating any card or signature, walk the full chain. For each link, check whether any 8xx or 9xx entry exists with an `effective_date` at or before the timestamp of the thing being evaluated. If so, apply the appropriate semantics: for 8xx, things before the effective date remain trusted; for 9xx, things on or after the effective date are invalid or suspect. If multiple revocation entries exist, the one with the earliest effective date governs. 1xx–7xx entries do not affect the card's revocation status.
 
@@ -445,7 +448,7 @@ This walk is independent of the standard chain walk used for card issuance. It t
 
 ### Open Questions
 
-- **[Engineering — RESOLVED]** Canonical serialization format: canonical CBOR per RFC 8949 §4.2, JSON input surface per RFC 8949 §6.1, with protocol-specific overrides for binary fields (base64url → CBOR byte string) and timestamps (ISO 8601 → CBOR Tag 1 uint). See Appendix A and ARCHITECTURE.md ADR-010.
+- **[Engineering — RESOLVED]** Canonical serialization format: RFC 8785 (JSON Canonicalization Scheme — JCS). Deterministic JSON with lexicographic key sorting, no whitespace, standard JSON escaping. All field values (including binary fields and timestamps) are serialized as plain JSON strings. See Appendix A and ARCHITECTURE.md ADR-010.
 - **[Engineering]** How are field definition changes (adding a new field to an existing policy) handled for cards already issued under the old schema? Are those cards now non-conforming, or do they remain valid?
 
 ---
@@ -467,7 +470,6 @@ Once a policy card is live and a press is authorized, the press must accept issu
 
 - **Not:** Cryptographic enforcement of rate limits. Rate limits stated in a policy are a social and legal commitment enforced by the press; they are auditable by the policy authorizer (who holds the audit key) but not verifiable by outside parties without the audit key.
 - **Not:** Guaranteeing delivery of card offers. Delivery is best-effort via invitation link or HTTPS to the recipient's wallet service.
-- **Not:** Hardware attestation in v1. This is a future consideration for high-stakes policies.
 
 ### User Stories
 
@@ -535,7 +537,7 @@ This check does not prevent issuance from proceeding if the press is already reg
 }
 ```
 
-`max_acceptances` and `expires_at` may each be null (unconstrained), but an offer with both null is valid only if the policy constrains issuance in some other way. An open card offer with no constraints whatsoever requires explicit acknowledgment from the issuer at creation time. The `offer_id` used for on-chain counter tracking is `hash(canonical CBOR of the complete open card offer document including `issuer_signature`)`. This binds the offer ID to the issuer's key, making it unforgeable and unique per issuance.
+`max_acceptances` and `expires_at` may each be null (unconstrained), but an offer with both null is valid only if the policy constrains issuance in some other way. An open card offer with no constraints whatsoever requires explicit acknowledgment from the issuer at creation time. The `offer_id` used for on-chain counter tracking is `hash(canonical RFC 8785 JSON of the complete open card offer document including `issuer_signature`)`. This binds the offer ID to the issuer's key, making it unforgeable and unique per issuance.
 
 **Open offer issuance flow.**
 
@@ -544,7 +546,7 @@ This check does not prevent issuance from proceeding if the press is already reg
 3. The issuer distributes the claim link via any channel (private message, QR code, email, etc.). The security of the resulting cards is bounded by the channel's trustworthiness.
 4. A recipient follows the claim link. The wallet service presents an offer review screen: issuer identity and chain summary, proposed field values, acceptance constraints (slots remaining if `max_acceptances` is set, expiry if `expires_at` is set), and the redirect destination URL.
 5. The recipient's client verifies the issuer's card chain to a trusted root and confirms the named press sub-card appears in the policy's `approved_presses`. If either check fails, the offer is rejected before display.
-6. If the recipient accepts: the client generates a fresh ML-DSA-44 keypair for this card, stores the private key in the keyring, and assembles an **open offer claim payload**: `{ "offer": <verbatim OpenCardOffer document>, "recipient_pubkey": <new public key> }`. The client signs the canonical CBOR of this claim payload with the new private key, producing a `recipient_signature`.
+6. If the recipient accepts: the client generates a fresh ML-DSA-44 keypair for this card, stores the private key in the keyring, and assembles an **open offer claim payload**: `{ "offer": <verbatim OpenCardOffer document>, "recipient_pubkey": <new public key> }`. The client signs the canonical RFC 8785 JSON of this claim payload with the new private key, producing a `recipient_signature`.
 7. The wallet service submits an **OpenOfferClaimSubmission** to the approved press via HTTPS POST: `{ "claim_payload": { "offer": ..., "recipient_pubkey": ... }, "recipient_signature": ... }`. See `protocol-objects.md` §7 for the full schema.
 8. The press validates: (a) the issuer's signature over the offer document is valid; (b) the press's own sub-card is listed in `approved_presses`; (c) the policy card has `allow_open_offers: true`; (d) the press independently checks `expires_at` and reads `OpenOfferUseCounts[offer_id]` on-chain to confirm capacity — this is the press's own pre-flight, separate from the contract's atomic enforcement (see below). If validation fails at any step, the press rejects with a specific error code before submitting any transaction.
 9. The press signs the per-recipient card with its press sub-card key (producing `offer_signature`), calls `ClaimOpenOffer` on-chain (which atomically re-validates constraints and registers the card), then posts the completed card to IPFS.
@@ -555,7 +557,7 @@ This check does not prevent issuance from proceeding if the press is already reg
 
 **Dual verification is required for open offers.** Open offers present a larger abuse surface than targeted issuance — any bearer may claim without individual issuer review, and a misconfigured or malicious press could otherwise bypass `max_acceptances` by calling `RegisterCard` directly. To prevent this, offer constraints are verified independently by both the press (pre-flight, before the transaction is submitted) and the contract (on-chain, atomically with registration). Neither check is a substitute for the other.
 
-The press calls `ClaimOpenOffer` with: `offer_id` (keccak256 of the canonical CBOR of the complete offer document including `issuer_signature`), `max_acceptances` (`null` in the document is encoded as `type(uint64).max` in calldata; any other value is passed as-is), `expires_at` (`null` encoded as `0`), `issuer_signature`, and the standard card registration fields.
+The press calls `ClaimOpenOffer` with: `offer_id` (keccak256 of the canonical RFC 8785 JSON of the complete offer document including `issuer_signature`), `max_acceptances` (`null` in the document is encoded as `type(uint64).max` in calldata; any other value is passed as-is), `expires_at` (`null` encoded as `0`), `issuer_signature`, and the standard card registration fields.
 
 The contract executes the following checks atomically with card registration:
 
@@ -903,7 +905,7 @@ The intent does not include `version` or `prev_log_root` — those are added by 
    - No fields in `field_updates` are protocol-required immutable fields.
    - The code range is consistent with the entry content (8xx–9xx entries must include `revocation`; 1xx–7xx entries must include `field_updates`).
    - If any check fails, the press rejects the intent with a specific error code and does not post.
-4. The press assembles the complete entry: intent payload verbatim + `version` (current head version + 1) + `prev_log_root` (current head CID). The press signs the complete entry with its press sub-card key, producing `press_signature`.
+4. The press assembles the complete entry: intent payload verbatim + `version` (current head version + 1) + `prev_log_root` (current head CID). The press signs the canonical RFC 8785 JSON of this complete assembled entry — **excluding the `press_signature` field itself** — with its press sub-card key, then appends the resulting `press_signature` field to the entry. The signature therefore covers everything that precedes it in the completed document.
 5. The press posts the new log entry to IPFS and updates the on-chain registry pointer for the card with its press sub-card key.
 6. If `notify_holder` is `true` and the policy does not suppress notification for this code prefix: the press sends an HTTPS notification to the holder's wallet service endpoint containing the update code, the `updater_message` if present, and the CID of the new log entry. If the holder's wallet service endpoint is unreachable, the notification is dropped and the holder will discover the update on next poll.
 7. The press confirms success to the updater via HTTPS.
@@ -1014,7 +1016,7 @@ Card holders need to sign arbitrary messages using their card identity. Signatur
 
 **Signing process.**
 1. The sender assembles the payload: content, recipient mutable pointers, timestamp, and optional reply/edit/retraction fields.
-2. The client canonically serializes the payload (canonical CBOR per RFC 8949 §4.2, with protocol-specific overrides for binary fields and timestamps — see Appendix A).
+2. The client canonically serializes the payload (canonical RFC 8785 JSON — see Appendix A).
 3. The client signs the canonical serialization using the current device's sub-card private key. The master key is not accessed.
 4. The signature, sub-card registry address, and ML-DSA-44 public key are added to the `signatures` array.
 5. For parallel co-signing, each additional signer independently repeats steps 3–4 and appends their entry.
@@ -1086,6 +1088,8 @@ A recipient or service needs to determine: whether each signature is cryptograph
 1. **Signature validity.** Verify the signature against the canonical serialization of the payload using the inline public key. No network call required.
 
 2. **Sub-card to master link.** Resolve the signing sub-card's registry address. Confirm the sub-card appears in the active sub-card list of its claimed master card's current metadata, and that the master card's signature on the sub-card registration is valid.
+
+2a. **Capability check (sub-cards only).** If the signing sub-card has an associated `SubCardDocument` (see `protocol-objects.md §16`), retrieve it and confirm the message's `type` field appears in the sub-card's `capabilities` array. If the message type is absent from the whitelist, reject the signature regardless of cryptographic validity. If no `SubCardDocument` exists (legacy or wallet primary-key signature), skip this step.
 
 3. **Chain walk (historical).** Using the cached chain array in the card's signed metadata, fetch all ancestor version CIDs from IPFS in parallel. For each link: verify the issuer's signature, confirm scope attenuation, confirm the chain array matches the per-link issuer references (array is a hint; per-link references are authoritative).
 
@@ -1260,7 +1264,7 @@ If no wallet is registered in CHAPI, the wallet's credential handler page is not
 4. The wallet walks the requester's card chain to a trusted root and checks for revocation, exactly as in §7. If the chain fails verification or any link is revoked, the request is rejected before display.
 5. The wallet confirms the `required_predicate` against the user's available cards. If no qualifying card exists, the wallet shows a clear explanation rather than a generic error.
 6. The wallet presents the signing request to the user: the `purpose`, the requester's verified card identity and chain summary, `payload.content`, and a summary of the `required_predicate` if set. The wallet must clearly show what will be signed and who is asking — including the requester's trust lineage, not just their domain name.
-7. If the user approves: the wallet selects a qualifying card (or presents a chooser if multiple qualify), assembles a signed message envelope per §6 with `type: "auth_response"`, `content: { statement, context, nonce }` (copied from the request's `payload`), `senders` (the holder's master card pointer), `recipients` (`requester_card`), and `timestamp` (current time). The wallet signs the canonical CBOR of the payload with the selected sub-card key and assembles the authentication response.
+7. If the user approves: the wallet selects a qualifying card (or presents a chooser if multiple qualify), assembles a signed message envelope per §6 with `type: "auth_response"`, `content: { statement, context, nonce }` (copied from the request's `payload`), `senders` (the holder's master card pointer), `recipients` (`requester_card`), and `timestamp` (current time). The wallet signs the canonical RFC 8785 JSON of the payload with the selected sub-card key and assembles the authentication response.
 8. The wallet sends the authentication response to the requester via the preferred transport (see below). On success, the requester returns a `confirmation_code` — a short-lived, single-use opaque token — in the response body.
 9. The wallet redirects the user's browser to `redirect_uri` with `{code}` replaced by the `confirmation_code`. The requesting site's page picks up the code, looks up the associated signed response, and considers the session authenticated.
 
@@ -1338,7 +1342,7 @@ If no wallet is registered in CHAPI, the wallet's credential handler page is not
 
 ## Timeline Considerations
 
-- **Canonical serialization format** is resolved: canonical CBOR per RFC 8949 §4.2 with a JSON input surface on the npm package. See Appendix A for the full type mapping. This must be implemented in the npm package and validated against the conformance test corpus before the API is locked.
+- **Canonical serialization format** is resolved: RFC 8785 (JSON Canonicalization Scheme — JCS). Deterministic JSON with lexicographic key sorting, no whitespace, standard JSON string escaping. See Appendix A. This must be implemented in the npm package and validated against the conformance test corpus before the API is locked.
 - **Arbitrum One registry contract** must implement ML-DSA-44 signature verification via Stylus, performed in full on-chain. The hash-commitment shortcut pattern (store only a hash of the press public key, verify signature off-chain) is explicitly rejected: it degrades the contract from a write gatekeeper to a passive log, enabling spam writes from anyone who knows a valid press public key. Full on-chain verification is required before contract deployment.
 - **Trusted root configuration UX** is a dependency for client-side verification and keychain setup — design work should begin in parallel with protocol engineering.
 - TEE hardening is explicitly P2 and does not gate v1 work.
@@ -1348,73 +1352,47 @@ If no wallet is registered in CHAPI, the wallet's credential handler page is not
 
 ## Appendix A — Canonical Serialization (Normative)
 
-All payloads that are signed or hashed in this protocol MUST use canonical CBOR as defined in this appendix. This applies to: card offers, completed cards, log entries (field updates and revocations), message envelope payloads, and authentication request/response objects.
+All payloads that are signed or hashed in this protocol MUST use canonical RFC 8785 JSON as defined in this appendix. This applies to: card offers, completed cards, log entries (field updates and revocations), message envelope payloads, and authentication request/response objects.
 
 ### A.1 Base Standard
 
-**RFC 8949 §6.1** ("Converting from JSON to CBOR") defines the base conversion. **RFC 8949 §4.2** ("Deterministic Encoding Requirements") defines the canonical form. Implementations MUST satisfy both.
+**RFC 8785** (JSON Canonicalization Scheme — JCS) defines the canonical serialization form. Implementations MUST produce output that is byte-for-byte identical to the RFC 8785 canonical form.
 
-The deterministic encoding rules (§4.2) require:
-- Integers encoded in the shortest form (e.g., value 1 → `0x01`, not `0x1800 01`).
-- Floats encoded in the shortest IEEE 754 form that round-trips. Whole-number values that fit in an integer MUST be encoded as integers, not floats (`1` not `1.0`).
-- Map keys sorted by the byte length of their CBOR-encoded form first; for equal lengths, sorted lexicographically by the CBOR-encoded key bytes. This sort applies at every nesting level.
-- No indefinite-length encodings.
+The canonical form rules are:
 
-### A.2 Protocol-Specific Overrides
+- **Key ordering**: Object keys MUST be sorted by Unicode code-point order (the ordering produced by JavaScript's standard `Array.prototype.sort()` on strings). This sort applies at every nesting level.
+- **No whitespace**: No spaces or newlines between tokens.
+- **Numbers**: Serialized per ECMAScript's `Number.prototype.toString()` (IEEE 754 double-precision; integers as plain integers, e.g., `1` not `1.0`).
+- **Strings**: Serialized per JSON string escaping rules (RFC 8259 §7). Control characters (U+0000–U+001F) and `"` and `\` are escaped; other characters including non-ASCII are emitted as-is.
+- **Booleans and null**: `true`, `false`, `null` as standard JSON literals.
 
-Two field categories require schema-aware handling that generic RFC 8949 §6.1 cannot provide. These overrides are applied by the npm package before RFC 8949 §6.1 encoding.
+The output MUST be encoded as UTF-8.
 
-#### A.2.1 Binary Fields
+### A.2 Field Serialization
 
-Fields carrying cryptographic material are accepted as **base64url strings** (RFC 4648 §5, no padding) in the JSON input surface and MUST be encoded as **CBOR byte strings (major type 2)**.
+All field values — including binary fields (base64url strings) and timestamp fields (ISO 8601 strings) — are serialized as ordinary JSON strings. There is no schema-aware type coercion.
 
-| Field name | Logical type | JSON input form | CBOR encoding |
-|---|---|---|---|
-| `recipient_pubkey`, `public_key` | ML-DSA-44 public key | base64url string | Major type 2 byte string |
-| `offer_signature`, `holder_signature`, `signature` | ML-DSA-44 signature | base64url string | Major type 2 byte string |
-| `policy_id` | CID | base64url string | Major type 2 byte string |
-| `press_card`, `signer_card`, `issuer_card` | Mutable pointer in registry | base64url string | Major type 2 byte string |
-| `prev_log_root` | CID | base64url string | Major type 2 byte string |
-| Any field of type `cid` or `card-pointer` | CID / mutable pointer in registry | base64url string | Major type 2 byte string |
-| `in_reply_to`, `edit_of`, `retracts` | Payload hash | base64url string | Major type 2 byte string |
-
-#### A.2.2 Timestamp Fields
-
-Fields of type `timestamp` are accepted as ISO 8601 strings in the JSON input surface and MUST be encoded as **CBOR Tag 1** (Epoch-Based Date/Time, RFC 8949 §3.4.2) wrapping an **unsigned integer** (Unix epoch seconds, UTC). Sub-second precision is not used.
-
-| Field name | JSON input form | CBOR encoding |
+| Protocol field type | JSON form | Canonical JSON serialization |
 |---|---|---|
-| `issued_at` | `"2026-05-19T14:30:00Z"` | Tag 1 + uint (e.g., `0xc1 0x1a ...`) |
-| `effective_date` | ISO 8601 string | Tag 1 + uint |
-| `expires`, `expires_at`, `valid_until` | ISO 8601 string | Tag 1 + uint |
-| Any field of type `timestamp` | ISO 8601 string | Tag 1 + uint |
+| `text` | String | JSON string as-is |
+| `base64url` | base64url string (RFC 4648 §5, no padding) | JSON string as-is |
+| `integer` | Number | JSON number (e.g., `1`, `-1`, `256`) |
+| `number` | Number | JSON number |
+| `boolean` | `true` / `false` | `true` / `false` |
+| `date` | `"YYYY-MM-DD"` string | JSON string as-is |
+| `timestamp` | ISO 8601 string (e.g., `"2026-05-19T00:00:00Z"`) | JSON string as-is |
+| `cid` | base64url string | JSON string as-is |
+| `card-pointer` | base64url string | JSON string as-is |
+| `card-pointer-array` | Array of base64url strings | JSON array of JSON strings |
+| `append-only-array` | Array | JSON array, items per their own type |
+| Absent optional field | `null` / omitted | Omitted from object entirely |
 
-Fields of type `date` (e.g., `enrollment_date`) are **not** Tag 1. They remain **CBOR text strings** in `YYYY-MM-DD` format.
+### A.3 Optional Field Omission
 
-#### A.2.3 Optional Field Omission
-
-Optional fields that are absent MUST be omitted from the CBOR map entirely. A field present with a `null` or `undefined` value MUST be stripped before encoding. Encoding `null` produces different bytes than omission and would invalidate signatures across implementations.
-
-### A.3 Type Mapping Summary
-
-| Protocol field type | JSON input form | CBOR encoding |
-|---|---|---|
-| `text` | String | Major type 3 text string (UTF-8, no NFC normalization required) |
-| `base64url` | base64url string (RFC 4648 §5, no padding) | Major type 2 byte string |
-| `integer` | Number (whole) | Major type 0 (unsigned) or 1 (negative), shortest form |
-| `number` | Number | Major type 7 float, shortest round-trippable form |
-| `boolean` | `true` / `false` | Simple value `0xf5` / `0xf4` |
-| `date` | `"YYYY-MM-DD"` string | Major type 3 text string |
-| `timestamp` | ISO 8601 string | Tag 1 + major type 0 uint (Unix epoch seconds) |
-| `cid` | base64url string | Major type 2 byte string |
-| `card-pointer` | base64url string | Major type 2 byte string |
-| `card-pointer-array` | Array of base64url strings | Major type 4 array of major type 2 byte strings |
-| `append-only-array` | Array | Major type 4 array, items encoded per their own type |
-| Binary cryptographic field | base64url string | Major type 2 byte string |
-| Absent optional field | `null` / omitted | Omitted from map entirely |
+Optional fields that are absent MUST be omitted from the serialized object entirely. A field present with a `null` or `undefined` value MUST be stripped before encoding. Including `null` would produce different bytes than omission and would break signature verification across implementations.
 
 ### A.4 Conformance Test Corpus
 
-The file `specs/serialization-conformance.json` contains reference test cases. Each case specifies a JSON input object, the names of any binary or timestamp fields requiring protocol-specific overrides, and the expected canonical CBOR output as a lowercase hex string. Implementations MUST produce identical hex output for all cases before being considered conformant.
+The file `specs/serialization-conformance.json` contains 22 reference test cases. Each case specifies a JSON input object and the expected RFC 8785 canonical JSON output string. Implementations MUST produce byte-identical output for all cases before being considered conformant.
 
-The corpus covers: binary field encoding, Tag 1 timestamp encoding, `date` text field encoding, integer shortest-form encoding, map key ordering (same-length and different-length keys, nested maps), optional field omission, boolean encoding, Unicode text fields, and array fields.
+The corpus covers: string encoding, integer encoding, negative integers, boolean encoding, ISO 8601 timestamp strings (as plain strings), date strings, base64url strings (as plain strings), map key ordering (same-length and different-length keys at all nesting levels), optional field omission, Unicode text fields, and array fields.

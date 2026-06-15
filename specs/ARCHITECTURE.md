@@ -1,9 +1,9 @@
 # Card Protocol — Arcardecture Decision Record
 
-**Version:** 1.0  
-**Date:** 2026-05-19  
+**Version:** 1.1  
+**Date:** 2026-06-14  
 **Status:** Current  
-**Source:** Synthesized from `card_protocol_spec.md` (v0.3) and supporting raw notes  
+**Source:** Synthesized from `card_protocol_spec.md` (v0.3) and supporting raw notes. v1.1 adds ADR-012 (secp256r1 for on-chain verification; ML-DSA-44 retained for IPFS content signing) and closes OQ-2.  
 
 ---
 
@@ -53,39 +53,40 @@ A card is a JSON document containing protocol-required fields (issuer, recipient
 
 ### Context
 
-The protocol requires a shared, authoritative registry that maps each card's mutable pointer to its current log head CID, enforces that only authorized presses can write new entries, and provides trusted timestamps and rollback resistance. The registry must support on-chain verification of ML-DSA-44 signatures (post-quantum, ~2,420-byte public keys and signatures).
+The protocol requires a shared, authoritative registry that maps each card's mutable pointer to its current log head CID, enforces that only authorized presses can write new entries, and provides trusted timestamps and rollback resistance. The registry must verify press authorization on every write with efficient on-chain signature verification.
 
 ### Decision
 
-Deploy a single registry contract on **Arbitrum One**, using **Stylus** to implement full on-chain ML-DSA-44 signature verification. One contract manages all cards; entries are separated by their on-chain address.
+Deploy a single registry contract on **Arbitrum One**, using the **RIP-7212 secp256r1 precompile** for on-chain write authorization. Press write operations and governance operations are signed with secp256r1 (P-256) keys; ML-DSA-44 is retained for IPFS content signing (see ADR-004, ADR-012). The contract is implemented in **Stylus** to retain the upgrade path to on-chain ML-DSA-44 verification when warranted. One contract manages all cards; entries are separated by their on-chain address.
 
 ### Options Considered
 
 | Dimension | Arbitrum One | Solana | Ethereum Mainnet | Polygon |
 |---|---|---|---|---|
-| Transaction cost (create) | ~$0.05–0.15 | ~$0.00025 | $3–5 | $0.001–0.01 |
-| Transaction cost (update) | ~$0.02–0.08 | ~$0.00025 | $1.50–2.50 | <$0.01 |
-| Post-quantum sig support | Stylus (EVM + WASM) | Requires custom program | Limited | Limited |
+| Transaction cost (create) | ~$0.05–0.10 | ~$0.00025 | $3–5 | $0.001–0.01 |
+| Transaction cost (update) | ~$0.02–0.05 | ~$0.00025 | $1.50–2.50 | <$0.01 |
+| secp256r1 precompile (RIP-7212) | Yes — native on Arbitrum | No | No | Partial |
 | Historical reliability | High (inherits ETH security) | Outages in 2022; improved | High | Medium |
 | EAS availability | Native on Arbitrum | Not available | Native on Mainnet | Available |
 | EVM composability | Full | None | Full | Full |
-| ML-DSA calldata overhead | ~3–8x vs Ed25519; est. <$0.25/write | Minimal | Prohibitive | Low |
+| On-chain sig calldata | 64-byte sig + 64-byte pubkey per write | Minimal | Prohibitive | Low |
 
-**Key trade-off: Solana vs. Arbitrum One.** Solana's per-transaction cost is ~100x cheaper than Arbitrum One, which matters if the protocol generates high write volumes. However:
+**Key trade-off: Solana vs. Arbitrum One.** Solana's per-transaction cost is ~100x cheaper than Arbitrum One. However:
 
-1. **ML-DSA-44 on Solana** requires a custom program with no existing Stylus-equivalent. Arbitrum's Stylus enables WASM-compiled Rust for efficient on-chain cryptographic computation.
+1. **RIP-7212 secp256r1 precompile** is natively deployed on Arbitrum One. This is the core on-chain verification mechanism for the protocol; Solana has no equivalent and would require a custom program.
 2. **EAS (Ethereum Attestation Service)** is natively deployed on Arbitrum One. The annotation layer (ADR-008) depends on EAS; replicating this on Solana adds significant implementation scope.
 3. **Solana's historical outage risk** is a chain-wide single point of failure. Distributed EVM infrastructure is lower correlated risk.
-4. At estimated write volumes, Arbitrum One costs remain under $0.25/write — acceptable for a credential issuance use case where writes are infrequent relative to reads.
+4. At estimated write volumes, Arbitrum One costs remain under $0.10/write with secp256r1 calldata — acceptable for a credential issuance use case where writes are infrequent relative to reads.
 
-**Why not the hash-commitment shortcut?** Storing only a hash of the press public key and verifying signatures off-chain was explicitly rejected. It degrades the contract from a write gatekeeper to a passive log, enabling spam writes from anyone who knows a valid press public key. Full on-chain ML-DSA-44 verification is required before deployment.
+**Why not the hash-commitment shortcut?** Storing only a hash of the press public key and verifying signatures off-chain was explicitly rejected. It degrades the contract from a write gatekeeper to a passive log, enabling spam writes from anyone who knows a valid press public key. Full on-chain signature verification (secp256r1 via RIP-7212) is required on every write.
 
 ### Consequences
 
-- ML-DSA-44 signature calldata (~2,420 bytes vs. 64 bytes for Ed25519) increases per-write cost by an estimated 3–8x over a hypothetical Ed25519 design, remaining under $0.25/write at expected volumes.
+- secp256r1 signatures (64 bytes) and public keys (64 bytes) are dramatically smaller than the original ML-DSA-44 design (~2,420-byte signatures, ~1,312-byte keys), reducing per-write calldata cost by ~15–20x.
 - Arbitrum One blob-era gas pricing should be finalized before contract deployment.
 - Press wallets hold ETH (not SOL) to pay for registry writes. A paymaster pattern can sponsor gas for recipient-initiated writes (self-revocations).
 - The annotation layer (EAS) runs on the same chain, simplifying verification — chain reads for revocation and annotation lookups both target Arbitrum One.
+- **Future upgrade path to ML-DSA-44 on-chain is built in from day one.** See ADR-012.
 
 ---
 
@@ -146,7 +147,7 @@ The protocol uses two log types with different privacy requirements:
 | **Card log** | Card holder | Public or private (owner's choice) | Yes — head CID in Arbitrum One registry |
 | **Press log** | Press service | Private by default | Yes — head CID in policy card's registry entry |
 
-The press log records each issuance event, encrypted to each auditor card's public key via ML-KEM (FIPS 203). The press operator cannot read these entries.
+The press log records each issuance event, encrypted under the current audit epoch's AEK (AES-GCM, per-entry random nonce). The AEK is generated at epoch open and wrapped once per auditor via ML-KEM-768; each auditor receives only their own wrapped copy. The press operator cannot read these entries. See `card_protocol_spec.md §2` Audit Epoch Lifecycle for the full open/close procedure.
 
 ### Log Entry Structure (Field Updates and Revocations)
 
@@ -166,12 +167,12 @@ The press log records each issuance event, encrypted to each auditor card's publ
   "intent_signature": {
     "signer_card": "<mutable pointer in registry of updater's sub-card — base64url>",
     "public_key": "<ML-DSA-44 public key — base64url>",
-    "signature": "<sig over canonical CBOR of UpdateIntentPayload — base64url>"
+    "signature": "<sig over canonical RFC 8785 JSON of UpdateIntentPayload — base64url>"
   },
   "press_signature": {
     "signer_card": "<mutable pointer in registry of press's sub-card — base64url>",
     "public_key": "<ML-DSA-44 public key — base64url>",
-    "signature": "<sig over canonical CBOR of complete LogEntry — base64url>"
+    "signature": "<sig over canonical RFC 8785 JSON of complete LogEntry excluding press_signature — base64url>"
   }
 }
 ```
@@ -187,31 +188,43 @@ The monotonic version number prevents replay. The `prev_log_root` CID creates a 
 
 ---
 
-## ADR-004: Cryptographic Primitives — ML-DSA-44 and ML-KEM
+## ADR-004: Cryptographic Primitives — Split Signing Model
 
-**Status:** Accepted
+**Status:** Accepted (revised 2026-06-14 per ADR-012)
 
 ### Context
 
-Signature and key encapsulation schemes must be selected for the protocol. The primary concern is post-quantum security given the expected long credential lifetimes.
+Signature and key encapsulation schemes must be selected for the protocol. The primary concern is post-quantum security for long-lived credentials, balanced against on-chain gas efficiency for write operations.
 
 ### Decision
 
-- **Signatures:** ML-DSA-44 (FIPS 204, Module Lattice Digital Signature Algorithm), replacing Ed25519.
-- **Key encapsulation (for audit log encryption):** ML-KEM (FIPS 203, Module Lattice Key Encapsulation Mechanism), replacing ECDH-based schemes.
-- **Canonical serialization:** RFC 8785 canonical JSON (open question — CBOR remains under consideration, see §Open Questions).
+The protocol uses a **split signing model** with two distinct signature schemes serving different roles:
 
-### Trade-offs vs. Ed25519
+- **IPFS / content signatures:** **ML-DSA-44** (FIPS 204, Module Lattice Digital Signature Algorithm). Used for all content signed to IPFS — card documents, log entries, SCIPs, message envelopes, audit epoch entries, and all other IPFS-stored artifacts. Post-quantum resistance is required here because IPFS content is permanent and cannot be re-signed after publish.
+- **On-chain write authorization:** **secp256r1 (P-256)** via the **RIP-7212 precompile** on Arbitrum One. Used for press write operations and governance operations. Keys are rotatable; the upgrade path to ML-DSA-44 on-chain is built in. See ADR-012.
+- **Key encapsulation (audit log encryption):** **ML-KEM-768** (FIPS 203, Module Lattice Key Encapsulation Mechanism, parameter set 768). ML-KEM-768 is the normatively pinned parameter set for this protocol.
+- **Canonical serialization:** RFC 8785 (JSON Canonicalization Scheme — JCS). Lexicographic key sort, no whitespace, standard JSON escaping, UTF-8 output. See ADR-010.
 
-| Dimension | Ed25519 | ML-DSA-44 |
+### Rationale for split model
+
+| Dimension | On-chain writes (secp256r1) | IPFS content (ML-DSA-44) |
 |---|---|---|
-| Public key size | 32 bytes | 1,312 bytes |
+| Public key size | 64 bytes (uncompressed) | 1,312 bytes |
 | Signature size | 64 bytes | 2,420 bytes |
-| Post-quantum security | No (vulnerable to Shor's algorithm) | Yes (FIPS 204) |
-| On-chain calldata overhead | Baseline | ~3–8x per registry write |
-| Hardware support | Widespread | Emerging (YubiKey firmware) |
+| Post-quantum security | No — but keys are rotatable | Yes (FIPS 204) |
+| On-chain gas cost | ~3,450 gas (RIP-7212 precompile) | ~10–30× more (Stylus WASM) |
+| Long-term threat model | Key rotation mitigates quantum risk | No rotation possible — PQ required now |
 
-For credentials with multi-year lifetimes, the post-quantum security of ML-DSA-44 is the decisive factor. The calldata overhead is acceptable at projected write volumes.
+The decisive factor is the asymmetry in the threat model. For IPFS content, a "harvest now, break later" attack is a real risk: an adversary can collect signed content today and forge or undermine signatures once quantum computing matures, since the content and signatures are permanent. ML-DSA-44 is required from day one. For on-chain writes, the signature is consumed at verification time — what persists is the resulting state change, not the signature. A future quantum adversary breaking a historical press write signature cannot undo that write. The threat is key compromise enabling *future* unauthorized writes, which key rotation addresses. secp256r1 with a designed-in upgrade path to ML-DSA-44 is sufficient.
+
+### Press card key structure
+
+Each press card carries two public keys:
+
+1. `secp256r1_pubkey` — registered on-chain (stored as 64 raw bytes in `PressAuthorizations`); used for on-chain write authorization via RIP-7212.
+2. `mldsa44_pubkey` — the card's `recipient_pubkey` field in its `CardDocument` on IPFS; used for all content/IPFS signature verification.
+
+Governance keys follow the same pattern: secp256r1 for on-chain governance operations (stored in `GovernanceKeysets`), rotatable.
 
 ### Proxy Re-encryption
 
@@ -411,7 +424,7 @@ A stolen YubiKey cannot complete recovery if a valid cancellation is submitted b
 │                        Arbitrum One                                  │
 │  ┌──────────────────────────────┐  ┌──────────────────────────────┐ │
 │  │   Card Registry Contract    │  │  EAS (Annotation Registry)   │ │
-│  │  (Stylus / ML-DSA-44 verify) │  │  (third-party attestations)  │ │
+│  │  (Stylus / secp256r1 verify) │  │  (third-party attestations)  │ │
 │  │  - card hash → log head CID │  └──────────────────────────────┘ │
 │  │  - wallet service registry  │                                    │
 │  │  - press authorizations     │                                    │
@@ -583,8 +596,8 @@ These are engineering and design questions from the spec that have not yet been 
 
 | ID | Area | Question | Priority |
 |---|---|---|---|
-| ~~OQ-1~~ | ~~Engineering~~ | ~~Canonical serialization format~~ — **CLOSED.** Canonical CBOR per RFC 8949 §4.2, JSON input surface per RFC 8949 §6.1, protocol overrides for binary fields and timestamps per ADR-010. Normative type mapping in spec Appendix A; conformance corpus at `specs/serialization-conformance.json`. | ~~Critical / Blocking~~ |
-| OQ-2 | Engineering | ML-DSA-44 on-chain verification cost via Stylus: finalize gas estimates against current Arbitrum One blob-era pricing before contract deployment. | **Critical / Blocking** |
+| ~~OQ-1~~ | ~~Engineering~~ | ~~Canonical serialization format~~ — **CLOSED.** RFC 8785 (JCS) canonical JSON. Lexicographic key sort, standard JSON escaping, no whitespace, UTF-8 output. No schema-aware overrides — all field values (binary, timestamps) serialized as plain JSON strings. Normative rules in spec Appendix A; conformance corpus at `specs/serialization-conformance.json`. See ADR-010. | ~~Critical / Blocking~~ |
+| ~~OQ-2~~ | ~~Engineering~~ | ~~ML-DSA-44 Stylus gas cost~~ — **CLOSED.** On-chain writes now use secp256r1 via RIP-7212 precompile (~3,450 gas per verification, 64-byte pubkey + 64-byte sig calldata). ML-DSA-44 Stylus verification is deferred to the Phase 2 on-chain upgrade path (ADR-012); Stylus is retained in the contract for that purpose. | ~~Critical / Blocking~~ |
 | OQ-3 | Engineering | Minimum IPFS replication count for a policy card's log before the Arbitrum One registry pointer update is considered safe. | High |
 | OQ-4 | Engineering | For recipient-initiated registry writes (e.g., self-revocations): always mediated by press, or direct writes from holder via paymaster? | High |
 | OQ-5 | Engineering | Field definition changes to a running policy (adding a new field): are previously-issued cards that lack the field non-conforming or still valid? | High |
@@ -606,8 +619,8 @@ These are engineering and design questions from the spec that have not yet been 
 |---|---|---|---|
 | **Arbitrum One outage / unavailability** | Low | High | Registry reads are cacheable; short-term unavailability doesn't break existing card verification (cached chain arrays). Write operations (issuance, revocation) are queued and retried. |
 | **IPFS content not pinned / unavailable** | Medium | High | Presses are contractually responsible for pinning. Filecoin archival (web3.storage/w3up) provides long-term backup. Clients cache recently-fetched CIDs locally. |
-| **ML-DSA-44 Stylus verification too expensive on-chain** | Medium | High | **Blocking risk before contract deployment.** Gas estimates must be finalized. Batched registry writes (multiple log updates per Arbitrum transaction) reduce per-card cost during high-volume periods. |
-| **Canonical serialization incompatibility** | Medium | High | **Blocking risk before npm package API lock.** RFC 8785 vs. CBOR must be decided. All signature interoperability depends on this. |
+| ~~**ML-DSA-44 Stylus verification too expensive on-chain**~~ | ~~Medium~~ | ~~High~~ | **CLOSED by ADR-012.** On-chain writes use secp256r1 via RIP-7212 precompile instead. ML-DSA-44 on-chain verification is deferred to the upgrade path, with Stylus retained for that purpose. |
+| ~~**Canonical serialization incompatibility**~~ | ~~Medium~~ | ~~High~~ | **CLOSED.** RFC 8785 (JCS) adopted per ADR-010. |
 | **Press authorization enforcement gap** | ~~High~~ Closed | ~~High~~ | **Closed by ADR-011.** The original design relied on the contract checking the IPFS-stored `approved_presses` field, which is unreachable at write time. ADR-011 replaces this with two on-chain tables (`PolicyAuthorizerKeys`, `PressAuthorizations`) that the Stylus contract can verify directly. |
 | **Unauthorized press/policy registration (spam)** | Low | Medium | `RegisterPolicy` and `AuthorizePress` both require governance quorum signatures. No party can unilaterally create root policies or register presses. |
 | **Press key compromise** | Low | Medium | Revoking the press entry via `RevokePress` (governance quorum required) removes its write authority. Previously-issued cards are unaffected. The press cannot forge user signatures (user-sovereign key custody). |
@@ -621,162 +634,53 @@ These are engineering and design questions from the spec that have not yet been 
 
 ## ADR-010: Canonical Serialization — RFC 8785 vs. CBOR
 
-**Status:** Open — decision required before npm package API lock  
-**Date:** 2026-05-19  
-**Blocking:** All signature interoperability; npm package API; on-chain verification logic
+**Status:** Accepted — RFC 8785 adopted  
+**Date:** 2026-05-19 (revised 2026-06-14)  
+**Closes:** OQ-1
 
-### Why This Decision Is Load-Bearing
+### Decision
 
-Every signature in the protocol commits to a **canonical serialization** of a payload. "Canonical" means deterministic: given the same logical data, every implementation — the press, the recipient's client, the verifier's server, the Stylus contract — must arrive at exactly the same byte sequence before signing or verifying. A one-byte difference means a failed signature. This is not an implementation detail; it is the cryptographic bedrock of the entire trust model.
+**RFC 8785 (JSON Canonicalization Scheme — JCS)** is adopted as the canonical serialization format for all signed and hashed payloads in the Card Protocol.
 
-The decision must be made and locked before:
+CBOR was previously adopted (2026-05-19) for its compact binary encoding. That decision was reversed because the protocol's issuance model — one press creating a card, with updates rare — means CBOR's calldata savings are modest while its readability and implementation costs are ongoing. The overhead of an extra encoding/decoding step and the loss of human-readable payloads (critical for debugging signature failures and for independent verifier adoption) were not justified by storage savings on IPFS (cheap and not the bottleneck) or marginal calldata reductions.
 
-1. The `CardAuth` npm package API is finalized (signature and verification helpers hardcode the encoding).
-2. The Arbitrum One registry contract is deployed (the Stylus verifier must agree with off-chain signers on what bytes were signed).
-3. Any two independent implementations exchange signed objects.
+### Background
 
-### What Is Being Serialized
+Every signature in the protocol commits to a **canonical serialization** of a payload — deterministic bytes that every implementation (press, client, verifier, Stylus contract) must reproduce identically. A one-byte difference means a failed verification.
 
-Three distinct payload types are signed in the protocol:
+Payloads signed in the protocol:
 
 | Payload | Signed by | Verified by |
 |---|---|---|
-| **Card offer** | Press (sub-card key) | Recipient client, then any verifier |
+| **Card offer** | Press (sub-card key) | Recipient client, any verifier |
 | **Completed card** | Recipient (new keypair) | Any verifier; on-chain registry contract |
 | **Log entry** (update, revocation) | Authorized updater | Any verifier |
 | **Message envelope payload** | Sender (sub-card key) | Recipient client, any verifier |
 | **Auth request / response** | Requester card; then holder | Service server |
 
-All of these must use the **same canonical serialization scheme**. A mixed-scheme protocol (JSON for some, CBOR for others) would require two independently-maintained serialization stacks and create correctness risk at every boundary.
+### RFC 8785 Rules
 
-### Option A: RFC 8785 — JSON Canonicalization Scheme (JCS)
+- Object keys sorted by Unicode code-point order (JavaScript `Array.prototype.sort()` string sort) at all nesting levels.
+- No whitespace between tokens.
+- Numbers per ECMAScript `Number.prototype.toString()` (integers as plain integers; `1` not `1.0`).
+- Strings per JSON escaping rules (RFC 8259 §7); control chars and `"`, `\` escaped; non-ASCII emitted as-is.
+- Output encoded as UTF-8.
 
-RFC 8785 defines a deterministic serialization of JSON: keys sorted lexicographically, whitespace removed, Unicode normalized, numbers in a specific format. The output is a valid UTF-8 JSON string.
+All field values — including binary fields (base64url strings) and timestamp fields (ISO 8601 strings) — are serialized as plain JSON strings. No schema-aware type coercion.
 
-**Pros:**
+### Constraints
 
-- **Human-readable.** The canonical form is plain JSON. A developer can read a signed payload without tooling, diff it against another, and paste it into a REST client. This is a meaningful ergonomic advantage for protocol debugging and adoption.
-- **Widely implemented.** Libraries exist for JavaScript, Python, Go, Rust, Java, and most other languages. The Rust implementation is straightforward to compile to WASM for Stylus.
-- **Matches the existing spec language.** The spec (§6, Signing) already specifies "RFC 8785 canonical JSON" as the serialization format, so this is the current leading candidate.
-- **Easy to adopt in the npm package.** `JSON.canonicalize()` (or equivalent) is a thin wrapper and requires no schema registry.
-- **No binary dependency in developer tooling.** Debugging a signature failure is: print the canonical JSON, inspect it, find the discrepancy. With CBOR you need a decoder step.
-
-**Cons:**
-
-- **Number representation edge cases.** RFC 8785 specifies IEEE 754 double-precision float formatting. Protocol field types like `integer` and `number` must be defined precisely to avoid cross-language differences (e.g., `1.0` vs `1` vs `1e0`). The spec's type system restricts numeric fields to `integer` and `number` with explicit range constraints, which mitigates but does not eliminate this risk.
-- **Unicode normalization requirement.** All string values must be in Unicode NFC normalization. This is handled transparently in most environments but must be explicitly tested in implementations that accept user-provided text field values (e.g., card field content from a `text` type field).
-- **Slightly larger payloads than CBOR.** JSON is text; CBOR is binary. For ML-DSA-44 keys (1,312 bytes) and signatures (2,420 bytes) embedded as base64 strings in JSON, the overhead is approximately 33% vs. raw binary. This affects calldata size on Arbitrum One — a meaningful but secondary concern compared to the ML-DSA-44 calldata cost already accepted.
-
-### Option B: CBOR (RFC 8949) with Deterministic Encoding
-
-CBOR is a binary data format designed for compactness. RFC 8949 §4.2 specifies "deterministically encoded CBOR" rules: shortest-form integers, sorted map keys (length-prefixed byte comparison), no indefinite-length items.
-
-**Pros:**
-
-- **Compact binary encoding.** Eliminates base64 overhead for embedded keys and signatures; reduces calldata size on Arbitrum One. For a card offer with two ML-DSA-44 keys and two signatures, CBOR saves roughly 1,200–2,000 bytes per object vs. JSON — meaningful at scale but under $0.02 at current blob pricing.
-- **Native binary type.** Cryptographic material (keys, signatures, hashes) is encoded as binary byte strings rather than base64 text, reducing encoding/decoding steps and eliminating base64 ambiguity (standard vs URL-safe, padding variants).
-- **Well-suited for constrained environments.** If Card clients eventually run on embedded or hardware devices (e.g., hardware wallet integrations), CBOR's compactness matters more.
-- **Growing ecosystem.** CBOR is used in COSE (CBOR Object Signing and Encryption), FIDO2/WebAuthn credentials, and various IETF identity standards. Cross-ecosystem compatibility is a potential benefit for future integrations.
-
-**Cons:**
-
-- **Not human-readable.** A signed payload is a binary blob. Debugging a signature failure requires a CBOR decoder before you can inspect the payload. This significantly increases the friction for third-party verifier implementations and protocol debugging.
-- **Schema coupling.** Deterministic CBOR requires precise agreement on map key ordering and type encoding. Adding a new optional field to a payload schema requires verifying that all implementations sort keys identically. JSON's lexicographic string sort is simpler and universally consistent.
-- **Library maturity varies.** JavaScript and Rust have solid CBOR libraries, but the ecosystem is thinner than JSON's. The Stylus/WASM CBOR implementation would need careful testing for determinism edge cases.
-- **Conceptual mismatch with the type system.** The spec's type system (`text`, `integer`, `number`, `boolean`, `date`, `timestamp`, `cid`, `card-pointer`, ...) maps naturally to JSON types. CBOR's richer type system (tagged types, bignum, etc.) introduces mapping choices — e.g., should a `timestamp` be a CBOR tagged integer (tag 1) or a text string? These choices must be specified and maintained.
-- **Higher adoption friction for third-party developers.** The protocol's value depends on independent verifiers building against it. A binary format with schema coupling will slow external adoption compared to JSON.
-
-### Recommendation: CBOR with JSON input surface in the npm package
-
-The adoption-friction argument for RFC 8785 rests on an assumption worth questioning: that verifiers will frequently implement canonical serialization themselves. In practice, verifiers fall into three categories:
-
-1. **Services using the `CardAuth` npm package** — never touch serialization; it's internal to the package.
-2. **Mobile/client SDKs** — same; the SDK owns the encoding.
-3. **Independent implementations from scratch** — a small minority even at wide adoption, and sophisticated enough to handle CBOR.
-
-If the npm package handles JSON→CBOR conversion internally — accepting JSON-shaped objects as developer input, converting to deterministic CBOR before signing or verifying — then the ergonomic cost of CBOR is almost entirely absorbed. Developers write JSON-like structures; they never see CBOR bytes unless they deliberately go looking. The rough verification experience argument applies only to category 3.
-
-Meanwhile, the calldata savings are not second-order — they are recurring costs on every registry write, and they compound. ML-DSA-44 keys and signatures are already large; base64url encoding in JSON adds ~33% on top of that. Per-issuance CBOR savings are roughly 2,400–2,500 bytes (two keys + two signatures, raw vs. base64url). At current Arbitrum One blob-era pricing that is a small per-write saving, but it applies to every issuance, every log update, and every revocation — forever. Batched writes reduce the per-card amortized cost but do not change the per-byte calldata cost. CBOR makes every byte cheaper; batching does not.
-
-The revised recommendation is **CBOR (RFC 8949 deterministic encoding)** with a JSON-friendly input surface on the npm package.
-
-### The JSON↔CBOR Conversion Standard: RFC 8949 §6.1/§6.2
-
-The base conversion standard is **RFC 8949 §§6.1–6.2** ("Converting from JSON to CBOR" / "Converting from CBOR to JSON"), combined with **RFC 8949 §4.2** deterministic encoding requirements. This is the published IETF standard for CBOR↔JSON interop and is what the major CBOR libraries (Rust's `ciborium`, JavaScript's `cbor2`, Python's `cbor2`) implement.
-
-Generic RFC 8949 §6.1 handles most of the protocol's types correctly without special casing:
-
-| JSON input type | CBOR encoding (RFC 8949 §6.1) |
-|---|---|
-| `false` / `true` / `null` | Simple values 0xf4 / 0xf5 / 0xf6 |
-| Integer (no fractional part) | Major type 0 (unsigned) or 1 (negative), shortest form |
-| Number (fractional) | Major type 7 float, shortest form that round-trips |
-| String | Major type 3 text string, UTF-8 as-is (no NFC normalization required) |
-| Array | Major type 4 |
-| Object | Major type 5 map, keys as text strings, **sorted per §4.2.1** |
-
-Deterministic encoding (RFC 8949 §4.2) requires: shortest integer encoding, shortest float encoding that round-trips, and map keys sorted by the length of their CBOR-encoded key first, then lexicographically by the key bytes.
-
-### Protocol-Specific Overrides (Schema-Aware)
-
-Two protocol field types cannot be handled by generic JSON→CBOR conversion because they require schema knowledge to encode correctly. These are protocol-level rules applied by the npm package before invoking RFC 8949 §6.1:
-
-**Binary fields — `text` fields carrying cryptographic material.**  
-Keys, signatures, CIDs, and hashes are accepted as **base64url strings** (no padding, RFC 4648 §5) in the JSON input surface. The npm package converts them to **CBOR byte strings (major type 2)** before encoding. The affected fields are:
-
-| Field | Accepted JSON form | CBOR encoding |
-|---|---|---|
-| `recipient_pubkey`, `public_key` (in any signature entry) | base64url string | Major type 2 byte string |
-| `offer_signature`, `holder_signature`, `signature` (in any signature entry) | base64url string | Major type 2 byte string |
-| `policy_id`, `press_card`, `prev_log_root`, and any `cid` type field | base64url string | Major type 2 byte string |
-
-This is the primary source of calldata savings — binary fields appear in CBOR at their raw byte length rather than ~33% larger as base64url text.
-
-**Timestamp fields — `timestamp` type.**  
-`timestamp` fields are accepted as ISO 8601 strings in the JSON input surface and encoded as **CBOR Tag 1 (Epoch-Based Date/Time, RFC 8949 §3.4.2)** wrapping an unsigned integer (Unix epoch seconds, UTC). Fractional seconds are not used; sub-second precision is not required by the protocol.
-
-| Field | Accepted JSON form | CBOR encoding |
-|---|---|---|
-| `issued_at`, `effective_date`, `expires`, timestamp fields generally | ISO 8601 string (e.g., `"2026-05-19T14:30:00Z"`) | Tag 1 + uint (e.g., `0xc1 0x1a ...`) |
-
-`date` type fields (e.g., `enrollment_date`) are **not** Tag 1 — they remain CBOR text strings in `YYYY-MM-DD` format, since they represent calendar dates without a time component.
-
-**Optional fields.**  
-Absent optional fields must be omitted from the CBOR map entirely. The npm package must strip `null` or `undefined` values from the input object before encoding; encoding them as CBOR null would produce different bytes.
-
-### What the npm Package Exposes and What It Hides
-
-The npm package's signing and verification helpers accept plain JavaScript objects (JSON-shaped). CBOR encoding is internal. The developer contract must be stated clearly in the package documentation:
-
-> *The bytes that are signed are canonical CBOR (RFC 8949 deterministic encoding with protocol-specific overrides for binary fields and timestamps). If you need to verify a signature outside this package, encode your payload using the same rules. A reference test corpus is provided.*
-
-This must not be a hidden implementation detail — auditors and independent verifier authors need to know what they're verifying against.
-
-### What Changes Relative to Current Spec
-
-The spec (§6, Signing) currently says "RFC 8785 canonical JSON." Adopting CBOR requires:
-
-- Updating the serialization section of the spec to: "Canonical CBOR per RFC 8949 §4.2, with JSON input surface conversion per RFC 8949 §6.1 and the protocol-specific overrides for binary fields and timestamps defined in ADR-010."
-- Publishing the JSON→CBOR type mapping table above as a normative appendix.
-- Producing the conformance test corpus (see Action Items below).
-- The npm package's signing and verification helpers are the canonical reference implementation; the test corpus is what third-party implementations validate against.
-
-### Constraints the Decision Imposes
-
-Regardless of which format is chosen, these constraints must be enforced:
-
-- **Integer types must round-trip exactly.** The `integer` field type must be constrained to the range representable without floating-point ambiguity in the chosen format. For JCS, this means values must be within the safe integer range (−2⁵³ + 1 to 2⁵³ − 1) and explicitly validated at field creation time.
-- **Binary data (keys, signatures, CIDs) must have a single canonical encoding.** For JCS: unpadded base64url (RFC 4648 §5, no padding characters). This must be documented and tested; standard `btoa()` in browsers uses standard base64 with padding, which is incorrect.
-- **Optional fields must have a canonical absence representation.** Omitted optional fields must be absent from the serialized object entirely — not present with a `null` value. Both representations are valid JSON/CBOR but produce different bytes when signed.
-- **Object key ordering applies only to the top-level map in JCS.** Nested objects are also sorted. Implementations that manually assemble JSON strings rather than using a JCS library will get this wrong; the npm package must expose only the canonical serialization helper, not raw JSON construction.
+- **Integer values** must be within the IEEE 754 safe integer range (−2⁵³+1 to 2⁵³−1); validated at field creation.
+- **Binary data** (keys, signatures, CIDs) must use unpadded base64url (RFC 4648 §5). Standard `btoa()` produces padded standard base64 — incorrect.
+- **Absent optional fields** must be omitted from the serialized object entirely; `null` produces different bytes than omission.
+- **Key ordering applies at all nesting levels.** Implementations that assemble JSON strings manually will get nested objects wrong.
 
 ### Action Items
 
-- [x] Update spec §6 serialization reference to: "Canonical CBOR per RFC 8949 §4.2, JSON input surface per RFC 8949 §6.1, with protocol-specific overrides per ADR-010." Close OQ-1.
-- [x] Add ADR-010 type mapping table as a normative appendix to the spec (Appendix A).
-- [x] Produce a serialization conformance test corpus: `specs/serialization-conformance.json` — 22 cases with verified CBOR hex, covering binary fields, Tag 1 timestamps, `date` text fields, integer boundary values (23/24/256), optional field omission, nested map key ordering, Unicode, arrays, booleans, and two full representative payloads.
-- [ ] Implement the npm package JSON input surface: all signing and verification helpers accept JSON-shaped objects; RFC 8949 §6.1 conversion + protocol overrides are internal. State in documentation that CBOR bytes are what is signed.
-- [ ] Validate Stylus WASM CBOR implementation against the full conformance test corpus before contract deployment.
+- [x] Update spec Appendix A to describe RFC 8785 rules. Close OQ-1.
+- [x] Update conformance test corpus: `specs/serialization-conformance.json` — 22 cases with expected RFC 8785 canonical JSON strings.
+- [x] Implement `card-validator/src/serialization.ts`: `canonicalize()` using RFC 8785 JCS (~30 lines, no library dependency).
+- [ ] Validate Stylus WASM RFC 8785 implementation against the full conformance test corpus before contract deployment.
 
 ---
 
@@ -801,37 +705,38 @@ Add two on-chain tables to the Arbitrum One registry contract, with three new wr
 
 **`PolicyAuthorizerKeys`**
 
-Maps each registered root policy address to the ML-DSA-44 public key whose signatures are recognized as authoritative for press management under that policy.
+Maps each registered root policy address to the secp256r1 public key whose signatures are recognized as authoritative for press management under that policy.
 
 ```
 PolicyAuthorizerKeys:
-  policyAddress (bytes32)  →  authorizerPublicKey (bytes[1312], ML-DSA-44)
+  policyAddress (bytes32)  →  authorizerPublicKey (bytes[64], secp256r1 uncompressed x||y)
 ```
 
 A policy address is the on-chain identifier for the policy — the Arbitrum One address associated with the policy card's registry entry. An entry in `PolicyAuthorizerKeys` is what makes a policy address a recognized root policy in the contract's view. The entry is created by `RegisterPolicy`.
 
 **`PressAuthorizations`**
 
-Maps (policyAddress, pressAddress) pairs to the press's active signing key and a boolean active flag.
+Maps (policyAddress, pressAddress) pairs to the press's active on-chain signing key and authorization status. The stored key is the press's **secp256r1 key** (used for on-chain write authorization); the press's ML-DSA-44 key (used for IPFS content signing) is on the press `CardDocument` in IPFS and is not stored here.
 
 ```
 PressAuthorizations:
   (policyAddress (bytes32), pressAddress (bytes32))
-    →  pressPublicKey (bytes[1312], ML-DSA-44)
-       active (bool)
+    →  pressPublicKey    (bytes[64], secp256r1 uncompressed x||y)
+       mldsa44KeyHash    (bytes32, keccak256 of ML-DSA-44 pubkey — for upgrade path)
+       active            (bool)
 ```
 
-The registry contract's write-gate check: for any registry write signed by `pressAddress` under `policyAddress`, look up this table. Accept the write if and only if an entry exists, `active == true`, and the signature verifies against the stored `pressPublicKey`.
+The registry contract's write-gate check: for any registry write signed by `pressAddress` under `policyAddress`, look up this table. Accept the write if and only if an entry exists, `active == true`, and the secp256r1 signature verifies against the stored `pressPublicKey` via RIP-7212. The `mldsa44KeyHash` field is registered at `AuthorizePress` time and is used during the Phase 2 on-chain key upgrade (see ADR-012); it is not verified on writes in Phase 1.
 
 ### Write Operations
 
 **`RegisterPolicy(policyAddress, authorizerPublicKey)`**
 
-Creates a new entry in `PolicyAuthorizerKeys`. Callable only with a valid quorum signature from the **Root Policy Governance Body** (see Governance below). Once registered, `policyAddress` is a recognized root in the contract, and its `authorizerPublicKey` is the key that authorizes presses.
+Creates a new entry in `PolicyAuthorizerKeys`. `authorizerPublicKey` is a secp256r1 public key (64 bytes). Callable only with a valid quorum signature from the **Root Policy Governance Body** (see Governance below). Once registered, `policyAddress` is a recognized root in the contract, and its `authorizerPublicKey` is the key that authorizes presses.
 
-**`AuthorizePress(policyAddress, pressAddress, pressPublicKey)`**
+**`AuthorizePress(policyAddress, pressAddress, pressPublicKey, mldsa44KeyHash)`**
 
-Creates or updates an entry in `PressAuthorizations`, setting `active = true` and recording `pressPublicKey`. Callable only with a valid quorum signature from the **Press Registry Governance Body** (see Governance below). The `policyAddress` must already be registered in `PolicyAuthorizerKeys`; attempts to authorize a press against an unregistered policy are rejected.
+Creates or updates an entry in `PressAuthorizations`, setting `active = true`, recording the secp256r1 `pressPublicKey` (64 bytes), and recording `mldsa44KeyHash` (keccak256 of the press's ML-DSA-44 public key, used for the upgrade path). Callable only with a valid quorum signature from the **Press Registry Governance Body** (see Governance below). The `policyAddress` must already be registered in `PolicyAuthorizerKeys`; attempts to authorize a press against an unregistered policy are rejected.
 
 **`RevokePress(policyAddress, pressAddress)`**
 
@@ -839,7 +744,7 @@ Sets `active = false` for the given (policyAddress, pressAddress) pair. Callable
 
 ### Key Rotation
 
-**Press key rotation.** When a press needs to rotate its signing key, the Press Registry Governance Body calls `AuthorizePress` with the same `pressAddress` and the new `pressPublicKey`. This overwrites the stored key and resets `active = true`. The press's prior signatures remain verifiable against the old key (which verifiers may cache); the contract will accept new writes only from the new key.
+**Press key rotation.** When a press needs to rotate its secp256r1 on-chain key, the Press Registry Governance Body calls `AuthorizePress` with the same `pressAddress` and the new `pressPublicKey`. This overwrites the stored key and resets `active = true`. The press's prior signatures remain verifiable against the old key (which verifiers may cache); the contract will accept new writes only from the new key. For upgrade to ML-DSA-44 on-chain keys, see ADR-012.
 
 **Authorizer key rotation.** When the authorizer key for a policy needs to change — due to key compromise, governance body change, or periodic rotation — the Root Policy Governance Body calls a `RotateAuthorizerKey(policyAddress, newAuthorizerPublicKey)` operation, signed by the current authorizer key plus governance quorum. The `PolicyAuthorizerKeys` entry is updated in place.
 
@@ -894,6 +799,71 @@ Both bodies share a narrow, defined remit: ensuring that root policies and press
 - Both governance bodies introduce a trusted third party in the authorization path. The protocol's decentralized properties hold for verification (chain walking, revocation checks) but not for policy/press registration, which is intentionally governed. This matches the design philosophy stated in the original spec: "give tools for communities with governance," not a trustless system.
 - Key rotation paths (press keys, authorizer keys, governance keys) are defined at the table level but the operational workflows must be specified in the governance charter.
 - Specific quorum thresholds, governance body composition rules, and membership processes are out of scope for this ADR and belong in a separate governance specification.
+
+---
+
+---
+
+## ADR-012: On-Chain Signing — secp256r1 Now, ML-DSA-44 Upgrade Path
+
+**Status:** Accepted  
+**Date:** 2026-06-14  
+**Closes:** OQ-2  
+**Amends:** ADR-001 (verification mechanism), ADR-004 (crypto primitives), ADR-011 (on-chain table key types)
+
+### Context
+
+The original design used ML-DSA-44 for all signatures, including on-chain press write authorization. On-chain ML-DSA-44 verification via Stylus WASM is feasible but expensive: 2,420-byte signatures and 1,312-byte public keys add significant calldata, and Stylus WASM execution for a lattice-based signature is more costly than a native precompile. Arbitrum One natively supports **RIP-7212**, a precompile for secp256r1 (P-256) signature verification at ~3,450 gas per call with 64-byte public keys and 64-byte signatures — approximately 15–20× cheaper in calldata and substantially cheaper in compute.
+
+The threat model analysis (see ADR-004) shows an asymmetry: IPFS content signatures require quantum resistance now (permanent, can't be re-signed); on-chain write authorization does not, because keys can be rotated before quantum attacks become viable.
+
+### Decision
+
+Use **secp256r1 / RIP-7212** for all on-chain write authorization (press writes, governance operations) in Phase 1. Build in the upgrade path to ML-DSA-44 on-chain verification from day one, so migration requires no re-registration of existing presses.
+
+### On-Chain Key Scheme Upgrade Path
+
+**What is built now (Phase 1):**
+
+- Press cards carry two public keys: a secp256r1 key registered on-chain for write authorization, and an ML-DSA-44 key (the press `CardDocument`'s `recipient_pubkey`) for IPFS content signing.
+- `AuthorizePress` stores both: the secp256r1 public key (64 bytes) and the `keccak256` hash of the ML-DSA-44 public key (32 bytes). The hash costs only 32 bytes of calldata at registration time.
+- Governance keys in `GovernanceKeysets` are secp256r1 (64 bytes per key).
+- The registry contract is deployed in Stylus with a modular verifier architecture (see `registry_contract.md §6.3`): a separate upgradeable verifier module handles signature verification. The storage contract is immutable; only the verifier can be upgraded.
+- Contract emits a `KeyScheme` field per press record (`secp256r1` initially).
+
+**Phase 2 — Dual-accept window** (triggered by governance when quantum threat horizon is credibly 3–5 years out):
+
+1. Governance upgrades the verifier module to accept either secp256r1 or ML-DSA-44 signatures for writes. The `KeyScheme` per press determines which is required.
+2. Presses rotate on-chain auth by submitting a `RotateOnChainKeyScheme` transaction, dual-signed by both the current secp256r1 key and the new ML-DSA-44 key (proving possession of both, preventing hijack during migration).
+
+Rotation payload:
+```json
+{
+  "op":                "rotate_on_chain_key_scheme",
+  "press_address":     "<bytes32>",
+  "new_mldsa44_pubkey": "<base64url — 1312 bytes>",
+  "nonce":             "<base64url>",
+  "deadline_block":    <uint64>
+}
+```
+Both `secp256r1_sig` (over the payload, from the current secp256r1 key) and `mldsa44_sig` (over the same payload, from the new ML-DSA-44 key) are required. The contract verifies both before updating `KeyScheme` to `mldsa44` and recording the full ML-DSA-44 public key.
+
+The new ML-DSA-44 public key can be the press's existing content-signing key (whose hash is already registered in `PressAuthorizations.mldsa44KeyHash`) or a freshly generated one.
+
+**Phase 3 — secp256r1 sunset:**
+
+Governance sets a block deadline after which the verifier module rejects secp256r1 signatures for card writes. Secp256r1 is still accepted *only* for `RotateOnChainKeyScheme` transactions during a grace period, so any press that has not yet migrated can still rotate rather than being permanently write-locked.
+
+### Governance key upgrade
+
+Governance keys in `GovernanceKeysets` follow the same three-phase path via `RotateGovernanceKeys`. The only difference is that governance key rotation is self-authorized (existing quorum must sign the rotation), so no external coordination is required.
+
+### Consequences
+
+- Per-write gas cost drops from an estimated ~$0.15–0.25 (ML-DSA-44 calldata + Stylus WASM) to ~$0.05–0.10 (secp256r1 calldata + RIP-7212 precompile).
+- IPFS content signatures remain ML-DSA-44 throughout — no change to card document structure, log entry structure, or client-side verification.
+- The split model introduces two key types per press, which must be tracked in press operator key management tooling.
+- Migration in Phase 2 is self-service per press (no re-registration, no new press card issuance) — presses rotate their own on-chain key using the dual-sign flow.
 
 ---
 

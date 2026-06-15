@@ -1,4 +1,4 @@
-# Open Questions to Resolve Before Implementation
+Mark # Open Questions to Resolve Before Implementation
 
 **Date:** 2026-06-14
 **Status:** Draft for review
@@ -98,60 +98,45 @@ All fields added to canonical schema: `successor` documented as a protocol-reser
 
 ### Authority-model / posture conflicts
 
-**INC-10 — "All writes go through a press" vs holder-callable on-chain ops (Medium).**
-`card_protocol_spec.md` §5 Non-Goals: *"No special direct-write paths for any code range. All
-updates… go through an approved press."* But `registry_contract.md` §4.3–4.4 card
-`RegisterSubCard`/`DeregisterSubCard` as *"Called by: Master card holder (via paymaster or
-press)."* Resolve whether holders can write directly (ties to OQ-4).
+~~**INC-10 — "All writes go through a press" vs holder-callable on-chain ops (Medium).**~~ ✅ RESOLVED 2026-06-14
 
-**INC-11 — Attestation deferred by the core spec but required by subcards (Medium).**
-`card_protocol_spec.md` defers hardware attestation ("Not: Hardware attestation in v1"; TEE is
-P2), yet `subcards.md` Step 2 makes platform app-attestation (iOS App Attest / Android Play
-Integrity) a hard P0 gate ("An app that cannot produce a valid attestation is rejected").
-Decide whether attestation is in scope for v1.
+**Decision:** All writes go through a press. `registry_contract.md §4.3` (`RegisterSubCard`) and §4.4 (`DeregisterSubCard`) updated to "Called by: Press (authorized for the card's policy), on behalf of the sub-card holder." Gas is sponsored by the issuing organization's press. Holder signatures are verified off-chain by the press and retained in calldata for auditability. A new §4.11 (Gas Sponsorship and Rate Limiting) documents the rate-limit defaults (1000 tx/week per policy; 10 RegisterSubCard/week per holder) and suspicious-activity notification to granting agencies at 80% of any limit.
 
-**INC-12 — `delegated_capabilities` is not integrated with predicate-based verification
-(Medium).** `subcards.md` §Step 4 introduces a `delegated_capabilities` object (`can_sign_statements`,
-`revocation_8xx`, …). The core verification flow (§7) evaluates authority only via
-`update_policy`/`revocation_permissions` predicates and the sub-card→master link — there is no
-defined way for a verifier to enforce `delegated_capabilities`. Specify how (or whether) these
-grants are checked.
+~~**INC-11 — Attestation deferred by the core spec but required by subcards (Medium).**~~ ✅ RESOLVED 2026-06-14
+
+**Decision:** Attestation is in scope for v1. Two tiers: **T2** (full app attestation via iOS App Attest / Android Play Integrity) is the default and required for all sub-cards. **T1** (hardware-backed key storage only — TEE/Secure Enclave) is available as a policy exception for devices that cannot support T2 (e.g. Android devices without Google Play Services, ~25–30% of Android globally). T1 must be explicitly accepted by the governing policy; absent explicit acceptance, T2 is required. The `SubCardDocument` now includes `attestation_level` (`"T2"` | `"T1"`) and `attestation_proof` (present for T2; omitted for T1). The "Not: Hardware attestation in v1" Non-Goal removed from `card_protocol_spec.md §2`. `subcards.md §Attestation Tiers` added; `protocol-objects.md §16` updated with the new fields.
+
+~~**INC-12 — `delegated_capabilities` is not integrated with predicate-based verification (Medium).**~~ ✅ RESOLVED 2026-06-14
+
+**Decision:** The `delegated_capabilities` object is replaced by the `capabilities` whitelist array on `SubCardDocument`. Verifiers enforce the whitelist: if a sub-card signed a message, check that the message's `type` field appears in the sub-card's `capabilities` array; if absent, reject regardless of cryptographic validity. `card_protocol_spec.md §7` updated with step 2a (capability check). No separate predicate mechanism is required.
 
 ### Audit-encryption model conflict
 
-**INC-13 — Per-entry ML-KEM vs per-epoch AEK audit encryption coexist (High).**
-`ARCHITECTURE.md` ADR-003 (and the `protocol-objects.md` §2 PolicyCardDocument table) say each
-issuance entry is encrypted **to each auditor's key via ML-KEM** (per-entry). But
-`card_protocol_spec.md` §2 "Audit Epoch Lifecycle" and `protocol-objects.md` §11–§12 specify a
-**per-epoch AEK** (AES-GCM, the AEK wrapped per auditor via ML-KEM). ADR-003 and the §2 table
-still describe the superseded per-entry model. This affects the auditor implementation and the
-forward-secrecy claims; update ADR-003 to the epoch model.
+~~**INC-13 — Per-entry ML-KEM vs per-epoch AEK audit encryption coexist (High).**~~ ✅ RESOLVED 2026-06-14
+
+**Decision:** The epoch AEK model is canonical. `ARCHITECTURE.md` ADR-003 and `protocol-objects.md §2` (PolicyCardDocument `auditors` field description) updated to match `card_protocol_spec.md §2 Audit Epoch Lifecycle`: auditors receive a per-epoch AEK wrapped once per auditor via ML-KEM-768; all entries in the epoch are encrypted under that shared AEK rather than individually per-entry. The per-entry ML-KEM description is removed from all documents.
 
 ### Hygiene / lower severity
 
-**INC-14 — ML-KEM parameter set not pinned (Medium).** ADR-004 says "ML-KEM (FIPS 203)" without
-choosing 512/768/1024; `protocol-objects.md` §12 silently assumes ML-KEM-768 (1088-byte
-ciphertext). Pin the parameter set normatively in ADR-004.
+~~**INC-14 — ML-KEM parameter set not pinned (Medium).**~~ ✅ RESOLVED 2026-06-14
 
-**INC-15 — `press_signature` coverage wording differs (Medium).** `protocol-objects.md` §3 says
-the press signs "the complete LogEntry **excluding the `press_signature` field**";
-`ARCHITECTURE.md` ADR-003 and `card_protocol_spec.md` §5 say "the complete/assembled LogEntry"
-with no exclusion. State exactly which fields are covered (a signature cannot cover itself).
+**Decision:** ML-KEM-768 is normatively pinned. `ARCHITECTURE.md` ADR-004 updated to "ML-KEM-768 (FIPS 203, parameter set 768 is normatively pinned)." This matches the ciphertext size already assumed in `protocol-objects.md §12`.
 
-**INC-16 — `protocol-objects.md` §15 is also stale (Low).** `registry_contract.md` §2 says it
-supersedes `protocol-objects.md` §14 (`RegistryEntry`) but does not mention §15
-(`SubCardRegistration`), which the contract's `SubCardRegistrations`/`RegisterSubCard` likewise
-supersede. Flag §15 for update alongside §14 (extends X-2).
+~~**INC-15 — `press_signature` coverage wording differs (Medium).**~~ ✅ RESOLVED 2026-06-14
 
-**INC-17 — `update_codes.md` is a divergent legacy restatement (Low).** It uses "card" and
-gives `710` as the "honorable" example, whereas `card_protocol_spec.md` defines `700`
-honorable / `750` procedural / `760` unfavorable. New codes introduced elsewhere (e.g.
-`key_rotation.md` code `101`) are not reflected here or in the main code table. Make one
-document the canonical code registry and delete/redirect the other.
+**Decision:** The press signs canonical CBOR of the complete LogEntry **excluding the `press_signature` field itself**, then appends `press_signature` after signing. `ARCHITECTURE.md` ADR-003 and `card_protocol_spec.md §5 step 4` updated to include the explicit exclusion. `protocol-objects.md §3` already had the correct language and is unchanged.
 
-**INC-18 — `messaging_protocol.md` doc errors (Low).** Two consecutive `### 5.` headings
-(`card_offer` and `card_offer_accepted`); the genesis object is called `CardDocument` here vs
-`CardDocument` in `protocol-objects.md` (folds into X-1).
+~~**INC-16 — `protocol-objects.md` §15 is also stale (Low).**~~ ✅ RESOLVED 2026-06-14
+
+**Decision:** `protocol-objects.md §15` (`SubCardRegistration`) updated to state "Written by: Press (authorized for the card's policy), on behalf of the holder — see `registry_contract.md §4.3` for the authoritative on-chain schema, preconditions, and state changes. §15 here is a high-level summary only."
+
+~~**INC-17 — `update_codes.md` is a divergent legacy restatement (Low).**~~ ✅ RESOLVED 2026-06-14
+
+**Decision:** `specs/update_codes.md` is now the canonical code registry. Rewritten to include: all range descriptions (1xx–9xx); all specific codes from `card_protocol_spec.md` (100–911); key-rotation codes (100/101/102/103) from `key_rotation.md`; authority rules per code; extended notes. `card_protocol_spec.md` "Initial defined codes" table replaced with a shorter reference table plus a pointer to `update_codes.md` as authoritative; codes 101/102/103 added; code 811 updated to "sub-card lost or stolen". `key_rotation.md §8.2` updated to cross-reference `update_codes.md`.
+
+~~**INC-18 — `messaging_protocol.md` doc errors (Low).**~~ ✅ RESOLVED 2026-06-14
+
+**Decision:** All duplicate `### 5.` headings fixed. `messaging_protocol.md` now has unique sequential headings 1 through 19: `### 6. card_offer_accepted` through `### 19. error` (previously 7 headings were off by one due to the duplicate `### 5.`). Summary table already had the correct 1–19 numbering and was not changed.
 
 | ID | Severity | One-line | Primary docs in conflict |
 |---|---|---|---|
@@ -164,15 +149,15 @@ document the canonical code registry and delete/redirect the other.
 | ~~INC-7~~ | ~~High~~ | ~~"sub-card" overloaded (device vs app)~~ ✅ "Sub-card" unified; `SubCardDocument` + app-card trust chain; `subcards.md` rewritten; `key_rotation.md §1` updated | — |
 | ~~INC-8~~ | ~~Medium~~ | ~~`ClaimOpenOffer` function vs inline registration~~ ✅ `ClaimOpenOffer` is the separate endpoint; dual verification (press + contract) required for abuse-surface reasons | — |
 | ~~INC-9~~ | ~~Medium~~ | ~~`max_acceptances` null vs 0 sentinel~~ ✅ `null` = unconstrained (document); press encodes `null` → `type(uint64).max` in calldata; `0` = zero acceptances | — |
-| INC-10 | Medium | "all writes via press" vs holder-callable ops | spec §5 vs registry_contract |
-| INC-11 | Medium | Attestation deferred vs required | spec vs subcards |
-| INC-12 | Medium | `delegated_capabilities` not in verification | subcards vs spec §7 |
-| INC-13 | High | Per-entry ML-KEM vs per-epoch AEK audit model | ADR-003/§2 table vs spec §2/protocol-objects §11-12 |
-| INC-14 | Medium | ML-KEM parameter set unpinned | ADR-004 vs protocol-objects §12 |
-| INC-15 | Medium | `press_signature` coverage wording | protocol-objects vs ARCH/spec |
-| INC-16 | Low | protocol-objects §15 also stale | registry_contract §2 |
-| INC-17 | Low | `update_codes.md` legacy drift | update_codes vs spec |
-| INC-18 | Low | messaging doc errors / object name | messaging vs protocol-objects |
+| ~~INC-10~~ | ~~Medium~~ | ~~"all writes via press" vs holder-callable ops~~ ✅ All writes via press; `RegisterSubCard`/`DeregisterSubCard` gas paid by requesting app's pre-funded account (not issuing org); card write gas paid by issuing org's press; rate limits + suspicious-activity notifications added (§4.11) | — |
+| ~~INC-11~~ | ~~Medium~~ | ~~Attestation deferred vs required~~ ✅ T2 (App Attest/Play Integrity) default; T1 accepted by policy exception; `attestation_level` + `attestation_proof` added to SubCardDocument | — |
+| ~~INC-12~~ | ~~Medium~~ | ~~`delegated_capabilities` not in verification~~ ✅ `capabilities` whitelist; verifier step 2a added to spec §7 | — |
+| ~~INC-13~~ | ~~High~~ | ~~Per-entry ML-KEM vs per-epoch AEK audit model~~ ✅ Epoch AEK model canonical; ADR-003 and protocol-objects §2 updated | — |
+| ~~INC-14~~ | ~~Medium~~ | ~~ML-KEM parameter set unpinned~~ ✅ ML-KEM-768 normatively pinned in ADR-004 | — |
+| ~~INC-15~~ | ~~Medium~~ | ~~`press_signature` coverage wording~~ ✅ Signs complete entry excluding `press_signature` field; ADR-003 and spec §5 updated | — |
+| ~~INC-16~~ | ~~Low~~ | ~~protocol-objects §15 also stale~~ ✅ §15 updated to reference registry_contract.md §4.3 as authoritative | — |
+| ~~INC-17~~ | ~~Low~~ | ~~`update_codes.md` legacy drift~~ ✅ `update_codes.md` rewritten as canonical registry; spec updated to cross-reference it | — |
+| ~~INC-18~~ | ~~Low~~ | ~~messaging doc errors / object name~~ ✅ Duplicate `### 5.` headings fixed; messaging_protocol.md now has unique sequential headings 1–19 | — |
 
 \* Blocking specifically for the messaging subsystem / envelope freeze.
 
@@ -186,8 +171,8 @@ document the canonical code registry and delete/redirect the other.
 
 | ID | Area | Question | Source |
 |---|---|---|---|
-| **OQ-2** | Contract | **ML-DSA-44 Stylus gas cost.** Benchmark full on-chain ML-DSA-44 verification against current Arbitrum One blob-era pricing. One press sig per `RegisterCard`/`UpdateMarkHead`; up to *quorum* (3–5) sigs + 1,312-byte keys per governance op. Confirm per-write and per-governance-op cost is acceptable before deploy. | ARCH OQ-2; registry OQ-2; spec Timeline |
-| **OQ-15** | Governance | **Bootstrap of initial governance keysets.** The deployer sets the first `GovernanceKeysets`; no quorum can authorize itself before it exists. How are initial holders chosen, published, audited? Timelock or recognized-stakeholder multisig at deploy? | registry OQ-15 |
+| ~~**OQ-2**~~ | Contract | ~~**ML-DSA-44 Stylus gas cost.**~~ ✅ **RESOLVED 2026-06-14** — Full on-chain ML-DSA-44 verification is retained. Optimistic/lazy verification was considered and rejected for now (adds dispute-window complexity, challenge-period state-rollback difficulty, and provisional-validity burden on clients). Decision: run the Stylus benchmark before contract deployment; if cost is prohibitive, revisit the hybrid model (verify at `RegisterCard`, optimistic at `UpdateMarkHead`). | ARCH OQ-2; registry OQ-2; spec Timeline |
+| ~~**OQ-15**~~ | Governance | ~~**Bootstrap of initial governance keysets.**~~ ✅ **RESOLVED 2026-06-14** — Deploy with a 1-of-1 governance keyset (single deployer key). As additional governance members are invited in, `RotateGovernanceKeys` expands the keyset and raises quorum. Once the board has multiple members, quorum is required to add or remove members (via `RotateGovernanceKeys`). The quorum threshold itself is board-updatable via the same operation (self-amending). No deploy-time timelock or external multisig required; the single-key bootstrap is the accepted initial trust anchor. | registry OQ-15 |
 | **OQ-16** | Contract | **Sub-card holder key verification.** `RegisterSubCard` must verify a signature from the master-card *holder*, not the press. Options: (a) store `holder_pubkey` on-chain per card (~1,312 B/card); (b) press-mediate all sub-card registration (adds press dependency to a user-sovereign op); (c) off-chain verify + press-countersigned payload (weakens user-sovereign model). | registry OQ-16 |
 | ~~**X-1 / X-2**~~ | Spec | ~~Canonical protocol name; reconcile `CardEntry`/`RegistryEntry`.~~ ✅ Both resolved 2026-06-14 — see §0. | §0 above |
 
@@ -195,8 +180,8 @@ Also effectively blocking the contract (listed as High in source but gate deploy
 
 | ID | Area | Question | Source |
 |---|---|---|---|
-| **OQ-17** | Contract | **Nonce storage & pruning.** Replay protection must bound storage growth. Timestamp-scoped nonces vs per-press sequence numbers; must align with the `timestamp` already in signed payloads. | registry OQ-17 |
-| **OQ-18** | Contract | **Upgradeability path.** Immutable vs proxy (trusted upgrade key) vs modular (only the verifier upgradeable). The new ML-DSA-44 Stylus code is bug-prone enough to argue for *some* path. | registry OQ-18 |
+| ~~**OQ-17**~~ | Contract | ~~**Nonce storage & pruning.**~~ ✅ **RESOLVED 2026-06-14** — Per-press sequence numbers. Each `PressAuthEntry` gains a `next_sequence: uint64` field. Press-signed payloads use `"sequence": <uint64>` instead of a random nonce; the contract checks `sequence == next_sequence` and increments on success. No nonce storage table or pruning needed. Governance payloads retain timestamp-scoped random nonces (governance bodies don't map cleanly to per-entity sequences and governance ops are rare). | registry OQ-17 |
+| ~~**OQ-18**~~ | Contract | ~~**Upgradeability path.**~~ ✅ **RESOLVED 2026-06-14** — Modular upgrade (Option C). The ML-DSA-44 verifier logic lives in a separate Stylus module; the registry storage contract is immutable. The verifier module address is stored in the registry and upgradeable via governance quorum (`UpgradeVerifier` governance operation) with a 48-hour timelock. Storage layout, card entries, and authorization tables are never touched by an upgrade. | registry OQ-18 |
 
 > Note: Canonical serialization (former OQ-1) is **resolved** — canonical CBOR per RFC 8949
 > §4.2 with a JSON input surface (ADR-010, spec Appendix A, `serialization-conformance.json`).
@@ -209,10 +194,10 @@ Also effectively blocking the contract (listed as High in source but gate deploy
 
 | ID | Area | Question | Source |
 |---|---|---|---|
-| **OQ-4** | Contract / keys | **Recipient-initiated writes.** Can a holder call `UpdateMarkHead` directly (e.g., self-revocation) via paymaster, or must a press always mediate? Direct writes need holder-key verification on-chain + gas sponsorship; press-mediated adds a liveness dependency on a user-sovereign op. Intersects key-rotation KR-4 and subcard SM-3. | ARCH OQ-4; registry OQ-4; spec §2 |
-| **OQ-5** | Verification | **Policy schema evolution.** When a running policy adds a `field_definitions` field, are previously-issued cards lacking it non-conforming or still valid? Affects every verifier. | ARCH OQ-5; spec §1, §5 |
-| **OQ-9** | Client / Design | **Trusted-root configuration & sync.** How does a user configure trusted roots and sync them across devices? Foundational to all client verification and to the captured-root threat (red-team 3.1-B). Spec flags design work should start in parallel. | ARCH OQ-9; spec §7 |
-| **SUB-DEREG** | Keys | **Sub-card deregistration with recovery-only access.** After recovery, how does a holder deregister compromised device sub-cards when they have no active device sub-card to sign with? | spec §3 |
+| ~~**OQ-4**~~ | Contract / keys | ~~**Recipient-initiated writes.**~~ ✅ **RESOLVED 2026-06-14** — Press always mediates all writes. Holder-initiated `UpdateMarkHead` (self-revocation, key rotation) is submitted through a press just like issuer-initiated updates. Gas for holder-initiated writes is paid by the issuing organization's press — holders do not hold or spend ETH directly. | ARCH OQ-4; registry OQ-4; spec §2 |
+| ~~**OQ-5**~~ | Verification | ~~**Policy schema evolution.**~~ ✅ **RESOLVED 2026-06-14** — Previously-issued cards remain valid. Verifiers check `field_definitions` against the policy version in effect at card creation time (from the policy card's IPFS log history), not the current version. Cards issued before a field was added are conforming under the policy version at their issuance. | ARCH OQ-5; spec §1, §5 |
+| ~~**OQ-9**~~ | Client / Design | ~~**Trusted-root configuration & sync.**~~ ✅ **RESOLVED 2026-06-14** — Trusted roots are at the protocol/contract level only. A policy registered in `PolicyAuthorizerKeys` on the Arbitrum One contract is a trusted root; an unregistered policy is not. No per-wallet trust store, no per-user trust configuration in v1. Wallets verify that a card's chain terminates at a policy present in the on-chain registry. | ARCH OQ-9; spec §7 |
+| ~~**SUB-DEREG**~~ | Keys | ~~**Sub-card deregistration with recovery-only access.**~~ ✅ **RESOLVED 2026-06-14** — Sub-cards are deregistered via a request signed by the holder's **primary card key** (not a sub-card key), submitted through a press. The primary card key is recoverable via the protocol's key recovery process. Gas is paid by the issuing organization's press (holder-sovereignty operation, consistent with OQ-4). After a key recovery event, all existing sub-cards should be revoked (the recovered-from key may have been compromised) and re-requested from each app. | spec §3 |
 
 ---
 
