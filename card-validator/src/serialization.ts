@@ -1,5 +1,5 @@
 /**
- * Canonical CBOR serialization per the Chitt Protocol Appendix A.
+ * Canonical CBOR serialization per the Card Protocol Appendix A.
  *
  * Base standard: RFC 8949 §6.1 (JSON→CBOR) + §4.2 (deterministic encoding).
  * Protocol overrides:
@@ -20,9 +20,9 @@ export const BINARY_FIELDS = new Set([
   'holder_signature',
   'signature',
   'policy_id',
-  'press_chitt',
-  'signer_chitt',
-  'issuer_chitt',
+  'press_card',
+  'signer_card',
+  'issuer_card',
   'prev_log_root',
   'in_reply_to',
   'edit_of',
@@ -303,7 +303,7 @@ export interface SerializationOptions {
 /**
  * Produce the canonical CBOR bytes for a JSON-shaped object.
  *
- * This is the serialization form used for all signatures in the Chitt Protocol.
+ * This is the serialization form used for all signatures in the Card Protocol.
  * By default applies the protocol field sets from Appendix A. Pass `options` to
  * override specific sets (useful for conformance tests or non-standard fields).
  */

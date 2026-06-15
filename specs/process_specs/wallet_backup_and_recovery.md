@@ -4,13 +4,13 @@
 **Date:** 2026-06-14  
 **Status:** Draft  
 
-> **Terminology note.** This spec uses "mark" for "chitt" and "wallet" for "keyring." The rename is in progress; treat the terms as interchangeable.
+> **Terminology note.** This spec now uses "card" as the canonical term per the Naming Convention.
 
 ---
 
 ## Overview
 
-A mark holder's wallet contains the private keys for every mark they control. Loss of the wallet means loss of access to all marks and any services authenticated with them. This spec covers four processes: initial wallet setup with backup registration, synced passkey recovery (default), YubiKey recovery (opt-in upgrade), and post-recovery re-registration.
+A card holder's wallet contains the private keys for every card they control. Loss of the wallet means loss of access to all cards and any services authenticated with them. This spec covers four processes: initial wallet setup with backup registration, synced passkey recovery (default), YubiKey recovery (opt-in upgrade), and post-recovery re-registration.
 
 The security model: the wallet is encrypted on IPFS with a key that requires both a passkey (device-bound) and a service secret (held by the primary service). Neither alone is sufficient to decrypt. Recovery is enabled by a wrapped copy of the decryption key held at the backup service, unwrappable by a second credential the holder registers at setup.
 
@@ -29,7 +29,7 @@ Both tiers use the same 72-hour cancellation window and notification flow. They 
 
 | Actor | Role |
 |---|---|
-| **Holder** | The mark owner setting up or recovering their wallet |
+| **Holder** | The card owner setting up or recovering their wallet |
 | **Primary service** | Holds `service_secret`; never sees the wallet's plaintext or decryption key |
 | **Backup service** | Holds wrapped decryption key blob(s); manages the 72-hour cancellation window |
 | **Synced passkey** | A WebAuthn platform credential backed up to iCloud Keychain or Google Password Manager; syncs to any device on the same account; requires biometric auth to use |
@@ -45,7 +45,7 @@ This flow runs when a new holder creates their first wallet, or when an existing
 
 **Wallet creation:**
 
-1. The client generates a **master mark keypair** (ML-DSA-44):
+1. The client generates a **master card keypair** (ML-DSA-44):
    - Private key is held in memory only during this step.
    - The keypair will serve as the holder's root identity.
 
@@ -60,27 +60,27 @@ This flow runs when a new holder creates their first wallet, or when an existing
    Neither `device_passkey_output` alone nor `service_secret` alone can reconstruct `decryption_key`.
 
 5. The keyring is initialized as an append-only encrypted blob:
-   - The blob contains the master mark private key, keyed by mark address.
+   - The blob contains the master card private key, keyed by card address.
    - The blob is encrypted with `decryption_key` (AES-GCM).
    - The encrypted blob is posted to IPFS.
    - The IPFS CID is stored by the primary service, associated with the holder's account.
 
-6. The master mark private key is cleared from memory after the keyring is posted.
+6. The master card private key is cleared from memory after the keyring is posted.
 
-**Device sub-mark setup:**
+**Device sub-card setup:**
 
-7. The client generates a **device sub-mark keypair** in secure device storage:
+7. The client generates a **device sub-card keypair** in secure device storage:
    - Apple devices: Secure Enclave.
    - Other devices: TPM-backed Keystore.
    - The private key is scoped to this application and cannot be exported.
 
-8. The master mark key is accessed from the keyring (decrypted using `decryption_key`):
-   - The master key signs a sub-mark registration binding the device sub-mark to the master.
+8. The master card key is accessed from the keyring (decrypted using `decryption_key`):
+   - The master key signs a sub-card registration binding the device sub-card to the master.
    - The master key is cleared from memory after signing.
 
-9. The sub-mark registration is posted on Arbitrum One, linking the sub-mark's registry address to the master mark's registry address.
+9. The sub-card registration is posted on Arbitrum One, linking the sub-card's registry address to the master card's registry address.
 
-10. Routine operations (signing messages, accepting marks) now use the device sub-mark key. The master key remains in the encrypted keyring and is accessed only for high-stakes operations (creating new sub-marks, key rotation).
+10. Routine operations (signing messages, accepting cards) now use the device sub-card key. The master key remains in the encrypted keyring and is accessed only for high-stakes operations (creating new sub-cards, key rotation).
 
 **Synced passkey backup registration (default — automatic):**
 
@@ -149,7 +149,7 @@ This flow runs when the holder has lost their primary device and has a synced pa
 5. If a cancellation is received:
    - The backup service aborts the recovery and notifies the holder via all channels.
    - The holder should treat their Apple/Google account as potentially compromised and rotate their account credentials.
-   - The holder should also rotate any sub-marks registered under the wallet.
+   - The holder should also rotate any sub-cards registered under the wallet.
 
 **Key release (after 72-hour window):**
 
@@ -167,7 +167,7 @@ This flow runs when the holder has lost their primary device and has a synced pa
    ```
    The synced passkey private key never leaves the device.
 
-9. The client decrypts the keyring blob using `decryption_key`. The full wallet — master mark private keys and all associated mark private keys — is now accessible.
+9. The client decrypts the keyring blob using `decryption_key`. The full wallet — master card private keys and all associated card private keys — is now accessible.
 
 10. Recovery is complete. Proceed to Process 3 (post-recovery re-registration).
 
@@ -211,7 +211,7 @@ This flow runs when the holder has a YubiKey registered and prefers the higher-s
 4. If a cancellation is received:
    - The backup service aborts the recovery and notifies the holder via all channels.
    - The holder must treat the old YubiKey as potentially compromised and register a new one.
-   - The holder should also rotate any sub-marks registered under the wallet.
+   - The holder should also rotate any sub-cards registered under the wallet.
 
 **Key release (after 72-hour window):**
 
@@ -243,14 +243,14 @@ After either recovery path, the holder re-establishes their wallet on a new prim
     - A new `decryption_key` is derived from the new passkey and service secret.
     - The keyring blob is re-encrypted with the new `decryption_key` and re-posted to IPFS.
 
-11. The holder registers new **device sub-marks** for their new device(s):
-    - Generate a new device sub-mark keypair in the new device's secure storage.
+11. The holder registers new **device sub-cards** for their new device(s):
+    - Generate a new device sub-card keypair in the new device's secure storage.
     - Access the master key from the recovered keyring.
-    - Sign a new sub-mark registration and post it on Arbitrum One.
+    - Sign a new sub-card registration and post it on Arbitrum One.
     - Clear the master key from memory.
 
-12. **Deregister potentially-compromised sub-marks:**
-    - For each device sub-mark that was active on the lost device: submit a revocation intent (code 811 — device sub-mark lost or stolen) via the mark update flow (see `mark_updates.md`).
+12. **Deregister potentially-compromised sub-cards:**
+    - For each device sub-card that was active on the lost device: submit a revocation intent (code 811 — device sub-card lost or stolen) via the card update flow (see `card_updates.md`).
 
 13. **Update backup registrations:**
     - Register a new synced passkey blob under the new `decryption_key` (Process 1, Steps 11–13).
@@ -262,7 +262,7 @@ After either recovery path, the holder re-establishes their wallet on a new prim
 ## Postconditions
 
 - The holder's wallet is accessible from the new device.
-- All compromised device sub-marks are revoked.
+- All compromised device sub-cards are revoked.
 - The wallet is protected again by the dual-factor encryption model (new passkey + new service secret).
 - Backup registration(s) are updated under the new decryption key.
 
@@ -279,7 +279,7 @@ After either recovery path, the holder re-establishes their wallet on a new prim
 | Account compromise alone does not decrypt the wallet | `service_secret` from the primary service is still required during re-registration |
 | Lost synced passkey + lost device | Holder must switch recovery to YubiKey path, or re-enroll after regaining Apple/Google account access |
 | Lost YubiKey + lost device (no synced passkey) | No recovery path; synced passkey default prevents this for most users |
-| Master key is cold during routine operations | All routine signing uses device sub-mark keys; master key accessed only for sub-mark creation and rotation |
+| Master key is cold during routine operations | All routine signing uses device sub-card keys; master key accessed only for sub-card creation and rotation |
 
 ---
 
@@ -292,13 +292,13 @@ After either recovery path, the holder re-establishes their wallet on a new prim
 | Synced passkey unavailable (e.g., account switched) | Use YubiKey recovery path if registered; otherwise recover Apple/Google account first |
 | YubiKey PIN forgotten | YubiKey recovery is blocked; use synced passkey recovery path instead |
 | Keyring IPFS CID unavailable during recovery | Retry IPFS fetch; if permanently unavailable, the keyring blob must be re-derived from any surviving private key material (last resort manual recovery) |
-| Cancellation window expires and holder did not intend recovery | Holder must immediately rotate all mark sub-marks that may have been exposed; treat master keys as compromised; issue successor marks as needed |
-| Recovery completed by attacker before holder notices | Holder must issue 910 (full wallet compromise suspected) revocations on all marks and work with each policy's issuer to obtain successor marks |
+| Cancellation window expires and holder did not intend recovery | Holder must immediately rotate all card sub-cards that may have been exposed; treat master keys as compromised; issue successor cards as needed |
+| Recovery completed by attacker before holder notices | Holder must issue 910 (full wallet compromise suspected) revocations on all cards and work with each policy's issuer to obtain successor cards |
 
 ---
 
 ## Related Specs
 
-- `open_offer_acceptance_new_wallet.md` — wallet creation as part of first mark acceptance
-- `mark_updates.md` — submitting sub-mark revocation intents post-recovery
-- `chitt_protocol_spec.md §3` — full feature spec for keychain setup and backup
+- `open_offer_acceptance_new_wallet.md` — wallet creation as part of first card acceptance
+- `card_updates.md` — submitting sub-card revocation intents post-recovery
+- `card_protocol_spec.md §3` — full feature spec for keychain setup and backup

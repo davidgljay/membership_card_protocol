@@ -1,5 +1,5 @@
 /**
- * Cryptographic operations for the Chitt Protocol.
+ * Cryptographic operations for the Card Protocol.
  * Uses ML-DSA-44 (FIPS 204) for all signature verification.
  */
 

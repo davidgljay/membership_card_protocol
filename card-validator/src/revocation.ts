@@ -1,5 +1,5 @@
 /**
- * Revocation semantics per the Chitt Protocol "Revocation Model" section.
+ * Revocation semantics per the Card Protocol "Revocation Model" section.
  *
  * Code ranges:
  *   7xx — Privilege reduction. Things before effective_date remain valid; new issuances rejected.
@@ -31,7 +31,7 @@ function codeCentury(code: number): 7 | 8 | 9 | null {
 }
 
 /**
- * Given the list of log entries for a chitt, find the governing
+ * Given the list of log entries for a card, find the governing
  * revocation: the 8xx/9xx entry with the earliest effective_date.
  * 7xx entries (privilege reductions) are included since they also
  * carry an effective_date that gates future issuance.
@@ -61,7 +61,7 @@ export function findGoverningRevocation(
 }
 
 /**
- * Determine whether a chitt was valid at a given signing time,
+ * Determine whether a card was valid at a given signing time,
  * given the governing revocation (if any).
  *
  * @param revocation     The governing revocation (or null if none).
@@ -93,7 +93,7 @@ export function wasValidAtSigningTime(
 }
 
 /**
- * Determine whether the chitt is currently valid (as of now).
+ * Determine whether the card is currently valid (as of now).
  *
  * @param revocation   The governing revocation (or null if none).
  * @param nowMs        Current time in milliseconds since epoch.

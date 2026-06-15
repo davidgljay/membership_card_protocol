@@ -132,7 +132,7 @@ describe('Canonical CBOR serialization — additional edge cases', () => {
   });
 
   it('protocol default field sets encode recipients as binary array', () => {
-    // With default sets, recipients are encoded as binary (chitt-pointer-array)
+    // With default sets, recipients are encoded as binary (card-pointer-array)
     const bytes = canonicalize({
       recipients: ['AAEC', 'BAED'],
     });

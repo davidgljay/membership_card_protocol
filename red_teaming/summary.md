@@ -1,4 +1,4 @@
-# Red-Team Summary — Mark Protocol v0.3
+# Red-Team Summary — Card Protocol v0.3
 ## Synthesis Across All Three Phases
 
 **Date:** 2026-05-22  
@@ -9,9 +9,9 @@
 
 ## 1. Overall Risk Posture
 
-The Mark Protocol v0.3 is a thoughtfully-designed system with genuine cryptographic strengths: the dual-signature model prevents credential forgery, the append-only log creates a tamper-evident audit trail, ML-DSA-44 provides quantum-resistant signing, and the epoch-based audit encryption model delivers epoch-scoped forward secrecy. For many use cases — community membership credentials, employee identity in low-threat environments, professional certification networks where the issuer community is not under active state-level threat — the protocol's security properties significantly exceed the alternatives it would replace.
+The Card Protocol v0.3 is a thoughtfully-designed system with genuine cryptographic strengths: the dual-signature model prevents credential forgery, the append-only log creates a tamper-evident audit trail, ML-DSA-44 provides quantum-resistant signing, and the epoch-based audit encryption model delivers epoch-scoped forward secrecy. For many use cases — community membership credentials, employee identity in low-threat environments, professional certification networks where the issuer community is not under active state-level threat — the protocol's security properties significantly exceed the alternatives it would replace.
 
-The protocol is **not yet ready for deployment to high-risk populations** — activists, journalists, abuse survivors, and communities operating under active state-actor surveillance — **without addressing two unresolved design gaps**: the governance body as a centralized compulsion target, and the absence of a trusted root literacy mechanism for users who cannot independently evaluate credential chains. These are not implementation bugs; they are architectural properties of the current design that require deliberate design decisions to address.
+The protocol is **not yet ready for deployment to high-risk populations** — activists, journalists, abuse survivors, and communities operating under active state-actor surveillance — **without addressing two unresolved design gaps**: the governance body as a centralized compulsion target, and the absence of a trusted root literacy mechanism for users who cannot independently evaluate credential chains. These are not implementation bugs; they are arcardectural properties of the current design that require deliberate design decisions to address.
 
 ### Full Findings Count
 
@@ -79,9 +79,9 @@ This finding also depends on the unresolved OQ-9 (trusted root configuration UX)
 ### #3 — Backdated Silent 9xx Revocation Has No Required Technical Counter
 **Findings:** 1.4-A (Phase 1), 2.2-A (Phase 2), 3.1-B, 3.1-F, 3.3-B (Phase 3) | **Severity:** High (recurring across all three phases and all adversary types)
 
-This is the most versatile attack vector in the protocol and the one finding that spans all three phases without resolution. A press with a valid sub-mark key can post a `LogEntry` with `code: 911`, `revocation.effective_date` set to any past date, and `notify_holder: false` against any mark in its scope. The spec explicitly supports both backdated effective dates and silent revocation as intentional features. There is no technical counter in the current protocol.
+This is the most versatile attack vector in the protocol and the one finding that spans all three phases without resolution. A press with a valid sub-card key can post a `LogEntry` with `code: 911`, `revocation.effective_date` set to any past date, and `notify_holder: false` against any card in its scope. The spec explicitly supports both backdated effective dates and silent revocation as intentional features. There is no technical counter in the current protocol.
 
-The consequences are severe: the holder does not receive a notification; their mark appears revoked with an `effective_date` potentially months before the attack; verifiers checking historical signing validity treat the holder's prior statements as made by a revoked member; and the holder learns of the revocation only when they next attempt to authenticate. Under the Phase 2 clarification checkpoint, this was confirmed as a spec-intentional behavior with no current protocol-level remedy.
+The consequences are severe: the holder does not receive a notification; their card appears revoked with an `effective_date` potentially months before the attack; verifiers checking historical signing validity treat the holder's prior statements as made by a revoked member; and the holder learns of the revocation only when they next attempt to authenticate. Under the Phase 2 clarification checkpoint, this was confirmed as a spec-intentional behavior with no current protocol-level remedy.
 
 The finding recurs under every adversary type: state actor (targeted de-platforming with manufactured history), criminal organization (removing competitors or members threatening to expose the operation), and individual abuser (credential revocation as harassment via residual press authority).
 
@@ -94,7 +94,7 @@ The finding recurs under every adversary type: state actor (targeted de-platform
 
 The 72-hour recovery window is the primary safeguard against full keyring takeover. It fails completely when the adversary also controls the holder's notification channels — which is practical for state actors with telecom legal authority (SIM swap via compulsion), sophisticated criminal organizations (SIM swap fraud, phishing), and individual abusers with cohabitant access or known credentials.
 
-For a state actor with physical custody of a holder (detained at a border crossing or arrested), the attack is entirely practical: seizure of the YubiKey, compulsion of the backup service to bypass the notification window, and coercion of the PIN yields the holder's complete keyring. The holder's master keys, all sub-chitts, and the ability to sign messages attributed to their identity are fully compromised — with no evidence visible in the credential logs.
+For a state actor with physical custody of a holder (detained at a border crossing or arrested), the attack is entirely practical: seizure of the YubiKey, compulsion of the backup service to bypass the notification window, and coercion of the PIN yields the holder's complete keyring. The holder's master keys, all sub-cards, and the ability to sign messages attributed to their identity are fully compromised — with no evidence visible in the credential logs.
 
 **What must be resolved:** Configurable recovery window (72 hours should be the minimum, not the default, for high-risk deployments; 7+ days recommended); independent backup notification channel not controlled by the device's primary accounts; multi-factor cancellation requiring a pre-registered secondary contact.
 
@@ -103,7 +103,7 @@ For a state actor with physical custody of a holder (detained at a border crossi
 ### #5 — Trusted Root Literacy Gap Enables Systematic Fraud and State-Sponsored Forgery
 **Finding:** 3.2-D (Phase 3), 3.1-E (indirect) | **Severity:** High (cross-cutting)
 
-The protocol's trust model requires end users to independently evaluate which roots they trust. This is architecturally correct — the protocol should not mandate a single authority. However, it creates a systematic harm vector: most users do not have the literacy to evaluate unfamiliar credential chains, and a credential that passes formal verification (`chain_reaches_trusted_root: true`) is indistinguishable to a non-expert from one that is fraudulent at the root level.
+The protocol's trust model requires end users to independently evaluate which roots they trust. This is arcardecturally correct — the protocol should not mandate a single authority. However, it creates a systematic harm vector: most users do not have the literacy to evaluate unfamiliar credential chains, and a credential that passes formal verification (`chain_reaches_trusted_root: true`) is indistinguishable to a non-expert from one that is fraudulent at the root level.
 
 Both criminal organizations (constructing plausible-seeming fraudulent credential chains for consumer fraud) and state actors (issuing informant credentials under captured trust roots) exploit this same gap. Neither attack requires cryptographic compromise; both exploit the distance between "formally verified" and "meaningfully trustworthy."
 
@@ -133,19 +133,19 @@ The backdated silent 9xx revocation (Finding #3) requires a protocol-level defau
 ### P1 — High-Priority Protocol Additions Before v1 Release
 
 **P1.1 — Holder-initiated log polling as a required wallet client behavior.**
-A wallet that does not periodically compare the on-chain log-head CID to its cached version cannot give the holder reliable information about their credential state. This is the primary individual-abuser mitigation (Finding #3 / 3.3-B) and a meaningful safeguard against the silent revocation path. The spec should define polling frequency requirements (recommended: minimum daily for active marks) and require that any change to the log head triggers notification to the holder regardless of `notify_holder`.
+A wallet that does not periodically compare the on-chain log-head CID to its cached version cannot give the holder reliable information about their credential state. This is the primary individual-abuser mitigation (Finding #3 / 3.3-B) and a meaningful safeguard against the silent revocation path. The spec should define polling frequency requirements (recommended: minimum daily for active cards) and require that any change to the log head triggers notification to the holder regardless of `notify_holder`.
 
 **P1.2 — Configurable recovery window with extended defaults for high-risk deployments.**
 The 72-hour recovery window should have a longer configurable default for deployments tagged as high-risk. The spec mentions this as a P1 feature; it should be elevated to a first-class configuration option with explicit documentation of the threat model that motivates it.
 
-**P1.3 — Successor mark chain reconstruction procedure documented as the standard recovery path.**
-Communities that experience a mass 9xx attack (Finding 2.1-A) or governance body compromise (Findings 3.1-D, 3.1-F) need a documented playbook for reconstruction. The successor mark mechanism exists in the spec; the recovery procedure using it is not described. This procedure should be a named, documented operation in the spec — not something communities have to derive on their own under crisis conditions.
+**P1.3 — Successor card chain reconstruction procedure documented as the standard recovery path.**
+Communities that experience a mass 9xx attack (Finding 2.1-A) or governance body compromise (Findings 3.1-D, 3.1-F) need a documented playbook for reconstruction. The successor card mechanism exists in the spec; the recovery procedure using it is not described. This procedure should be a named, documented operation in the spec — not something communities have to derive on their own under crisis conditions.
 
 **P1.4 — Governance-level monitoring alerts for AuthorizePress and RevokePress transactions.**
 All communities that have registered policies under ADR-011 governance should receive immediate alerts when any `AuthorizePress` or `RevokePress` transaction occurs on a policy they are associated with. This does not prevent governance body capture but enables rapid community response — publication of attack documentation, migration planning, and mobilization of the successor governance structure.
 
 **P1.5 — Shorter epoch defaults for high-risk community policies.**
-The epoch-based audit encryption model provides forward secrecy for closed epochs, but the default annual epoch means a compromised current-epoch AEK exposes up to one year of issuance records. For communities serving journalists or activists, quarterly epochs reduce this window to three months. The spec should recommend quarter-epoch defaults for policies where the policy chitt metadata indicates a high-risk issuer context.
+The epoch-based audit encryption model provides forward secrecy for closed epochs, but the default annual epoch means a compromised current-epoch AEK exposes up to one year of issuance records. For communities serving journalists or activists, quarterly epochs reduce this window to three months. The spec should recommend quarter-epoch defaults for policies where the policy card metadata indicates a high-risk issuer context.
 
 ---
 
@@ -160,8 +160,8 @@ Finding 3.4-C documents that fraudulent communities can exclude safety signals b
 **P2.3 — `policy_creation` constraints recommended as root policy defaults.**
 Finding 3.2-A documents that root policies without `policy_creation` constraints leave the sub-policy derivation chain open for exploitation. The governance body should check for `policy_creation` constraints as part of root policy registration evaluation. The spec should establish a default recommended `policy_creation` field for root policies operating in consumer-facing contexts.
 
-**P2.4 — Per-context marks and Nym gateway rotation as wallet UX defaults.**
-Both the authentication metadata tracking finding (3.3-A) and the pseudonymous identity exposure finding (3.3-D) are substantially mitigated by context-separated marks and per-mark Nym gateway addresses. These are already noted as security practices in the spec but are presented as optional. Wallet implementations for safety-sensitive deployments should surface context separation as a default recommendation, not an advanced option.
+**P2.4 — Per-context cards and Nym gateway rotation as wallet UX defaults.**
+Both the authentication metadata tracking finding (3.3-A) and the pseudonymous identity exposure finding (3.3-D) are substantially mitigated by context-separated cards and per-card Nym gateway addresses. These are already noted as security practices in the spec but are presented as optional. Wallet implementations for safety-sensitive deployments should surface context separation as a default recommendation, not an advanced option.
 
 **P2.5 — Resolve OQ-14 (governance key holder identity policy).**
 OQ-14 — whether governance key holders should be pseudonymous or identifiable — is deferred in ADR-011. This is not a minor implementation detail; it determines whether legal compulsion of the governance body is practical for a state actor. A named, identifiable governance body with members in one or two jurisdictions is directly coercible. OQ-14 should be resolved as part of the governance charter (P0.1 above) and should include provisions for pseudonymous participation.
@@ -172,7 +172,7 @@ OQ-14 — whether governance key holders should be pseudonymous or identifiable 
 
 ### Recommendation: Conditional — Deploy with Documented Threat-Model Tiers
 
-The Mark Protocol v0.3 is ready for **limited deployment to lower-risk use cases** and **not yet ready for deployment to high-risk populations** without resolving the P0 items above.
+The Card Protocol v0.3 is ready for **limited deployment to lower-risk use cases** and **not yet ready for deployment to high-risk populations** without resolving the P0 items above.
 
 **Lower-risk use cases where the protocol is deployable today:**
 
@@ -198,7 +198,7 @@ For these deployments: the governance compulsion path (Finding #1) means that a 
 
 **The precise gap between "ready for low-risk" and "ready for high-risk":**
 
-The P0 items — governance charter with jurisdictional distribution requirements, OQ-9 resolution, and multi-party authorization defaults for silent 9xx — are design and governance decisions, not additional implementation work. They require author decisions and documentation, not new cryptographic primitives. This is a smaller gap than it might appear from the findings count. The protocol's architecture is sound; the unresolved items are at the governance and policy layer above the cryptography.
+The P0 items — governance charter with jurisdictional distribution requirements, OQ-9 resolution, and multi-party authorization defaults for silent 9xx — are design and governance decisions, not additional implementation work. They require author decisions and documentation, not new cryptographic primitives. This is a smaller gap than it might appear from the findings count. The protocol's arcardecture is sound; the unresolved items are at the governance and policy layer above the cryptography.
 
 **Recommended path to high-risk readiness:**
 
@@ -224,10 +224,10 @@ The remaining Critical risks are at the governance and trust model layers — wh
 |---|---|---|---|
 | 1.1-A | `approved_presses` on-chain enforcement under-specified | Critical (Resolved by ADR-011) | 1 |
 | 1.2-A | De-pinning as soft revocation — verification denial | High | 1 |
-| 1.2-B | Policy chitt unavailability cascades to all issued marks | High | 1 |
+| 1.2-B | Policy card unavailability cascades to all issued cards | High | 1 |
 | 1.2-C | Selective revocation record suppression via split-view IPFS | Medium | 1 |
 | 1.3-A | DoS flooding forces privacy-degrading transport fallback | High | 1 |
-| 1.3-B | State-actor traffic correlation: IP → mark identity → site | High | 1 |
+| 1.3-B | State-actor traffic correlation: IP → card identity → site | High | 1 |
 | 1.3-C | Criminal org targeted de-anonymization via relying-party control | High | 1 |
 | 1.3-D | Gateway endpoint as stable activity oracle | High | 1 |
 | 1.3-E | De-anonymization consequence: full authentication context exposure | High | 1 |
@@ -236,17 +236,17 @@ The remaining Critical risks are at the governance and trust model layers — wh
 | 1.4-C | Press as single point of failure blocks 810 self-revocations | Medium | 1 |
 | 1.4-D | Selective censorship of update intents undetectable without multi-press | Medium | 1 |
 | 1.1-B | Gas griefing via valid-signature / invalid-calldata transactions | Medium | 1 |
-| 1.1-C | Serialization BINARY_FIELDS gaps in mark-validator | Medium | 1 |
+| 1.1-C | Serialization BINARY_FIELDS gaps in card-validator | Medium | 1 |
 | 1.1-D | ML-DSA-44 Stylus conformance not yet validated | Low | 1 |
 | 2.1-A | Authorizer key enables mass 9xx revocation; recovery via successor chain is costly | High | 2 |
 | 2.1-B | ADR-011 governance gate limits on-chain blast radius of authorizer compromise | Medium | 2 |
 | 2.1-C | Detection requires active log monitoring; attacker operates freely until first check | Medium | 2 |
-| 2.2-A | Compromised press key enables backdated silent 9xx revocation against any mark in scope | High | 2 |
+| 2.2-A | Compromised press key enables backdated silent 9xx revocation against any card in scope | High | 2 |
 | 2.2-B | Governance-controlled press revocation adds response latency in fast-moving incident | High | 2 |
-| 2.2-C | Press can issue fake marks with attacker-controlled holder keys | Medium | 2 |
-| 2.3-A | Sub-mark key compromise: recovery via master key; gap is press availability | Medium | 2 |
+| 2.2-C | Press can issue fake cards with attacker-controlled holder keys | Medium | 2 |
+| 2.3-A | Sub-card key compromise: recovery via master key; gap is press availability | Medium | 2 |
 | 2.3-B | Full keyring compromise + notification channel control bypasses 72-hour window | High | 2 |
-| 2.3-C | Physical device access allows keyring blob exfiltration; Secure Enclave limits sub-chitt key extraction | Medium | 2 |
+| 2.3-C | Physical device access allows keyring blob exfiltration; Secure Enclave limits sub-card key extraction | Medium | 2 |
 | 2.4-A | Auditor key compromise exposes historical issuance record; epoch model bounds damage | High | 2 |
 | 2.4-B | Auditor key rotation does not protect past entries; epoch commitment enables post-hoc detection | High | 2 |
 | 2.5-A | Backup service breach alone insufficient; attacker needs YubiKey + PIN | Low | 2 |
@@ -260,9 +260,9 @@ The remaining Critical risks are at the governance and trust model layers — wh
 | 3.1-G | Surveillance via forged authentication flows aggregates community activity map | High | 3 |
 | 3.2-A | Governance registration enables legitimately-appearing fraudulent root | Medium | 3 |
 | 3.2-B | Open offer with null constraints enables unlimited credential issuance | Medium | 3 |
-| 3.2-C | Predicate gaming chains weak-predicate marks into higher-value credential contexts | Medium | 3 |
+| 3.2-C | Predicate gaming chains weak-predicate cards into higher-value credential contexts | Medium | 3 |
 | 3.2-D | Trusted root literacy gap creates systematic fraud enablement | High | 3 |
-| 3.3-A | Authentication metadata surveillance uses mark pointer as stable tracking identifier | Medium | 3 |
+| 3.3-A | Authentication metadata surveillance uses card pointer as stable tracking identifier | Medium | 3 |
 | 3.3-B | Residual press authority enables credential revocation as harassment | High | 3 |
 | 3.3-C | Physical device access: Secure Enclave limits exfiltration but not in-session misuse | Medium | 3 |
 | 3.3-D | Pseudonymous identity exposure via Nym gateway correlation from single interaction | High | 3 |

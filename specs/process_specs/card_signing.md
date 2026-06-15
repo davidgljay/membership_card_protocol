@@ -1,16 +1,16 @@
-# Mark Signing — Process Spec
+# Card Signing — Process Spec
 
 **Version:** 0.2 (draft)  
 **Date:** 2026-06-09  
 **Status:** Draft  
 
-> **Terminology note.** This spec uses "mark" for "chitt." The rename is in progress; treat the terms as interchangeable.
+> **Terminology note.** This spec now uses "card" as the canonical term per the Naming Convention.
 
 ---
 
 ## Overview
 
-Mark signing is the process by which a mark holder signs an arbitrary message using their mark identity. The result is a `SignedMessageEnvelope` — a payload object plus one or more signature entries — that any party can verify without a network call, using the inline public key. Signatures commit to specific recipients and a timestamp, preventing misquotation and replay. Multiple signers may independently sign the same payload in parallel.
+Card signing is the process by which a card holder signs an arbitrary message using their card identity. The result is a `SignedMessageEnvelope` — a payload object plus one or more signature entries — that any party can verify without a network call, using the inline public key. Signatures commit to specific recipients and a timestamp, preventing misquotation and replay. Multiple signers may independently sign the same payload in parallel.
 
 ---
 
@@ -18,17 +18,17 @@ Mark signing is the process by which a mark holder signs an arbitrary message us
 
 | Actor | Role |
 |---|---|
-| **Signer** | The mark holder composing and signing the message |
-| **Co-signer(s)** | Additional mark holders independently signing the same payload (optional) |
-| **Recipients** | Mark holders listed in the `recipients` array; the intended audience |
+| **Signer** | The card holder composing and signing the message |
+| **Co-signer(s)** | Additional card holders independently signing the same payload (optional) |
+| **Recipients** | Card holders listed in the `recipients` array; the intended audience |
 
 ---
 
 ## Preconditions
 
-- The signer holds an active mark with a registered sub-mark keypair on their device.
-- The signer's master mark key is not required for routine signing; only the device sub-mark private key is used.
-- The signer knows the mutable pointers of the intended recipients' marks.
+- The signer holds an active card with a registered sub-card keypair on their device.
+- The signer's master card key is not required for routine signing; only the device sub-card private key is used.
+- The signer knows the mutable pointers of the intended recipients' cards.
 
 ---
 
@@ -70,7 +70,7 @@ Mark signing is the process by which a mark holder signs an arbitrary message us
 
 ### Phase 3: Signing
 
-4. The client signs the canonical serialization of `payload` using the **current device's sub-mark private key**. The master mark key is not accessed.
+4. The client signs the canonical serialization of `payload` using the **current device's sub-card private key**. The master card key is not accessed.
 
 5. The signer constructs a `SignatureEntry`:
    ```json
@@ -79,7 +79,7 @@ Mark signing is the process by which a mark holder signs an arbitrary message us
      "signature":  "<base64url — ML-DSA-44 signature over canonical CBOR of payload, 2420 bytes raw>"
    }
    ```
-   The signer's address (and thus their mark identity) is derived from `public_key` by verifiers; it is not included in the entry.
+   The signer's address (and thus their card identity) is derived from `public_key` by verifiers; it is not included in the entry.
 
 6. The signer assembles the `SignedMessageEnvelope`:
    ```json
@@ -95,14 +95,14 @@ Mark signing is the process by which a mark holder signs an arbitrary message us
    - Receives the `payload` object (not the full envelope).
    - Verifies the payload content and recipients are as expected.
    - Canonically serializes the `payload` per the same rules in Step 3.
-   - Signs the canonical serialization with their own sub-mark private key.
+   - Signs the canonical serialization with their own sub-card private key.
    - Appends their `SignatureEntry` to the `signatures` array.
 
    All signers sign the same canonical payload bytes. No ordering of signers is required or enforced in v1.
 
 ### Phase 5: Sending
 
-8. The completed `SignedMessageEnvelope` is transmitted to recipients via HTTPS (optionally via OHTTP for IP privacy). For authentication flows, the signed statement is wrapped in an `AuthenticationResponse` (see `chitt_protocol_spec.md §8`).
+8. The completed `SignedMessageEnvelope` is transmitted to recipients via HTTPS (optionally via OHTTP for IP privacy). For authentication flows, the signed statement is wrapped in an `AuthenticationResponse` (see `card_protocol_spec.md §8`).
 
 ---
 
@@ -121,39 +121,39 @@ The canonical type definitions (content schemas, field constraints, and notes) l
 | `reply` | Text message explicitly threaded under a prior message |
 | `edit` | Signed revision to a prior message (`edit_of` required) |
 | `announcement` | One-to-many broadcast to a group of recipients |
-| `introduction` | Introduces two marks that don't yet share a trust path |
+| `introduction` | Introduces two cards that don't yet share a trust path |
 | `read_receipt` | Acknowledges a message was delivered and opened (opt-in) |
 | `delete` | Request to remove a message from one or more stores |
 | `flag` | Reports a message to the issuing press; entry to the 6xx/9xx pipeline |
 
-### Mark lifecycle
+### Card lifecycle
 
 | Value | Description |
 |---|---|
-| `mark_offer` | Press delivers a targeted mark offer to a prospective holder |
-| `mark_offer_accepted` | Holder returns the countersigned, completed mark document |
-| `mark_offer_declined` | Holder declines an offer |
-| `mark_update_notification` | Press notifies a holder of a post-issuance update to one of their marks |
-| `capability_grant` | Shares a capability bundle (address + decryption key) for a private mark |
+| `card_offer` | Press delivers a targeted card offer to a prospective holder |
+| `card_offer_accepted` | Holder returns the countersigned, completed card document |
+| `card_offer_declined` | Holder declines an offer |
+| `card_update_notification` | Press notifies a holder of a post-issuance update to one of their cards |
+| `capability_grant` | Shares a capability bundle (address + decryption key) for a private card |
 
 ### Authentication
 
 | Value | Description |
 |---|---|
-| `auth_request` | Service requests authentication from a mark holder |
+| `auth_request` | Service requests authentication from a card holder |
 | `auth_response` | Holder responds to an `auth_request` |
 
 ### Programmatic / machine-to-machine
 
 | Value | Description |
 |---|---|
-| `api.advertise` | Mark declares the API capabilities it exposes |
-| `api.invoke` | Mark requests execution of a capability on a remote API mark |
-| `api.response` | API mark returns the result of an invocation |
-| `mcp.tool_call` | AI agent invokes a tool (includes `delegated_by` human mark) |
+| `api.advertise` | Card declares the API capabilities it exposes |
+| `api.invoke` | Card requests execution of a capability on a remote API card |
+| `api.response` | API card returns the result of an invocation |
+| `mcp.tool_call` | AI agent invokes a tool (includes `delegated_by` human card) |
 | `mcp.tool_result` | Tool returns a result to the agent |
-| `mcp.prompt` | Sends a named prompt to a model mark |
-| `mcp.resource` | Delivers a resource from a model mark |
+| `mcp.prompt` | Sends a named prompt to a model card |
+| `mcp.resource` | Delivers a resource from a model card |
 
 ### System
 
@@ -195,7 +195,7 @@ The original envelope is not modified; all its signatures remain independently v
 
 ## Edits and Retractions
 
-**Edit:** A new `SignedMessageEnvelope` with `edit_of` set to the hash of the prior payload. The original message is not mutated. The edit is only valid if the signer's master mark chains to the same master as the original signer.
+**Edit:** A new `SignedMessageEnvelope` with `edit_of` set to the hash of the prior payload. The original message is not mutated. The edit is only valid if the signer's master card chains to the same master as the original signer.
 
 **Retraction:** A new `SignedMessageEnvelope` with `retracts` set to the hash of the prior payload. No new content is proposed; the sender formally withdraws the original statement.
 
@@ -205,7 +205,7 @@ The original envelope is not modified; all its signatures remain independently v
 
 ## Recipient Binding
 
-The `recipients` array is part of the signed `payload`. Modifying it after signing invalidates all signatures. A receiving party whose mark pointer does not appear in `recipients` MUST NOT treat the envelope as a valid direct message — it is only valid if delivered as part of a `ForwardPackage` whose `forward_envelope.payload.recipients` includes that party's pointer (see Forwarding above).
+The `recipients` array is part of the signed `payload`. Modifying it after signing invalidates all signatures. A receiving party whose card pointer does not appear in `recipients` MUST NOT treat the envelope as a valid direct message — it is only valid if delivered as part of a `ForwardPackage` whose `forward_envelope.payload.recipients` includes that party's pointer (see Forwarding above).
 
 ---
 
@@ -227,15 +227,15 @@ The `recipients` array is part of the signed `payload`. Modifying it after signi
 | `forwards` hash does not match `original_envelope.payload` | Verifier rejects the ForwardPackage; the hash must be the canonical CBOR hash of the original payload |
 | Original envelope delivered to a party not in its `recipients`, without a ForwardPackage | Verifier rejects as an unauthenticated relay; the receiving party has no verified forwarder identity |
 | `recipients` is empty | Client rejects before signing |
-| Sub-mark key not available on device (e.g., device was wiped) | Signer must register a new sub-mark from their master key before signing |
-| Signing key's sub-mark has been revoked | Verifiers will flag the signature; signer should rotate to a new sub-mark and resign |
+| Sub-card key not available on device (e.g., device was wiped) | Signer must register a new sub-card from their master key before signing |
+| Signing key's sub-card has been revoked | Verifiers will flag the signature; signer should rotate to a new sub-card and resign |
 | Co-signer signs a different payload (content mismatch) | Verifiers will detect the divergence; the co-signer must sign the canonical payload as received |
 
 ---
 
 ## Related Specs
 
-- `mark_validation.md` — how recipients and third parties verify signed statements
+- `card_validation.md` — how recipients and third parties verify signed statements
 - `wallet_backup_and_recovery.md` — key management for signing keys
-- `chitt_protocol_spec.md §6` — full feature spec for signing a message with a mark
+- `card_protocol_spec.md §6` — full feature spec for signing a message with a card
 - `protocol-objects.md §5` — `SignedMessageEnvelope` object reference

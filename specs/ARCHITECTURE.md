@@ -1,9 +1,9 @@
-# Chitt Protocol — Architecture Decision Record
+# Card Protocol — Arcardecture Decision Record
 
 **Version:** 1.0  
 **Date:** 2026-05-19  
 **Status:** Current  
-**Source:** Synthesized from `chitt_protocol_spec.md` (v0.3) and supporting raw notes  
+**Source:** Synthesized from `card_protocol_spec.md` (v0.3) and supporting raw notes  
 
 ---
 
@@ -12,7 +12,7 @@
 1. [System Overview](#system-overview)
 2. [ADR-001: Registry Substrate — Arbitrum One](#adr-001-registry-substrate--arbitrum-one)
 3. [ADR-002: Off-Chain Content Storage — IPFS](#adr-002-off-chain-content-storage--ipfs)
-4. [ADR-003: Append-Only Log Architecture](#adr-003-append-only-log-architecture)
+4. [ADR-003: Append-Only Log Arcardecture](#adr-003-append-only-log-arcardecture)
 5. [ADR-004: Cryptographic Primitives — ML-DSA-44 and ML-KEM](#adr-004-cryptographic-primitives--ml-dsa-44-and-ml-kem)
 6. [ADR-005: Press Model and Key Custody](#adr-005-press-model-and-key-custody)
 7. [ADR-006: Privacy Model — Client-Side, Private by Default](#adr-006-privacy-model--client-side-private-by-default)
@@ -30,7 +30,7 @@
 
 ## System Overview
 
-The Chitt Protocol is a decentralized, privacy-preserving credential system. Its core primitive — the **chitt** — is a cryptographically signed credential issued under a policy, held by a user-sovereign keypair, whose current state is tracked on Arbitrum One and whose full content and history live on IPFS.
+The Card Protocol is a decentralized, privacy-preserving credential system. Its core primitive — the **card** — is a cryptographically signed credential issued under a policy, held by a user-sovereign keypair, whose current state is tracked on Arbitrum One and whose full content and history live on IPFS.
 
 **Design goals:**
 
@@ -40,9 +40,9 @@ The Chitt Protocol is a decentralized, privacy-preserving credential system. Its
 - Key custody is user-sovereign; no service holds a user's signing key.
 - The system is composable: credentials can reference other credentials, policies can constrain sub-policies, and third-party annotations accumulate as reputation context.
 
-**What a chitt is, structurally:**
+**What a card is, structurally:**
 
-A chitt is a JSON document containing protocol-required fields (issuer, recipient public key, signatures, policy reference) plus policy-defined fields. The document is content-addressed and immutable on IPFS. Its current state is tracked by a **mutable pointer** — an on-chain registry entry pointing to the current head CID of an append-only log. The mutable pointer is the stable identity of the chitt across all updates.
+A card is a JSON document containing protocol-required fields (issuer, recipient public key, signatures, policy reference) plus policy-defined fields. The document is content-addressed and immutable on IPFS. Its current state is tracked by a **mutable pointer** — an on-chain registry entry pointing to the current head CID of an append-only log. The mutable pointer is the stable identity of the card across all updates.
 
 ---
 
@@ -53,11 +53,11 @@ A chitt is a JSON document containing protocol-required fields (issuer, recipien
 
 ### Context
 
-The protocol requires a shared, authoritative registry that maps each chitt's mutable pointer to its current log head CID, enforces that only authorized presses can write new entries, and provides trusted timestamps and rollback resistance. The registry must support on-chain verification of ML-DSA-44 signatures (post-quantum, ~2,420-byte public keys and signatures).
+The protocol requires a shared, authoritative registry that maps each card's mutable pointer to its current log head CID, enforces that only authorized presses can write new entries, and provides trusted timestamps and rollback resistance. The registry must support on-chain verification of ML-DSA-44 signatures (post-quantum, ~2,420-byte public keys and signatures).
 
 ### Decision
 
-Deploy a single registry contract on **Arbitrum One**, using **Stylus** to implement full on-chain ML-DSA-44 signature verification. One contract manages all chitts; entries are separated by their on-chain address.
+Deploy a single registry contract on **Arbitrum One**, using **Stylus** to implement full on-chain ML-DSA-44 signature verification. One contract manages all cards; entries are separated by their on-chain address.
 
 ### Options Considered
 
@@ -95,7 +95,7 @@ Deploy a single registry contract on **Arbitrum One**, using **Stylus** to imple
 
 ### Context
 
-Chitt content, policy documents, and the keyring blob must be stored durably, be content-addressable, and be independently fetchable by any verifier without going through a centralized service.
+Card content, policy documents, and the keyring blob must be stored durably, be content-addressable, and be independently fetchable by any verifier without going through a centralized service.
 
 ### Decision
 
@@ -109,19 +109,19 @@ Use **IPFS** for all off-chain content. The on-chain registry stores only CID po
 
 ### Consequences
 
-- Presses are responsible for pinning all content they upload to IPFS. A chitt whose content is no longer pinned is unresolvable by verifiers.
+- Presses are responsible for pinning all content they upload to IPFS. A card whose content is no longer pinned is unresolvable by verifiers.
 - The keyring blob (§ADR-009) lives on IPFS and must be pinned by the primary service until the user recovers.
-- Filecoin integration (via pinning services) is the recommended long-term persistence path for high-value chitt data but is not required in v1.
+- Filecoin integration (via pinning services) is the recommended long-term persistence path for high-value card data but is not required in v1.
 
 ---
 
-## ADR-003: Append-Only Log Architecture
+## ADR-003: Append-Only Log Arcardecture
 
 **Status:** Accepted
 
 ### Context
 
-Chitt history — all updates, annotations, and revocations — must be preserved in an immutable, auditable log. The current state (log head) must be resolvable quickly; the full history must be independently verifiable. OrbitDB was evaluated as a candidate for this role.
+Card history — all updates, annotations, and revocations — must be preserved in an immutable, auditable log. The current state (log head) must be resolvable quickly; the full history must be independently verifiable. OrbitDB was evaluated as a candidate for this role.
 
 ### Decision
 
@@ -143,10 +143,10 @@ The protocol uses two log types with different privacy requirements:
 
 | Log type | Owner | Privacy | Anchored on-chain? |
 |---|---|---|---|
-| **Chitt log** | Chitt holder | Public or private (owner's choice) | Yes — head CID in Arbitrum One registry |
-| **Press log** | Press service | Private by default | Yes — head CID in policy chitt's registry entry |
+| **Card log** | Card holder | Public or private (owner's choice) | Yes — head CID in Arbitrum One registry |
+| **Press log** | Press service | Private by default | Yes — head CID in policy card's registry entry |
 
-The press log records each issuance event, encrypted to each auditor chitt's public key via ML-KEM (FIPS 203). The press operator cannot read these entries.
+The press log records each issuance event, encrypted to each auditor card's public key via ML-KEM (FIPS 203). The press operator cannot read these entries.
 
 ### Log Entry Structure (Field Updates and Revocations)
 
@@ -164,12 +164,12 @@ The press log records each issuance event, encrypted to each auditor chitt's pub
   "notify_holder": true,
   "updater_message": "<optional message forwarded to holder>",
   "intent_signature": {
-    "signer_chitt": "<mutable pointer in registry of updater's sub-chitt — base64url>",
+    "signer_card": "<mutable pointer in registry of updater's sub-card — base64url>",
     "public_key": "<ML-DSA-44 public key — base64url>",
     "signature": "<sig over canonical CBOR of UpdateIntentPayload — base64url>"
   },
   "press_signature": {
-    "signer_chitt": "<mutable pointer in registry of press's sub-chitt — base64url>",
+    "signer_card": "<mutable pointer in registry of press's sub-card — base64url>",
     "public_key": "<ML-DSA-44 public key — base64url>",
     "signature": "<sig over canonical CBOR of complete LogEntry — base64url>"
   }
@@ -182,7 +182,7 @@ The monotonic version number prevents replay. The `prev_log_root` CID creates a 
 
 ### Consequences
 
-- Full log verification requires fetching all CIDs in sequence from IPFS (from head to genesis). For long-lived chitts, this grows linearly. Chain-walk parallelization using the cached chain array mitigates latency.
+- Full log verification requires fetching all CIDs in sequence from IPFS (from head to genesis). For long-lived cards, this grows linearly. Chain-walk parallelization using the cached chain array mitigates latency.
 - OrbitDB replication nodes (docker-compose reference stack) may still be useful for press infrastructure to distribute IPFS pinning, but are not part of the trust model.
 
 ---
@@ -215,7 +215,7 @@ For credentials with multi-year lifetimes, the post-quantum security of ML-DSA-4
 
 ### Proxy Re-encryption
 
-The message server uses **UMBRAL proxy re-encryption** to transform inbound ciphertexts (encrypted to a master chitt public key) into per-device sub-chitt ciphertexts, without ever seeing plaintext. This enables multi-device delivery without the master key being online.
+The message server uses **UMBRAL proxy re-encryption** to transform inbound ciphertexts (encrypted to a master card public key) into per-device sub-card ciphertexts, without ever seeing plaintext. This enables multi-device delivery without the master key being online.
 
 ---
 
@@ -226,31 +226,31 @@ The message server uses **UMBRAL proxy re-encryption** to transform inbound ciph
 
 ### Context
 
-A **chitt press** is a service that verifies policy compliance and issues chitts on behalf of authorized policies. The question of who holds the chitt holder's signing key determines the trust model users opt into.
+A **card press** is a service that verifies policy compliance and issues cards on behalf of authorized policies. The question of who holds the card holder's signing key determines the trust model users opt into.
 
 ### Decision
 
-**Key custody is user-sovereign.** The press never holds a chitt holder's signing key.
+**Key custody is user-sovereign.** The press never holds a card holder's signing key.
 
 The issuance flow is a **mutual-signing pattern**:
 
-1. The press verifies policy compliance, assembles the proposed chitt JSON (without the recipient's public key), and signs it as a **signed offer** — attesting that this press verified policy compliance.
-2. The recipient independently generates their own ML-DSA-44 keypair, adds their public key, and **countersigns** the completed chitt.
-3. Both signatures are present in every completed chitt. The press's signature is a statement about policy adherence; the recipient's countersignature is an assertion of identity and acceptance.
+1. The press verifies policy compliance, assembles the proposed card JSON (without the recipient's public key), and signs it as a **signed offer** — attesting that this press verified policy compliance.
+2. The recipient independently generates their own ML-DSA-44 keypair, adds their public key, and **countersigns** the completed card.
+3. Both signatures are present in every completed card. The press's signature is a statement about policy adherence; the recipient's countersignature is an assertion of identity and acceptance.
 
-The press's signing key is the private key for its **press sub-chitt** — a sub-chitt of a specific policy chitt that authorizes it to issue under that policy. No separate press key type exists.
+The press's signing key is the private key for its **press sub-card** — a sub-card of a specific policy card that authorizes it to issue under that policy. No separate press key type exists.
 
 ### Press Authorization Structure
 
 ```
-Policy chitt (held by administrator/authorizer)
-  └── Press sub-chitt (held by press operator)
-       └── Issued chitts (held by recipients)
+Policy card (held by administrator/authorizer)
+  └── Press sub-card (held by press operator)
+       └── Issued cards (held by recipients)
 ```
 
-The Arbitrum One registry contract enforces press authorization via two on-chain tables defined in ADR-011: `PolicyAuthorizerKeys` (mapping each policy to its governance-assigned authorizer key) and `PressAuthorizations` (mapping (policyAddress, pressAddress) pairs to the press's active public key). A registry write is accepted only if it is signed by a key that appears in `PressAuthorizations` for the target policy and is marked active. Revoking a press removes its write authority; previously-issued chitts are unaffected.
+The Arbitrum One registry contract enforces press authorization via two on-chain tables defined in ADR-011: `PolicyAuthorizerKeys` (mapping each policy to its governance-assigned authorizer key) and `PressAuthorizations` (mapping (policyAddress, pressAddress) pairs to the press's active public key). A registry write is accepted only if it is signed by a key that appears in `PressAuthorizations` for the target policy and is marked active. Revoking a press removes its write authority; previously-issued cards are unaffected.
 
-> **Amendment note (ADR-011):** Earlier versions of this document stated that the registry contract enforces authorization by checking whether a press sub-chitt pointer appears in the IPFS-stored `approved_presses` field of the policy chitt. That mechanism was under-specified: the Stylus contract cannot fetch or verify IPFS content at write time. ADR-011 replaces it with the on-chain tables described above. The `approved_presses` field in the policy chitt's IPFS content is retained as an audit surface that tooling should keep in sync with on-chain state; in the event of a discrepancy, on-chain state is authoritative.
+> **Amendment note (ADR-011):** Earlier versions of this document stated that the registry contract enforces authorization by checking whether a press sub-card pointer appears in the IPFS-stored `approved_presses` field of the policy card. That mechanism was under-specified: the Stylus contract cannot fetch or verify IPFS content at write time. ADR-011 replaces it with the on-chain tables described above. The `approved_presses` field in the policy card's IPFS content is retained as an audit surface that tooling should keep in sync with on-chain state; in the event of a discrepancy, on-chain state is authoritative.
 
 ### Privacy Properties of the Press
 
@@ -258,7 +258,7 @@ The press is deliberately constrained in what it can observe:
 
 - **The press never sees plaintext CIDs.** The client encrypts the CID before handoff; the press posts ciphertext.
 - **The press never knows the address derivation secret.** The client derives the registry address locally and tells the press where to write.
-- **The press does record the chitt CID in its press log**, encrypted to each auditor's public key. This provides the policy authorizer an auditable recovery path if a recipient loses their capability bundle.
+- **The press does record the card CID in its press log**, encrypted to each auditor's public key. This provides the policy authorizer an auditable recovery path if a recipient loses their capability bundle.
 
 ### Self-Hosted Presses
 
@@ -266,8 +266,8 @@ A docker-compose reference stack enables self-hosted press deployment. Self-host
 
 ### Consequences
 
-- Trust in an issued chitt derives from trust in the policy, the authorizing chain, and the press sub-chitt authorization — not from trusting the press operator's intentions.
-- The press operator can withhold issuance (refuse to sign offers) but cannot forge chitts — user-sovereign key custody prevents this.
+- Trust in an issued card derives from trust in the policy, the authorizing chain, and the press sub-card authorization — not from trusting the press operator's intentions.
+- The press operator can withhold issuance (refuse to sign offers) but cannot forge cards — user-sovereign key custody prevents this.
 - Key portability across presses requires the recipient to hold their own keys from inception — which this model guarantees.
 
 ---
@@ -287,15 +287,15 @@ Privacy is entirely **client-side**. The registry contract is neutral. At creati
 | Mode | Registry address derivation | CID on-chain | IPFS content |
 |---|---|---|---|
 | **Fully public** | `pubkey-derived` | Plaintext | Plaintext |
-| **Selectively shared** | `hash(sign(private_key, "chitt-log-v1"))` | Encrypted | Plaintext |
-| **Fully private** | `hash(sign(private_key, "chitt-log-v1"))` | Encrypted | Encrypted |
+| **Selectively shared** | `keccak256(sign(private_key, "card-address-v1"))` | Encrypted | Plaintext |
+| **Fully private** | `keccak256(sign(private_key, "card-address-v1"))` | Encrypted | Encrypted |
 
-**Two keys per private chitt:**
+**Two keys per private card:**
 
 - **Address secret** — derives the registry address. Never shared. Controls who can locate the account on-chain.
 - **Decryption key** — decrypts the on-chain CID. Shareable independently. Controls who can read the log head.
 
-**Capability bundle:** to share a private chitt, the owner provides the recipient with an `(address, decryption_key)` pair. The decryption key can be ECDH-wrapped to the recipient's public key, tying it to their identity and preventing trivial forwarding.
+**Capability bundle:** to share a private card, the owner provides the recipient with an `(address, decryption_key)` pair. The decryption key can be ECDH-wrapped to the recipient's public key, tying it to their identity and preventing trivial forwarding.
 
 **What an observer always sees:** that transactions are happening to the registry contract, when they occurred, and the fee payer (the press wallet). They cannot correlate transactions to identities, content, or each other without the address secret.
 
@@ -307,29 +307,35 @@ The policy control key and the audit log encryption key are **separate keypairs*
 
 ## ADR-007: Transport Layer — HTTPS
 
-**Status:** Accepted (revised — Nym mixnet requirement removed)
+**Status:** Accepted
 
 ### Context
 
-The protocol needs a reliable communication channel for inbound message delivery (offers, SCIPs, server-to-user notifications) between wallet services and presses. An earlier version of this ADR required the Nym mixnet to hide which wallet service holds a given badge. That requirement has been dropped: because every badge is associated with a wallet address on-chain, the identity of the wallet service holding a badge is already observable. Attempting to hide it via a mixnet adds significant operational complexity and latency with limited practical benefit in a world with relatively few wallet services.
+The protocol needs a reliable communication channel for message delivery between wallet services and from presses to wallet services. Wallet services must be able to route messages to the correct destination using a card's hash as its address, without a centralized lookup at send time.
 
 ### Decision
 
-Use **HTTPS** for all wallet-service-to-wallet-service and press-to-wallet-service communication. Each wallet service exposes a stable HTTPS endpoint. Senders POST encrypted payloads directly; end-to-end encryption (ML-KEM + ML-DSA-44) ensures the message server cannot read content even though it can observe delivery timing and sender IP.
+Use **HTTPS** for all wallet-service-to-wallet-service and press-to-wallet-service communication. Each registered wallet service exposes a stable HTTPS endpoint. Messages are delivered as **routing envelopes** — a thin outer layer carrying only the recipient card hash and an E2E-encrypted payload. End-to-end encryption (ML-KEM + ML-DSA-44) ensures wallet services cannot read message content; sender identity is inside the encrypted payload and never visible to the routing layer.
 
-OHTTP (Oblivious HTTP, RFC 9458) remains an optional transport upgrade for deployments where IP-level metadata privacy is desirable, but is not required for protocol conformance.
+OHTTP (Oblivious HTTP, RFC 9458) and the Nym mixnet are optional transport upgrades selectable per wallet service via `transport_flags` in the wallet service registry. They are not required for protocol conformance but provide stronger metadata privacy at the cost of latency. See `process_specs/message_routing.md §Transport Extensibility`.
+
+### Routing
+
+A card's **on-chain registry address** (its mutable pointer hash) is also its **messaging address**. Wallet services maintain a local routing table — `{ card_hash → wallet_service_id }` — derived from on-chain card registration and migration events. Routing a message requires only a local table lookup followed by a single HTTPS POST; no external directory query is needed at send time.
+
+See `process_specs/message_routing.md` for the full routing flow, routing envelope format, migration handling, and transport capability flags.
 
 ### Message Server
 
-A **message server** (operator's own infrastructure) accepts inbound HTTPS messages and queues them for offline devices:
+A **message server** (wallet service operator's own infrastructure) accepts inbound routing envelopes and queues them for offline devices:
 
-1. Accepts authenticated HTTPS POST requests at a well-known endpoint.
-2. Holds **proxy re-encryption keys** (UMBRAL) for each active sub-chitt, generated at sub-chitt creation.
-3. Transforms inbound ciphertexts (encrypted to master chitt public key) into per-device sub-chitt ciphertexts — without seeing plaintext.
-4. Queues re-encrypted ciphertexts in a per-sub-chitt queue for device pickup.
-5. Authenticates devices via sub-chitt signature challenge before delivering queued messages.
+1. Accepts HTTPS POST requests at the wallet service's registered endpoint.
+2. Holds **proxy re-encryption keys** (UMBRAL) for each active sub-card, generated at sub-card creation.
+3. Transforms inbound ciphertexts (encrypted to master card public key) into per-device sub-card ciphertexts — without seeing plaintext.
+4. Queues re-encrypted ciphertexts in a per-sub-card queue for device pickup.
+5. Authenticates devices via sub-card signature challenge before delivering queued messages.
 
-The message server observes delivery timing and sender IP, but not message content (ciphertexts only). Operators who wish to reduce IP metadata exposure can deploy an OHTTP relay in front of the message server endpoint.
+The message server observes: the recipient card hash (from the routing header) and the originating wallet service. It does not observe sender card identity or message content. Operators who wish to reduce metadata exposure can enable OHTTP or Nym transport in their wallet service registry entry.
 
 ---
 
@@ -339,7 +345,7 @@ The message server observes delivery timing and sender IP, but not message conte
 
 ### Context
 
-Third-party annotations — statements by parties outside the issuance chain about a chitt — are a core reputation mechanism. They must be published publicly, be signed by the annotator's chitt, and be filterable by trust.
+Third-party annotations — statements by parties outside the issuance chain about a card — are a core reputation mechanism. They must be published publicly, be signed by the annotator's card, and be filterable by trust.
 
 ### Decision
 
@@ -349,17 +355,17 @@ Use **Ethereum Attestation Service (EAS)** on Arbitrum One as the on-chain regis
 
 - EAS is natively deployed on Arbitrum One, requiring no separate infrastructure.
 - The EAS schema registry enables typed annotations with standardized fields.
-- Annotations are filterable by the signing chitt's chain — "show me only annotations from chitts I trust" — using the same chain-walk logic as all other verification.
+- Annotations are filterable by the signing card's chain — "show me only annotations from cards I trust" — using the same chain-walk logic as all other verification.
 
 ### Annotation vs. Issuer Updates
 
-Third-party annotations are distinct from issuer updates appended to a chitt's own log:
+Third-party annotations are distinct from issuer updates appended to a card's own log:
 
-| | Chitt log update | EAS annotation |
+| | Card log update | EAS annotation |
 |---|---|---|
-| Author | Authorized party (per `update_policy`) | Any chitt holder |
-| Location | Chitt's append-only log on IPFS | EAS registry on Arbitrum One |
-| Authoritative? | Yes — part of chitt's canonical history | No — contextual; trust-weighted |
+| Author | Authorized party (per `update_policy`) | Any card holder |
+| Location | Card's append-only log on IPFS | EAS registry on Arbitrum One |
+| Authoritative? | Yes — part of card's canonical history | No — contextual; trust-weighted |
 | Filterable? | No — always visible | Yes — filtered by annotator chain |
 
 ---
@@ -374,10 +380,10 @@ A holder's private keys are the root of their identity. Loss means permanent los
 
 ### Decision
 
-**Two-tier key architecture:**
+**Two-tier key arcardecture:**
 
-- **Master chitt key** — high-stakes key for creating sub-chitts and key rotations. Stored in an **encrypted keyring blob on IPFS**, encrypted with a key derived from `passkey + service_secret`. Neither the passkey nor the service secret alone can decrypt it.
-- **Sub-chitt keys** — day-to-day signing keys, one per device. Stored in **secure device storage** (Secure Enclave on Apple, TPM on others). All routine signing operations use sub-chitt keys; the master key is cold.
+- **Master card key** — high-stakes key for creating sub-cards and key rotations. Stored in an **encrypted keyring blob on IPFS**, encrypted with a key derived from `passkey + service_secret`. Neither the passkey nor the service secret alone can decrypt it.
+- **Sub-card keys** — day-to-day signing keys, one per device. Stored in **secure device storage** (Secure Enclave on Apple, TPM on others). All routine signing operations use sub-card keys; the master key is cold.
 
 **The keyring blob** is append-only: new keys are added; old keys are never removed from the blob, preserving recoverability after device loss.
 
@@ -403,37 +409,47 @@ A stolen YubiKey cannot complete recovery if a valid cancellation is submitted b
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                        Arbitrum One                                  │
-│  ┌─────────────────────────────┐  ┌──────────────────────────────┐  │
-│  │   Chitt Registry Contract   │  │  EAS (Annotation Registry)   │  │
-│  │  (Stylus / ML-DSA-44 verify)│  │  (third-party attestations)  │  │
-│  └──────────────┬──────────────┘  └──────────────────────────────┘  │
+│  ┌──────────────────────────────┐  ┌──────────────────────────────┐ │
+│  │   Card Registry Contract    │  │  EAS (Annotation Registry)   │ │
+│  │  (Stylus / ML-DSA-44 verify) │  │  (third-party attestations)  │ │
+│  │  - card hash → log head CID │  └──────────────────────────────┘ │
+│  │  - wallet service registry  │                                    │
+│  │  - press authorizations     │                                    │
+│  └──────────────┬──────────────┘                                    │
 └─────────────────┼───────────────────────────────────────────────────┘
-                  │ mutable pointer → current log head CID
+                  │ card hash (mutable pointer) → current log head CID
+                  │ card registration events → wallet service routing tables
                   ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                            IPFS                                      │
 │  ┌─────────────┐  ┌────────────────┐  ┌───────────────────────────┐ │
-│  │ Chitt logs  │  │ Policy chitts  │  │ Keyring blobs / Annotation│ │
+│  │ Card logs  │  │ Policy cards  │  │ Keyring blobs / Annotation│ │
 │  │ (CID chain) │  │ (content addr) │  │ content                   │ │
 │  └─────────────┘  └────────────────┘  └───────────────────────────┘ │
 └─────────────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────┐  ┌──────────────────────────────┐
-│          Chitt Press             │  │         Message Server        │
-│  - Policy compliance check       │  │  - HTTPS endpoint             │
-│  - Signs offers (press sub-chitt)│  │  - UMBRAL proxy re-encryption │
-│  - Posts to IPFS + Arbitrum      │  │  - Per-device message queue   │
-│  - Logs issuance (encrypted)     │  └───────────────┬──────────────┘
-└──────────────────────────────────┘                  │
-                                         HTTPS (optional: OHTTP relay)
-                                                      │
-┌──────────────────────────────────────────────────── ▼ ──────────────┐
+│          Card Press             │  │   Wallet Service (message    │
+│  - Policy compliance check       │  │   server + routing)          │
+│  - Signs offers (press sub-card)│  │  - HTTPS endpoint             │
+│  - Posts to IPFS + Arbitrum      │  │  - Local routing table       │
+│  - Logs issuance (encrypted)     │  │    { card_hash → wallet_svc }│
+│  - Routes SCIP to holder via     │  │  - UMBRAL proxy re-encryption│
+│    wallet service routing        │  │  - Per-device message queue  │
+└──────────────────────────────────┘  └───────────────┬──────────────┘
+                                                       │
+                              HTTPS routing envelopes  │
+                        { to: card_hash, payload: E2E }│
+                          (optional: OHTTP / Nym)      │
+                                                       │
+┌──────────────────────────────────────────────────────▼──────────────┐
 │                          Client (Holder)                              │
 │  - Keyring (encrypted, IPFS-backed)                                  │
-│  - Sub-chitt keys in Secure Enclave / TPM                            │
+│  - Sub-card keys in Secure Enclave / TPM                            │
 │  - Derives registry address locally (private mode)                   │
-│  - Countersigns chitt offers                                         │
+│  - Countersigns card offers                                         │
 │  - Verifies chain before displaying any offer or message             │
+│  - Decrypts inbound routing envelope payloads                       │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -441,7 +457,7 @@ A stolen YubiKey cannot complete recovery if a valid cancellation is submitted b
 
 ## Key Data Flows
 
-### 1. Chitt Issuance (First-Time Recipient)
+### 1. Card Issuance (First-Time Recipient)
 
 ```
 Administrator / Requester
@@ -450,38 +466,38 @@ Administrator / Requester
 Press
   → resolves requester + recipient chains, evaluates predicates
   → checks revocation entries on all chain links
-  → assembles proposed chitt JSON (recipient_pubkey empty)
-  → signs with press sub-chitt key → signed offer
-  → encodes as chitt://invite?o=<base64>
+  → assembles proposed card JSON (recipient_pubkey empty)
+  → signs with press sub-card key → signed offer
+  → encodes as card://invite?o=<base64>
 
 Recipient
   → opens invitation link
-  → client verifies press sub-chitt chain before showing offer
+  → client verifies press sub-card chain before showing offer
   → [keychain setup if first time]
   → reviews offer (issuer identity, field values, policy)
   → generates fresh ML-DSA-44 keypair
-  → adds public key to chitt JSON
+  → adds public key to card JSON
   → countersigns canonical serialization
 
-Completed chitt (both signatures)
+Completed card (both signatures)
   → posted to IPFS → CID returned
 
 Press
   → creates registry entry on Arbitrum One (initial log head CID)
-    signed by press sub-chitt key
+    signed by press sub-card key
   → constructs issuance log entry, encrypted to each auditor via ML-KEM
-  → appends to policy chitt's IPFS log + updates policy chitt's registry pointer
-  → produces Signed Chitt Inclusion Proof (SCIP)
+  → appends to policy card's IPFS log + updates policy card's registry pointer
+  → produces Signed Card Inclusion Proof (SCIP)
   → sends SCIP + confirmation to recipient via HTTPS (to wallet service endpoint)
 ```
 
 ### 2. Chain Verification
 
 ```
-Verifier receives signed message or chitt pointer
+Verifier receives signed message or card pointer
   → verify signature against canonical payload (no network call)
-  → resolve signing sub-chitt's registry address on Arbitrum One
-  → confirm sub-chitt appears in master chitt's active sub-chitt list
+  → resolve signing sub-card's registry address on Arbitrum One
+  → confirm sub-card appears in master card's active sub-card list
   → fetch chain CIDs from IPFS (parallelized via cached chain array)
     for each link: verify issuer signature, check scope attenuation
   → resolve all mutable pointers in chain on Arbitrum One (parallelized)
@@ -497,12 +513,12 @@ Return per-signature structured result:
   was_valid_at_signing_time / is_currently_valid / addressed_to_verifier
 ```
 
-### 3. Chitt Update / Revocation
+### 3. Card Update / Revocation
 
 ```
 Authorized party (holder or press, per field's update_policy)
   → assembles log entry: version, entry_type, prev_log_root, changes
-  → signs with sub-chitt key satisfying the relevant update_policy predicate
+  → signs with sub-card key satisfying the relevant update_policy predicate
   → posts entry to IPFS → new log head CID
   → press (or paymaster) updates Arbitrum One registry entry → new head pointer
 
@@ -512,15 +528,15 @@ Verifiers
   → verify authorization against policy's field_definitions / revocation_permissions
 ```
 
-### 4. Chitt Authentication (Site Requesting a Signed Statement)
+### 4. Card Authentication (Site Requesting a Signed Statement)
 
 ```
 Requesting site
   → creates authentication request object:
-      session_id, purpose, requester_chitt (mutable pointer),
+      session_id, purpose, requester_card (mutable pointer),
       payload (content + nonce), required_predicate, callbacks.https,
       optional callbacks.ohttp
-  → signs request with requester's chitt key (request_signature)
+  → signs request with requester's card key (request_signature)
   → hosts request object at a single-use HTTPS URL
   → calls CHAPI with the request URL (not the payload)
 
@@ -531,16 +547,16 @@ CHAPI mediator
 
 Wallet service
   → fetches request object via HTTPS from single-use URL
-  → verifies request_signature against requester's chitt public key
-  → walks requester's chitt chain to trusted root, checks revocation (per §7)
-  → evaluates required_predicate against user's available chitts
+  → verifies request_signature against requester's card public key
+  → walks requester's card chain to trusted root, checks revocation (per §7)
+  → evaluates required_predicate against user's available cards
   → presents to user: requester's verified chain identity, purpose,
       payload content, required predicate summary
   → [user approves or declines]
 
 On approval:
-  → wallet selects qualifying chitt (or user chooses from chooser)
-  → generates signed message envelope (§6) over canonical payload + nonce
+  → wallet selects qualifying card (or user chooses from chooser)
+  → generates signed message envelope (§6) with type "auth_response", content.nonce echoed from request
   → sends authentication response to requester:
       preferred: OHTTP → callbacks.ohttp (IP privacy, lower latency)
       fallback:  HTTPS → callbacks.https (always available)
@@ -569,9 +585,9 @@ These are engineering and design questions from the spec that have not yet been 
 |---|---|---|---|
 | ~~OQ-1~~ | ~~Engineering~~ | ~~Canonical serialization format~~ — **CLOSED.** Canonical CBOR per RFC 8949 §4.2, JSON input surface per RFC 8949 §6.1, protocol overrides for binary fields and timestamps per ADR-010. Normative type mapping in spec Appendix A; conformance corpus at `specs/serialization-conformance.json`. | ~~Critical / Blocking~~ |
 | OQ-2 | Engineering | ML-DSA-44 on-chain verification cost via Stylus: finalize gas estimates against current Arbitrum One blob-era pricing before contract deployment. | **Critical / Blocking** |
-| OQ-3 | Engineering | Minimum IPFS replication count for a policy chitt's log before the Arbitrum One registry pointer update is considered safe. | High |
+| OQ-3 | Engineering | Minimum IPFS replication count for a policy card's log before the Arbitrum One registry pointer update is considered safe. | High |
 | OQ-4 | Engineering | For recipient-initiated registry writes (e.g., self-revocations): always mediated by press, or direct writes from holder via paymaster? | High |
-| OQ-5 | Engineering | Field definition changes to a running policy (adding a new field): are previously-issued chitts that lack the field non-conforming or still valid? | High |
+| OQ-5 | Engineering | Field definition changes to a running policy (adding a new field): are previously-issued cards that lack the field non-conforming or still valid? | High |
 | OQ-6 | Engineering | How does the client efficiently detect new log entries since its last check — polling Arbitrum One registry pointer, or push notification via HTTPS webhook? | Medium |
 | OQ-7 | Engineering | Fetch budget and caching strategy for chain and annotation lookups on mobile clients with limited connectivity. | Medium |
 | OQ-8 | Engineering | When the cached chain array's version CIDs differ from a link's current state (because an ancestor was updated post-issuance), how should verifiers resolve the discrepancy? | Medium |
@@ -579,7 +595,7 @@ These are engineering and design questions from the spec that have not yet been 
 | OQ-10 | Design | Recovery UX when the holder has both a lost primary service and a lost YubiKey. Out of scope for v1? | Medium |
 | OQ-11 | Design | What is the UX when a recipient declines an offer? Should a decline notification be sent to the press? | Low |
 | OQ-12 | Engineering | Is a transparency log of approved press implementations operated by the protocol foundation needed? Relevant if TEE attestation is added in P2. | Low (P2 dependency) |
-| OQ-13 | Design | Should wallet services publish a `/.well-known/chitt-wallet.json` manifest advertising their supported transports (HTTPS, OHTTP gateway)? If yes, requesting sites can construct the correct `callbacks` block without trial-and-error; if no, sites advertise all transports they support and wallets pick. | Medium |
+| OQ-13 | Design | Should wallet services publish a `/.well-known/card-wallet.json` manifest advertising their supported transports (HTTPS, OHTTP gateway)? If yes, requesting sites can construct the correct `callbacks` block without trial-and-error; if no, sites advertise all transports they support and wallets pick. | Medium |
 | OQ-14 | Governance | **Coercion resistance / governance key holder identity.** Should governance body key holders be pseudonymous (organizations or anonymous participants, harder to coerce) or identifiable (named individuals/organizations with public accountability, easier to hold accountable but more coercible)? Deferred pending governance charter design. See also red-team Finding 1.4-B (press legal compulsion). | Medium |
 
 ---
@@ -588,15 +604,15 @@ These are engineering and design questions from the spec that have not yet been 
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
-| **Arbitrum One outage / unavailability** | Low | High | Registry reads are cacheable; short-term unavailability doesn't break existing chitt verification (cached chain arrays). Write operations (issuance, revocation) are queued and retried. |
+| **Arbitrum One outage / unavailability** | Low | High | Registry reads are cacheable; short-term unavailability doesn't break existing card verification (cached chain arrays). Write operations (issuance, revocation) are queued and retried. |
 | **IPFS content not pinned / unavailable** | Medium | High | Presses are contractually responsible for pinning. Filecoin archival (web3.storage/w3up) provides long-term backup. Clients cache recently-fetched CIDs locally. |
-| **ML-DSA-44 Stylus verification too expensive on-chain** | Medium | High | **Blocking risk before contract deployment.** Gas estimates must be finalized. Batched registry writes (multiple log updates per Arbitrum transaction) reduce per-chitt cost during high-volume periods. |
+| **ML-DSA-44 Stylus verification too expensive on-chain** | Medium | High | **Blocking risk before contract deployment.** Gas estimates must be finalized. Batched registry writes (multiple log updates per Arbitrum transaction) reduce per-card cost during high-volume periods. |
 | **Canonical serialization incompatibility** | Medium | High | **Blocking risk before npm package API lock.** RFC 8785 vs. CBOR must be decided. All signature interoperability depends on this. |
 | **Press authorization enforcement gap** | ~~High~~ Closed | ~~High~~ | **Closed by ADR-011.** The original design relied on the contract checking the IPFS-stored `approved_presses` field, which is unreachable at write time. ADR-011 replaces this with two on-chain tables (`PolicyAuthorizerKeys`, `PressAuthorizations`) that the Stylus contract can verify directly. |
 | **Unauthorized press/policy registration (spam)** | Low | Medium | `RegisterPolicy` and `AuthorizePress` both require governance quorum signatures. No party can unilaterally create root policies or register presses. |
-| **Press key compromise** | Low | Medium | Revoking the press entry via `RevokePress` (governance quorum required) removes its write authority. Previously-issued chitts are unaffected. The press cannot forge user signatures (user-sovereign key custody). |
+| **Press key compromise** | Low | Medium | Revoking the press entry via `RevokePress` (governance quorum required) removes its write authority. Previously-issued cards are unaffected. The press cannot forge user signatures (user-sovereign key custody). |
 | **YubiKey stolen before 72-hour cancellation window** | Low | Medium | Multi-channel notifications give holder 72 hours to cancel. After recovery, old YubiKey should be treated as potentially compromised; holder should rotate backup registration. |
-| **OrbitDB legacy references causing confusion** | Medium | Low | Some early raw notes reference OrbitDB. This architecture supersedes those notes. OrbitDB is **not** part of the trust model; the linked-CID-chain + on-chain anchoring pattern is authoritative. |
+| **OrbitDB legacy references causing confusion** | Medium | Low | Some early raw notes reference OrbitDB. This arcardecture supersedes those notes. OrbitDB is **not** part of the trust model; the linked-CID-chain + on-chain anchoring pattern is authoritative. |
 | **Post-quantum transition risk for Ed25519 legacy tooling** | Low | Medium | ML-DSA-44 is FIPS 204 standardized. YubiKey hardware support is emerging. Where necessary, hybrid signatures (Ed25519 + ML-DSA) can be used during transition. |
 
 ---
@@ -615,7 +631,7 @@ Every signature in the protocol commits to a **canonical serialization** of a pa
 
 The decision must be made and locked before:
 
-1. The `ChittAuth` npm package API is finalized (signature and verification helpers hardcode the encoding).
+1. The `CardAuth` npm package API is finalized (signature and verification helpers hardcode the encoding).
 2. The Arbitrum One registry contract is deployed (the Stylus verifier must agree with off-chain signers on what bytes were signed).
 3. Any two independent implementations exchange signed objects.
 
@@ -625,11 +641,11 @@ Three distinct payload types are signed in the protocol:
 
 | Payload | Signed by | Verified by |
 |---|---|---|
-| **Chitt offer** | Press (sub-chitt key) | Recipient client, then any verifier |
-| **Completed chitt** | Recipient (new keypair) | Any verifier; on-chain registry contract |
+| **Card offer** | Press (sub-card key) | Recipient client, then any verifier |
+| **Completed card** | Recipient (new keypair) | Any verifier; on-chain registry contract |
 | **Log entry** (update, revocation) | Authorized updater | Any verifier |
-| **Message envelope payload** | Sender (sub-chitt key) | Recipient client, any verifier |
-| **Auth request / response** | Requester chitt; then holder | Service server |
+| **Message envelope payload** | Sender (sub-card key) | Recipient client, any verifier |
+| **Auth request / response** | Requester card; then holder | Service server |
 
 All of these must use the **same canonical serialization scheme**. A mixed-scheme protocol (JSON for some, CBOR for others) would require two independently-maintained serialization stacks and create correctness risk at every boundary.
 
@@ -648,7 +664,7 @@ RFC 8785 defines a deterministic serialization of JSON: keys sorted lexicographi
 **Cons:**
 
 - **Number representation edge cases.** RFC 8785 specifies IEEE 754 double-precision float formatting. Protocol field types like `integer` and `number` must be defined precisely to avoid cross-language differences (e.g., `1.0` vs `1` vs `1e0`). The spec's type system restricts numeric fields to `integer` and `number` with explicit range constraints, which mitigates but does not eliminate this risk.
-- **Unicode normalization requirement.** All string values must be in Unicode NFC normalization. This is handled transparently in most environments but must be explicitly tested in implementations that accept user-provided text field values (e.g., chitt field content from a `text` type field).
+- **Unicode normalization requirement.** All string values must be in Unicode NFC normalization. This is handled transparently in most environments but must be explicitly tested in implementations that accept user-provided text field values (e.g., card field content from a `text` type field).
 - **Slightly larger payloads than CBOR.** JSON is text; CBOR is binary. For ML-DSA-44 keys (1,312 bytes) and signatures (2,420 bytes) embedded as base64 strings in JSON, the overhead is approximately 33% vs. raw binary. This affects calldata size on Arbitrum One — a meaningful but secondary concern compared to the ML-DSA-44 calldata cost already accepted.
 
 ### Option B: CBOR (RFC 8949) with Deterministic Encoding
@@ -657,9 +673,9 @@ CBOR is a binary data format designed for compactness. RFC 8949 §4.2 specifies 
 
 **Pros:**
 
-- **Compact binary encoding.** Eliminates base64 overhead for embedded keys and signatures; reduces calldata size on Arbitrum One. For a chitt offer with two ML-DSA-44 keys and two signatures, CBOR saves roughly 1,200–2,000 bytes per object vs. JSON — meaningful at scale but under $0.02 at current blob pricing.
+- **Compact binary encoding.** Eliminates base64 overhead for embedded keys and signatures; reduces calldata size on Arbitrum One. For a card offer with two ML-DSA-44 keys and two signatures, CBOR saves roughly 1,200–2,000 bytes per object vs. JSON — meaningful at scale but under $0.02 at current blob pricing.
 - **Native binary type.** Cryptographic material (keys, signatures, hashes) is encoded as binary byte strings rather than base64 text, reducing encoding/decoding steps and eliminating base64 ambiguity (standard vs URL-safe, padding variants).
-- **Well-suited for constrained environments.** If Chitt clients eventually run on embedded or hardware devices (e.g., hardware wallet integrations), CBOR's compactness matters more.
+- **Well-suited for constrained environments.** If Card clients eventually run on embedded or hardware devices (e.g., hardware wallet integrations), CBOR's compactness matters more.
 - **Growing ecosystem.** CBOR is used in COSE (CBOR Object Signing and Encryption), FIDO2/WebAuthn credentials, and various IETF identity standards. Cross-ecosystem compatibility is a potential benefit for future integrations.
 
 **Cons:**
@@ -667,20 +683,20 @@ CBOR is a binary data format designed for compactness. RFC 8949 §4.2 specifies 
 - **Not human-readable.** A signed payload is a binary blob. Debugging a signature failure requires a CBOR decoder before you can inspect the payload. This significantly increases the friction for third-party verifier implementations and protocol debugging.
 - **Schema coupling.** Deterministic CBOR requires precise agreement on map key ordering and type encoding. Adding a new optional field to a payload schema requires verifying that all implementations sort keys identically. JSON's lexicographic string sort is simpler and universally consistent.
 - **Library maturity varies.** JavaScript and Rust have solid CBOR libraries, but the ecosystem is thinner than JSON's. The Stylus/WASM CBOR implementation would need careful testing for determinism edge cases.
-- **Conceptual mismatch with the type system.** The spec's type system (`text`, `integer`, `number`, `boolean`, `date`, `timestamp`, `cid`, `chitt-pointer`, ...) maps naturally to JSON types. CBOR's richer type system (tagged types, bignum, etc.) introduces mapping choices — e.g., should a `timestamp` be a CBOR tagged integer (tag 1) or a text string? These choices must be specified and maintained.
+- **Conceptual mismatch with the type system.** The spec's type system (`text`, `integer`, `number`, `boolean`, `date`, `timestamp`, `cid`, `card-pointer`, ...) maps naturally to JSON types. CBOR's richer type system (tagged types, bignum, etc.) introduces mapping choices — e.g., should a `timestamp` be a CBOR tagged integer (tag 1) or a text string? These choices must be specified and maintained.
 - **Higher adoption friction for third-party developers.** The protocol's value depends on independent verifiers building against it. A binary format with schema coupling will slow external adoption compared to JSON.
 
 ### Recommendation: CBOR with JSON input surface in the npm package
 
 The adoption-friction argument for RFC 8785 rests on an assumption worth questioning: that verifiers will frequently implement canonical serialization themselves. In practice, verifiers fall into three categories:
 
-1. **Services using the `ChittAuth` npm package** — never touch serialization; it's internal to the package.
+1. **Services using the `CardAuth` npm package** — never touch serialization; it's internal to the package.
 2. **Mobile/client SDKs** — same; the SDK owns the encoding.
 3. **Independent implementations from scratch** — a small minority even at wide adoption, and sophisticated enough to handle CBOR.
 
 If the npm package handles JSON→CBOR conversion internally — accepting JSON-shaped objects as developer input, converting to deterministic CBOR before signing or verifying — then the ergonomic cost of CBOR is almost entirely absorbed. Developers write JSON-like structures; they never see CBOR bytes unless they deliberately go looking. The rough verification experience argument applies only to category 3.
 
-Meanwhile, the calldata savings are not second-order — they are recurring costs on every registry write, and they compound. ML-DSA-44 keys and signatures are already large; base64url encoding in JSON adds ~33% on top of that. Per-issuance CBOR savings are roughly 2,400–2,500 bytes (two keys + two signatures, raw vs. base64url). At current Arbitrum One blob-era pricing that is a small per-write saving, but it applies to every issuance, every log update, and every revocation — forever. Batched writes reduce the per-chitt amortized cost but do not change the per-byte calldata cost. CBOR makes every byte cheaper; batching does not.
+Meanwhile, the calldata savings are not second-order — they are recurring costs on every registry write, and they compound. ML-DSA-44 keys and signatures are already large; base64url encoding in JSON adds ~33% on top of that. Per-issuance CBOR savings are roughly 2,400–2,500 bytes (two keys + two signatures, raw vs. base64url). At current Arbitrum One blob-era pricing that is a small per-write saving, but it applies to every issuance, every log update, and every revocation — forever. Batched writes reduce the per-card amortized cost but do not change the per-byte calldata cost. CBOR makes every byte cheaper; batching does not.
 
 The revised recommendation is **CBOR (RFC 8949 deterministic encoding)** with a JSON-friendly input surface on the npm package.
 
@@ -712,7 +728,7 @@ Keys, signatures, CIDs, and hashes are accepted as **base64url strings** (no pad
 |---|---|---|
 | `recipient_pubkey`, `public_key` (in any signature entry) | base64url string | Major type 2 byte string |
 | `offer_signature`, `holder_signature`, `signature` (in any signature entry) | base64url string | Major type 2 byte string |
-| `policy_id`, `press_chitt`, `prev_log_root`, and any `cid` type field | base64url string | Major type 2 byte string |
+| `policy_id`, `press_card`, `prev_log_root`, and any `cid` type field | base64url string | Major type 2 byte string |
 
 This is the primary source of calldata savings — binary fields appear in CBOR at their raw byte length rather than ~33% larger as base64url text.
 
@@ -773,7 +789,7 @@ Regardless of which format is chosen, these constraints must be enforced:
 
 ### Context
 
-Red-team analysis identified that the contract description in earlier versions of this document — "writes are rejected unless signed by a press sub-chitt key listed in `approved_presses`" — was unimplementable as written. The Stylus contract verifies on-chain state at write time; it cannot fetch or verify the IPFS-stored `approved_presses` array in the policy chitt's content. This created an unenforced authorization boundary: any party holding a valid ML-DSA-44 keypair could write to the registry against any policy without the contract having a way to reject them.
+Red-team analysis identified that the contract description in earlier versions of this document — "writes are rejected unless signed by a press sub-card key listed in `approved_presses`" — was unimplementable as written. The Stylus contract verifies on-chain state at write time; it cannot fetch or verify the IPFS-stored `approved_presses` array in the policy card's content. This created an unenforced authorization boundary: any party holding a valid ML-DSA-44 keypair could write to the registry against any policy without the contract having a way to reject them.
 
 Separately, the question of who can register a new root policy and who can authorize presses was left implicit. Without access controls on these entry points, the registry is open to spam policy creation and unauthorized press registration.
 
@@ -792,7 +808,7 @@ PolicyAuthorizerKeys:
   policyAddress (bytes32)  →  authorizerPublicKey (bytes[1312], ML-DSA-44)
 ```
 
-A policy address is the on-chain identifier for the policy — the Arbitrum One address associated with the policy chitt's registry entry. An entry in `PolicyAuthorizerKeys` is what makes a policy address a recognized root policy in the contract's view. The entry is created by `RegisterPolicy`.
+A policy address is the on-chain identifier for the policy — the Arbitrum One address associated with the policy card's registry entry. An entry in `PolicyAuthorizerKeys` is what makes a policy address a recognized root policy in the contract's view. The entry is created by `RegisterPolicy`.
 
 **`PressAuthorizations`**
 
@@ -831,7 +847,7 @@ Sets `active = false` for the given (policyAddress, pressAddress) pair. Callable
 
 ### Integration with IPFS `approved_presses`
 
-The policy chitt's IPFS content includes an `approved_presses` array listing the mutable pointers of authorized press sub-chitts. This field is retained as an **audit surface**: tooling (press operators, policy administrators, monitoring agents) should keep it in sync with the on-chain `PressAuthorizations` table. However:
+The policy card's IPFS content includes an `approved_presses` array listing the mutable pointers of authorized press sub-cards. This field is retained as an **audit surface**: tooling (press operators, policy administrators, monitoring agents) should keep it in sync with the on-chain `PressAuthorizations` table. However:
 
 - **On-chain state is authoritative** for contract enforcement. A press listed in `approved_presses` but absent from `PressAuthorizations` cannot write to the registry. A press in `PressAuthorizations` with `active = false` cannot write even if it still appears in `approved_presses`.
 - **Discrepancies between IPFS and on-chain state are a monitoring signal**, not a protocol error. They indicate that tooling has failed to sync the IPFS content after an on-chain authorization change.
@@ -843,7 +859,7 @@ The protocol's governance model separates two functions with different operation
 
 **Root Policy Governance Body**
 
-Controls root policy creation via `RegisterPolicy`. This is an infrequent, high-stakes operation: creating a new root policy establishes a new trust anchor for all chitts that derive from it. The Root Policy Governance Body's remit is narrow:
+Controls root policy creation via `RegisterPolicy`. This is an infrequent, high-stakes operation: creating a new root policy establishes a new trust anchor for all cards that derive from it. The Root Policy Governance Body's remit is narrow:
 
 - Evaluate whether proposed root policies meet the protocol's published ethics criteria.
 - Register approved root policies via `RegisterPolicy`.
@@ -863,7 +879,7 @@ The quorum requirement for this body is set to reflect operational cadence while
 
 **Shared principles for both bodies**
 
-Both bodies share a narrow, defined remit: ensuring that root policies and presses operate within the published ethics criteria. Neither body has authority over the content of policies, the terms of issuance, or the behavior of individual chitts. Both bodies operate with published membership lists, quorum requirements, and decision logs. Both bodies are self-perpetuating or elected per a governance charter whose design is out of scope for the current protocol specification.
+Both bodies share a narrow, defined remit: ensuring that root policies and presses operate within the published ethics criteria. Neither body has authority over the content of policies, the terms of issuance, or the behavior of individual cards. Both bodies operate with published membership lists, quorum requirements, and decision logs. Both bodies are self-perpetuating or elected per a governance charter whose design is out of scope for the current protocol specification.
 
 **Scope note.** The protocol's current risk analysis treats the governance bodies themselves as trusted. Attacks targeting the governance bodies — coercion of key holders, quorum subversion, capture of the membership composition process — are out of scope for Phase 1 red-teaming and are deferred to a later analysis phase.
 
@@ -881,4 +897,4 @@ Both bodies share a narrow, defined remit: ensuring that root policies and press
 
 ---
 
-*This document synthesizes `chitt_protocol_spec.md` (v0.3, 2026-05-19) and supporting raw notes. Where the spec and earlier notes conflict (e.g., Solana vs. Arbitrum One as the registry substrate), the spec is authoritative.*
+*This document synthesizes `card_protocol_spec.md` (v0.3, 2026-05-19) and supporting raw notes. Where the spec and earlier notes conflict (e.g., Solana vs. Arbitrum One as the registry substrate), the spec is authoritative.*

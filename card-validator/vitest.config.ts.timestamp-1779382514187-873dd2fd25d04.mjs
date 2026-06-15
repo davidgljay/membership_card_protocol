@@ -1,5 +1,5 @@
 // vitest.config.ts
-import { defineConfig } from "file:///sessions/keen-quirky-hamilton/mnt/chitt_protocol/chitt-validator/node_modules/vitest/dist/config.js";
+import { defineConfig } from "file:///sessions/keen-quirky-hamilton/mnt/card_protocol/card-validator/node_modules/vitest/dist/config.js";
 var vitest_config_default = defineConfig({
   test: {
     environment: "node"
