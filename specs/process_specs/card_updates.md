@@ -1,16 +1,16 @@
-# Mark Updates — Process Spec
+# Card Updates — Process Spec
 
 **Version:** 0.1 (draft)  
 **Date:** 2026-05-25  
 **Status:** Draft  
 
-> **Terminology note.** This spec uses "mark" for "chitt" and "press" for the issuance service. The rename is in progress; treat the terms as interchangeable.
+> **Terminology note.** This spec now uses "card" as the canonical term per the Naming Convention.
 
 ---
 
 ## Overview
 
-A mark update is any post-issuance change to a mark's state: field edits, annotations, privilege changes, or revocations. All updates follow a single unified flow — the updater signs an intent payload, submits it to any press listed in `approved_presses`, and the press validates authorization, assembles the full log entry, signs it, and posts it. The append-only log preserves complete history; nothing is silently removed.
+A card update is any post-issuance change to a card's state: field edits, annotations, privilege changes, or revocations. All updates follow a single unified flow — the updater signs an intent payload, submits it to any press listed in `approved_presses`, and the press validates authorization, assembles the full log entry, signs it, and posts it. The append-only log preserves complete history; nothing is silently removed.
 
 Updates are classified by a three-digit code (1xx–9xx) that signals the semantic nature of the update to verifiers. Codes 1xx–7xx are field updates; codes 8xx–9xx are revocations.
 
@@ -28,10 +28,10 @@ Updates are classified by a three-digit code (1xx–9xx) that signals the semant
 
 ## Preconditions
 
-- The target mark exists on IPFS and is registered on Arbitrum One.
-- The updater holds a mark whose chain satisfies the relevant authorization predicate.
-- The updater has a press sub-mark key available for signing.
-- At least one press is listed in `approved_presses` for the target mark's policy.
+- The target card exists on IPFS and is registered on Arbitrum One.
+- The updater holds a card whose chain satisfies the relevant authorization predicate.
+- The updater has a press sub-card key available for signing.
+- At least one press is listed in `approved_presses` for the target card's policy.
 
 ---
 
@@ -40,7 +40,7 @@ Updates are classified by a three-digit code (1xx–9xx) that signals the semant
 ### Phase 1: Intent Assembly
 
 1. The updater determines the appropriate update code:
-   - **1xx** — positive update (e.g., linked to a successor mark)
+   - **1xx** — positive update (e.g., linked to a successor card)
    - **2xx** — positive annotation (commendation, endorsement)
    - **3xx** — neutral field update (e.g., `valid_until` refresh)
    - **4xx** — neutral annotation (informational note for verifiers)
@@ -53,12 +53,12 @@ Updates are classified by a three-digit code (1xx–9xx) that signals the semant
 2. The updater assembles the `UpdateIntentPayload`:
    ```json
    {
-     "target_mark":    "<mutable pointer of the mark being updated>",
-     "updater_mark":   "<mutable pointer of the updater's mark>",
+     "target_card":    "<mutable pointer of the card being updated>",
+     "updater_card":   "<mutable pointer of the updater's card>",
      "code":           <integer 100–999>,
      "field_updates":  [{ "field": "<name>", "value": <new value> }],
      "revocation":     { "effective_date": "<ISO 8601>", "note": "<optional>" },
-     "note":           "<optional free text — appended to the mark's notes array>",
+     "note":           "<optional free text — appended to the card's notes array>",
      "notify_holder":  true,
      "updater_message":"<optional — forwarded to holder in HTTPS notification>",
      "timestamp":      "<ISO 8601 — replay prevention>"
@@ -66,27 +66,27 @@ Updates are classified by a three-digit code (1xx–9xx) that signals the semant
    ```
    - For codes 1xx–7xx: populate `field_updates`; omit `revocation`.
    - For codes 8xx–9xx: populate `revocation` with an `effective_date` (may predate posting); omit `field_updates`.
-   - `note` is optional and may be included with any update code. If present, it is appended to the mark's notes array (see Notes Array below). It is distinct from `revocation.note`, which is internal to the revocation record and not surfaced in the notes array.
+   - `note` is optional and may be included with any update code. If present, it is appended to the card's notes array (see Notes Array below). It is distinct from `revocation.note`, which is internal to the revocation record and not surfaced in the notes array.
    - Set `notify_holder: false` for adversarial scenarios (e.g., a 9xx revocation where notification would be harmful). The policy may also suppress notification for specific code prefixes.
 
 3. The updater canonically serializes the `UpdateIntentPayload` (canonical CBOR per RFC 8949 §4.2 with protocol-specific overrides).
 
-4. The updater signs the canonical serialization with their current sub-mark private key → `intent_signature`.
+4. The updater signs the canonical serialization with their current sub-card private key → `intent_signature`.
 
 ### Phase 2: Submission
 
-5. The updater sends the signed intent via HTTPS POST to any press listed in `approved_presses` for the mark's policy. The press is neutral infrastructure — any listed press may process any update; the updater does not need to use the original issuing press.
+5. The updater sends the signed intent via HTTPS POST to any press listed in `approved_presses` for the card's policy. The press is neutral infrastructure — any listed press may process any update; the updater does not need to use the original issuing press.
 
 ### Phase 3: Press Validation
 
-6. The press fetches the target mark's current log head from IPFS and confirms the on-chain Arbitrum One pointer matches.
+6. The press fetches the target card's current log head from IPFS and confirms the on-chain Arbitrum One pointer matches.
 
 7. The press validates the intent:
    - **Signature validity:** Verify `intent_signature` over the canonical `UpdateIntentPayload`.
-   - **Updater not revoked:** Confirm the updater's mark has no 8xx or 9xx entry with `effective_date` ≤ now.
-   - **Authorization — field updates (codes 1xx–7xx):** For each field in `field_updates`, confirm the updater's mark chain satisfies that field's `update_policy` predicate (from the policy's `field_definitions`). All predicates must be satisfied by the same updater.
-   - **Authorization — revocations (codes 8xx–9xx):** Confirm the updater's mark chain satisfies `revocation_permissions` for the given code range. If `revocation_permissions` is absent from the policy, the default applies: 8xx by holder or issuer, 9xx by issuer only.
-   - **Immutable fields:** Confirm no `field_updates` entry targets a protocol-required immutable field (`policy_id`, `press_mark`, `recipient_pubkey`, `issued_at`, `offer_signature`, `holder_signature`).
+   - **Updater not revoked:** Confirm the updater's card has no 8xx or 9xx entry with `effective_date` ≤ now.
+   - **Authorization — field updates (codes 1xx–7xx):** For each field in `field_updates`, confirm the updater's card chain satisfies that field's `update_policy` predicate (from the policy's `field_definitions`). All predicates must be satisfied by the same updater.
+   - **Authorization — revocations (codes 8xx–9xx):** Confirm the updater's card chain satisfies `revocation_permissions` for the given code range. If `revocation_permissions` is absent from the policy, the default applies: 8xx by holder or issuer, 9xx by issuer only.
+   - **Immutable fields:** Confirm no `field_updates` entry targets a protocol-required immutable field (`policy_id`, `press_card`, `recipient_pubkey`, `issued_at`, `offer_signature`, `holder_signature`).
    - **Code consistency:** 8xx–9xx entries must include `revocation` and no `field_updates`; 1xx–7xx entries must include `field_updates` and no `revocation`.
    - **Erasure eligibility:** If the entry carries `erasure: true`, confirm the policy specifies `erasable: true`. Reject otherwise.
    - **Timestamp freshness:** Reject intents with timestamps outside the acceptable replay-prevention window.
@@ -99,11 +99,11 @@ Updates are classified by a three-digit code (1xx–9xx) that signals the semant
    - Copies the intent payload verbatim.
    - Adds `version` — the current log head's version plus one.
    - Adds `prev_log_root` — the CID of the current log head.
-   - Signs the canonical serialization of the complete `LogEntry` (excluding `press_signature`) with the press sub-mark key → `press_signature`.
+   - Signs the canonical serialization of the complete `LogEntry` (excluding `press_signature`) with the press sub-card key → `press_signature`.
 
 10. The press posts the new log entry to IPFS.
 
-11. The press updates the Arbitrum One registry pointer for the target mark to the CID of the new log entry, signed with the press sub-mark key.
+11. The press updates the Arbitrum One registry pointer for the target card to the CID of the new log entry, signed with the press sub-card key.
 
 ### Phase 5: Notification and Confirmation
 
@@ -117,7 +117,7 @@ Updates are classified by a three-digit code (1xx–9xx) that signals the semant
 
 ## Notes Array
 
-A mark's notes array is not stored as a mutable field. It is derived by verifiers and clients by walking the append-only log from genesis to the current head and collecting every `LogEntry` whose intent payload contains a non-empty `note` field. The result is an ordered list of note objects, one per qualifying entry, in chronological order.
+A card's notes array is not stored as a mutable field. It is derived by verifiers and clients by walking the append-only log from genesis to the current head and collecting every `LogEntry` whose intent payload contains a non-empty `note` field. The result is an ordered list of note objects, one per qualifying entry, in chronological order.
 
 Each entry in the derived notes array has the following shape:
 
@@ -125,24 +125,24 @@ Each entry in the derived notes array has the following shape:
 {
   "text":         "<the note string from UpdateIntentPayload.note>",
   "timestamp":    "<ISO 8601 — the intent timestamp from the same payload>",
-  "updater_mark": "<mutable pointer of the updater's mark>",
+  "updater_card": "<mutable pointer of the updater's card>",
   "log_entry_cid":"<IPFS CID of the LogEntry that carried this note>",
   "update_code":  <integer — the code from the same log entry>
 }
 ```
 
-Notes are immutable once posted — they are part of the signed log and cannot be edited or removed (subject to the mark's erasure policy). A note may accompany any update code; the `update_code` field in the derived object lets readers understand the context in which the note was written (e.g., a 2xx commendation note vs. a 6xx concern note).
+Notes are immutable once posted — they are part of the signed log and cannot be edited or removed (subject to the card's erasure policy). A note may accompany any update code; the `update_code` field in the derived object lets readers understand the context in which the note was written (e.g., a 2xx commendation note vs. a 6xx concern note).
 
 ---
 
 ## Postconditions
 
-- A new `LogEntry` is appended to the target mark's IPFS log, chained via `prev_log_root`.
-- The Arbitrum One registry entry for the target mark points to the new log head.
+- A new `LogEntry` is appended to the target card's IPFS log, chained via `prev_log_root`.
+- The Arbitrum One registry entry for the target card points to the new log head.
 - The updater's identity and intent signature are permanently recorded in the log entry.
-- If the intent payload included a `note`, it is now part of the immutable log and will appear in the mark's derived notes array, attributed to `updater_mark` with the intent timestamp.
+- If the intent payload included a `note`, it is now part of the immutable log and will appear in the card's derived notes array, attributed to `updater_card` with the intent timestamp.
 - If `notify_holder` was true, an HTTPS notification was sent to the holder's wallet service endpoint.
-- Any verifier can re-derive the complete current state of the mark — including the full notes array — by reading the append-only log from the genesis document to the current head.
+- Any verifier can re-derive the complete current state of the card — including the full notes array — by reading the append-only log from the genesis document to the current head.
 
 ---
 
@@ -154,9 +154,9 @@ If two update intents are submitted concurrently and one is posted first, the se
 
 ## Revocation Semantics
 
-- **8xx (quiet revocation):** The mark is revoked. Historical signatures before `effective_date` remain trusted. The revocation signals a change of state, not a retroactive claim that prior actions were invalid.
-- **9xx (loud revocation):** The mark is revoked. Things on or after `effective_date` are suspect or invalid; things before are trusted. Verifiers may notify issuers of other marks they have seen from the same holder — but this is a social protocol, not cryptographic.
-- **Un-revocation:** The append-only log cannot remove a revocation entry. To restore standing, the authorizer issues a new **successor mark** with a `supersedes` field pointing to the old mark's mutable pointer and a `supersession_note` explaining the context.
+- **8xx (quiet revocation):** The card is revoked. Historical signatures before `effective_date` remain trusted. The revocation signals a change of state, not a retroactive claim that prior actions were invalid.
+- **9xx (loud revocation):** The card is revoked. Things on or after `effective_date` are suspect or invalid; things before are trusted. Verifiers may notify issuers of other cards they have seen from the same holder — but this is a social protocol, not cryptographic.
+- **Un-revocation:** The append-only log cannot remove a revocation entry. To restore standing, the authorizer issues a new **successor card** with a `supersedes` field pointing to the old card's mutable pointer and a `supersession_note` explaining the context.
 - **Effective date backdating:** The `effective_date` in a revocation may be earlier than the posting date. If multiple revocation entries exist, the one with the earliest `effective_date` governs.
 
 ---
@@ -166,21 +166,21 @@ If two update intents are submitted concurrently and one is posted first, the se
 | Condition | Resolution |
 |---|---|
 | Intent timestamp too old or too far in the future | Updater resubmits with a fresh timestamp |
-| Updater's mark revoked with `effective_date` ≤ now | Updater is not eligible; must use a different authorized party |
+| Updater's card revoked with `effective_date` ≤ now | Updater is not eligible; must use a different authorized party |
 | `update_policy` predicate not satisfied for one or more fields | Updater does not have authority; request must come from an authorized party |
 | `revocation_permissions` not satisfied | Updater does not have revocation authority; requester must use an authorized party |
 | `prev_log_root` is stale (concurrent update race) | Updater re-fetches current log head and resubmits |
 | IPFS post fails | Press retries; does not write on-chain until IPFS CID is confirmed |
-| Erasure attempted on non-erasable mark | Press rejects; policy must specify `erasable: true` |
+| Erasure attempted on non-erasable card | Press rejects; policy must specify `erasable: true` |
 
 ---
 
 ## Related Specs
 
 - `policy_creation.md` — where `update_policy` and `revocation_permissions` are defined
-- `mark_offering_and_acceptance.md` — the issuance flow (genesis of the mark being updated)
+- `card_offering_and_acceptance.md` — the issuance flow (genesis of the card being updated)
 - `log_auditing.md` — how update entries are visible to auditors
-- `chitt_protocol_spec.md §5` — full feature spec for updating marks
+- `card_protocol_spec.md §5` — full feature spec for updating cards
 - `protocol-objects.md §3` — `LogEntry` object reference
 - `protocol-objects.md §4` — `UpdateIntentPayload` object reference
 - `update_codes.md` — full update code taxonomy

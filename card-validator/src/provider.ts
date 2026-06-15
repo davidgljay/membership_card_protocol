@@ -1,21 +1,21 @@
 /**
- * ChittProvider implementations.
+ * CardProvider implementations.
  *
- * The default HttpChittProvider uses a public IPFS gateway for content fetches
+ * The default HttpCardProvider uses a public IPFS gateway for content fetches
  * and a JSON-RPC endpoint for Arbitrum One reads. The registry contract is not
- * yet deployed; getLogHead and getSubChittRegistration will throw until the
+ * yet deployed; getLogHead and getSubCardRegistration will throw until the
  * contract address is configured and the ABI is finalized.
  */
 
-import type { ChittDocument, ChittProvider, LogEntry, LogEntryWithCid, SubChittRegistration } from './types.js';
+import type { CardDocument, CardProvider, LogEntry, LogEntryWithCid, SubCardRegistration } from './types.js';
 
 const DEFAULT_IPFS_GATEWAY = 'https://ipfs.io';
 const DEFAULT_ARBITRUM_RPC = 'https://arb1.arbitrum.io/rpc';
 
-export interface HttpChittProviderOptions {
+export interface HttpCardProviderOptions {
   ipfsGateway?: string;
   arbitrumRpcUrl?: string;
-  /** Address of the deployed Chitt registry contract on Arbitrum One. */
+  /** Address of the deployed Card registry contract on Arbitrum One. */
   registryContractAddress?: string;
 }
 
@@ -23,16 +23,16 @@ export interface HttpChittProviderOptions {
  * Default provider that fetches IPFS content via an HTTP gateway and reads
  * Arbitrum One state via JSON-RPC.
  *
- * On-chain reads require the Chitt registry contract to be deployed and its
- * address provided in options. Until then, getLogHead and getSubChittRegistration
+ * On-chain reads require the Card registry contract to be deployed and its
+ * address provided in options. Until then, getLogHead and getSubCardRegistration
  * throw a clear error explaining what's needed.
  */
-export class HttpChittProvider implements ChittProvider {
+export class HttpCardProvider implements CardProvider {
   private readonly ipfsGateway: string;
   private readonly arbitrumRpcUrl: string;
   private readonly registryContractAddress: string | undefined;
 
-  constructor(options: HttpChittProviderOptions = {}) {
+  constructor(options: HttpCardProviderOptions = {}) {
     this.ipfsGateway = options.ipfsGateway ?? DEFAULT_IPFS_GATEWAY;
     this.arbitrumRpcUrl = options.arbitrumRpcUrl ?? DEFAULT_ARBITRUM_RPC;
     this.registryContractAddress = options.registryContractAddress;
@@ -40,7 +40,7 @@ export class HttpChittProvider implements ChittProvider {
 
   /**
    * Fetch a JSON document from IPFS by its CID.
-   * CID is a base64url string as it appears in chitt fields; it is re-encoded
+   * CID is a base64url string as it appears in card fields; it is re-encoded
    * as a standard multibase CID string for the gateway URL.
    */
   async fetchIPFS(cid: string): Promise<unknown> {
@@ -64,7 +64,7 @@ export class HttpChittProvider implements ChittProvider {
   async getLogHead(registryAddress: string): Promise<string | null> {
     if (!this.registryContractAddress) {
       throw new Error(
-        'Chitt registry contract not deployed yet. ' +
+        'Card registry contract not deployed yet. ' +
           'Provide registryContractAddress in ValidationOptions once the contract is live.',
       );
     }
@@ -79,31 +79,31 @@ export class HttpChittProvider implements ChittProvider {
   }
 
   /**
-   * Look up a sub-chitt's master registration from Arbitrum One.
+   * Look up a sub-card's master registration from Arbitrum One.
    *
-   * Calls `getSubChittMaster(bytes32 subChittAddress)` on the registry contract.
+   * Calls `getSubCardMaster(bytes32 subCardAddress)` on the registry contract.
    */
-  async getSubChittRegistration(
-    subChittAddress: string,
-  ): Promise<SubChittRegistration | null> {
+  async getSubCardRegistration(
+    subCardAddress: string,
+  ): Promise<SubCardRegistration | null> {
     if (!this.registryContractAddress) {
       throw new Error(
-        'Chitt registry contract not deployed yet. ' +
+        'Card registry contract not deployed yet. ' +
           'Provide registryContractAddress in ValidationOptions once the contract is live.',
       );
     }
-    const callData = encodeGetSubChittMaster(subChittAddress);
+    const callData = encodeGetSubCardMaster(subCardAddress);
     const result = await ethCall(
       this.arbitrumRpcUrl,
       this.registryContractAddress,
       callData,
     );
-    return decodeSubChittMasterResult(result);
+    return decodeSubCardMasterResult(result);
   }
 
   /**
    * Walk the IPFS log from logHeadCid backward through prev_log_root links,
-   * returning ALL log entries with their CIDs plus the genesis ChittDocument.
+   * returning ALL log entries with their CIDs plus the genesis CardDocument.
    *
    * Entries are returned newest-first (head → genesis direction).
    * The genesis document is identified by the absence of an entry_type field.
@@ -111,9 +111,9 @@ export class HttpChittProvider implements ChittProvider {
   async getAllLogEntries(
     _registryAddress: string,
     logHeadCid: string,
-  ): Promise<{ entries: LogEntryWithCid[]; genesis: ChittDocument | null; fetchedAt: Date }> {
+  ): Promise<{ entries: LogEntryWithCid[]; genesis: CardDocument | null; fetchedAt: Date }> {
     const entries: LogEntryWithCid[] = [];
-    let genesis: ChittDocument | null = null;
+    let genesis: CardDocument | null = null;
     let currentCid: string | null = logHeadCid;
     const fetchedAt = new Date();
 
@@ -123,7 +123,7 @@ export class HttpChittProvider implements ChittProvider {
         entries.push({ entry: doc as unknown as LogEntry, cid: currentCid });
         currentCid = (doc.prev_log_root as string | undefined | null) ?? null;
       } else {
-        genesis = doc as unknown as ChittDocument;
+        genesis = doc as unknown as CardDocument;
         break;
       }
     }
@@ -137,10 +137,10 @@ export class HttpChittProvider implements ChittProvider {
 // ---------------------------------------------------------------------------
 
 /**
- * Convert a base64url CID (as stored in chitt fields) to the multibase string
+ * Convert a base64url CID (as stored in card fields) to the multibase string
  * used in IPFS gateway URLs.
  *
- * Chitt fields store CIDs as base64url-encoded raw bytes (the CID byte string).
+ * Card fields store CIDs as base64url-encoded raw bytes (the CID byte string).
  * IPFS gateways accept CIDv1 in base32 (bafy...) or CIDv0 (Qm...) encoding.
  *
  * If the CID bytes begin with 0x12 0x20 (CIDv0 / sha2-256 / 32 bytes),
@@ -165,17 +165,17 @@ function cidToGatewayPath(cid: string): string {
 /** keccak256("getLogHead(bytes32)") first 4 bytes: selector */
 const GET_LOG_HEAD_SELECTOR = '0x1234abcd'; // placeholder — update when ABI is finalized
 
-/** keccak256("getSubChittMaster(bytes32)") first 4 bytes: selector */
-const GET_SUB_CHITT_MASTER_SELECTOR = '0x5678efgh'; // placeholder — update when ABI is finalized
+/** keccak256("getSubCardMaster(bytes32)") first 4 bytes: selector */
+const GET_SUB_CARD_MASTER_SELECTOR = '0x5678efgh'; // placeholder — update when ABI is finalized
 
 function encodeGetLogHead(registryAddress: string): string {
   const addr = padBytes32(registryAddress);
   return GET_LOG_HEAD_SELECTOR + addr;
 }
 
-function encodeGetSubChittMaster(subChittAddress: string): string {
-  const addr = padBytes32(subChittAddress);
-  return GET_SUB_CHITT_MASTER_SELECTOR + addr;
+function encodeGetSubCardMaster(subCardAddress: string): string {
+  const addr = padBytes32(subCardAddress);
+  return GET_SUB_CARD_MASTER_SELECTOR + addr;
 }
 
 function padBytes32(hexOrBase64url: string): string {
@@ -202,7 +202,7 @@ function decodeLogHeadResult(result: string): string | null {
   return Buffer.from(bytes).toString('base64url');
 }
 
-function decodeSubChittMasterResult(result: string): SubChittRegistration | null {
+function decodeSubCardMasterResult(result: string): SubCardRegistration | null {
   // ABI-decode (bytes32 masterAddress, bytes32 registrationLogHeadCid)
   if (!result || result === '0x') return null;
   const hex = result.startsWith('0x') ? result.slice(2) : result;
@@ -216,7 +216,7 @@ function decodeSubChittMasterResult(result: string): SubChittRegistration | null
     logHeadHex.match(/.{2}/g)!.map(b => parseInt(b, 16)),
   );
   return {
-    masterChittAddress: Buffer.from(masterBytes).toString('base64url'),
+    masterCardAddress: Buffer.from(masterBytes).toString('base64url'),
     registrationLogHeadCid: Buffer.from(logHeadBytes).toString('base64url'),
   };
 }

@@ -1,7 +1,7 @@
 Notary Systems and Verifiable Computation
 
 Summary
-The pattern explored here: trusted wrapper/oracle scripts that observe data or run computations and produce signed attestations — three concrete cases being a WhatsApp message-signing wrapper, an EventBrite API wrapper, and a survey-aggregation wrapper that signs transformations of multiple inputs. In each case, the output is a signed Chitt or a signed attestation that can be treated as a link in a Chitt chain.
+The pattern explored here: trusted wrapper/oracle scripts that observe data or run computations and produce signed attestations — three concrete cases being a WhatsApp message-signing wrapper, an EventBrite API wrapper, and a survey-aggregation wrapper that signs transformations of multiple inputs. In each case, the output is a signed Card or a signed attestation that can be treated as a link in a Card chain.
 
 Prior Art
 For wrapping external services (cases 1 and 2), this is the zkTLS / oracle / notary family: TLSNotary, DECO, Reclaim Protocol, Town Crier, Chainlink, with DKIM as a deployed-but-narrow ancestor. Reclaim is the closest productized match.
@@ -10,8 +10,8 @@ For attesting transformations (case 3), this is verifiable computation: TEE atte
 
 Cross-cutting: W3C Verifiable Credentials provide a natural data-model envelope; C2PA's signed-transformation chains structurally resemble case 3; authenticated data structures handle the "query against large dataset" variant.
 
-Relationship to the Chitt Press
-Notary systems and the Chitt Press are related but distinct. The Chitt Press is a gated enclave that issues Chitts according to approved policies. Notary systems are a broader family of attested computation that can serve as inputs to a Chitt Press — for example, a Reclaim-style HTTPS attestation can be the evidence required by a policy before the Press will issue a Chitt. The notary's signed output is a verifiable input; the Chitt Press's signed output is the credential.
+Relationship to the Card Press
+Notary systems and the Card Press are related but distinct. The Card Press is a gated enclave that issues Cards according to approved policies. Notary systems are a broader family of attested computation that can serve as inputs to a Card Press — for example, a Reclaim-style HTTPS attestation can be the evidence required by a policy before the Press will issue a Card. The notary's signed output is a verifiable input; the Card Press's signed output is the credential.
 
 Zero-Knowledge Extensions
 Zero-knowledge extensions split into two distinct properties:
@@ -20,7 +20,7 @@ Predicate hiding — the attester sees raw data but proves only a statement abou
 
 Attester blindness — the attester doesn't see plaintext at all. Three substrates: TEEs (trust hardware), MPC with non-colluding aggregators (trust at-least-one-honest, the Prio/DAP model), or FHE (trust the math, pay in performance).
 
-The properties compose. The natural design for the survey-aggregation case combines them: respondents send encrypted inputs with SNARK range proofs; an aggregator (TEE or MPC) computes blindly and issues a signed output Chitt with an aggregation proof. This slots into the existing chain-verification model as just another link whose issuer happens to be attested code — the same pattern as the Chitt Press itself.
+The properties compose. The natural design for the survey-aggregation case combines them: respondents send encrypted inputs with SNARK range proofs; an aggregator (TEE or MPC) computes blindly and issues a signed output Card with an aggregation proof. This slots into the existing chain-verification model as just another link whose issuer happens to be attested code — the same pattern as the Card Press itself.
 
 Key Tradeoffs
 SNARK proving time: generating proofs is computationally expensive; verifying them is cheap.

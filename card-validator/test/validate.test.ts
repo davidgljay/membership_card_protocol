@@ -1,8 +1,8 @@
 /**
- * End-to-end validation tests using a mock ChittProvider.
+ * End-to-end validation tests using a mock CardProvider.
  *
  * These tests verify the full §7 verification flow (signature validity,
- * sub-chitt/master link, chain walk, revocation semantics, recipient-set check)
+ * sub-card/master link, chain walk, revocation semantics, recipient-set check)
  * without requiring real IPFS or Arbitrum infrastructure.
  *
  * All binary field values in test fixtures must be valid base64url strings,
@@ -17,15 +17,15 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { validateChitt } from '../src/index.js';
+import { validateCard } from '../src/index.js';
 import { walkPolicyCreationChain } from '../src/verify.js';
 import type {
-  ChittDocument,
-  ChittProvider,
+  CardDocument,
+  CardProvider,
   LogEntry,
   LogEntryWithCid,
   SignedMessageEnvelope,
-  SubChittRegistration,
+  SubCardRegistration,
 } from '../src/types.js';
 
 // ---------------------------------------------------------------------------
@@ -40,10 +40,10 @@ const RECIPIENT_POINTER_A = 'AAEC'; // valid base64url, used in recipients array
 const RECIPIENT_POINTER_B = 'BAED'; // valid base64url, used in recipients array
 
 // Registry addresses and CIDs are opaque routing strings for the mock provider.
-const SUB_CHITT_ADDR = 'sub-chitt-1';
-const MASTER_CHITT_ADDR = 'master-chitt-1';
+const SUB_CARD_ADDR = 'sub-card-1';
+const MASTER_CARD_ADDR = 'master-card-1';
 const POLICY_CID = 'policy-cid-0001';
-const PRESS_CHITT_POINTER = 'press-pointer-0001';
+const PRESS_CARD_POINTER = 'press-pointer-0001';
 const POLICY_CREATOR_POINTER = 'policy-creator-0001';
 const MASTER_LOG_HEAD = 'master-log-head-0001';
 const PRESS_LOG_HEAD = 'press-log-head-0001';
@@ -53,18 +53,18 @@ const POLICY_CREATOR_LOG_HEAD = 'policy-creator-log-head-0001';
 // Mock provider
 //
 // getAllLogEntries is implemented by walking the ipfs map following
-// prev_log_root links, exactly mirroring the real HttpChittProvider logic.
+// prev_log_root links, exactly mirroring the real HttpCardProvider logic.
 // Documents with an entry_type field are log entries; documents without are
-// the genesis ChittDocument at the root of the log.
+// the genesis CardDocument at the root of the log.
 // ---------------------------------------------------------------------------
 
 interface MockProviderData {
   ipfs: Record<string, unknown>;
   logHeads: Record<string, string | null>;
-  subChitts: Record<string, SubChittRegistration | null>;
+  subCards: Record<string, SubCardRegistration | null>;
 }
 
-function makeMockProvider(data: MockProviderData): ChittProvider {
+function makeMockProvider(data: MockProviderData): CardProvider {
   return {
     async fetchIPFS(cid: string) {
       if (!(cid in data.ipfs)) throw new Error(`IPFS: CID not found: ${cid}`);
@@ -73,12 +73,12 @@ function makeMockProvider(data: MockProviderData): ChittProvider {
     async getLogHead(addr: string) {
       return data.logHeads[addr] ?? null;
     },
-    async getSubChittRegistration(addr: string) {
-      return data.subChitts[addr] ?? null;
+    async getSubCardRegistration(addr: string) {
+      return data.subCards[addr] ?? null;
     },
     async getAllLogEntries(_addr: string, logHeadCid: string) {
       const entries: LogEntryWithCid[] = [];
-      let genesis: ChittDocument | null = null;
+      let genesis: CardDocument | null = null;
       let currentCid: string | null = logHeadCid;
       const fetchedAt = new Date();
 
@@ -89,7 +89,7 @@ function makeMockProvider(data: MockProviderData): ChittProvider {
           entries.push({ entry: doc as unknown as LogEntry, cid: currentCid });
           currentCid = (doc.prev_log_root as string | undefined | null) ?? null;
         } else {
-          genesis = doc as unknown as ChittDocument;
+          genesis = doc as unknown as CardDocument;
           break;
         }
       }
@@ -100,21 +100,21 @@ function makeMockProvider(data: MockProviderData): ChittProvider {
 }
 
 // ---------------------------------------------------------------------------
-// Shared chitt documents used in tests
+// Shared card documents used in tests
 // ---------------------------------------------------------------------------
 
-const MASTER_CHITT_DOC: ChittDocument = {
+const MASTER_CARD_DOC: CardDocument = {
   policy_id: POLICY_CID,
-  press_chitt: PRESS_CHITT_POINTER,
+  press_card: PRESS_CARD_POINTER,
   recipient_pubkey: 'AAEC',
   issued_at: '2026-01-01T00:00:00Z',
   offer_signature: 'AAEC',
   holder_signature: 'AAEC',
 };
 
-const POLICY_CHITT_DOC: ChittDocument = {
+const POLICY_CARD_DOC: CardDocument = {
   policy_id: 'root-meta-policy',
-  press_chitt: POLICY_CREATOR_POINTER,
+  press_card: POLICY_CREATOR_POINTER,
   recipient_pubkey: 'AAEC',
   issued_at: '2025-01-01T00:00:00Z',
   offer_signature: 'AAEC',
@@ -122,10 +122,10 @@ const POLICY_CHITT_DOC: ChittDocument = {
   field_definitions: [],
 };
 
-// Root chitts (press_chitt: null) represent the top of their respective chains.
-const ROOT_CHITT_DOC: ChittDocument = {
+// Root cards (press_card: null) represent the top of their respective chains.
+const ROOT_CARD_DOC: CardDocument = {
   policy_id: '',
-  press_chitt: '',
+  press_card: '',
   recipient_pubkey: 'AAEC',
   issued_at: '',
   offer_signature: 'AAEC',
@@ -135,19 +135,19 @@ const ROOT_CHITT_DOC: ChittDocument = {
 function baseProviderData(): MockProviderData {
   return {
     ipfs: {
-      [MASTER_LOG_HEAD]: MASTER_CHITT_DOC,
-      [POLICY_CID]: POLICY_CHITT_DOC,
-      [PRESS_LOG_HEAD]: { ...ROOT_CHITT_DOC, press_chitt: null },
-      [POLICY_CREATOR_LOG_HEAD]: { ...ROOT_CHITT_DOC, press_chitt: null },
+      [MASTER_LOG_HEAD]: MASTER_CARD_DOC,
+      [POLICY_CID]: POLICY_CARD_DOC,
+      [PRESS_LOG_HEAD]: { ...ROOT_CARD_DOC, press_card: null },
+      [POLICY_CREATOR_LOG_HEAD]: { ...ROOT_CARD_DOC, press_card: null },
     },
     logHeads: {
-      [MASTER_CHITT_ADDR]: MASTER_LOG_HEAD,
-      [PRESS_CHITT_POINTER]: PRESS_LOG_HEAD,
+      [MASTER_CARD_ADDR]: MASTER_LOG_HEAD,
+      [PRESS_CARD_POINTER]: PRESS_LOG_HEAD,
       [POLICY_CREATOR_POINTER]: POLICY_CREATOR_LOG_HEAD,
     },
-    subChitts: {
-      [SUB_CHITT_ADDR]: {
-        masterChittAddress: MASTER_CHITT_ADDR,
+    subCards: {
+      [SUB_CARD_ADDR]: {
+        masterCardAddress: MASTER_CARD_ADDR,
         registrationLogHeadCid: MASTER_LOG_HEAD,
       },
     },
@@ -172,7 +172,7 @@ const MOCK_ENVELOPE: SignedMessageEnvelope = {
   },
   signatures: [
     {
-      signer_chitt: SUB_CHITT_ADDR,
+      signer_card: SUB_CARD_ADDR,
       public_key: 'AAEC', // invalid size — signature will fail
       signature: 'AAEC',  // invalid size — signature will fail
     },
@@ -183,11 +183,11 @@ const MOCK_ENVELOPE: SignedMessageEnvelope = {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe('validateChitt — structural validation', () => {
+describe('validateCard — structural validation', () => {
   it('returns valid: false when signature is invalid (wrong key size)', async () => {
-    const result = await validateChitt(MOCK_ENVELOPE, {
+    const result = await validateCard(MOCK_ENVELOPE, {
       provider: makeMockProvider(baseProviderData()),
-      trustedRoots: [MASTER_CHITT_ADDR],
+      trustedRoots: [MASTER_CARD_ADDR],
     });
     expect(result.valid).toBe(false);
     expect(result.signatures).toHaveLength(1);
@@ -199,7 +199,7 @@ describe('validateChitt — structural validation', () => {
       payload: MOCK_ENVELOPE.payload,
       signatures: [],
     };
-    const result = await validateChitt(emptyEnvelope, {
+    const result = await validateCard(emptyEnvelope, {
       provider: makeMockProvider(baseProviderData()),
     });
     expect(result.valid).toBe(false);
@@ -211,7 +211,7 @@ describe('validateChitt — structural validation', () => {
       payload: { ...MOCK_ENVELOPE.payload, timestamp: 'not-a-date' },
       signatures: MOCK_ENVELOPE.signatures,
     };
-    const result = await validateChitt(badEnvelope, {
+    const result = await validateCard(badEnvelope, {
       provider: makeMockProvider(baseProviderData()),
     });
     expect(result.valid).toBe(false);
@@ -222,16 +222,16 @@ describe('validateChitt — structural validation', () => {
       payload: { ...MOCK_ENVELOPE.payload, timestamp: 'not-a-date' },
       signatures: MOCK_ENVELOPE.signatures,
     };
-    const result = await validateChitt(badEnvelope, {
+    const result = await validateCard(badEnvelope, {
       provider: makeMockProvider(baseProviderData()),
     });
     expect(result.chains).toBeNull();
   });
 });
 
-describe('validateChitt — link extraction', () => {
+describe('validateCard — link extraction', () => {
   it('extracts policy link as ipfs://<policy_id_cid>', async () => {
-    const result = await validateChitt(MOCK_ENVELOPE, {
+    const result = await validateCard(MOCK_ENVELOPE, {
       provider: makeMockProvider(baseProviderData()),
     });
     // With an invalid signature, links are null (chain walk skipped after stage 1 failure).
@@ -239,7 +239,7 @@ describe('validateChitt — link extraction', () => {
   });
 
   it('policy link format is ipfs:// when populated', async () => {
-    const result = await validateChitt(MOCK_ENVELOPE, {
+    const result = await validateCard(MOCK_ENVELOPE, {
       provider: makeMockProvider(baseProviderData()),
     });
     if (result.policy !== null) {
@@ -248,7 +248,7 @@ describe('validateChitt — link extraction', () => {
   });
 
   it('authorizer link format is ipfs:// when populated', async () => {
-    const result = await validateChitt(MOCK_ENVELOPE, {
+    const result = await validateCard(MOCK_ENVELOPE, {
       provider: makeMockProvider(baseProviderData()),
     });
     if (result.authorizer !== null) {
@@ -257,7 +257,7 @@ describe('validateChitt — link extraction', () => {
   });
 
   it('policyCreator link format is ipfs:// when populated', async () => {
-    const result = await validateChitt(MOCK_ENVELOPE, {
+    const result = await validateCard(MOCK_ENVELOPE, {
       provider: makeMockProvider(baseProviderData()),
     });
     if (result.policyCreator !== null) {
@@ -266,12 +266,12 @@ describe('validateChitt — link extraction', () => {
   });
 });
 
-describe('validateChitt — revocation semantics', () => {
+describe('validateCard — revocation semantics', () => {
   it('getAllLogEntries returns no entries and genesis for a genesis-only log', async () => {
     const provider = makeMockProvider(baseProviderData());
-    const { entries, genesis } = await provider.getAllLogEntries(MASTER_CHITT_ADDR, MASTER_LOG_HEAD);
+    const { entries, genesis } = await provider.getAllLogEntries(MASTER_CARD_ADDR, MASTER_LOG_HEAD);
     expect(entries).toHaveLength(0);
-    expect(genesis).toEqual(MASTER_CHITT_DOC);
+    expect(genesis).toEqual(MASTER_CARD_DOC);
   });
 
   it('getAllLogEntries returns log entries and genesis for a chained log', async () => {
@@ -284,16 +284,16 @@ describe('validateChitt — revocation semantics', () => {
       prev_log_root: MASTER_LOG_HEAD,
       revocation: { effective_date: '2026-06-01T00:00:00Z' },
       notify_holder: true,
-      intent_signature: { signer_chitt: 'x', public_key: 'AAEC', signature: 'AAEC' },
-      press_signature:  { signer_chitt: 'x', public_key: 'AAEC', signature: 'AAEC' },
+      intent_signature: { signer_card: 'x', public_key: 'AAEC', signature: 'AAEC' },
+      press_signature:  { signer_card: 'x', public_key: 'AAEC', signature: 'AAEC' },
     };
-    data.logHeads[MASTER_CHITT_ADDR] = REV_CID;
+    data.logHeads[MASTER_CARD_ADDR] = REV_CID;
     const provider = makeMockProvider(data);
-    const { entries, genesis } = await provider.getAllLogEntries(MASTER_CHITT_ADDR, REV_CID);
+    const { entries, genesis } = await provider.getAllLogEntries(MASTER_CARD_ADDR, REV_CID);
     expect(entries).toHaveLength(1);
     expect(entries[0]?.entry.code).toBe(700);
     expect(entries[0]?.cid).toBe(REV_CID);
-    expect(genesis).toEqual(MASTER_CHITT_DOC);
+    expect(genesis).toEqual(MASTER_CARD_DOC);
   });
 
   it('9xx revocation entry has correct code and effective_date', async () => {
@@ -306,49 +306,49 @@ describe('validateChitt — revocation semantics', () => {
       prev_log_root: MASTER_LOG_HEAD,
       revocation: { effective_date: '2026-04-01T00:00:00Z' },
       notify_holder: true,
-      intent_signature: { signer_chitt: 'x', public_key: 'AAEC', signature: 'AAEC' },
-      press_signature:  { signer_chitt: 'x', public_key: 'AAEC', signature: 'AAEC' },
+      intent_signature: { signer_card: 'x', public_key: 'AAEC', signature: 'AAEC' },
+      press_signature:  { signer_card: 'x', public_key: 'AAEC', signature: 'AAEC' },
     };
-    data.logHeads[MASTER_CHITT_ADDR] = REV_CID;
+    data.logHeads[MASTER_CARD_ADDR] = REV_CID;
     const provider = makeMockProvider(data);
-    const { entries } = await provider.getAllLogEntries(MASTER_CHITT_ADDR, REV_CID);
+    const { entries } = await provider.getAllLogEntries(MASTER_CARD_ADDR, REV_CID);
     expect(entries[0]?.entry.code).toBe(900);
     expect(entries[0]?.entry.revocation?.effective_date).toBe('2026-04-01T00:00:00Z');
   });
 });
 
-describe('validateChitt — recipient-set check', () => {
-  it('addressed_to_verifier = true when verifierChitt matches a recipient', async () => {
+describe('validateCard — recipient-set check', () => {
+  it('addressed_to_verifier = true when verifierCard matches a recipient', async () => {
     // addressed_to_verifier is computed before the signature check,
     // so it reflects the recipients list even when signature_valid = false.
-    const result = await validateChitt(MOCK_ENVELOPE, {
+    const result = await validateCard(MOCK_ENVELOPE, {
       provider: makeMockProvider(baseProviderData()),
-      verifierChitt: RECIPIENT_POINTER_A,
+      verifierCard: RECIPIENT_POINTER_A,
     });
     expect(result.signatures[0]?.addressed_to_verifier).toBe(true);
   });
 
-  it('addressed_to_verifier = false when verifierChitt is not in recipients', async () => {
-    const result = await validateChitt(MOCK_ENVELOPE, {
+  it('addressed_to_verifier = false when verifierCard is not in recipients', async () => {
+    const result = await validateCard(MOCK_ENVELOPE, {
       provider: makeMockProvider(baseProviderData()),
-      verifierChitt: 'ZZZZ', // not in recipients
+      verifierCard: 'ZZZZ', // not in recipients
     });
     expect(result.signatures[0]?.addressed_to_verifier).toBe(false);
   });
 
-  it('addressed_to_verifier = false when verifierChitt is not provided', async () => {
-    const result = await validateChitt(MOCK_ENVELOPE, {
+  it('addressed_to_verifier = false when verifierCard is not provided', async () => {
+    const result = await validateCard(MOCK_ENVELOPE, {
       provider: makeMockProvider(baseProviderData()),
     });
     expect(result.signatures[0]?.addressed_to_verifier).toBe(false);
   });
 });
 
-describe('validateChitt — provider errors', () => {
-  it('handles sub-chitt not found gracefully — returns valid: false', async () => {
+describe('validateCard — provider errors', () => {
+  it('handles sub-card not found gracefully — returns valid: false', async () => {
     const data = baseProviderData();
-    data.subChitts[SUB_CHITT_ADDR] = null;
-    const result = await validateChitt(MOCK_ENVELOPE, {
+    data.subCards[SUB_CARD_ADDR] = null;
+    const result = await validateCard(MOCK_ENVELOPE, {
       provider: makeMockProvider(data),
     });
     expect(result.valid).toBe(false);
@@ -357,38 +357,38 @@ describe('validateChitt — provider errors', () => {
   it('handles IPFS fetch failure gracefully — returns valid: false', async () => {
     const data = baseProviderData();
     delete data.ipfs[MASTER_LOG_HEAD];
-    const result = await validateChitt(MOCK_ENVELOPE, {
+    const result = await validateCard(MOCK_ENVELOPE, {
       provider: makeMockProvider(data),
     });
     expect(result.valid).toBe(false);
   });
 
   it('returns signatures array with length matching envelope signatures', async () => {
-    const result = await validateChitt(MOCK_ENVELOPE, {
+    const result = await validateCard(MOCK_ENVELOPE, {
       provider: makeMockProvider(baseProviderData()),
     });
     expect(result.signatures).toHaveLength(MOCK_ENVELOPE.signatures.length);
   });
 });
 
-describe('validateChitt — policy creation chains', () => {
+describe('validateCard — policy creation chains', () => {
   it('walkPolicyCreationChain returns one link for a genesis-only log', async () => {
     const provider = makeMockProvider(baseProviderData());
-    const chain = await walkPolicyCreationChain(MASTER_CHITT_ADDR, provider);
-    // MASTER_CHITT_DOC has press_chitt = PRESS_CHITT_POINTER, so chain continues
+    const chain = await walkPolicyCreationChain(MASTER_CARD_ADDR, provider);
+    // MASTER_CARD_DOC has press_card = PRESS_CARD_POINTER, so chain continues
     expect(chain.length).toBeGreaterThanOrEqual(1);
-    expect(chain[0]?.chittAddress).toBe(MASTER_CHITT_ADDR);
+    expect(chain[0]?.cardAddress).toBe(MASTER_CARD_ADDR);
     expect(chain[0]?.logHeadUrl).toBe(`ipfs://${MASTER_LOG_HEAD}`);
     expect(chain[0]?.updates).toHaveLength(0);
   });
 
-  it('walkPolicyCreationChain walks press_chitt links upward', async () => {
+  it('walkPolicyCreationChain walks press_card links upward', async () => {
     const provider = makeMockProvider(baseProviderData());
-    const chain = await walkPolicyCreationChain(MASTER_CHITT_ADDR, provider);
-    // MASTER_CHITT_ADDR → (press_chitt) → PRESS_CHITT_POINTER → (press_chitt: null) stops
+    const chain = await walkPolicyCreationChain(MASTER_CARD_ADDR, provider);
+    // MASTER_CARD_ADDR → (press_card) → PRESS_CARD_POINTER → (press_card: null) stops
     expect(chain).toHaveLength(2);
-    expect(chain[0]?.chittAddress).toBe(MASTER_CHITT_ADDR);
-    expect(chain[1]?.chittAddress).toBe(PRESS_CHITT_POINTER);
+    expect(chain[0]?.cardAddress).toBe(MASTER_CARD_ADDR);
+    expect(chain[1]?.cardAddress).toBe(PRESS_CARD_POINTER);
     expect(chain[1]?.logHeadUrl).toBe(`ipfs://${PRESS_LOG_HEAD}`);
   });
 
@@ -401,12 +401,12 @@ describe('validateChitt — policy creation chains', () => {
       entry_type: 'field_update',
       prev_log_root: MASTER_LOG_HEAD,
       field_updates: [{ field: 'status', value: 'active' }],
-      intent_signature: { signer_chitt: 'x', public_key: 'AAEC', signature: 'AAEC' },
-      press_signature:  { signer_chitt: 'x', public_key: 'AAEC', signature: 'AAEC' },
+      intent_signature: { signer_card: 'x', public_key: 'AAEC', signature: 'AAEC' },
+      press_signature:  { signer_card: 'x', public_key: 'AAEC', signature: 'AAEC' },
     };
-    data.logHeads[MASTER_CHITT_ADDR] = UPDATE_CID;
+    data.logHeads[MASTER_CARD_ADDR] = UPDATE_CID;
     const provider = makeMockProvider(data);
-    const chain = await walkPolicyCreationChain(MASTER_CHITT_ADDR, provider);
+    const chain = await walkPolicyCreationChain(MASTER_CARD_ADDR, provider);
     expect(chain[0]?.updates).toHaveLength(1);
     expect(chain[0]?.updates[0]?.entryType).toBe('field_update');
     expect(chain[0]?.updates[0]?.statusCode).toBeNull();
@@ -423,12 +423,12 @@ describe('validateChitt — policy creation chains', () => {
       entry_type: 'revocation',
       prev_log_root: MASTER_LOG_HEAD,
       revocation: { effective_date: '2026-06-01T00:00:00Z' },
-      intent_signature: { signer_chitt: 'x', public_key: 'AAEC', signature: 'AAEC' },
-      press_signature:  { signer_chitt: 'x', public_key: 'AAEC', signature: 'AAEC' },
+      intent_signature: { signer_card: 'x', public_key: 'AAEC', signature: 'AAEC' },
+      press_signature:  { signer_card: 'x', public_key: 'AAEC', signature: 'AAEC' },
     };
-    data.logHeads[MASTER_CHITT_ADDR] = REV_CID;
+    data.logHeads[MASTER_CARD_ADDR] = REV_CID;
     const provider = makeMockProvider(data);
-    const chain = await walkPolicyCreationChain(MASTER_CHITT_ADDR, provider);
+    const chain = await walkPolicyCreationChain(MASTER_CARD_ADDR, provider);
     expect(chain[0]?.updates[0]?.statusCode).toBe(800);
     expect(chain[0]?.updates[0]?.entryType).toBe('revocation');
     expect(chain[0]?.updates[0]?.version).toBe(3);
@@ -445,8 +445,8 @@ describe('validateChitt — policy creation chains', () => {
       entry_type: 'field_update',
       prev_log_root: MASTER_LOG_HEAD,
       field_updates: [{ field: 'name', value: 'v2' }],
-      intent_signature: { signer_chitt: 'x', public_key: 'AAEC', signature: 'AAEC' },
-      press_signature:  { signer_chitt: 'x', public_key: 'AAEC', signature: 'AAEC' },
+      intent_signature: { signer_card: 'x', public_key: 'AAEC', signature: 'AAEC' },
+      press_signature:  { signer_card: 'x', public_key: 'AAEC', signature: 'AAEC' },
     };
     data.ipfs[ENTRY_CID_2] = {
       version: 3,
@@ -454,12 +454,12 @@ describe('validateChitt — policy creation chains', () => {
       entry_type: 'revocation',
       prev_log_root: ENTRY_CID_1,  // v3 points back to v2
       revocation: { effective_date: '2027-01-01T00:00:00Z' },
-      intent_signature: { signer_chitt: 'x', public_key: 'AAEC', signature: 'AAEC' },
-      press_signature:  { signer_chitt: 'x', public_key: 'AAEC', signature: 'AAEC' },
+      intent_signature: { signer_card: 'x', public_key: 'AAEC', signature: 'AAEC' },
+      press_signature:  { signer_card: 'x', public_key: 'AAEC', signature: 'AAEC' },
     };
-    data.logHeads[MASTER_CHITT_ADDR] = ENTRY_CID_2;  // head is v3
+    data.logHeads[MASTER_CARD_ADDR] = ENTRY_CID_2;  // head is v3
     const provider = makeMockProvider(data);
-    const chain = await walkPolicyCreationChain(MASTER_CHITT_ADDR, provider);
+    const chain = await walkPolicyCreationChain(MASTER_CARD_ADDR, provider);
     const updates = chain[0]?.updates ?? [];
     expect(updates).toHaveLength(2);
     // Newest-first: v3 first, then v2
@@ -469,16 +469,16 @@ describe('validateChitt — policy creation chains', () => {
     expect(updates[1]?.entryType).toBe('field_update');
   });
 
-  it('validateChitt returns chains: null when no signature resolves master address', async () => {
-    // With invalid signature, masterChittAddress is null → chains is null
-    const result = await validateChitt(MOCK_ENVELOPE, {
+  it('validateCard returns chains: null when no signature resolves master address', async () => {
+    // With invalid signature, masterCardAddress is null → chains is null
+    const result = await validateCard(MOCK_ENVELOPE, {
       provider: makeMockProvider(baseProviderData()),
     });
     expect(result.chains).toBeNull();
   });
 });
 
-describe('validateChitt — revocation module unit tests', () => {
+describe('validateCard — revocation module unit tests', () => {
   it('findGoverningRevocation returns null for no entries', async () => {
     const { findGoverningRevocation } = await import('../src/revocation.js');
     expect(findGoverningRevocation([])).toBeNull();
@@ -493,8 +493,8 @@ describe('validateChitt — revocation module unit tests', () => {
         entry_type: 'revocation',
         prev_log_root: 'x',
         revocation: { effective_date: '2026-06-01T00:00:00Z' },
-        intent_signature: { signer_chitt: 'x', public_key: 'AAEC', signature: 'AAEC' },
-        press_signature:  { signer_chitt: 'x', public_key: 'AAEC', signature: 'AAEC' },
+        intent_signature: { signer_card: 'x', public_key: 'AAEC', signature: 'AAEC' },
+        press_signature:  { signer_card: 'x', public_key: 'AAEC', signature: 'AAEC' },
       },
       {
         version: 3,
@@ -502,8 +502,8 @@ describe('validateChitt — revocation module unit tests', () => {
         entry_type: 'revocation',
         prev_log_root: 'x',
         revocation: { effective_date: '2026-01-01T00:00:00Z' },
-        intent_signature: { signer_chitt: 'x', public_key: 'AAEC', signature: 'AAEC' },
-        press_signature:  { signer_chitt: 'x', public_key: 'AAEC', signature: 'AAEC' },
+        intent_signature: { signer_card: 'x', public_key: 'AAEC', signature: 'AAEC' },
+        press_signature:  { signer_card: 'x', public_key: 'AAEC', signature: 'AAEC' },
       },
     ];
     const gov = findGoverningRevocation(entries);

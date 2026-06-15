@@ -1,15 +1,15 @@
 /**
- * chitt-validator
+ * card-validator
  *
- * Validates signed message envelopes (§6) per the Chitt Protocol (v0.3).
+ * Validates signed message envelopes (§6) per the Card Protocol (v0.3).
  *
  * @example
  * ```ts
- * import { validateChitt } from 'chitt-validator';
+ * import { validateCard } from 'card-validator';
  *
- * const result = await validateChitt(envelope, {
+ * const result = await validateCard(envelope, {
  *   trustedRoots: ['<authorizer-registry-address>'],
- *   verifierChitt: '<my-chitt-pointer>',
+ *   verifierCard: '<my-card-pointer>',
  *   ipfsGateway: 'https://ipfs.io',
  *   registryContractAddress: '<deployed-contract-address>',
  * });
@@ -23,12 +23,12 @@
  */
 
 import type {
-  ChittProvider,
+  CardProvider,
   SignedMessageEnvelope,
   ValidationOptions,
   ValidationResult,
 } from './types.js';
-import { HttpChittProvider } from './provider.js';
+import { HttpCardProvider } from './provider.js';
 import {
   verifySignatureEntry,
   resolvePointerToIpfsUrl,
@@ -39,23 +39,23 @@ export type {
   SignedMessageEnvelope,
   MessagePayload,
   SignatureEntry,
-  ChittDocument,
+  CardDocument,
   LogEntry,
   LogEntryWithCid,
   RevocationEntry,
-  SubChittRegistration,
+  SubCardRegistration,
   SignatureResult,
   ChainUpdate,
   PolicyChainLink,
   ValidationChains,
   ValidationResult,
   ValidationOptions,
-  ChittProvider,
+  CardProvider,
 } from './types.js';
 
 export { canonicalize, base64urlDecode, base64urlEncode, toHex, fromHex } from './serialization.js';
 
-export { HttpChittProvider } from './provider.js';
+export { HttpCardProvider } from './provider.js';
 
 export { walkPolicyCreationChain } from './verify.js';
 
@@ -64,35 +64,35 @@ export { walkPolicyCreationChain } from './verify.js';
  *
  * Performs per-signature:
  *   1. ML-DSA-44 signature verification over the canonical CBOR payload
- *   2. Sub-chitt → master chitt resolution (Arbitrum One)
+ *   2. Sub-card → master card resolution (Arbitrum One)
  *   3. Historical chain walk (IPFS)
  *   4. Current revocation check (Arbitrum One + IPFS log)
  *   5. Recipient-set check
  *
  * Returns a `valid` boolean, per-signature details, ipfs:// URLs for
  * the policy, press, and policy creator, and three policy creation chains
- * with the full update history of every chitt encountered.
+ * with the full update history of every card encountered.
  *
- * **Note:** On-chain reads require the Chitt registry contract to be deployed.
+ * **Note:** On-chain reads require the Card registry contract to be deployed.
  * Until then, pass a custom `provider` in options for testing, or expect errors
- * from the default provider's getLogHead / getSubChittRegistration methods.
+ * from the default provider's getLogHead / getSubCardRegistration methods.
  */
-export async function validateChitt(
+export async function validateCard(
   envelope: SignedMessageEnvelope,
   options: ValidationOptions = {},
 ): Promise<ValidationResult> {
   const {
     trustedRoots = [],
-    verifierChitt,
+    verifierCard,
     freshnessWindowSeconds = 300,
     ipfsGateway,
     arbitrumRpcUrl,
     registryContractAddress,
   } = options;
 
-  const provider: ChittProvider =
+  const provider: CardProvider =
     options.provider ??
-    new HttpChittProvider({ ipfsGateway, arbitrumRpcUrl, registryContractAddress });
+    new HttpCardProvider({ ipfsGateway, arbitrumRpcUrl, registryContractAddress });
 
   const signingTimeMs = Date.parse(envelope.payload.timestamp);
   if (isNaN(signingTimeMs)) {
@@ -112,7 +112,7 @@ export async function validateChitt(
       verifySignatureEntry(entry, {
         provider,
         trustedRoots,
-        verifierChitt,
+        verifierCard,
         freshnessWindowSeconds,
         payload: envelope.payload,
         signingTimeMs,
@@ -133,13 +133,13 @@ export async function validateChitt(
   // Collect links from the first successfully resolved signature.
   // All signatures on a well-formed envelope should resolve to the same policy.
   const firstResolved = outputs.find(
-    o => o.masterChittAddress !== null,
+    o => o.masterCardAddress !== null,
   );
 
   const policyCid = firstResolved?.policyCid ?? null;
-  const pressPointer = firstResolved?.pressChittPointer ?? null;
+  const pressPointer = firstResolved?.pressCardPointer ?? null;
   const policyCreatorPointer = firstResolved?.policyCreatorPointer ?? null;
-  const masterChittAddress = firstResolved?.masterChittAddress ?? null;
+  const masterCardAddress = firstResolved?.masterCardAddress ?? null;
 
   // Resolve mutable pointers to ipfs:// URLs and walk the three policy creation chains.
   const [authorizer, policyCreator, chains] = await Promise.all([
@@ -147,7 +147,7 @@ export async function validateChitt(
     policyCreatorPointer
       ? resolvePointerToIpfsUrl(policyCreatorPointer, provider)
       : Promise.resolve(null),
-    resolveValidationChains(masterChittAddress, pressPointer, policyCreatorPointer, provider).catch(
+    resolveValidationChains(masterCardAddress, pressPointer, policyCreatorPointer, provider).catch(
       () => null,
     ),
   ]);

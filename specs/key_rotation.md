@@ -4,15 +4,15 @@
 **Date:** 2026-05-25
 **Status:** Draft
 
-> **Terminology note.** This spec uses "mark" to refer to what the rest of the codebase currently calls a "chitt." The rename is in progress; treat the terms as interchangeable.
+> **Terminology note.** This spec now uses "card" as the canonical term per the Naming Convention.
 
 ---
 
 ## Overview
 
-Key rotation is the process of replacing a cryptographic key in active use with a newly generated key, while preserving the continuity of the identity or credential that key represents. In the mark protocol, there are five distinct categories of key material — each with different custodians, threat models, and rotation procedures.
+Key rotation is the process of replacing a cryptographic key in active use with a newly generated key, while preserving the continuity of the identity or credential that key represents. In the card protocol, there are five distinct categories of key material — each with different custodians, threat models, and rotation procedures.
 
-This spec defines the rotation flows for each category, the on-log artifacts those flows produce, and the invariants verifiers depend on. It is a companion to `specs/submarks.md` (per-installation mark keys) and `chitt_protocol_spec.md §3` (keychain setup and YubiKey recovery).
+This spec defines the rotation flows for each category, the on-log artifacts those flows produce, and the invariants verifiers depend on. It is a companion to `specs/subcards.md` (per-installation card keys) and `card_protocol_spec.md §3` (keychain setup and YubiKey recovery).
 
 ---
 
@@ -20,118 +20,118 @@ This spec defines the rotation flows for each category, the on-log artifacts tho
 
 | Category | Custodian | Storage | Rotation trigger |
 |---|---|---|---|
-| Master mark key | Holder | Encrypted keyring blob on IPFS | Periodic hygiene; key compromise |
-| Device sub-mark key | Holder | Secure device storage (Secure Enclave / TPM) | Device loss; device replacement; routine rotation |
-| Per-installation mark key | App installation | Hardware keystore, scoped to app signing identity | App uninstall; device migration; re-registration |
-| Press sub-mark key | Press operator | Operator-managed; hardware-backed recommended | Periodic rotation; operator compromise |
+| Master card key | Holder | Encrypted keyring blob on IPFS | Periodic hygiene; key compromise |
+| Sub-card key | Holder / App | Secure device storage (Secure Enclave / TEE / TPM), scoped to app signing identity | Device loss; device replacement; app uninstall; migration; routine rotation |
+| Press sub-card key | Press operator | Operator-managed; hardware-backed recommended | Periodic rotation; operator compromise |
 | Auditor ML-KEM key | Auditor | Auditor-managed | Periodic rotation; key compromise |
 
 ---
 
-## 1. Device Sub-Mark Key Rotation
+## 1. Sub-Card Key Rotation
 
 ### 1.1 Scope and Motivation
 
-Each device the holder uses holds a sub-mark private key in secure device storage (Secure Enclave on Apple, TPM on others). This key handles all routine signing operations. The master mark key is never used for routine operations; it is cold except when creating or revoking sub-marks.
+Sub-cards are device-bound, app-specific credentials. Each app on each device holds a sub-card private key in hardware-backed secure storage (Secure Enclave on iOS, StrongBox / TEE-backed Keystore on Android), scoped to the app's signing identity. The wallet is itself an app and holds its own sub-cards for routine operations (message signing, authentication, etc.). This key handles all routine signing operations for that app+device combination. The master card key (primary card key) is never used for routine operations; it is cold except when authorizing new sub-card creation.
 
-Sub-mark keys are rotated when:
+Sub-card keys are rotated when:
 
 - A device is lost or stolen (emergency rotation)
 - A device is intentionally replaced or wiped
+- An app is uninstalled and reinstalled
 - A holder performs routine credential hygiene
 
 ### 1.2 Planned Rotation Flow
 
-The holder, acting from any device with an active sub-mark, initiates rotation:
+The holder, acting from any device with an active sub-card (or from the wallet using the primary card key), initiates rotation:
 
-1. **Generate new sub-mark key.** On the target device (the device that will hold the new sub-mark), generate a fresh ML-DSA-44 keypair in secure device storage.
-2. **Register new sub-mark.** Using the master mark key (fetched from the keyring by the wallet client), issue a new sub-mark registration: a signed statement from the master key attesting the new sub-mark public key and the device identifier. Append this registration to the keyring blob and upload the new blob to IPFS.
-3. **Revoke old sub-mark.** Using the master key or any active sub-mark key, submit a revocation intent for the old sub-mark with code **801** (voluntary surrender) and `notify_holder: false`, since the holder is the initiator. The press processes the revocation and appends the log entry to the old sub-mark's append-only log.
-4. **Update UMBRAL re-encryption keys.** The message server generates new proxy re-encryption keys for the new sub-mark using UMBRAL. The old sub-mark's queue is flushed; the message server stops accepting delivery to the old sub-mark.
+1. **Generate new sub-card key.** On the target device, generate a fresh ML-DSA-44 keypair in hardware-backed secure storage. The private key is scoped to the requesting app's signing identity and is non-exportable.
+2. **Request sub-card authorization.** The app constructs a `SubCardDocument` (see `protocol-objects.md §16`), signs it with the app's card key, and submits it to the wallet. The wallet validates the app card chain to the governance root, presents the capability whitelist to the user, and countersigns with the primary card key. The completed `SubCardDocument` is posted to IPFS and registered on-chain.
+3. **Revoke old sub-card.** Using the primary card key or any active sub-card key, submit a revocation intent for the old sub-card with code **801** (voluntary surrender) and `notify_holder: false`, since the holder is the initiator. The press processes the revocation and appends the log entry to the old sub-card's append-only log.
+4. **Update UMBRAL re-encryption keys.** The message server generates new proxy re-encryption keys for the new sub-card using UMBRAL. The old sub-card's queue is flushed; the message server stops accepting delivery to the old sub-card.
 
-**Atomicity note.** Steps 2 and 3 are not atomic. During the window between registration and revocation, both the old and new sub-mark keys are valid. This window should be minimized. Verifiers should accept signatures from either sub-mark during this window; signatures from the revoked sub-mark are valid for statements whose timestamps precede the revocation's `effective_date`.
+**Atomicity note.** Steps 2 and 3 are not atomic. During the window between registration and revocation, both the old and new sub-card keys are valid. This window should be minimized. Verifiers should accept signatures from either sub-card during this window; signatures from the revoked sub-card are valid for statements whose timestamps precede the revocation's `effective_date`.
 
 ### 1.3 Emergency Rotation (Device Loss or Compromise)
 
-When a device is lost or stolen, the holder has no access to the sub-mark key on the lost device. Emergency rotation requires only the master mark key:
+When a device is lost or stolen, the holder has no access to the sub-card key on the lost device. Emergency rotation requires only the primary card key:
 
 1. Using any surviving device (or a recovery device after YubiKey recovery), fetch and decrypt the keyring blob from IPFS.
-2. Using the master mark key, submit a revocation intent for the lost device's sub-mark with code **811** (device sub-mark lost or stolen, this mark only). Use `effective_date: <now>` to immediately invalidate the sub-mark.
-3. Optionally: generate a replacement sub-mark on the surviving/recovery device as in the planned flow, steps 1–4 above.
+2. Using the primary card key, submit a revocation intent for the lost device's sub-card with code **811** (sub-card lost or stolen, this card only). Use `effective_date: <now>` to immediately invalidate the sub-card.
+3. Optionally: generate a replacement sub-card on the surviving/recovery device as in the planned flow, steps 1–4 above.
 
-**If the holder has no surviving active device** (both the device and passkey access are gone simultaneously), the YubiKey recovery flow (`chitt_protocol_spec.md §3`) is required first to recover keyring access before sub-mark rotation can proceed.
+**If the holder has no surviving active device** (both the device and passkey access are gone simultaneously), the YubiKey recovery flow (`card_protocol_spec.md §3`) is required first to recover keyring access before sub-card rotation can proceed.
 
 ### 1.4 Acceptance Criteria
 
-- [ ] A sub-mark revoked with code 811 and `effective_date: now` is rejected by verifiers for statements whose timestamps are at or after the `effective_date`.
-- [ ] Statements signed by the sub-mark before the `effective_date` remain verifiable.
-- [ ] After master key-based sub-mark revocation, the message server stops queuing inbound messages to the revoked sub-mark within one delivery cycle.
-- [ ] The wallet client prevents routine use of the master mark key; sub-mark key operations on active devices do not require decrypting the keyring blob.
+- [ ] A sub-card revoked with code 811 and `effective_date: now` is rejected by verifiers for statements whose timestamps are at or after the `effective_date`.
+- [ ] Statements signed by the sub-card before the `effective_date` remain verifiable.
+- [ ] After primary-card-key-based sub-card revocation, the message server stops queuing inbound messages to the revoked sub-card within one delivery cycle.
+- [ ] The wallet client prevents routine use of the primary card key; sub-card key operations on active devices do not require decrypting the keyring blob.
 
 ---
 
-## 2. Per-Installation Mark Key Rotation
+## 2. Per-Installation Card Key Rotation
 
-Per-installation mark keys are sub-marks delegated from the holder's wallet to a specific app installation. They are hardware-bound to the app's signing identity and cannot be exported.
+Per-installation card keys are sub-cards delegated from the holder's wallet to a specific app installation. They are hardware-bound to the app's signing identity and cannot be exported.
 
-See `specs/submarks.md §Sub-Mark Key Management` for non-exportability guarantees and the approved keystore library requirement.
+See `specs/subcards.md §Sub-Card Key Management` for non-exportability guarantees and the approved keystore library requirement.
 
 ### 2.1 Normal Rotation (Reinstallation or Migration)
 
 When an app is uninstalled and reinstalled, or installed on a new device:
 
-1. The app's old per-installation mark key is permanently lost (hardware-bound, cannot be backed up).
-2. The app generates a new per-installation mark at first launch on the new installation.
-3. The app initiates the sub-mark request flow (`specs/submarks.md §Sub-Mark Request Flow`) from the beginning.
+1. The app's old per-installation card key is permanently lost (hardware-bound, cannot be backed up).
+2. The app generates a new per-installation card at first launch on the new installation.
+3. The app initiates the sub-card request flow (`specs/subcards.md §Sub-Card Request Flow`) from the beginning.
 4. The holder's wallet presents the consent flow again for the new installation.
-5. On approval, the new sub-mark is issued. The new sub-mark is a distinct mark from the old one; it has its own registry entry and log.
-6. The holder's wallet submits an 8xx revocation for the old sub-mark, code **811** (installation lost or uninstalled). The wallet should perform this automatically on migration — see `specs/submarks.md §Sub-Mark Revocation`.
+5. On approval, the new sub-card is issued. The new sub-card is a distinct card from the old one; it has its own registry entry and log.
+6. The holder's wallet submits an 8xx revocation for the old sub-card, code **811** (installation lost or uninstalled). The wallet should perform this automatically on migration — see `specs/subcards.md §Sub-Card Revocation`.
 
 ### 2.2 No In-Place Key Rotation
 
-Per-installation marks cannot be rotated in place. Because the private key is hardware-bound and non-exportable, there is no path to transfer signing authority from one installation mark key to another within the same sub-mark record. The rotation mechanism is always: revoke old sub-mark → re-run sub-mark request flow → issue new sub-mark.
+Per-installation cards cannot be rotated in place. Because the private key is hardware-bound and non-exportable, there is no path to transfer signing authority from one installation card key to another within the same sub-card record. The rotation mechanism is always: revoke old sub-card → re-run sub-card request flow → issue new sub-card.
 
 This is a deliberate consequence of the hardware binding invariant: if in-place rotation were permitted, it would require the app to submit a new public key without proving hardware custody of the new key at the moment of rotation.
 
 ### 2.3 Acceptance Criteria
 
-- [ ] An app that has been uninstalled and reinstalled must complete the full sub-mark request flow before signing statements with the new installation's key.
-- [ ] The wallet automatically revokes stale per-installation sub-marks when it issues a replacement sub-mark for the same app identity on a new installation.
-- [ ] A verifier who encounters a statement signed by a revoked per-installation sub-mark can determine the revocation's effective date and decline to accept statements timestamped at or after it.
+- [ ] An app that has been uninstalled and reinstalled must complete the full sub-card request flow before signing statements with the new installation's key.
+- [ ] The wallet automatically revokes stale per-installation sub-cards when it issues a replacement sub-card for the same app identity on a new installation.
+- [ ] A verifier who encounters a statement signed by a revoked per-installation sub-card can determine the revocation's effective date and decline to accept statements timestamped at or after it.
 
 ---
 
-## 3. Master Mark Key Rotation
+## 3. Master Card Key Rotation
 
 ### 3.1 Motivation and Constraints
 
-The master mark key's public key is recorded as `recipient_pubkey` in each mark the holder holds. `recipient_pubkey` is a protocol-required field that **cannot be modified by any update after issuance**, regardless of the mark's update policy. This immutability is a foundational trust property: verifiers need a stable identity anchor; a mutable public key would allow silent substitution attacks.
+The master card key's public key is recorded as `recipient_pubkey` in each card the holder holds. `recipient_pubkey` is a protocol-required field that **cannot be modified by any update after issuance**, regardless of the card's update policy. This immutability is a foundational trust property: verifiers need a stable identity anchor; a mutable public key would allow silent substitution attacks.
 
-Master key rotation therefore cannot update existing marks in place. Instead, it uses a **linked-successor** pattern: a new mark is issued with the new public key, the old mark posts a link to the successor, and the old mark is subsequently revoked.
+Master key rotation therefore cannot update existing cards in place. Instead, it uses a **linked-successor** pattern: a new card is issued with the new public key, the old card posts a link to the successor, and the old card is subsequently revoked.
 
 ### 3.2 The Linked-Successor Pattern
 
-The protocol supports a built-in `successor` field on all marks. Unlike user-defined fields (which are defined in the mark's governing policy), `successor` is a protocol-level field whose semantics are understood by all verifiers:
+The protocol supports a built-in `successor` field on all cards. Unlike user-defined fields (which are defined in the card's governing policy), `successor` is a protocol-level field whose semantics are understood by all verifiers:
 
 | Field | Type | Update policy |
 |---|---|---|
-| `successor` | `mark-pointer` | `{ "is_holder": true }` |
+| `successor` | `card-pointer` | `{ "is_holder": true }` |
 
-A mark with a `successor` pointer is still considered valid until it receives an explicit 8xx revocation. The successor link is informational and advisory; the revocation is what changes the active status. Verifiers who encounter a revoked mark with a `successor` pointer should:
+A card with a `successor` pointer is still considered valid until it receives an explicit 8xx revocation. The successor link is informational and advisory; the revocation is what changes the active status. Verifiers who encounter a revoked card with a `successor` pointer should:
 
-1. Follow the pointer to the successor mark.
+1. Follow the pointer to the successor card.
 2. Confirm the successor's `recipient_pubkey` belongs to the same real-world entity (via the holder's own signed rotation statement — see §3.3).
-3. Treat the successor as the canonical mark for that holder going forward.
+3. Treat the successor as the canonical card for that holder going forward.
 
 **The `successor` field is appended with a 1xx log entry.** Code **100** (linked successor — planned key rotation) or code **101** (linked successor — emergency, prior key potentially compromised).
 
 ### 3.3 Planned Master Key Rotation Flow
 
-**Prerequisites:** The holder has access to their master mark key (keyring is decryptable) and at least one active device sub-mark.
+**Prerequisites:** The holder has access to their master card key (keyring is decryptable) and at least one active device sub-card.
 
 1. **Generate new master keypair.** The wallet generates a fresh ML-DSA-44 keypair for the new master key. The new private key is stored in the keyring blob.
 
-2. **Request new marks.** For each mark the holder holds, initiate the full issuance flow to receive a new mark with the new public key from the relevant press. The new marks are independent mark registry entries.
+2. **Request new cards.** For each card the holder holds, initiate the full issuance flow to receive a new card with the new public key from the relevant press. The new cards are independent card registry entries.
 
 3. **Produce a rotation statement.** The holder signs a **key rotation statement** with both the old master key and the new master key:
 
@@ -151,40 +151,86 @@ A mark with a `successor` pointer is still considered valid until it receives an
 
    This dual-signed statement is stored on IPFS. Its CID is the rotation evidence that verifiers can check to confirm the successor relationship was established by the same entity.
 
-4. **Post successor links.** For each old mark, submit a 1xx (code 100) update intent:
+4. **Post successor links.** For each old card, submit a 1xx (code 100) update intent:
    - `code: 100`
-   - `field_updates: [{ "field": "successor", "value": "<new mark mutable pointer>" }]`
+   - `field_updates: [{ "field": "successor", "value": "<new card mutable pointer>" }]`
    - Include the rotation statement CID in the update's `updater_message` field.
-   - Sign with the old master key (or an active sub-mark, depending on the update policy).
+   - Sign with the old master key (or an active sub-card, depending on the update policy).
 
-5. **Revoke old marks.** After all successor links are posted, revoke each old mark with code **801** (voluntary surrender), with an `effective_date` set to the current time.
+5. **Revoke old cards.** After all successor links are posted, revoke each old card with code **801** (voluntary surrender), with an `effective_date` set to the current time.
 
 6. **Update keyring.** Re-encrypt the keyring blob with the new master key added and the old master key flagged as retired. Upload to IPFS. Update backup registration if using YubiKey recovery.
 
-7. **Re-register sub-marks.** Existing device sub-marks are registered to the old master key. Issue new sub-marks from the new master key for each active device. Revoke the old sub-marks.
+7. **Re-register sub-cards.** Existing device sub-cards are registered to the old master key. Issue new sub-cards from the new master key for each active device. Revoke the old sub-cards.
 
-**Ordering note.** Steps 3–5 (successor links) should be completed before step 5 (revocations) to ensure verifiers can follow the successor chain without encountering a revoked mark with no forward pointer.
+**Ordering note.** Steps 3–5 (successor links) should be completed before step 5 (revocations) to ensure verifiers can follow the successor chain without encountering a revoked card with no forward pointer.
 
 ### 3.4 Emergency Master Key Rotation (Key Compromised)
 
 If the master key is believed to be compromised:
 
-1. Use any active device sub-mark (if the device is still secure) or YubiKey recovery to access the keyring.
-2. Immediately revoke all marks with code **810** (signing key compromised). Set `effective_date: <now>` on each revocation. This invalidates all statements signed after `effective_date`.
+1. Use any active device sub-card (if the device is still secure) or YubiKey recovery to access the keyring.
+2. Immediately revoke all cards with code **810** (signing key compromised). Set `effective_date: <now>` on each revocation. This invalidates all statements signed after `effective_date`.
 3. Proceed with the planned rotation flow (§3.3), but use code **101** (linked successor — emergency) for the `successor` field updates and record the compromise in the rotation statement.
-4. Issue a loud revocation 9xx (code **910**: full wallet compromise suspected) only if there is evidence that the compromise extends beyond the master key to the full wallet, including device sub-marks.
+4. Issue a loud revocation 9xx (code **910**: full wallet compromise suspected) only if there is evidence that the compromise extends beyond the master key to the full wallet, including device sub-cards.
 
-**If a device is also compromised:** Treat the device sub-marks as compromised. Revoke all device sub-marks with code 811 immediately. If recovery requires YubiKey, complete YubiKey recovery first, then proceed with master key rotation.
+**If a device is also compromised:** Treat the device sub-cards as compromised. Revoke all device sub-cards with code 811 immediately. If recovery requires YubiKey, complete YubiKey recovery first, then proceed with master key rotation.
 
 **Statement validity after key compromise.** Statements signed with a compromised key before the revocation's `effective_date` are provisionally valid but should be treated with lower trust by relying parties — the rotation statement's `rotation_code: 101` signals that the prior period's signatures may be at risk. Relying parties with high-stakes decisions may choose to require re-attestation under the new key.
 
-### 3.5 Acceptance Criteria
+### 3.5 Issuer-Initiated Card Recovery Rotation
 
-- [ ] A mark with a `successor` pointer and a subsequent 8xx revocation is recognized by verifiers as superseded; verifiers follow the pointer to the successor mark.
+**Motivation.** A holder who has lost access to both their device sub-card keys and their keyring passkey (and has no surviving YubiKey backup) cannot self-recover via any path in this spec. They must contact the issuer of each card they hold and request a replacement. This section defines the protocol by which an issuer may initiate a key rotation on behalf of a holder who has lost key access.
+
+**Risk model.** Issuer-initiated recovery grants the issuer momentary power to redirect a holder's credential to a new key — a key that could, in a malicious scenario, be controlled by the issuer rather than the holder. The protocol mitigates this risk with three safeguards:
+
+1. A **72-hour pending window** before the rotation takes effect, during which the holder can cancel.
+2. A **mandatory notification message** sent by the press to the holder's card at the start of the window.
+3. An **auditable log entry** (code 102) posted immediately on the old card, visible to any party monitoring the card's log.
+
+**Prerequisites.** The issuer must satisfy `{ "is_issuer": true }` for the target card (i.e., the target card was issued by a press operating under a policy authorized by this issuer). The holder must have established contact with the issuer via an out-of-band channel, and the issuer must apply whatever identity-verification procedure their policy requires.
+
+**Flow.**
+
+1. **Holder contacts issuer.** The holder contacts the issuer out-of-band (email, phone, in-person) to request a recovery rotation. The issuer verifies the holder's identity per their policy.
+
+2. **Issuer issues a replacement card.** The issuer creates a new card for the holder under the same (or equivalent) policy, with the holder's new public key generated during the recovery session.
+
+3. **Issuer submits a code-102 recovery rotation request to the press.** The intent contains:
+   - `code: 102`
+   - `field_updates: [{ "field": "successor", "value": "<new card mutable pointer>" }]`
+   - `pending_until: <ISO 8601 — exactly 72 hours from the submission timestamp>`
+
+4. **Press validates and posts the pending entry.** The press:
+   - Confirms the issuer satisfies `{ "is_issuer": true }` for the target card.
+   - Posts a code-102 log entry on the old card containing the proposed `successor` value and `pending_until`. The rotation is **not yet effective**.
+   - **Immediately sends a `recovery_rotation_notification` message** to the holder's card via the messaging protocol. The message must include: the issuer's card pointer, the proposed successor card pointer, the `pending_until` deadline, and the CID of the pending code-102 log entry (so the holder can reference it in a cancellation).
+
+5. **72-hour pending window.** During this window:
+   - Verifiers who read the old card's log see the code-102 entry but treat the `successor` value as pending and not effective. The old card is still considered active with no successor.
+   - The holder may cancel by submitting a **code-103 log entry** (recovery rotation cancelled) to any approved press, signed by any holder-authorized key (master or active sub-card). The code-103 entry must reference the pending code-102 entry's log CID. A successful cancellation permanently nullifies the pending rotation.
+
+6. **After 72 hours without cancellation.** The rotation becomes effective: verifiers treat the code-102 `successor` pointer as equivalent to a code-100 entry. The old card may subsequently be revoked by the issuer with an 8xx or 9xx entry.
+
+7. **Optional holder co-signature.** The holder, now operating with their new key, may sign a `key_rotation_statement` (§8.3) with the new key to provide a holder-side continuity attestation. Recommended but not required for the rotation to be valid.
+
+**Notification delivery note.** If the holder has truly lost all key access, they cannot actively receive messaging protocol messages. The notification therefore serves primarily as a disclosure to auditors, verifying parties, and monitoring services watching the card's log. Monitoring services should alert the holder via out-of-band channels when they detect a pending code-102 entry on a card they watch.
+
+**Cancellation by self-recovery.** If the holder independently recovers key access (e.g., locates their YubiKey) during the 72-hour window, they should immediately post a code-103 cancellation. This prevents an issuer from using the recovery path to seize a card from a holder who has not actually lost access.
+
+---
+
+### 3.6 Acceptance Criteria
+
+- [ ] A card with a `successor` pointer and a subsequent 8xx revocation is recognized by verifiers as superseded; verifiers follow the pointer to the successor card.
 - [ ] A dual-signed rotation statement with both old and new master key signatures is verifiable by any party with access to IPFS.
 - [ ] After emergency rotation (code 810), statements signed by the old key before `effective_date` are treated as provisionally valid; statements at or after `effective_date` are rejected.
 - [ ] The wallet prevents re-use of a retired master key after rotation completes.
-- [ ] A verifier who encounters a mark with `successor` but no revocation entry treats the mark as active and the successor link as advisory only.
+- [ ] A verifier who encounters a card with `successor` but no revocation entry treats the card as active and the successor link as advisory only.
+- [ ] A code-102 entry's `successor` pointer is not treated as effective until `pending_until` is reached and no code-103 entry referencing it exists in the log.
+- [ ] A code-103 entry that references a code-102 entry permanently nullifies the pending rotation; the old card remains active with no successor.
+- [ ] The press sends a `recovery_rotation_notification` message to the holder's card immediately upon posting a code-102 entry.
+- [ ] After `pending_until` elapses without a code-103 cancellation, verifiers treat the code-102 `successor` pointer identically to a code-100 entry.
 
 ---
 
@@ -198,7 +244,7 @@ The keyring blob is encrypted with a key derived from `passkey + service_secret`
 - The holder migrates to a new primary service (service_secret changes)
 - The holder rotates their YubiKey backup registration
 
-Re-encryption does not rotate any mark keys. It changes the protection layer around the existing keys.
+Re-encryption does not rotate any card keys. It changes the protection layer around the existing keys.
 
 ### 4.2 Re-encryption Flow
 
@@ -224,20 +270,20 @@ Re-encryption does not rotate any mark keys. It changes the protection layer aro
 
 A full wallet compromise occurs when an attacker has obtained or may have obtained:
 
-- The master mark key, AND
-- One or more device sub-mark keys
+- The master card key, AND
+- One or more device sub-card keys
 
-This is the highest-severity scenario. Code **910** (loud revocation — full wallet compromise suspected) signals publicly that all marks held by this identity should be treated as untrusted from `effective_date` forward, regardless of whether the attacker has been observed signing anything.
+This is the highest-severity scenario. Code **910** (loud revocation — full wallet compromise suspected) signals publicly that all cards held by this identity should be treated as untrusted from `effective_date` forward, regardless of whether the attacker has been observed signing anything.
 
 ### 5.2 Response Flow
 
-1. **Revoke all marks loudly.** For each mark the holder controls, submit a 9xx revocation intent (code 910) to any approved press. Set `effective_date: <now>`. The press's `revocation_permissions` must permit 9xx by the holder (the default permits 9xx by the issuer only — if this policy blocks the holder from issuing 9xx against their own marks, the holder must contact the issuer to perform the revocations, or the trust-and-safety governance body must act). The spec **recommends** that policies permit holders to issue 9xx on their own marks with `code: 910`.
+1. **Revoke all cards loudly.** For each card the holder controls, submit a 9xx revocation intent (code 910) to any approved press. Set `effective_date: <now>`. The press's `revocation_permissions` must permit 9xx by the holder (the default permits 9xx by the issuer only — if this policy blocks the holder from issuing 9xx against their own cards, the holder must contact the issuer to perform the revocations, or the trust-and-safety governance body must act). The spec **recommends** that policies permit holders to issue 9xx on their own cards with `code: 910`.
 
-2. **Revoke all sub-marks.** Revoke all device sub-marks (811) and all per-installation sub-marks (811). Because the device sub-mark keys may be compromised, use the YubiKey recovery path if necessary.
+2. **Revoke all sub-cards.** Revoke all device sub-cards (811) and all per-installation sub-cards (811). Because the device sub-card keys may be compromised, use the YubiKey recovery path if necessary.
 
-3. **Notify relying parties.** The wallet should send notifications to all services and parties where the holder has authenticated using a compromised mark, informing them of the revocation and `effective_date`.
+3. **Notify relying parties.** The wallet should send notifications to all services and parties where the holder has authenticated using a compromised card, informing them of the revocation and `effective_date`.
 
-4. **Bootstrap new identity.** After revocation is complete, the holder proceeds with full master key rotation (§3.3), issuing new marks under the new key. The new marks have no automatic trust inheritance from the old marks — each issuer must re-issue under the new public key. This is intentional: the compromise may have affected what the holder consented to, and relying parties should make a fresh assessment.
+4. **Bootstrap new identity.** After revocation is complete, the holder proceeds with full master key rotation (§3.3), issuing new cards under the new key. The new cards have no automatic trust inheritance from the old cards — each issuer must re-issue under the new public key. This is intentional: the compromise may have affected what the holder consented to, and relying parties should make a fresh assessment.
 
 ### 5.3 Code 9xx Authorization for Self-Revocation
 
@@ -262,43 +308,43 @@ This allows holders to issue 910 (full wallet compromise) but not other 9xx code
 
 ### 5.4 Acceptance Criteria
 
-- [ ] A mark revoked with code 910 causes verifiers to reject all statements signed by that mark at or after `effective_date`, including sub-mark-signed statements that chain to the compromised master mark.
+- [ ] A card revoked with code 910 causes verifiers to reject all statements signed by that card at or after `effective_date`, including sub-card-signed statements that chain to the compromised master card.
 - [ ] A policy that includes the recommended `revocation_permissions` override accepts holder-signed 910 intents.
-- [ ] After a 910 revocation, the wallet blocks all further signing operations using the compromised mark's key material until the holder explicitly confirms a new master key has been installed.
+- [ ] After a 910 revocation, the wallet blocks all further signing operations using the compromised card's key material until the holder explicitly confirms a new master key has been installed.
 
 ---
 
-## 6. Press Sub-Mark Key Rotation
+## 6. Press Sub-Card Key Rotation
 
 ### 6.1 Motivation
 
-Press sub-marks are authorized to write to the Arbitrum One registry on behalf of a policy. A press with a compromised sub-mark key can write fraudulent marks to the registry. Press key rotation is therefore a high-priority operational security concern.
+Press sub-cards are authorized to write to the Arbitrum One registry on behalf of a policy. A press with a compromised sub-card key can write fraudulent cards to the registry. Press key rotation is therefore a high-priority operational security concern.
 
 ### 6.2 Planned Press Key Rotation
 
-1. **Generate new keypair.** The press generates a fresh ML-DSA-44 keypair for the new sub-mark key.
-2. **Issue new press sub-mark.** The press operator requests a new press sub-mark from the policy holder. The new sub-mark has a new mutable pointer and the new public key as `recipient_pubkey`.
-3. **Update `approved_presses`.** The policy holder submits a 3xx update intent to add the new press sub-mark pointer to the policy's `approved_presses` array.
-4. **Update `PressAuthorizations` on-chain.** The policy governance body updates the `PressAuthorizations` table on Arbitrum One to register the new press sub-mark key as active for this policy.
+1. **Generate new keypair.** The press generates a fresh ML-DSA-44 keypair for the new sub-card key.
+2. **Issue new press sub-card.** The press operator requests a new press sub-card from the policy holder. The new sub-card has a new mutable pointer and the new public key as `recipient_pubkey`.
+3. **Update `approved_presses`.** The policy holder submits a 3xx update intent to add the new press sub-card pointer to the policy's `approved_presses` array.
+4. **Update `PressAuthorizations` on-chain.** The policy governance body updates the `PressAuthorizations` table on Arbitrum One to register the new press sub-card key as active for this policy.
 5. **Drain and switch.** The press completes any in-flight issuance operations with the old key, then switches to signing with the new key.
-6. **Revoke old press sub-mark.** The old press sub-mark is revoked (code 801) and removed from `approved_presses` via a further 3xx update to the policy.
-7. **Update `PressAuthorizations` on-chain.** Remove or deactivate the old press sub-mark key from the `PressAuthorizations` table.
+6. **Revoke old press sub-card.** The old press sub-card is revoked (code 801) and removed from `approved_presses` via a further 3xx update to the policy.
+7. **Update `PressAuthorizations` on-chain.** Remove or deactivate the old press sub-card key from the `PressAuthorizations` table.
 
-**Previously issued marks are unaffected.** The old press sub-mark's signature on historical marks remains valid because those marks were issued while the sub-mark was active.
+**Previously issued cards are unaffected.** The old press sub-card's signature on historical cards remains valid because those cards were issued while the sub-card was active.
 
 ### 6.3 Emergency Press Key Rotation (Suspected Compromise)
 
-1. Immediately deactivate the old press sub-mark in the `PressAuthorizations` table. This blocks further registry writes from the compromised key even before the press sub-mark itself is formally revoked.
-2. Investigate what marks, if any, were fraudulently issued using the compromised key. Coordinate with the policy holder to revoke fraudulent marks.
-3. Issue new press sub-mark and proceed with standard rotation (steps 2–7 above).
+1. Immediately deactivate the old press sub-card in the `PressAuthorizations` table. This blocks further registry writes from the compromised key even before the press sub-card itself is formally revoked.
+2. Investigate what cards, if any, were fraudulently issued using the compromised key. Coordinate with the policy holder to revoke fraudulent cards.
+3. Issue new press sub-card and proceed with standard rotation (steps 2–7 above).
 
 **Detecting fraudulent issuances.** The press's signed issuance log (encrypted to auditors) provides a record of what the press legitimately issued. Any registry entry not present in that log is a candidate for fraudulent issuance. Auditors play a critical role in post-compromise forensics.
 
 ### 6.4 Acceptance Criteria
 
-- [ ] After the old press sub-mark is removed from `PressAuthorizations`, the Arbitrum One registry contract rejects further writes from the old key.
-- [ ] Previously issued marks remain verifiable after the press key rotation.
-- [ ] The window between the `PressAuthorizations` deactivation and the formal sub-mark revocation is minimized; the on-chain deactivation is the effective security boundary.
+- [ ] After the old press sub-card is removed from `PressAuthorizations`, the Arbitrum One registry contract rejects further writes from the old key.
+- [ ] Previously issued cards remain verifiable after the press key rotation.
+- [ ] The window between the `PressAuthorizations` deactivation and the formal sub-card revocation is minimized; the on-chain deactivation is the effective security boundary.
 
 ---
 
@@ -309,14 +355,14 @@ Auditor key rotation is triggered by:
 - Periodic hygiene
 - Compromise of the auditor's ML-KEM private key
 
-**The rotation procedure is already specified in `chitt_protocol_spec.md §2` under *Audit Epoch Lifecycle, Auditor key rotation within an epoch*.** The key points:
+**The rotation procedure is already specified in `card_protocol_spec.md §2` under *Audit Epoch Lifecycle, Auditor key rotation within an epoch*.** The key points:
 
 1. The current audit epoch closes; the auditor produces an `AuditEpochCommitment` under their old key.
 2. The auditor destroys the old epoch AEK.
 3. A new epoch opens with the auditor's new ML-KEM public key.
 4. The old ML-KEM private key can be destroyed after the commitment is published and the CID is confirmed on-chain.
 
-This spec does not re-define this flow. See `chitt_protocol_spec.md §2` for the canonical procedure.
+This spec does not re-define this flow. See `card_protocol_spec.md §2` for the canonical procedure.
 
 ---
 
@@ -324,22 +370,24 @@ This spec does not re-define this flow. See `chitt_protocol_spec.md §2` for the
 
 ### 8.1 New Protocol-Level Field: `successor`
 
-All marks implicitly support a `successor` field. This is not defined in any policy's `field_definitions` — it is a protocol-reserved field whose update semantics are enforced by the press and verifiers regardless of policy content.
+All cards implicitly support a `successor` field. This is not defined in any policy's `field_definitions` — it is a protocol-reserved field whose update semantics are enforced by the press and verifiers regardless of policy content.
 
-| Field | Type | Update policy | Meaning |
+| Field | Type | Authorization | Meaning |
 |---|---|---|---|
-| `successor` | `mark-pointer` | `{ "is_holder": true }` | Mutable pointer of the mark that supersedes this one |
+| `successor` | `card-pointer` | Codes 100, 101: `{ "is_holder": true }`. Code 102: `{ "is_issuer": true }` with 72-hour pending window (see §3.5). | Mutable pointer of the card that supersedes this one. |
 
-The `successor` field may be appended at most once. Once set, it is immutable. Attempts to overwrite an existing `successor` value are rejected by the press.
+The `successor` field may be appended at most once. A code-102 entry is pending until `pending_until` is reached; if no code-103 cancellation is present at that point, the value becomes effective and immutable. Attempts to overwrite an already-effective `successor` value are rejected by the press.
 
 ### 8.2 1xx Update Codes for Key Rotation
 
 | Code | Meaning |
 |---|---|
-| 100 | Linked successor — planned key rotation |
-| 101 | Linked successor — emergency rotation (prior key potentially compromised) |
+| 100 | Linked successor — planned key rotation (holder-initiated) |
+| 101 | Linked successor — emergency rotation (holder-initiated; prior key potentially compromised) |
+| 102 | Linked successor — issuer-initiated card recovery (72-hour pending window; see §3.5) |
+| 103 | Issuer-initiated recovery rotation cancelled by holder |
 
-These codes are distinguished for auditors and relying parties: a 100 in a mark's log signals routine housekeeping; a 101 signals that the prior key period's signatures should be treated with elevated skepticism.
+Codes 100 and 101 are distinguished for auditors: a 100 signals routine housekeeping; a 101 signals that the prior key period's signatures should be treated with elevated skepticism. Code 102 entries carry a `pending_until` field and are not effective until that timestamp is reached; a code-103 entry referencing a code-102 entry by log CID permanently nullifies the pending rotation.
 
 ### 8.3 Key Rotation Statement (IPFS Document)
 
@@ -347,7 +395,7 @@ The dual-signed key rotation statement produced in §3.3 is a CBOR document with
 
 ```json
 {
-  "doc_type": "mark_key_rotation_statement",
+  "doc_type": "card_key_rotation_statement",
   "rotation_code": 100 | 101,
   "old_pubkey": "<base64url ML-DSA-44 public key being retired>",
   "new_pubkey": "<base64url ML-DSA-44 public key replacing it>",
@@ -365,17 +413,17 @@ Both signatures are computed over the same payload (the document without either 
 
 ## 9. Open Questions
 
-- **[Design]** How should verifiers handle a mark chain where a sub-mark was signed by a key that was later revealed to have been compromised (code 101)? Should they require re-attestation under the new key for high-stakes verifications, or should all pre-`effective_date` statements remain fully trusted?
+- **[Design]** How should verifiers handle a card chain where a sub-card was signed by a key that was later revealed to have been compromised (code 101)? Should they require re-attestation under the new key for high-stakes verifications, or should all pre-`effective_date` statements remain fully trusted?
 
-- **[Engineering]** When a holder revokes all marks with code 910 (full wallet compromise), should the wallet client automatically initiate a new identity bootstrap, or should the holder explicitly trigger this step?
+- **[Engineering]** When a holder revokes all cards with code 910 (full wallet compromise), should the wallet client automatically initiate a new identity bootstrap, or should the holder explicitly trigger this step?
 
-- **[Policy]** Is the recommended `revocation_permissions` override (allowing holder-issued 910 codes) appropriate for all policy types, or should high-stakes policies (e.g., root-of-trust marks) block holder-issued loud revocations?
+- **[Policy]** Is the recommended `revocation_permissions` override (allowing holder-issued 910 codes) appropriate for all policy types, or should high-stakes policies (e.g., root-of-trust cards) block holder-issued loud revocations?
 
 - **[Engineering]** The `successor` field update requires an approved press. In a full wallet compromise scenario where the press is unavailable, the holder cannot post the successor link. Should a direct-write path to the registry be supported for holder-signed 9xx and `successor` updates, bypassing the press? This conflicts with the design principle that all updates go through an approved press.
 
-- **[Security]** For the press emergency rotation, is deactivating the `PressAuthorizations` on-chain entry sufficient as an immediate countermeasure, or should the protocol support a signed "press compromise notification" that verifiers can check when evaluating previously-issued marks?
+- **[Security]** For the press emergency rotation, is deactivating the `PressAuthorizations` on-chain entry sufficient as an immediate countermeasure, or should the protocol support a signed "press compromise notification" that verifiers can check when evaluating previously-issued cards?
 
-- **[Design]** Should the key rotation statement be posted to the old mark's log as an additional payload, or is it sufficient to reference the statement CID in the `updater_message` field of the 1xx entry?
+- **[Design]** Should the key rotation statement be posted to the old card's log as an additional payload, or is it sufficient to reference the statement CID in the `updater_message` field of the 1xx entry?
 
 ---
 
@@ -383,9 +431,11 @@ Both signatures are computed over the same payload (the document without either 
 
 All individual section acceptance criteria apply. The following are cross-cutting:
 
-- [ ] A verifier who walks a mark chain that terminates in a revoked mark with a `successor` pointer correctly identifies the successor as the current mark, provided the rotation statement is dual-signed and verifiable.
-- [ ] The press rejects an attempt to set the `successor` field on a mark that already has `successor` set.
-- [ ] A mark revoked with code 810 (key compromised) causes all statements signed by that key after `effective_date` to be rejected by compliant verifiers.
-- [ ] A mark revoked with code 910 (full wallet compromise) causes verifiers to reject not only the master mark's signatures but also all sub-mark signatures that chain to the compromised master, for statements at or after `effective_date`.
-- [ ] Rotation flows that require the master mark key are blocked by the wallet client if the keyring blob cannot be decrypted (e.g., passkey unavailable).
+- [ ] A verifier who walks a card chain that terminates in a revoked card with a `successor` pointer correctly identifies the successor as the current card, provided the rotation statement is dual-signed and verifiable.
+- [ ] The press rejects an attempt to set the `successor` field on a card that already has `successor` set.
+- [ ] A card revoked with code 810 (key compromised) causes all statements signed by that key after `effective_date` to be rejected by compliant verifiers.
+- [ ] A card revoked with code 910 (full wallet compromise) causes verifiers to reject not only the master card's signatures but also all sub-card signatures that chain to the compromised master, for statements at or after `effective_date`.
+- [ ] Rotation flows that require the master card key are blocked by the wallet client if the keyring blob cannot be decrypted (e.g., passkey unavailable).
 - [ ] Key rotation operations produce auditable on-log artifacts (1xx entries, rotation statement CID) such that a post-hoc verifier can reconstruct the full rotation history without contacting the holder or press.
+- [ ] A press rejects a code-102 intent from any party that does not satisfy `{ "is_issuer": true }` for the target card.
+- [ ] A press rejects a code-103 intent that does not include a valid log-CID reference to an open (not yet effective and not previously cancelled) code-102 entry on the same card.

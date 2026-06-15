@@ -1,7 +1,7 @@
 {
-  "name": "chitt-validator",
+  "name": "card-validator",
   "version": "0.1.0",
-  "description": "Validates signed message envelopes per the Chitt Protocol (v0.3)",
+  "description": "Validates signed message envelopes per the Card Protocol (v0.3)",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",

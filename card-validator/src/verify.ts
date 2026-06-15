@@ -1,9 +1,9 @@
 /**
- * Core verification logic — §7 of the Chitt Protocol spec.
+ * Core verification logic — §7 of the Card Protocol spec.
  *
  * Verification stages (executed per signature entry):
  *   1. Signature validity (offline, canonical CBOR + ML-DSA-44)
- *   2. Sub-chitt → master link (Arbitrum One)
+ *   2. Sub-card → master link (Arbitrum One)
  *   3. Chain walk — historical (IPFS, parallelized)
  *   4. Revocation check — current (Arbitrum One + IPFS log)
  *   5. Policy match (predicates, deferred — returns scope_clean: true placeholder)
@@ -14,8 +14,8 @@
  */
 
 import type {
-  ChittDocument,
-  ChittProvider,
+  CardDocument,
+  CardProvider,
   MessagePayload,
   PolicyChainLink,
   SignatureEntry,
@@ -33,9 +33,9 @@ import {
 } from './revocation.js';
 
 export interface VerifySignatureOptions {
-  provider: ChittProvider;
+  provider: CardProvider;
   trustedRoots: string[];
-  verifierChitt?: string;
+  verifierCard?: string;
   freshnessWindowSeconds: number;
   payload: MessagePayload;
   signingTimeMs: number;
@@ -43,14 +43,14 @@ export interface VerifySignatureOptions {
 
 export interface VerifySignatureOutput {
   result: SignatureResult;
-  /** policy_id CID extracted from the master chitt genesis (if resolved). */
+  /** policy_id CID extracted from the master card genesis (if resolved). */
   policyCid: string | null;
-  /** press_chitt pointer extracted from the master chitt genesis (if resolved). */
-  pressChittPointer: string | null;
-  /** press_chitt pointer extracted from the policy chitt (if resolved). */
+  /** press_card pointer extracted from the master card genesis (if resolved). */
+  pressCardPointer: string | null;
+  /** press_card pointer extracted from the policy card (if resolved). */
   policyCreatorPointer: string | null;
-  /** On-chain registry address of the sender's master chitt (if resolved). */
-  masterChittAddress: string | null;
+  /** On-chain registry address of the sender's master card (if resolved). */
+  masterCardAddress: string | null;
 }
 
 /**
@@ -63,7 +63,7 @@ export async function verifySignatureEntry(
 ): Promise<VerifySignatureOutput> {
   const nowMs = Date.now();
   const baseResult: SignatureResult = {
-    signer_chitt: entry.signer_chitt,
+    signer_card: entry.signer_card,
     signature_valid: false,
     chain_reaches_trusted_root: false,
     scope_clean: true, // predicate evaluation deferred (§7 stage 5)
@@ -78,8 +78,8 @@ export async function verifySignatureEntry(
   // Stage 7: Recipient-set check — computed first, always included in result.
   // -------------------------------------------------------------------------
   const addressedToVerifier =
-    opts.verifierChitt !== undefined &&
-    opts.payload.recipients.includes(opts.verifierChitt);
+    opts.verifierCard !== undefined &&
+    opts.payload.recipients.includes(opts.verifierCard);
 
   // -------------------------------------------------------------------------
   // Stage 1: Signature validity
@@ -91,49 +91,49 @@ export async function verifySignatureEntry(
     return {
       result: { ...baseResult, signature_valid: false, addressed_to_verifier: addressedToVerifier },
       policyCid: null,
-      pressChittPointer: null,
+      pressCardPointer: null,
       policyCreatorPointer: null,
-      masterChittAddress: null,
+      masterCardAddress: null,
     };
   }
 
   // -------------------------------------------------------------------------
-  // Stage 2: Sub-chitt → master link
+  // Stage 2: Sub-card → master link
   // -------------------------------------------------------------------------
-  let masterChittAddress: string | null = null;
+  let masterCardAddress: string | null = null;
   let policyCid: string | null = null;
-  let pressChittPointer: string | null = null;
+  let pressCardPointer: string | null = null;
   let policyCreatorPointer: string | null = null;
 
   try {
-    const registration = await opts.provider.getSubChittRegistration(entry.signer_chitt);
+    const registration = await opts.provider.getSubCardRegistration(entry.signer_card);
     if (!registration) {
       return {
         result: {
           ...baseResult,
           signature_valid: true,
           addressed_to_verifier: addressedToVerifier,
-          error: 'Sub-chitt registration not found on-chain',
+          error: 'Sub-card registration not found on-chain',
         },
         policyCid,
-        pressChittPointer,
+        pressCardPointer,
         policyCreatorPointer,
-        masterChittAddress,
+        masterCardAddress,
       };
     }
-    masterChittAddress = registration.masterChittAddress;
+    masterCardAddress = registration.masterCardAddress;
   } catch (err) {
     return {
       result: {
         ...baseResult,
         signature_valid: true,
         addressed_to_verifier: addressedToVerifier,
-        error: `Sub-chitt registration lookup failed: ${String(err)}`,
+        error: `Sub-card registration lookup failed: ${String(err)}`,
       },
       policyCid,
-      pressChittPointer,
+      pressCardPointer,
       policyCreatorPointer,
-      masterChittAddress,
+      masterCardAddress,
     };
   }
 
@@ -141,7 +141,7 @@ export async function verifySignatureEntry(
   // Stages 3+4: Chain walk and revocation check via IPFS log traversal.
   // getAllLogEntries walks the full log in one pass, giving us both the
   // complete entry history (for revocation checks) and the genesis doc
-  // (for press_chitt / policy_id links). This avoids a second log fetch.
+  // (for press_card / policy_id links). This avoids a second log fetch.
   // -------------------------------------------------------------------------
   let chainReachesTrustedRoot = false;
   let revResult: { status: 'none' | 'revoked'; code: number | null; effective_date: string | null; data_freshness_seconds: number } = {
@@ -154,48 +154,48 @@ export async function verifySignatureEntry(
   let currentlyValid = true;
 
   try {
-    const masterLogHeadCid = await opts.provider.getLogHead(masterChittAddress!);
+    const masterLogHeadCid = await opts.provider.getLogHead(masterCardAddress!);
     if (!masterLogHeadCid) {
       return {
         result: {
           ...baseResult,
           signature_valid: true,
           addressed_to_verifier: addressedToVerifier,
-          error: 'Master chitt log head not found on-chain',
+          error: 'Master card log head not found on-chain',
         },
         policyCid,
-        pressChittPointer,
+        pressCardPointer,
         policyCreatorPointer,
-        masterChittAddress,
+        masterCardAddress,
       };
     }
 
     const { entries: allEntries, genesis, fetchedAt } = await opts.provider.getAllLogEntries(
-      masterChittAddress!,
+      masterCardAddress!,
       masterLogHeadCid,
     );
 
-    // Extract policy links from the genesis doc (original ChittDocument at log root).
+    // Extract policy links from the genesis doc (original CardDocument at log root).
     policyCid = genesis?.policy_id ?? null;
-    pressChittPointer = genesis?.press_chitt ?? null;
+    pressCardPointer = genesis?.press_card ?? null;
 
-    // Chain trust check: master address itself, or walk press_chitt ancestors.
-    chainReachesTrustedRoot = opts.trustedRoots.includes(masterChittAddress!);
-    if (!chainReachesTrustedRoot && pressChittPointer) {
+    // Chain trust check: master address itself, or walk press_card ancestors.
+    chainReachesTrustedRoot = opts.trustedRoots.includes(masterCardAddress!);
+    if (!chainReachesTrustedRoot && pressCardPointer) {
       chainReachesTrustedRoot = await walkChainForTrustedRoot(
-        pressChittPointer,
+        pressCardPointer,
         opts.provider,
         opts.trustedRoots,
       );
     }
 
-    // Fetch policy chitt to extract the policyCreator pointer.
+    // Fetch policy card to extract the policyCreator pointer.
     if (policyCid) {
       try {
-        const policyChitt = (await opts.provider.fetchIPFS(policyCid)) as ChittDocument;
-        policyCreatorPointer = policyChitt.press_chitt ?? null;
+        const policyCard = (await opts.provider.fetchIPFS(policyCid)) as CardDocument;
+        policyCreatorPointer = policyCard.press_card ?? null;
       } catch {
-        // Non-fatal: policy chitt may not be pinned.
+        // Non-fatal: policy card may not be pinned.
       }
     }
 
@@ -219,15 +219,15 @@ export async function verifySignatureEntry(
         error: `Chain walk failed: ${String(err)}`,
       },
       policyCid,
-      pressChittPointer,
+      pressCardPointer,
       policyCreatorPointer,
-      masterChittAddress,
+      masterCardAddress,
     };
   }
 
   return {
     result: {
-      signer_chitt: entry.signer_chitt,
+      signer_card: entry.signer_card,
       signature_valid: true,
       chain_reaches_trusted_root: chainReachesTrustedRoot,
       scope_clean: true,
@@ -238,23 +238,23 @@ export async function verifySignatureEntry(
       annotations: [],
     },
     policyCid,
-    pressChittPointer,
+    pressCardPointer,
     policyCreatorPointer,
-    masterChittAddress,
+    masterCardAddress,
   };
 }
 
 /**
- * Walk the press_chitt authorization chain upward from startAddress,
- * collecting all log entries and their CIDs for each chitt encountered.
+ * Walk the press_card authorization chain upward from startAddress,
+ * collecting all log entries and their CIDs for each card encountered.
  *
- * Each link in the returned array represents one chitt in the chain, with
+ * Each link in the returned array represents one card in the chain, with
  * its full update history (newest-first) and a pointer to its log head.
- * The chain proceeds upward via each genesis doc's press_chitt field.
+ * The chain proceeds upward via each genesis doc's press_card field.
  */
 export async function walkPolicyCreationChain(
   startAddress: string,
-  provider: ChittProvider,
+  provider: CardProvider,
   maxDepth = 50,
 ): Promise<PolicyChainLink[]> {
   const chain: PolicyChainLink[] = [];
@@ -280,13 +280,13 @@ export async function walkPolicyCreationChain(
             cid: `ipfs://${cid}`,
           });
         }
-        nextAddress = genesis?.press_chitt ?? null;
+        nextAddress = genesis?.press_card ?? null;
       }
     } catch {
       // Stop chain walk on error, but still include the partial link.
     }
 
-    chain.push({ chittAddress: currentAddress, logHeadUrl, updates });
+    chain.push({ cardAddress: currentAddress, logHeadUrl, updates });
     currentAddress = nextAddress;
   }
 
@@ -294,11 +294,11 @@ export async function walkPolicyCreationChain(
 }
 
 /**
- * Walk the press_chitt chain to check if any ancestor reaches a trusted root.
+ * Walk the press_card chain to check if any ancestor reaches a trusted root.
  */
 async function walkChainForTrustedRoot(
   address: string,
-  provider: ChittProvider,
+  provider: CardProvider,
   trustedRoots: string[],
   depth = 0,
 ): Promise<boolean> {
@@ -309,8 +309,8 @@ async function walkChainForTrustedRoot(
     const logHeadCid = await provider.getLogHead(address);
     if (!logHeadCid) return false;
     const { genesis } = await provider.getAllLogEntries(address, logHeadCid);
-    if (!genesis?.press_chitt) return false;
-    return walkChainForTrustedRoot(genesis.press_chitt, provider, trustedRoots, depth + 1);
+    if (!genesis?.press_card) return false;
+    return walkChainForTrustedRoot(genesis.press_card, provider, trustedRoots, depth + 1);
   } catch {
     return false;
   }
@@ -321,28 +321,28 @@ async function walkChainForTrustedRoot(
  * Returns null if all three starting addresses are null.
  */
 export async function resolveValidationChains(
-  masterChittAddress: string | null,
-  pressChittPointer: string | null,
+  masterCardAddress: string | null,
+  pressCardPointer: string | null,
   policyCreatorPointer: string | null,
-  provider: ChittProvider,
+  provider: CardProvider,
 ): Promise<ValidationChains | null> {
-  if (!masterChittAddress && !pressChittPointer && !policyCreatorPointer) {
+  if (!masterCardAddress && !pressCardPointer && !policyCreatorPointer) {
     return null;
   }
 
-  const [chitt, chittAuthorizer, policyCreator] = await Promise.all([
-    masterChittAddress
-      ? walkPolicyCreationChain(masterChittAddress, provider)
+  const [card, cardAuthorizer, policyCreator] = await Promise.all([
+    masterCardAddress
+      ? walkPolicyCreationChain(masterCardAddress, provider)
       : Promise.resolve([]),
-    pressChittPointer
-      ? walkPolicyCreationChain(pressChittPointer, provider)
+    pressCardPointer
+      ? walkPolicyCreationChain(pressCardPointer, provider)
       : Promise.resolve([]),
     policyCreatorPointer
       ? walkPolicyCreationChain(policyCreatorPointer, provider)
       : Promise.resolve([]),
   ]);
 
-  return { chitt, chittAuthorizer, policyCreator };
+  return { card, cardAuthorizer, policyCreator };
 }
 
 /**
@@ -351,7 +351,7 @@ export async function resolveValidationChains(
  */
 export async function resolvePointerToIpfsUrl(
   pointer: string,
-  provider: ChittProvider,
+  provider: CardProvider,
 ): Promise<string | null> {
   try {
     const cid = await provider.getLogHead(pointer);

@@ -4,13 +4,13 @@
 **Date:** 2026-05-25  
 **Status:** Draft  
 
-> **Terminology note.** This spec uses "mark" for "chitt" and "press" for the issuance service. The rename is in progress; treat the terms as interchangeable.
+> **Terminology note.** This spec now uses "card" as the canonical term per the Naming Convention.
 
 ---
 
 ## Overview
 
-Every mark issuance is recorded in an encrypted press log appended to the policy mark. Audit access is organized into time-bounded **epochs**, each secured by a single Audit Encryption Key (AEK). At epoch close, the auditor decrypts all entries, produces a signed commitment, and destroys the AEK — providing forward secrecy bounded at the epoch level. Once an epoch is closed, its entries are permanently undecryptable by anyone.
+Every card issuance is recorded in an encrypted press log appended to the policy card. Audit access is organized into time-bounded **epochs**, each secured by a single Audit Encryption Key (AEK). At epoch close, the auditor decrypts all entries, produces a signed commitment, and destroys the AEK — providing forward secrecy bounded at the epoch level. Once an epoch is closed, its entries are permanently undecryptable by anyone.
 
 This spec covers three processes: opening an epoch, auditing and closing an epoch, and the special cases that trigger early epoch closure (auditor changes, key rotations).
 
@@ -21,15 +21,15 @@ This spec covers three processes: opening an epoch, auditing and closing an epoc
 | Actor | Role |
 |---|---|
 | **Press** | Generates and distributes the epoch AEK; encrypts issuance records; posts epoch entries to the policy log |
-| **Auditor** | Holds a mark whose pointer appears in the policy's `auditors` array; receives wrapped AEK; decrypts and audits entries at epoch close; produces the `AuditEpochCommitment` |
+| **Auditor** | Holds a card whose pointer appears in the policy's `auditors` array; receives wrapped AEK; decrypts and audits entries at epoch close; produces the `AuditEpochCommitment` |
 | **Administrator** | Manages auditor membership in the policy's `auditors` field; receives the commitment CID |
 
 ---
 
 ## Preconditions
 
-- A valid policy mark is live with at least one entry in its `auditors` array.
-- Each auditor holds an active ML-KEM (FIPS 203) keypair. The auditor's public key is resolvable from their mark.
+- A valid policy card is live with at least one entry in its `auditors` array.
+- Each auditor holds an active ML-KEM (FIPS 203) keypair. The auditor's public key is resolvable from their card.
 - The press has a live audit epoch (or is prepared to open one) before logging any issuance.
 
 ---
@@ -46,7 +46,7 @@ An epoch must be opened before the first issuance record can be posted. A new ep
    - Run `ML-KEM.Encaps(auditor_pubkey)` → `(kem_ciphertext, kem_shared_secret)`.
    - Derive a wrapping key: `HKDF-SHA3-256(kem_shared_secret, "audit-epoch-aek-v1")`.
    - Compute `wrapped_aek = AES-GCM.Encrypt(wrapping_key, AEK)` with a fresh nonce.
-   - Record the `auditor_mark` pointer, `kem_ciphertext`, and `wrapped_aek` as one entry in `auditor_key_packages`.
+   - Record the `auditor_card` pointer, `kem_ciphertext`, and `wrapped_aek` as one entry in `auditor_key_packages`.
 
 3. The press assembles and signs an `AuditEpochEntry` with `status: "open"`:
    ```json
@@ -60,7 +60,7 @@ An epoch must be opened before the first issuance record can be posted. A new ep
    }
    ```
 
-4. The press posts the `AuditEpochEntry` to the policy mark's IPFS append-only log and updates the policy mark's Arbitrum One registry pointer to the new log head.
+4. The press posts the `AuditEpochEntry` to the policy card's IPFS append-only log and updates the policy card's Arbitrum One registry pointer to the new log head.
 
 5. The press discards the raw AEK from memory immediately after distributing the wrapped copies. The press retains only the encrypted per-entry records; it cannot read the AEK in plaintext at any future point.
 
@@ -102,8 +102,8 @@ An epoch closes on any of the following:
    {
      "type":             "audit_epoch_commitment",
      "epoch_id":         "<matches the closing epoch>",
-     "policy_mark":      "<mutable pointer of the policy mark>",
-     "auditor_mark":     "<mutable pointer of this auditor's mark>",
+     "policy_card":      "<mutable pointer of the policy card>",
+     "auditor_card":     "<mutable pointer of this auditor's card>",
      "period_start":     "<ISO 8601 — matches epoch_start from the opening AuditEpochEntry>",
      "period_end":       "<ISO 8601>",
      "entry_count":      <integer — number of PressIssuanceRecord entries decrypted>,
@@ -144,7 +144,7 @@ An epoch closes on any of the following:
 
 When an auditor rotates their ML-KEM public key:
 
-1. The auditor updates their mark via the standard update flow (see `mark_updates.md`). The press observes the key update on Arbitrum One.
+1. The auditor updates their card via the standard update flow (see `card_updates.md`). The press observes the key update on Arbitrum One.
 2. The press stops posting new issuance entries under the old epoch AEK.
 3. The epoch closes per Process 2 above. The rotating auditor produces the commitment under their old key before the AEK is destroyed.
 4. The press opens a new epoch with key packages generated under the auditor's new public key (Process 1).
@@ -198,10 +198,10 @@ When an auditor is removed from `auditors` via a policy field update:
 
 ## Related Specs
 
-- `mark_offering_and_acceptance.md` — where issuance records are generated and encrypted
+- `card_offering_and_acceptance.md` — where issuance records are generated and encrypted
 - `policy_creation.md` — where auditors are defined in the policy
-- `mark_updates.md` — used to add/remove auditors and trigger epoch close
-- `chitt_protocol_spec.md §2` — Audit Epoch Lifecycle section
+- `card_updates.md` — used to add/remove auditors and trigger epoch close
+- `card_protocol_spec.md §2` — Audit Epoch Lifecycle section
 - `protocol-objects.md §11` — `PressIssuanceRecord` object reference
 - `protocol-objects.md §12` — `AuditEpochEntry` object reference
 - `protocol-objects.md §13` — `AuditEpochCommitment` object reference

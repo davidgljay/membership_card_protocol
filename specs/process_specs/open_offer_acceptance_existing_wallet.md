@@ -4,13 +4,13 @@
 **Date:** 2026-05-25  
 **Status:** Draft  
 
-> **Terminology note.** This spec uses "mark" for "chitt," "wallet" for "keyring," and "press" for the issuance service. The rename is in progress; treat the terms as interchangeable.
+> **Terminology note.** This spec now uses "card" as the canonical term per the Naming Convention.
 
 ---
 
 ## Overview
 
-This spec covers the flow for an **existing mark holder** who follows an open offer claim link and adds the resulting mark to their existing wallet. Because the recipient already has a wallet and signing keys, wallet setup is skipped. The claim is submitted using a freshly generated keypair for the new mark.
+This spec covers the flow for an **existing card holder** who follows an open offer claim link and adds the resulting card to their existing wallet. Because the recipient already has a wallet and signing keys, wallet setup is skipped. The claim is submitted using a freshly generated keypair for the new card.
 
 For first-time recipients who need to create a wallet, see `open_offer_acceptance_new_wallet.md`.
 
@@ -20,9 +20,9 @@ For first-time recipients who need to create a wallet, see `open_offer_acceptanc
 
 | Actor | Role |
 |---|---|
-| **Recipient** | An existing mark holder with an active wallet and device sub-mark |
+| **Recipient** | An existing card holder with an active wallet and device sub-card |
 | **Wallet service** | Hosts the offer; handles claim submission to the press; updates the keyring on completion |
-| **Press** | Validates the claim and issues the mark on-chain |
+| **Press** | Validates the claim and issues the card on-chain |
 | **Issuer** | Created and signed the open offer (passive during acceptance) |
 
 ---
@@ -30,9 +30,9 @@ For first-time recipients who need to create a wallet, see `open_offer_acceptanc
 ## Preconditions
 
 - The recipient has followed a valid claim link.
-- The recipient has an existing wallet with at least one active mark, a device sub-mark private key in secure storage, and a passkey for keyring access.
+- The recipient has an existing wallet with at least one active card, a device sub-card private key in secure storage, and a passkey for keyring access.
 - The open offer has not expired and has not reached `max_acceptances`.
-- The policy mark has `allow_open_offers: true`.
+- The policy card has `allow_open_offers: true`.
 
 ---
 
@@ -44,32 +44,32 @@ For first-time recipients who need to create a wallet, see `open_offer_acceptanc
 
 2. The wallet service — or the recipient's existing wallet client — verifies the offer before displaying it:
    - Verify `issuer_signature` over the canonical CBOR of all offer fields (excluding the signature itself).
-   - Resolve the issuer's mark chain to a trusted root. If chain verification fails, **reject the offer before displaying it**.
-   - Confirm the named press sub-mark pointer appears in the policy's `approved_presses`. If not, reject.
+   - Resolve the issuer's card chain to a trusted root. If chain verification fails, **reject the offer before displaying it**.
+   - Confirm the named press sub-card pointer appears in the policy's `approved_presses`. If not, reject.
 
 3. The wallet service displays the offer review screen:
-   - **Issuer identity:** Mark pointer, chain summary.
+   - **Issuer identity:** Card pointer, chain summary.
    - **What you'll receive:** Proposed field values from `proposed_fields`, rendered with human-readable field names.
-   - **Which wallet:** Confirm which of the recipient's existing wallets/marks will hold the new mark (if the recipient holds multiple).
+   - **Which wallet:** Confirm which of the recipient's existing wallets/cards will hold the new card (if the recipient holds multiple).
    - **Constraints:** Slots remaining (if `max_acceptances` is set), expiry countdown (if `expires_at` is set).
    - **Redirect destination:** The `redirect_url`, displayed before navigation.
    - **Display message:** The issuer's `display_message` (if set).
 
 4. The recipient reviews the offer. If they choose not to accept, the flow ends with no action.
 
-### Phase 2: Key Generation for the New Mark
+### Phase 2: Key Generation for the New Card
 
-5. The client generates a fresh ML-DSA-44 keypair specifically for this new mark:
-   - **Do not reuse** any existing mark keypair, sub-mark key, or master key.
-   - Each mark owns a distinct keypair.
+5. The client generates a fresh ML-DSA-44 keypair specifically for this new card:
+   - **Do not reuse** any existing card keypair, sub-card key, or master key.
+   - Each card owns a distinct keypair.
 
 6. The client stores the new private key in the existing keyring before proceeding:
    - Decrypt the keyring (using `KDF(passkey_output, service_secret)`).
-   - Append the new keypair entry (mark address → private key) to the keyring blob.
+   - Append the new keypair entry (card address → private key) to the keyring blob.
    - Re-encrypt and post the updated keyring blob to IPFS.
    - Wait for IPFS confirmation before proceeding to claim submission.
 
-   The private key must be in the keyring before countersigning so that it is recoverable via the YubiKey backup flow even if the device is lost after signing but before the mark is received.
+   The private key must be in the keyring before countersigning so that it is recoverable via the YubiKey backup flow even if the device is lost after signing but before the card is received.
 
 ### Phase 3: Claim Submission
 
@@ -83,9 +83,9 @@ For first-time recipients who need to create a wallet, see `open_offer_acceptanc
 
 8. The client canonically serializes `claim_payload` (canonical CBOR per RFC 8949 §4.2 with protocol-specific overrides).
 
-9. The client signs the canonical serialization with the **new mark's private key** → `recipient_signature`.
+9. The client signs the canonical serialization with the **new card's private key** → `recipient_signature`.
 
-   This signature proves the recipient controls the key that will own the issued mark. The device sub-mark key is not used here.
+   This signature proves the recipient controls the key that will own the issued card. The device sub-card key is not used here.
 
 10. The wallet service submits an `OpenOfferClaimSubmission` to the press via HTTPS POST:
     ```json
@@ -100,13 +100,13 @@ For first-time recipients who need to create a wallet, see `open_offer_acceptanc
 11. The press validates the submission:
     - Re-verify `claim_payload.offer.issuer_signature` over the offer document.
     - Verify `recipient_signature` over the canonical CBOR of `claim_payload`.
-    - Confirm `claim_payload.offer.press_mark` matches the receiving press's own sub-mark pointer.
+    - Confirm `claim_payload.offer.press_card` matches the receiving press's own sub-card pointer.
     - Confirm the policy has `allow_open_offers: true`.
-    - Submit an atomic Arbitrum One transaction that: verifies the issuer's ML-DSA-44 signature over the offer payload; checks `block.timestamp < expires_at` (if set); checks `openOfferUseCounts[offer_id] < max_acceptances` (if set); atomically increments the counter and registers the mark. If any check fails, the transaction reverts.
+    - Submit an atomic Arbitrum One transaction that: verifies the issuer's ML-DSA-44 signature over the offer payload; checks `block.timestamp < expires_at` (if set); checks `openOfferUseCounts[offer_id] < max_acceptances` (if set); atomically increments the counter and registers the card. If any check fails, the transaction reverts.
 
-12. If validation succeeds, the press assembles the `MarkDocument` from `proposed_fields` plus `recipient_pubkey`, signs it with the press sub-mark key (`offer_signature`), and posts it to IPFS.
+12. If validation succeeds, the press assembles the `CardDocument` from `proposed_fields` plus `recipient_pubkey`, signs it with the press sub-card key (`offer_signature`), and posts it to IPFS.
 
-13. The press registers the mark on Arbitrum One (included in the atomic transaction from Step 11).
+13. The press registers the card on Arbitrum One (included in the atomic transaction from Step 11).
 
 14. The press logs the issuance in the policy's encrypted audit log (see `log_auditing.md`) with `offer_type: "open"`.
 
@@ -114,11 +114,11 @@ For first-time recipients who need to create a wallet, see `open_offer_acceptanc
 
 ### Phase 5: Completion
 
-16. The wallet service receives the confirmation and verifies the new mark CID matches what was registered.
+16. The wallet service receives the confirmation and verifies the new card CID matches what was registered.
 
-17. The wallet service updates the recipient's local mark list to include the new mark address and presents a confirmation screen:
-    - Mark details (policy, field values, issuer).
-    - Option to view the mark.
+17. The wallet service updates the recipient's local card list to include the new card address and presents a confirmation screen:
+    - Card details (policy, field values, issuer).
+    - Option to view the card.
 
 18. The wallet service displays the `redirect_url` to the recipient before navigating, warns against known phishing domains, and redirects.
 
@@ -126,8 +126,8 @@ For first-time recipients who need to create a wallet, see `open_offer_acceptanc
 
 ## Postconditions
 
-- The recipient's existing wallet now includes the new mark's private key in the keyring.
-- The new mark is pinned on IPFS and registered on Arbitrum One.
+- The recipient's existing wallet now includes the new card's private key in the keyring.
+- The new card is pinned on IPFS and registered on Arbitrum One.
 - The on-chain acceptance counter for the offer has been atomically incremented.
 - The issuance is recorded in the policy's encrypted audit log.
 - The recipient did not need to set up a new passkey or re-derive the keyring decryption key (the existing credential was used).
@@ -141,8 +141,8 @@ For first-time recipients who need to create a wallet, see `open_offer_acceptanc
 | Wallet setup | Required (Steps 5–9 of that spec) | Skipped entirely |
 | Passkey | Created fresh | Already exists |
 | Master keypair | Generated fresh | Already exists |
-| Device sub-mark | Generated and registered | Already registered |
-| Keyring for new mark key | Initialized, then updated | Updated only |
+| Device sub-card | Generated and registered | Already registered |
+| Keyring for new card key | Initialized, then updated | Updated only |
 | Claim submission | Identical | Identical |
 | Press validation | Identical | Identical |
 
@@ -167,7 +167,7 @@ For first-time recipients who need to create a wallet, see `open_offer_acceptanc
 - `open_offer_acceptance_new_wallet.md` — same flow for recipients without an existing wallet
 - `open_offer_creation.md` — how the offer was created by the issuer
 - `wallet_backup_and_recovery.md` — recovery path when the passkey is unavailable
-- `mark_offering_and_acceptance.md` — targeted issuance alternative
-- `chitt_protocol_spec.md §4` — receiving a mark feature spec (open offer receipt flow)
+- `card_offering_and_acceptance.md` — targeted issuance alternative
+- `card_protocol_spec.md §4` — receiving a card feature spec (open offer receipt flow)
 - `protocol-objects.md §6` — `OpenMarkOffer` object reference
 - `protocol-objects.md §7` — `OpenOfferClaimSubmission` object reference

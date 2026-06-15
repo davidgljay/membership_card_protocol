@@ -1,9 +1,9 @@
-# Phase 3 Red-Team Report — Mark Protocol v0.3
+# Phase 3 Red-Team Report — Card Protocol v0.3
 ## Social Engineering and Adversary-Specific Scenarios
 
 **Date:** 2026-05-22
 **Scope:** Steps 3.1–3.4 per `plans/implementation-plan.md`
-**Sources reviewed:** `specs/ARCHITECTURE.md` (including ADR-011), `specs/chitt_protocol_spec.md`, `specs/protocol-objects.md`, `raw_notes/Third party attestations when chit holders cause harm.md`, `red_teaming/phase_1_report.md`, `red_teaming/phase_2_report.md`, `plans/strategic-plan.md`
+**Sources reviewed:** `specs/ARCHITECTURE.md` (including ADR-011), `specs/card_protocol_spec.md`, `specs/protocol-objects.md`, `raw_notes/Third party attestations when card holders cause harm.md`, `red_teaming/phase_1_report.md`, `red_teaming/phase_2_report.md`, `plans/strategic-plan.md`
 
 ---
 
@@ -18,7 +18,7 @@ Phase 3 assessed four social and adversary-specific attack scenarios: a state ac
 | Medium | 7 |
 | Low | 1 |
 
-**The two Critical findings** arise from the same underlying problem: the protocol's trust model has a root that can be captured, and it does not provide users with a reliable mechanism to detect root capture. Under Condition B of Step 3.1 (government controls the trust root), a state actor can issue credentials to informants that are cryptographically indistinguishable from legitimate community credentials, and can simultaneously revoke all activist marks at scale using the machinery analyzed in Phase 2. Both capabilities depend on governance body capture — which Phase 2 identified as the highest-severity new finding introduced by ADR-011. Finding 3.1-D (governance compulsion as structural Critical) is a direct Phase 3 expansion of Phase 2's Finding 2.X-A.
+**The two Critical findings** arise from the same underlying problem: the protocol's trust model has a root that can be captured, and it does not provide users with a reliable mechanism to detect root capture. Under Condition B of Step 3.1 (government controls the trust root), a state actor can issue credentials to informants that are cryptographically indistinguishable from legitimate community credentials, and can simultaneously revoke all activist cards at scale using the machinery analyzed in Phase 2. Both capabilities depend on governance body capture — which Phase 2 identified as the highest-severity new finding introduced by ADR-011. Finding 3.1-D (governance compulsion as structural Critical) is a direct Phase 3 expansion of Phase 2's Finding 2.X-A.
 
 The protocol's most important Phase 3 strength is its composable verifiability: every credential, annotation, and authentication response is independently verifiable by anyone with IPFS and Arbitrum One access, without trusting any intermediary. This transparency is meaningful against criminal fraud (fraudulent credentials leave auditable trails) and individual abuse (revocations and annotations are signed and attributed). The protocol is substantially stronger than username/password systems for the use cases it addresses.
 
@@ -39,9 +39,9 @@ However, the protocol is not ready for deployment to high-risk populations — a
 | 3.1 | 3.1-G | Surveillance via forged authentication flows aggregates community activity mapping | **High** | High | Low | Low |
 | 3.2 | 3.2-A | Policy creation via governance approval enables legitimately-appearing fraudulent root | Medium | Low | High | Low |
 | 3.2 | 3.2-B | Open offer with null constraints enables unlimited credential issuance | Medium | Low | High | Low |
-| 3.2 | 3.2-C | Predicate gaming chains weak-predicate marks into higher-value credential contexts | Medium | Low | High | Low |
+| 3.2 | 3.2-C | Predicate gaming chains weak-predicate cards into higher-value credential contexts | Medium | Low | High | Low |
 | 3.2 | 3.2-D | Trusted root literacy gap: users cannot reliably evaluate unfamiliar root policies | **High** | Low | High | Low |
-| 3.3 | 3.3-A | Authentication metadata surveillance uses mark pointer as stable tracking identifier | Medium | Low | Medium | **High** |
+| 3.3 | 3.3-A | Authentication metadata surveillance uses card pointer as stable tracking identifier | Medium | Low | Medium | **High** |
 | 3.3 | 3.3-B | Residual press authority or annotator rights enable credential harassment | **High** | Medium | Low | **High** |
 | 3.3 | 3.3-C | Physical device access: Secure Enclave limits key exfiltration but not in-session misuse | Medium | Low | Low | **High** |
 | 3.3 | 3.3-D | Pseudonymous identity exposure via Nym gateway correlation from single interaction | **High** | High | Medium | High |
@@ -70,20 +70,20 @@ The distinction matters: Condition A attacks are painful and require significant
 **Feasibility:** Practical
 **Adversary relevance:** State actor (High)
 
-On-chain transactions to the Arbitrum One registry contract are publicly visible regardless of the mark's privacy mode. For "fully private" marks, the registry address is secret-derived and the CID on-chain is encrypted — but the *act of writing to the registry* is always visible: the transaction hash, the press wallet address paying gas, and the timestamp.
+On-chain transactions to the Arbitrum One registry contract are publicly visible regardless of the card's privacy mode. For "fully private" cards, the registry address is secret-derived and the CID on-chain is encrypted — but the *act of writing to the registry* is always visible: the transaction hash, the press wallet address paying gas, and the timestamp.
 
 **What chain analysis reveals:**
 
 1. **Press wallet fingerprinting**: Every registry write from a given press is paid from the same wallet address. A government intelligence analyst can enumerate all transactions to the registry contract and cluster them by fee payer, producing a map of which press wallets are active, how frequently each writes, and when bursts of activity occur. If any press wallet is publicly associated with a known community, all activity from that wallet is attributable.
 
-2. **Issuance timing correlation**: Bursts of new mark registrations (the press registering new ChittDocuments) correlate with recruitment events, onboarding periods, or organizational milestones. A government watching chain activity can detect that "Press X registered 12 new marks in a 3-day window" around the time of a known organizing event.
+2. **Issuance timing correlation**: Bursts of new card registrations (the press registering new CardDocuments) correlate with recruitment events, onboarding periods, or organizational milestones. A government watching chain activity can detect that "Press X registered 12 new cards in a 3-day window" around the time of a known organizing event.
 
 3. **Revocation timing**: A revocation entry (8xx or 9xx) is a registry write; its timing is visible. A pattern of revocations shortly after specific events (protests, arrests, public statements) can reveal that the community uses credential revocation as a disciplinary response, and may identify the triggering event.
 
-**What chain analysis does NOT reveal for private marks:**
+**What chain analysis does NOT reveal for private cards:**
 - The identity of any specific holder (the registry address is secret-derived).
-- The content of any mark (encrypted CID on-chain; encrypted IPFS content).
-- Which marks belong to the same holder (different marks use different address derivation secrets).
+- The content of any card (encrypted CID on-chain; encrypted IPFS content).
+- Which cards belong to the same holder (different cards use different address derivation secrets).
 
 **Cross-reference:** Combined with Finding 1.3-B (Nym de-anonymization), chain analysis timing can be correlated with Nym traffic patterns to narrow down which IP address received which issuance notification — adding identity to the timing data.
 
@@ -105,7 +105,7 @@ This finding combines and extends Phase 1 Findings 1.4-A and 1.4-B and Phase 2 F
 - IP addresses of all HTTPS-submitted update intents (directly identifying non-Nym submitters)
 - Nym gateway addresses from Nym-submitted intents (enabling gateway-level traffic analysis per Finding 1.3-D)
 - Timing and frequency of all issuance requests (community activity patterns)
-- Which mark pointers submitted 810 self-revocation intents (indicating awareness of key compromise, itself intelligence)
+- Which card pointers submitted 810 self-revocation intents (indicating awareness of key compromise, itself intelligence)
 
 *Active operations (targeted harm):*
 - Post 9xx revocations with `notify_holder: false` and backdated `effective_date` against specific targets (Finding 2.2-A mechanics)
@@ -141,23 +141,23 @@ The governance registration requirement (ADR-011) is a friction point for fast-m
 **Feasibility:** Practical (if an informant can satisfy the policy's `recipient_predicate`)
 **Adversary relevance:** State actor (Medium), Criminal org (Medium)
 
-If a government informant genuinely satisfies a policy's `recipient_predicate`, they receive a valid mark through legitimate channels. This mark is cryptographically indistinguishable from any legitimate community member's credential.
+If a government informant genuinely satisfies a policy's `recipient_predicate`, they receive a valid card through legitimate channels. This card is cryptographically indistinguishable from any legitimate community member's credential.
 
-**What a valid mark enables for intelligence gathering:**
+**What a valid card enables for intelligence gathering:**
 
-1. **Authentication request interception**: The informant operates or infiltrates a community service that requests authentication. Every community member who authenticates to that service presents their `chitt_pointer` in the authentication response. The informant accumulates a list of mark pointers — stable identities for active community members.
+1. **Authentication request interception**: The informant operates or infiltrates a community service that requests authentication. Every community member who authenticates to that service presents their `card_pointer` in the authentication response. The informant accumulates a list of card pointers — stable identities for active community members.
 
-2. **Open offer issuance**: If the informant is in a position to create or distribute an open offer (`allow_open_offers: true`), they can distribute claim links and observe every recipient's `chitt_pointer` when they accept. The informant receives a notification (§2) when each acceptance completes.
+2. **Open offer issuance**: If the informant is in a position to create or distribute an open offer (`allow_open_offers: true`), they can distribute claim links and observe every recipient's `card_pointer` when they accept. The informant receives a notification (§2) when each acceptance completes.
 
-3. **Signed message interception**: If the informant is in the `recipients` array of community messages, they receive signed envelopes addressed to them. The `signer_chitt` field in each signature identifies the author's mark pointer — mapping community members who communicate with the informant.
+3. **Signed message interception**: If the informant is in the `recipients` array of community messages, they receive signed envelopes addressed to them. The `signer_card` field in each signature identifies the author's card pointer — mapping community members who communicate with the informant.
 
 **What this does NOT reveal:**
-- The holder's real-world identity (the mark contains no identity-linking fields unless the policy explicitly includes them).
-- Other community members' marks or activities that don't involve the informant directly.
+- The holder's real-world identity (the card contains no identity-linking fields unless the policy explicitly includes them).
+- Other community members' cards or activities that don't involve the informant directly.
 
-**The mapping becomes dangerous over time:** Each authentication to an informant-controlled service adds one mark pointer to the surveillance list. Over weeks or months, a significant fraction of active community members' mark pointers are identified — enabling correlation with subsequent de-anonymization attacks via Nym (Finding 1.3-B).
+**The mapping becomes dangerous over time:** Each authentication to an informant-controlled service adds one card pointer to the surveillance list. Over weeks or months, a significant fraction of active community members' card pointers are identified — enabling correlation with subsequent de-anonymization attacks via Nym (Finding 1.3-B).
 
-**Mitigation:** The authentication flow's unlinkability property (one mark per service context, as noted in §8) limits the utility of any single authentication event. However, repeated use of an informant-controlled service builds the same map more slowly. Communities should be educated about the authentication metadata exposure model and the importance of evaluating the trustworthiness of services before authenticating.
+**Mitigation:** The authentication flow's unlinkability property (one card per service context, as noted in §8) limits the utility of any single authentication event. However, repeated use of an informant-controlled service builds the same map more slowly. Communities should be educated about the authentication metadata exposure model and the importance of evaluating the trustworthiness of services before authenticating.
 
 ---
 
@@ -203,13 +203,13 @@ A government that wants to authorize its own press under a specific policy needs
 **Feasibility:** Practical once trust root is controlled
 **Adversary relevance:** State actor (Critical)
 
-With a captured trust root (either through the policy creation chain or via governance body compulsion), a state actor can create a policy chitt and issue marks to informants that satisfy `required_predicate` checks in community authentication flows.
+With a captured trust root (either through the policy creation chain or via governance body compulsion), a state actor can create a policy card and issue cards to informants that satisfy `required_predicate` checks in community authentication flows.
 
 **The attack mechanics:**
 
 1. The state creates or captures a policy whose trust chain reaches a root that the community has configured as trusted (OQ-9 — trusted root configuration UX is currently unresolved).
-2. The state issues marks to informants under this policy. The marks are valid: they carry a legitimate press signature and a holder countersignature.
-3. When an informant uses their mark to authenticate to a community service, the service's wallet verifies the chain — all the way to the trusted root — and returns `chain_reaches_trusted_root: true`.
+2. The state issues cards to informants under this policy. The cards are valid: they carry a legitimate press signature and a holder countersignature.
+3. When an informant uses their card to authenticate to a community service, the service's wallet verifies the chain — all the way to the trusted root — and returns `chain_reaches_trusted_root: true`.
 4. The community service admits the informant.
 
 **Why this is undetectable at the protocol level:**
@@ -229,9 +229,9 @@ The protocol currently has no mechanism for:
 
 An informant with a fake-but-verifying credential can:
 - Access community platforms that use `required_predicate` with the informant's policy as the required chain.
-- Participate in authentication flows and accumulate mark pointers of other community members (see Finding 3.1-C mechanics, now applied to a valid mark).
+- Participate in authentication flows and accumulate card pointers of other community members (see Finding 3.1-C mechanics, now applied to a valid card).
 - Sign messages that appear to come from a legitimate community member.
-- If the informant's mark is also used to satisfy predicates for receiving other community marks, the informant gains deeper access over time.
+- If the informant's card is also used to satisfy predicates for receiving other community cards, the informant gains deeper access over time.
 
 **Mitigation directions:**
 1. **Trusted root verification ceremony**: Communities should establish out-of-band verification of root identity before trusting a new root — for example, the root policy authorizer signs a statement at a known in-person event or verifiable public channel. This does not prevent compromise after verification but creates a known-good baseline.
@@ -251,22 +251,22 @@ Under Condition B, with the governance body captured (Finding 3.1-D), the state 
 **The attack sequence:**
 
 1. State press is authorized via `AuthorizePress` (governance body quorum, now controlled or compelled).
-2. State press posts 9xx revocations against all activist marks in the policy's scope:
+2. State press posts 9xx revocations against all activist cards in the policy's scope:
    - `code: 911` ("bad actor or harmful conduct")
    - `notify_holder: false` (no Nym notification to victims)
    - `revocation.effective_date`: set to a date before any specific event the state wants to contextualize (e.g., before a protest, before a news publication, before a legal filing)
-3. All affected marks now show as revoked in the on-chain registry.
-4. Verifiers who check any of these marks return `is_currently_valid: false` with a 9xx code.
+3. All affected cards now show as revoked in the on-chain registry.
+4. Verifiers who check any of these cards return `is_currently_valid: false` with a 9xx code.
 5. Every community platform that performs full verification rejects the affected holders.
 
-**Blast radius:** All marks under the controlled policy, simultaneously, from a single authorized press.
+**Blast radius:** All cards under the controlled policy, simultaneously, from a single authorized press.
 
 **The backdated narrative harm:** A 911 revocation with an `effective_date` months before the attack creates permanent false evidence in the append-only log. Verifiers checking historical signing validity will evaluate signatures made by the holder on or after that date as `was_valid_at_signing_time: false`. The holder's prior statements, votes, and authentications become retroactively suspect. This is a manufactured history rewrite.
 
-**Recovery:** The community can issue successor marks under a new, clean policy (if one can be established with an uncompromised governance registration), with `supersedes` pointers to the revoked marks and documentation of the attack. This requires:
+**Recovery:** The community can issue successor cards under a new, clean policy (if one can be established with an uncompromised governance registration), with `supersedes` pointers to the revoked cards and documentation of the attack. This requires:
 - A clean governance registration for the new policy (requires governance body cooperation — potentially the same body that was just compelled).
 - Community communication to all affected holders.
-- Tooling for fast successor mark issuance.
+- Tooling for fast successor card issuance.
 
 Recovery from a governance-body-mediated attack is structurally harder than recovery from a single compromised press, because the governance body is the only path to re-establishing legitimate press authorization.
 
@@ -277,28 +277,28 @@ Recovery from a governance-body-mediated attack is structurally harder than reco
 ### Finding 3.1-G — Surveillance via Forged Authentication Flows Aggregates Community Activity Map
 
 **Severity:** High
-**Feasibility:** Practical once a legitimate-appearing mark is established
+**Feasibility:** Practical once a legitimate-appearing card is established
 **Adversary relevance:** State actor (High)
 
-Under Condition B, a state actor with a legitimate-appearing mark (from Finding 3.1-E) operates a community service that requests authentication. Every community member who authenticates to this service presents:
+Under Condition B, a state actor with a legitimate-appearing card (from Finding 3.1-E) operates a community service that requests authentication. Every community member who authenticates to this service presents:
 
-- Their `chitt_pointer` (stable mark identity)
-- A signed authentication response tied to their mark
+- Their `card_pointer` (stable card identity)
+- A signed authentication response tied to their card
 - The timestamp of authentication
 - (For HTTPS fallback) their wallet service's IP address
 
 **What aggregate collection enables:**
 
-Over time, the state service accumulates the `chitt_pointer` for every active community member who has authenticated to it. Combined with chain analysis (Finding 3.1-A) and Nym correlation (Finding 1.3-B), this creates a community membership roster linked to:
-- Stable mark identities (which can be correlated with Nym gateway addresses)
+Over time, the state service accumulates the `card_pointer` for every active community member who has authenticated to it. Combined with chain analysis (Finding 3.1-A) and Nym correlation (Finding 1.3-B), this creates a community membership roster linked to:
+- Stable card identities (which can be correlated with Nym gateway addresses)
 - Authentication timing (activity patterns)
 - Any `requester_predicate` the service specifies (can narrow the membership list to specific subgroups)
 
-**The predicate specification as an intelligence tool:** The authentication request can include a `required_predicate` — "this service requires that you hold a mark issued under Policy X." A state actor who knows the policy CID used by a specific activist cell can construct a predicate that authenticates only members of that cell, filtering the captured mark pointers by group membership.
+**The predicate specification as an intelligence tool:** The authentication request can include a `required_predicate` — "this service requires that you hold a card issued under Policy X." A state actor who knows the policy CID used by a specific activist cell can construct a predicate that authenticates only members of that cell, filtering the captured card pointers by group membership.
 
-**Cross-reference:** This finding is the adversarial application of the §8 authentication flow. The authentication flow's privacy properties (CHAPI hides wallet service identity; Nym hides wallet IP from requester) protect the wallet service but not the community member's mark identity, which is the authentication payload by design. The security model assumes the requesting service is trustworthy.
+**Cross-reference:** This finding is the adversarial application of the §8 authentication flow. The authentication flow's privacy properties (CHAPI hides wallet service identity; Nym hides wallet IP from requester) protect the wallet service but not the community member's card identity, which is the authentication payload by design. The security model assumes the requesting service is trustworthy.
 
-**Mitigation:** The spec's §8 discussion of unlinkability (use a different mark per service context) is the primary defense. Communities should be educated to use context-specific marks for high-sensitivity services and to be suspicious of services that aggregate authentications across many community sub-groups.
+**Mitigation:** The spec's §8 discussion of unlinkability (use a different card per service context) is the primary defense. Communities should be educated to use context-specific cards for high-sensitivity services and to be suspicious of services that aggregate authentications across many community sub-groups.
 
 ---
 
@@ -323,9 +323,9 @@ With ADR-011, creating a root policy requires Root Policy Governance Body quorum
 - That the organization's field definitions accurately represent what credentials they will issue.
 - That the `recipient_predicate` will be applied honestly.
 
-**Sub-policy proliferation:** Once a root policy is registered and marked are issued under it, holders of those marks can create sub-policies (subject to `policy_creation` constraints). A criminal organization that obtains a few marks from a legitimate policy, using whatever predicate that policy requires, can create sub-policies under those marks — inheriting the legitimate root's trust lineage.
+**Sub-policy proliferation:** Once a root policy is registered and marked are issued under it, holders of those cards can create sub-policies (subject to `policy_creation` constraints). A criminal organization that obtains a few cards from a legitimate policy, using whatever predicate that policy requires, can create sub-policies under those cards — inheriting the legitimate root's trust lineage.
 
-**The `policy_creation` constraint gap:** The spec states: "Without [the `policy_creation` field], holders are unconstrained in what policies they create." If a legitimate root policy does not include `policy_creation` constraints, any holder of a mark under that policy can create sub-policies with arbitrary fields and predicates, inheriting the legitimate chain but issuing fraudulent credentials.
+**The `policy_creation` constraint gap:** The spec states: "Without [the `policy_creation` field], holders are unconstrained in what policies they create." If a legitimate root policy does not include `policy_creation` constraints, any holder of a card under that policy can create sub-policies with arbitrary fields and predicates, inheriting the legitimate chain but issuing fraudulent credentials.
 
 **Mitigation:** Root policy operators should uniformly include `policy_creation` constraints that prohibit sub-policies from using professional or consumer-trust-implying language (e.g., "certified," "licensed," "accredited") without explicit permission. The governance body should check for `policy_creation` constraints as part of the registration evaluation.
 
@@ -337,9 +337,9 @@ With ADR-011, creating a root policy requires Root Policy Governance Body quorum
 **Feasibility:** Practical
 **Adversary relevance:** Criminal org (High)
 
-The `allow_open_offers: true` flag enables mass issuance. The open offer document supports `max_acceptances: null` and `expires_at: null` — explicitly allowed, with the spec noting: "An open chitt offer with no constraints whatsoever requires explicit acknowledgment from the issuer at creation time."
+The `allow_open_offers: true` flag enables mass issuance. The open offer document supports `max_acceptances: null` and `expires_at: null` — explicitly allowed, with the spec noting: "An open card offer with no constraints whatsoever requires explicit acknowledgment from the issuer at creation time."
 
-**The on-chain enforcement reality:** The smart contract skips the `max_acceptances` check when the value is null and the `expires_at` check when null. A null-constrained open offer can issue marks to an unlimited number of claimants with no expiry. The issuer's signature commits to the null values — confirming they are intentional — but does not limit the rate or total volume of issuance.
+**The on-chain enforcement reality:** The smart contract skips the `max_acceptances` check when the value is null and the `expires_at` check when null. A null-constrained open offer can issue cards to an unlimited number of claimants with no expiry. The issuer's signature commits to the null values — confirming they are intentional — but does not limit the rate or total volume of issuance.
 
 **The fraud application:** A criminal organization operating a fraudulent "Certified Financial Advisor" policy creates an open offer with null constraints and distributes the claim link widely (email campaigns, social media, phishing sites). Any victim who follows the link and accepts receives a validly-signed credential that verifies correctly to a legitimate-appearing chain. The credential appears to certify the holder as a "Certified Financial Advisor" — and any verifier who doesn't independently evaluate the policy root will accept it.
 
@@ -349,26 +349,26 @@ The `allow_open_offers: true` flag enables mass issuance. The open offer documen
 
 ---
 
-### Finding 3.2-C — Predicate Gaming Chains Weak-Predicate Marks into Higher-Value Credential Contexts
+### Finding 3.2-C — Predicate Gaming Chains Weak-Predicate Cards into Higher-Value Credential Contexts
 
 **Severity:** Medium
 **Feasibility:** Practical with systematic effort
 **Adversary relevance:** Criminal org (High)
 
-Many deployed policies will specify `required_predicate` checks that require the presenter to hold a mark under a specific upstream policy. A criminal organization can systematically target the weakest links in predicate chains:
+Many deployed policies will specify `required_predicate` checks that require the presenter to hold a card under a specific upstream policy. A criminal organization can systematically target the weakest links in predicate chains:
 
 **The credential laundering path:**
 
 1. Identify a policy with no `recipient_predicate` (open issuance) or a weak predicate that can be satisfied through social engineering.
-2. Obtain marks under that policy — either legitimately (satisfying the predicate honestly) or through a purchased or fabricated predicate chain.
-3. Use those marks to satisfy the `required_predicate` for a moderately valuable policy (e.g., "must hold a community member mark" → receive a "verified trader" mark).
-4. Use the "verified trader" mark to satisfy the predicate for a high-value policy (e.g., "must hold a verified trader mark" → receive a "licensed financial professional" mark).
+2. Obtain cards under that policy — either legitimately (satisfying the predicate honestly) or through a purchased or fabricated predicate chain.
+3. Use those cards to satisfy the `required_predicate` for a moderately valuable policy (e.g., "must hold a community member card" → receive a "verified trader" card).
+4. Use the "verified trader" card to satisfy the predicate for a high-value policy (e.g., "must hold a verified trader card" → receive a "licensed financial professional" card).
 
 **The chain depth defense:** The `chain_depth_at_most` predicate limits how deep a chain can be at the point of authentication. A policy that specifies `{ "chain_depth_at_most": 2 }` will not accept credentials with long chains — but many policies will not use this predicate, and a criminal organization targeting policies without it can build arbitrarily deep chains.
 
 **The detection gap:** Each step in the predicate chain is individually valid — the criminal organization satisfied the predicate at each level. The fraud is at the root level (the initial weak policy was exploited), but by the time a verifier checks the chain, they see a sequence of valid credentials, each properly signed by authorized presses, each reaching a trusted root.
 
-**Mitigation:** High-value policies should use `chain_depth_at_most` constraints and should explicitly specify trusted root policies by CID rather than accepting any chain that verifies. A "must hold a mark under this specific root policy" check is harder to launder than a "must hold any mark from any chain that reaches any trusted root" check.
+**Mitigation:** High-value policies should use `chain_depth_at_most` constraints and should explicitly specify trusted root policies by CID rather than accepting any chain that verifies. A "must hold a card under this specific root policy" check is harder to launder than a "must hold any card from any chain that reaches any trusted root" check.
 
 ---
 
@@ -404,30 +404,30 @@ The service's verification machinery returns `chain_reaches_trusted_root: true`.
 
 A technically sophisticated individual abuser — a former partner, a stalker with some technical capability, or an adversary within a shared community — attempts to use the protocol to track, control, expose, or harm a specific target. This scenario is the most directly personal of the three adversary types and is the one most likely to affect the protocol's user populations of abuse survivors and community members with personal safety concerns.
 
-### Finding 3.3-A — Authentication Metadata Surveillance Uses Mark Pointer as Stable Tracking Identifier
+### Finding 3.3-A — Authentication Metadata Surveillance Uses Card Pointer as Stable Tracking Identifier
 
 **Severity:** Medium
 **Feasibility:** Practical
 **Adversary relevance:** Individual abuser (High), Criminal org (Medium)
 
-The authentication flow (§8) requires the holder to include their `chitt_pointer` in the authentication response. This is required for the requesting site to verify the credential. As a consequence, every site a holder authenticates to receives their stable mark identity.
+The authentication flow (§8) requires the holder to include their `card_pointer` in the authentication response. This is required for the requesting site to verify the credential. As a consequence, every site a holder authenticates to receives their stable card identity.
 
 **The tracking mechanism:**
 
 1. Abuser operates or infiltrates a service that the target regularly authenticates to.
-2. Target's `chitt_pointer` appears in every authentication response.
+2. Target's `card_pointer` appears in every authentication response.
 3. Abuser stores the pointer with timestamps, building a log of "target was active at [times]."
-4. If the target uses the same mark across multiple of the abuser's services (or the abuser controls multiple services), the abuser aggregates a cross-service activity timeline.
-5. Abuser can poll the on-chain Arbitrum One registry for the target's mark pointer: any new log entries (updates, revocations) are observable, revealing when the mark was last modified.
+4. If the target uses the same card across multiple of the abuser's services (or the abuser controls multiple services), the abuser aggregates a cross-service activity timeline.
+5. Abuser can poll the on-chain Arbitrum One registry for the target's card pointer: any new log entries (updates, revocations) are observable, revealing when the card was last modified.
 
-**The spec's unlinkability recommendation:** §8 notes that using a different mark per service context limits cross-service correlation. However:
-- Many users will use one mark across multiple services — especially in small communities where a single "community member" mark is the credential.
-- Using per-service marks requires managing multiple keychains, which most users will not do.
-- If the abuser is within the target's community, they may know which mark the target uses for community authentication.
+**The spec's unlinkability recommendation:** §8 notes that using a different card per service context limits cross-service correlation. However:
+- Many users will use one card across multiple services — especially in small communities where a single "community member" card is the credential.
+- Using per-service cards requires managing multiple keychains, which most users will not do.
+- If the abuser is within the target's community, they may know which card the target uses for community authentication.
 
-**On-chain monitoring:** Once the abuser has the target's mark pointer, they can subscribe to on-chain events for that registry address. Any update to the mark's log head (a new 8xx/9xx entry, a field update, even a 300-neutral-update) is visible as a transaction. The abuser knows when the target's credential was last active, which is itself surveillance data.
+**On-chain monitoring:** Once the abuser has the target's card pointer, they can subscribe to on-chain events for that registry address. Any update to the card's log head (a new 8xx/9xx entry, a field update, even a 300-neutral-update) is visible as a transaction. The abuser knows when the target's credential was last active, which is itself surveillance data.
 
-**Mitigation:** Wallet clients should make it easy to use per-context marks and should automatically suggest context separation when the same mark has been used across many unrelated services. The spec's §8 unlinkability note should be promoted from optional guidance to a recommended practice in the wallet UX specification.
+**Mitigation:** Wallet clients should make it easy to use per-context cards and should automatically suggest context separation when the same card has been used across many unrelated services. The spec's §8 unlinkability note should be promoted from optional guidance to a recommended practice in the wallet UX specification.
 
 ---
 
@@ -437,18 +437,18 @@ The authentication flow (§8) requires the holder to include their `chitt_pointe
 **Feasibility:** Practical where abuser has had any authorized role
 **Adversary relevance:** Individual abuser (High), State actor (Medium)
 
-If the abuser was once a press operator for a community that the target is a member of, they may retain the ability to post entries against the target's mark — even after the abuser's relationship with the community has ended.
+If the abuser was once a press operator for a community that the target is a member of, they may retain the ability to post entries against the target's card — even after the abuser's relationship with the community has ended.
 
 **The residual authority scenarios:**
 
-1. **Former press operator, press not yet revoked**: If the abuser's press has not been explicitly revoked via `RevokePress` (governance quorum required under ADR-011), the press key remains active in `PressAuthorizations`. The abuser can continue posting entries against marks in the policy's scope. This includes:
+1. **Former press operator, press not yet revoked**: If the abuser's press has not been explicitly revoked via `RevokePress` (governance quorum required under ADR-011), the press key remains active in `PressAuthorizations`. The abuser can continue posting entries against cards in the policy's scope. This includes:
    - 9xx revocations with `notify_holder: false` and backdated `effective_date`.
    - 6xx negative annotations (concern entries that reduce the target's visible standing without formal revocation).
    - Suppressing 810 self-revocation intents the target submits.
 
-2. **Former press operator, press revoked**: Once `RevokePress` is executed, the press key loses write authority. Past entries the press posted (including any 9xx entries) remain in the append-only log permanently — they cannot be removed. The target can obtain a successor mark with a `supersession_note` documenting the situation, but the original entries remain visible.
+2. **Former press operator, press revoked**: Once `RevokePress` is executed, the press key loses write authority. Past entries the press posted (including any 9xx entries) remain in the append-only log permanently — they cannot be removed. The target can obtain a successor card with a `supersession_note` documenting the situation, but the original entries remain visible.
 
-3. **Annotator with residual signing authority**: If the abuser holds an annotator mark (under the third-party annotation system), they can post annotations against the target. The evidence requirement (a statement signed by the mark in question, or by a trusted mark holder) applies — but the abuser may have prior signed statements from the target, or may be able to socially engineer a trusted co-signer (see Finding 3.4-A).
+3. **Annotator with residual signing authority**: If the abuser holds an annotator card (under the third-party annotation system), they can post annotations against the target. The evidence requirement (a statement signed by the card in question, or by a trusted card holder) applies — but the abuser may have prior signed statements from the target, or may be able to socially engineer a trusted co-signer (see Finding 3.4-A).
 
 **The `notify_holder: false` harassment path:** The most damaging scenario is a 9xx entry with `notify_holder: false`. The target does not receive a notification. They discover the revocation only when they attempt to authenticate somewhere and are rejected. The backdated `effective_date` means verifiers see the target as having been a "bad actor" before recent events — a reputational attack that is particularly harmful if the target has just publicly reported abuse and community members are evaluating their credibility.
 
@@ -470,19 +470,19 @@ If the abuser was once a press operator for a community that the target is a mem
 This finding cross-references Phase 2 Finding 2.3-C and applies it specifically to the intimate partner abuse scenario.
 
 **What Secure Enclave/TPM prevents:**
-- Raw sub-chitt private key exfiltration from the device. The hardware boundary means that even an attacker with OS-level access cannot read the key material from storage. The key can only be used by operations that pass through the Secure Enclave API.
+- Raw sub-card private key exfiltration from the device. The hardware boundary means that even an attacker with OS-level access cannot read the key material from storage. The key can only be used by operations that pass through the Secure Enclave API.
 
 **What Secure Enclave does NOT prevent in the individual abuser context:**
 1. **In-session signing**: While the device is unlocked (screen on, biometrics or PIN recently used), the wallet app can sign operations without an additional authentication prompt — depending on wallet implementation. An abuser with brief access to an unlocked device can initiate authentication flows and message signings.
 2. **Passkey observation**: An abuser who lives with or regularly observes the target can observe PIN entry, shoulder-surf biometric setup, or note the device's unlock pattern. The passkey protecting the keyring is as strong as the target's ability to keep it secret.
-3. **Monitoring software installation**: An abuser with unlocked device access and sufficient technical skill can install a monitoring application that captures biometrics, PIN entry, application screens, and network traffic — effectively converting the phone into a surveillance device. Sub-chitt keys in Secure Enclave cannot be extracted, but a monitoring app can capture signed payloads before they leave the app.
+3. **Monitoring software installation**: An abuser with unlocked device access and sufficient technical skill can install a monitoring application that captures biometrics, PIN entry, application screens, and network traffic — effectively converting the phone into a surveillance device. Sub-card keys in Secure Enclave cannot be extracted, but a monitoring app can capture signed payloads before they leave the app.
 4. **Keyring blob address**: If the wallet stores the IPFS keyring blob address in local app storage (likely for offline access), the abuser can note this address and fetch the encrypted blob. The blob requires `passkey + service_secret` to decrypt — but if the passkey is observed and the service secret is locally cached, decryption may be feasible.
 
 **Recovery for a discovered intimate-partner compromise:**
 1. Reset the device (not just the app) to eliminate any installed monitoring software.
 2. Generate a new passkey and re-encrypt the keyring under it.
 3. Register with a new primary service to obtain a new `service_secret`.
-4. Submit 810 intents for any sub-chitts that may have been used by the abuser.
+4. Submit 810 intents for any sub-cards that may have been used by the abuser.
 5. Consider whether the YubiKey backup registration should also be updated if the abuser may have observed the PIN.
 
 **Mitigation:** The wallet spec should require biometric confirmation for every individual signing event (not just app unlock), making brief physical access insufficient for misuse. This should be documented as a required wallet behavior for safety-sensitive deployments, not a performance optimization choice.
@@ -495,28 +495,28 @@ This finding cross-references Phase 2 Finding 2.3-C and applies it specifically 
 **Feasibility:** Practical for a motivated individual abuser with some technical capability
 **Adversary relevance:** Individual abuser (High), State actor (High), Criminal org (Medium)
 
-This finding applies Phase 1 Finding 1.3-D to the individual abuser scenario. The protocol exposes the target's Nym gateway address in their mark metadata — for public marks, this is plaintext.
+This finding applies Phase 1 Finding 1.3-D to the individual abuser scenario. The protocol exposes the target's Nym gateway address in their card metadata — for public cards, this is plaintext.
 
 **The exposure chain:**
 
-1. The abuser obtains the target's `chitt_pointer` from a single authentication interaction (see Finding 3.3-A).
-2. For a fully public mark: the abuser fetches the mark metadata from IPFS, which includes the Nym gateway address in plaintext.
-3. The abuser now knows the stable Nym endpoint that receives all of the target's mark-related messages.
+1. The abuser obtains the target's `card_pointer` from a single authentication interaction (see Finding 3.3-A).
+2. For a fully public card: the abuser fetches the card metadata from IPFS, which includes the Nym gateway address in plaintext.
+3. The abuser now knows the stable Nym endpoint that receives all of the target's card-related messages.
 4. Traffic analysis: even without reading message content (Nym encrypts content), the gateway's message arrival timestamps reveal:
-   - When the target receives issuance confirmations (someone new issued them a mark).
+   - When the target receives issuance confirmations (someone new issued them a card).
    - When the target receives update notifications.
    - When the target receives authentication responses (they authenticated somewhere).
 5. A technically capable abuser who also operates Nym nodes can attempt partial de-anonymization via timing correlation — correlating outbound authentication response traffic with the gateway's inbound message timing.
 
-**The cross-mark correlation problem (Finding 1.3-D):** If the target uses the same Nym gateway address for multiple marks across different communities, the abuser who knows one of the target's marks can infer that other marks sharing the gateway address belong to the same holder — linking otherwise pseudonymous identities.
+**The cross-card correlation problem (Finding 1.3-D):** If the target uses the same Nym gateway address for multiple cards across different communities, the abuser who knows one of the target's cards can infer that other cards sharing the gateway address belong to the same holder — linking otherwise pseudonymous identities.
 
-**The consequence for abuse survivors:** A target who has left an abusive situation, established a new community identity under a pseudonymous mark, and is building a new life may still be findable via their Nym gateway address if the abuser knew their old mark. Gateway address persistence creates a tracking vector that survives context separation.
+**The consequence for abuse survivors:** A target who has left an abusive situation, established a new community identity under a pseudonymous card, and is building a new life may still be findable via their Nym gateway address if the abuser knew their old card. Gateway address persistence creates a tracking vector that survives context separation.
 
 **Individual abuser vs. state actor capability:**
 - *Individual abuser*: Can observe gateway activity patterns (message arrival timing) without Nym node operation. The gateway address is the primary finding; timing data is secondary. For most individual abusers, this stops at "I know when they receive messages" — which is still surveillance but short of full de-anonymization.
 - *State actor*: Can use Nym node infrastructure for full traffic correlation (Finding 1.3-B) — linking the target's Nym gateway to a physical IP.
 
-**Mitigation:** Wallet clients should recommend periodic Nym gateway address rotation — using the append-only log update mechanism — for users with public marks or users who have recently authenticated to untrusted services. Different marks should use different gateway addresses by default to prevent cross-mark correlation. The spec's existing note on gateway address rotation (Finding 1.3-D mitigations) should be elevated from a suggestion to a wallet UX requirement for safety-sensitive deployments.
+**Mitigation:** Wallet clients should recommend periodic Nym gateway address rotation — using the append-only log update mechanism — for users with public cards or users who have recently authenticated to untrusted services. Different cards should use different gateway addresses by default to prevent cross-card correlation. The spec's existing note on gateway address rotation (Finding 1.3-D mitigations) should be elevated from a suggestion to a wallet UX requirement for safety-sensitive deployments.
 
 ---
 
@@ -524,7 +524,7 @@ This finding applies Phase 1 Finding 1.3-D to the individual abuser scenario. Th
 
 ### Context
 
-The safety annotator system (described in `raw_notes/Third party attestations when chit holders cause harm.md`) operates on top of the EAS annotation layer (ADR-008). Annotators post to a separate EAS contract on Arbitrum One; their mutable pointers point to annotation records rather than to the annotated marks. Valid annotations require signed evidence: a statement signed by the mark in question, or by a trusted mark holder. Annotators are filtered by trust roots configured independently from normal mark roots.
+The safety annotator system (described in `raw_notes/Third party attestations when card holders cause harm.md`) operates on top of the EAS annotation layer (ADR-008). Annotators post to a separate EAS contract on Arbitrum One; their mutable pointers point to annotation records rather than to the annotated cards. Valid annotations require signed evidence: a statement signed by the card in question, or by a trusted card holder. Annotators are filtered by trust roots configured independently from normal card roots.
 
 Three properties shape the safety layer's attack surface: (1) evidence requirements are mandatory but not cryptographically foolproof against social engineering; (2) annotators have "easily discoverable mutable pointers" by design; and (3) annotations on EAS are immutable — once posted, they cannot be deleted, only superseded.
 
@@ -535,12 +535,12 @@ Three properties shape the safety layer's attack surface: (1) evidence requireme
 **Adversary relevance:** Criminal org (Medium), State actor (Low direct, but see 3.4-B)
 
 The annotation evidence requirement has two branches:
-1. A statement signed by the mark in question — requires the target's private key. Practically infeasible to forge.
-2. A statement signed by a trusted mark holder who vouches for the annotation's accuracy — requires social engineering a trusted member of the community or annotator ecosystem.
+1. A statement signed by the card in question — requires the target's private key. Practically infeasible to forge.
+2. A statement signed by a trusted card holder who vouches for the annotation's accuracy — requires social engineering a trusted member of the community or annotator ecosystem.
 
 **The realistic forgery path — option 2:**
 
-A criminal organization targeting a specific community member who is exposing their fraud scheme can attempt to deceive a trusted mark holder into signing a statement that appears to describe the target's conduct. The key challenge for the attacker: the trusted co-signer must believe they are signing an accurate statement. Social engineering scenarios:
+A criminal organization targeting a specific community member who is exposing their fraud scheme can attempt to deceive a trusted card holder into signing a statement that appears to describe the target's conduct. The key challenge for the attacker: the trusted co-signer must believe they are signing an accurate statement. Social engineering scenarios:
 - Present manipulated or selectively edited evidence to a trusted community member.
 - Create a fake context in which the trusted member believes they observed the harmful conduct directly.
 - Use an informant who is a legitimate community member and a trusted co-signer (a variant of Finding 3.1-C infiltration).
@@ -579,7 +579,7 @@ A government that compels a safety annotator to publish false annotations agains
 - Community members who trust the annotator will act on the annotation — excluding the activist from community spaces, treating their credentials with suspicion
 - The annotation is signed and publicly visible — it becomes the evidence record that the state can cite in legal proceedings or public communications as "an independent safety organization flagged this person"
 
-This is a particularly insidious attack because the safety layer is specifically designed to protect vulnerable people. Turning it against those people — using the safety annotator's accumulated trust as a weapon — is the most dangerous misuse of the annotation architecture.
+This is a particularly insidious attack because the safety layer is specifically designed to protect vulnerable people. Turning it against those people — using the safety annotator's accumulated trust as a weapon — is the most dangerous misuse of the annotation arcardecture.
 
 **The discovery problem:** How does a community detect that their trusted annotator has been compromised? The annotator's methodology and evidence standards are published — but a compelled annotator may post a plausible-seeming annotation with fabricated evidence. Detection requires:
 - The annotated target publishing a credible counter-annotation via right of reply.
@@ -614,7 +614,7 @@ A criminal organization operating a fraudulent community platform simply does no
 
 **Partial mitigations:**
 1. Wallet services (rather than community platforms) could implement their own annotation lookup as a client-side check, independent of the requesting service's configuration. A wallet that checks annotations at authentication time — before presenting the holder's credential — can warn the holder that they are authenticating to a service whose operators have been flagged, even if the service doesn't check annotations.
-2. The spec should document the annotation suppression pattern as a known risk in the annotator architecture section, so communities deploying the protocol understand why it matters.
+2. The spec should document the annotation suppression pattern as a known risk in the annotator arcardecture section, so communities deploying the protocol understand why it matters.
 
 ---
 

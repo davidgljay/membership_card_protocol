@@ -6,7 +6,7 @@ Glossary
 
 **Sub-Card** — A device-level keypair registered under a master card. Sub-cards are used for all routine signing operations (messages, authentication challenges, room entry) so that the master card's private key can remain cold. A holder may have multiple active sub-cards across devices. Revoking a sub-card (e.g. on a lost device) does not affect the master card or other sub-cards.
 
-**Keyring** — An append-only encrypted blob stored on IPFS that contains a holder's private keys (master card key and sub-card keys). The keyring is decryptable only with a key derived from a passkey combined with a service secret, or via a YubiKey-wrapped decryption key for recovery. Whoever holds the keyring decryption key controls the cards in that keyring.
+**Wallet** — An append-only encrypted blob stored on IPFS that contains a holder's private keys (master card key and sub-card keys). The keyring is decryptable only with a key derived from a passkey combined with a service secret, or via a YubiKey-wrapped decryption key for recovery. Whoever holds the keyring decryption key controls the cards in that keyring.
 
 **Membership Card Press** — A gated enclave service that generates new cards according to a signed policy and distributes them to recipients. Think of a card as a small piece of metal and the Membership Card Press as the machine that stamps out new ones — it can only produce what the die (policy) specifies, and the die itself must be approved before the press will accept it.
 
@@ -18,7 +18,7 @@ Glossary
 
 **Log Root** — A signed Merkle root over all entries in a card's append-only log at a given moment. Log roots are anchored on-chain, providing a trusted timestamp and rollback resistance. Signatures on messages commit to the log root at signing time, enabling retroactive key-compromise revocation.
 
-**Policy** — A structured, signed document that specifies exactly how a Membership Card Press will operate: who is authorized to invoke it, what evidence is required, what the output card will contain, how the issuance log is managed, and what revocation cascading rules apply. A policy must be approved (signed) by an authorizing card before the press will accept it. The policy's CID is its stable identity across enclave deployments.
+**Card Policy** — A structured, signed document that specifies exactly how a Membership Card Press will operate: who is authorized to invoke it, what evidence is required, what the output card will contain, how the issuance log is managed, and what revocation cascading rules apply. A policy must be approved (signed) by an authorizing card before the press will accept it. The policy's CID is its stable identity across enclave deployments.
 
 **Template Membership Card** — A card issued by an authorizer that binds their signing authority to a specific policy and enclave deployment. It is the runtime trust anchor: any card produced by the enclave chains to the template card, which chains to the authorizer. Verifiers walking the chain can confirm not just that the authorizer approved a template, but that they approved this specific policy running on this specific attested code.
 
@@ -36,7 +36,6 @@ Glossary
 
 **Annotation Policy** — A signed document (analogous to an issuance policy) that governs who is permitted to annotate a card and in what ways. For example, an annotation policy might allow certain card types to append metadata but not to revoke, or might require corroboration from multiple annotators before a warning is surfaced. If a card type does not specify an annotation policy, a default permissionless model applies (any card holder may publish a third-party annotation, subject to verifier-side filtering).
 
-**Nym Gateway** — The card's inbound messaging address, embedded in its metadata. Messages are routed through the Nym mixnet to this gateway, which hides the sender's identity and timing. The gateway is a field in the card's metadata; holders who operate their own message server can set it to their own endpoint.
 
 **Membership Card Image** — An optional IPFS-hosted image associated with a card, referenced by CID in the card's metadata document. The image is intended for display in a hexagonal frame as the visual representation of the card. If a policy includes an image CID field, the issuer supplies the CID at issuance time as part of the proposed card JSON, and it is committed to by the enclave's signature along with all other issuer-populated fields. A card with no image CID displays a default or blank hexagonal tile.
 
