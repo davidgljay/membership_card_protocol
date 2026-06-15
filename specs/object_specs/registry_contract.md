@@ -21,7 +21,7 @@
    - 3.6 [GovernanceKeysets](#36-governancekeysets)
 4. [Write Operations](#4-write-operations)
    - 4.1 [RegisterCard](#41-registermark)
-   - 4.2 [UpdateMarkHead](#42-updatemarkhead)
+   - 4.2 [UpdateCardHead](#42-updatecardhead)
    - 4.3 [RegisterSubCard](#43-registersubcard)
    - 4.4 [DeregisterSubCard](#44-deregistersubcard)
    - 4.5 [ClaimOpenOffer](#45-claimopenoffer)
@@ -30,6 +30,9 @@
    - 4.8 [RevokePress](#48-revokepress)
    - 4.9 [RotateAuthorizerKey](#49-rotateauthorizerkey)
    - 4.10 [RotateGovernanceKeys](#410-rotategovernancekeys)
+   - 4.11 [RotateOnChainKeyScheme](#411-rotateonchainKeyscheme)
+   - 4.12 [Gas Payment and Rate Limiting](#412-gas-payment-and-rate-limiting)
+   - 4.13 [RegisterAddressForward](#413-registeraddressforward)
 5. [Read Operations](#5-read-operations)
 6. [Authorization Model](#6-authorization-model)
    - 6.1 [Card Write Gate](#61-card-write-gate)
@@ -76,10 +79,8 @@ One entry per registered card. Keyed by `card_address`.
 CardEntries: mapping (bytes32 → CardEntry)
 
 CardEntry {
-    log_head_cid      bytes         — Current IPFS log head CID.
-                                      Public mode:  plaintext CID bytes.
-                                      Private mode: ML-KEM-encrypted CID bytes.
-                                      Updated on every successful RegisterCard or UpdateMarkHead call.
+    log_head_cid      bytes         — Current IPFS log head CID, stored as plaintext CID bytes.
+                                      Updated on every successful RegisterCard or UpdateCardHead call.
 
     policy_address    bytes32       — On-chain registry address of the policy card under which
                                       this card was issued. Set at RegisterCard time; immutable
@@ -87,9 +88,15 @@ CardEntry {
                                       PressAuthorizations[policy_address, press_address].
 
     last_press_address bytes32      — On-chain registry address of the press sub-card whose key
-                                      signed the most recent write (RegisterCard or UpdateMarkHead).
+                                      signed the most recent write (RegisterCard or UpdateCardHead).
                                       Updated on every successful write. Provides an on-chain
                                       attribution trail independent of IPFS content.
+
+    forward_to        bytes32       — If non-zero, the registry address of the card that supersedes
+                                      this one following a key rotation. Set by RegisterAddressForward
+                                      (§4.13); immutable once set. A client that resolves this address
+                                      and finds forward_to non-zero SHOULD follow it to the new address.
+                                      Zero value (default) means no forward is registered.
 
     exists            bool          — True once the entry has been created by RegisterCard;
                                       used to distinguish unregistered addresses from cards
@@ -97,14 +104,9 @@ CardEntry {
 }
 ```
 
-**Address derivation (client-side, not enforced by contract):**
+**Address derivation (client-side, not enforced by contract):** a card's address is always `keccak256(recipient_pubkey)` — a single public derivation, no private/secret-derived addresses (see `ARCHITECTURE.md` ADR-006).
 
-| Privacy mode | Address derivation |
-|---|---|
-| Public | `keccak256(recipient_pubkey)` |
-| Private | `keccak256(sign(recipient_private_key, "card-address-v1"))` |
-
-The contract does not distinguish between public and private addresses; both are `bytes32` keys. The privacy properties are enforced by the client's choice of derivation and by whether `log_head_cid` is stored as plaintext or encrypted bytes.
+All card addresses are `bytes32` keys derived as `keccak256(recipient_pubkey)`; `log_head_cid` is always stored as plaintext CID bytes.
 
 **Encoding of `log_head_cid`:** The CID is stored as raw bytes (multihash format). Maximum length is 64 bytes, which accommodates SHA2-256 (34 bytes), SHA3-256 (34 bytes), and BLAKE3 (34 bytes) CIDs. The contract does not validate CID format; format is the press's responsibility.
 
@@ -173,7 +175,7 @@ PressAuthEntry {
 }
 ```
 
-**Write gate check:** On any card write (RegisterCard, UpdateMarkHead), the contract:
+**Write gate check:** On any card write (RegisterCard, UpdateCardHead), the contract:
 
 1. Resolves `policyAddress` from the target `CardEntry.policy_address`.
 2. Looks up `PressAuthorizations[policyAddress][pressAddress]`.
@@ -189,7 +191,7 @@ Maps a sub-card's registry address to its master card's registry address and the
 SubCardRegistrations: mapping (bytes32 → SubCardEntry)
 
 SubCardEntry {
-    master_mark_address     bytes32   — Registry address of the master card.
+    master_card_address     bytes32   — Registry address of the master card.
 
     registration_log_head   bytes     — Log head CID of the master card at the time this
                                         sub-card was registered. Used for scope-attenuation
@@ -213,7 +215,7 @@ Tracks acceptance counts for open card offers. Keyed by the offer's canonical ID
 ```
 OpenOfferUseCounts: mapping (bytes32 → uint64)
 
-key:   offer_id (bytes32)   — keccak256(canonical CBOR of the complete OpenMarkOffer document
+key:   offer_id (bytes32)   — keccak256(canonical RFC 8785 JSON of the complete OpenCardOffer document
                                including issuer_signature). Lazily initialized on first accepted claim.
 value: use_count (uint64)   — Number of accepted claims under this offer. Atomically incremented
                                by ClaimOpenOffer (§4.5).
@@ -278,7 +280,7 @@ RegisterCard(
     card_address       bytes32,   — Derived by client; see §3.1 address derivation
     initial_log_cid    bytes,     — CID of the genesis CardDocument on IPFS
     policy_address     bytes32,   — Registry address of the governing policy card
-    press_sig_payload  bytes,     — Canonical CBOR of the RegisterCardPayload (see below)
+    press_sig_payload  bytes,     — Canonical RFC 8785 JSON of the RegisterCardPayload (see below)
     press_signature    bytes[64]  — secp256r1 signature (r||s) over keccak256(press_sig_payload),
                                     verified via RIP-7212 against PressAuthorizations.press_public_key
 ) → void
@@ -312,25 +314,25 @@ RegisterCard(
 
 ---
 
-### 4.2 UpdateMarkHead
+### 4.2 UpdateCardHead
 
 **Called by:** Press (authorized for the card's policy)  
 **Purpose:** Advance the card's log head to a new CID after any post-genesis update (field change, annotation, revocation).
 
 ```
-UpdateMarkHead(
+UpdateCardHead(
     card_address      bytes32,   — Existing card to update
     new_log_cid       bytes,     — CID of the new log head (latest LogEntry on IPFS)
-    press_sig_payload bytes,     — Canonical CBOR of the UpdateMarkHeadPayload (see below)
+    press_sig_payload bytes,     — Canonical RFC 8785 JSON of the UpdateCardHeadPayload (see below)
     press_signature   bytes[64]  — secp256r1 signature (r||s) over keccak256(press_sig_payload)
 ) → void
 ```
 
-**`UpdateMarkHeadPayload` (signed by press):**
+**`UpdateCardHeadPayload` (signed by press):**
 
 ```json
 {
-  "op":              "update_mark_head",
+  "op":              "update_card_head",
   "card_address":    "<base64url — bytes32>",
   "prev_log_cid":    "<base64url — current log_head_cid; prevents lost-update race>",
   "new_log_cid":     "<base64url — CID bytes>",
@@ -354,21 +356,21 @@ UpdateMarkHead(
 - Updates `CardEntries[card_address].log_head_cid = new_log_cid`.
 - Updates `CardEntries[card_address].last_press_address = press_address`.
 
-**Note on revocations:** The contract does not distinguish between update codes (field changes vs. revocations). Both use `UpdateMarkHead`. The update code semantics (1xx–9xx) live in the LogEntry stored on IPFS; the contract is code-agnostic. Revocation status is determined by verifiers reading the log from IPFS, not by on-chain state beyond the head pointer.
+**Note on revocations:** The contract does not distinguish between update codes (field changes vs. revocations). Both use `UpdateCardHead`. The update code semantics (1xx–9xx) live in the LogEntry stored on IPFS; the contract is code-agnostic. Revocation status is determined by verifiers reading the log from IPFS, not by on-chain state beyond the head pointer.
 
 ---
 
 ### 4.3 RegisterSubCard
 
-**Called by:** Press (authorized for the card's policy), on behalf of the sub-card holder. Gas is paid from the requesting app's pre-funded gas account with the press (see §4.11). The press verifies the holder's authorization off-chain before submitting; the holder's signature in `master_sig_payload` is included for auditability.  
+**Called by:** Press (authorized for the card's policy), on behalf of the sub-card holder. Gas is paid from the requesting app's pre-funded gas account with the press (see §4.12). The press verifies the holder's authorization off-chain before submitting; the holder's signature in `master_sig_payload` is included for auditability.  
 **Purpose:** Register a new sub-card (device key delegation) under a master card.
 
 ```
 RegisterSubCard(
     sub_card_address       bytes32,    — Registry address of the new sub-card
-    master_mark_address    bytes32,    — Registry address of the master card
+    master_card_address    bytes32,    — Registry address of the master card
     registration_log_head  bytes,      — Current log_head_cid of master card (snapshot for scope check)
-    master_sig_payload     bytes,      — Canonical CBOR of the RegisterSubCardPayload
+    master_sig_payload     bytes,      — Canonical RFC 8785 JSON of the RegisterSubCardPayload
     master_signature       bytes[2420] — ML-DSA-44 signature over master_sig_payload,
                                          using the master card's holder key.
                                          Note: master card holder keys are ML-DSA-44 (IPFS identity
@@ -383,7 +385,7 @@ RegisterSubCard(
 {
   "op":                       "register_sub_card",
   "sub_card_address":         "<base64url — bytes32>",
-  "master_mark_address":      "<base64url — bytes32>",
+  "master_card_address":      "<base64url — bytes32>",
   "registration_log_head":    "<base64url — CID bytes>",
   "sequence":                 <uint64 — must equal PressAuthorizations[policy][press].next_sequence>,
   "timestamp":                "<ISO 8601>"
@@ -392,22 +394,22 @@ RegisterSubCard(
 
 **Preconditions checked by contract:**
 
-1. `master_mark_address` exists in `CardEntries`.
+1. `master_card_address` exists in `CardEntries`.
 2. `sub_card_address` does not already exist in `SubCardRegistrations` with `active == true`.
-3. `registration_log_head` matches `CardEntries[master_mark_address].log_head_cid` at call time. (Ensures the snapshot is current; prevents a holder from registering a sub-card claiming authority the master no longer holds.)
-4. `master_signature` verifies against the master card holder's public key.
+3. `registration_log_head` matches `CardEntries[master_card_address].log_head_cid` at call time. (Ensures the snapshot is current; prevents a holder from registering a sub-card claiming authority the master no longer holds.)
+4. Press authorization checks (§6.1) pass for the master card's policy.
 
-> **Resolution (INC-10/OQ-4/OQ-16):** All writes go through a press. The press verifies `master_signature` off-chain against the holder public key from the card's `CardDocument` (fetched from IPFS). The contract verifies only press authorization (§6.1 write gate). The holder signature in calldata remains as an auditable proof of holder intent; the press bears responsibility for off-chain verification and is sanctioned/revoked if it submits unauthorized registrations.
+> **Master signature is press-side only.** The press verifies `master_signature` (ML-DSA-44) off-chain against the holder public key from the card's `CardDocument` (fetched from IPFS) before submitting. The contract does not re-verify the master signature. The holder signature in calldata is retained as an auditable proof of holder intent. A press submitting a sub-card registration without a valid holder signature is detectable by observers and constitutes a press policy violation (press-side error E-22).
 
 **State changes:**
 
-- Creates `SubCardRegistrations[sub_card_address] = { master_mark_address, registration_log_head, active: true, registered_at: block.timestamp, deregistered_at: 0 }`.
+- Creates `SubCardRegistrations[sub_card_address] = { master_card_address, registration_log_head, active: true, registered_at: block.timestamp, deregistered_at: 0 }`.
 
 ---
 
 ### 4.4 DeregisterSubCard
 
-**Called by:** Press (authorized for the card's policy), on behalf of the sub-card holder or issuing organization. Gas is paid by the issuing organization's press in all cases (see §4.11).  
+**Called by:** Press (authorized for the card's policy), on behalf of the sub-card holder or issuing organization. Gas is paid from the requesting app's pre-funded gas account (see §4.12); if the app account has insufficient balance, the issuing organization's press sponsors the cost.  
 **Purpose:** Mark a sub-card as inactive (lost device, key rotation, app access revocation). Existing signatures from the sub-card that predate deregistration remain verifiable; new authentications using that sub-card key are rejected by verifiers.
 
 ```
@@ -418,13 +420,14 @@ DeregisterSubCard(
 ) → void
 ```
 
-**Preconditions:**
+**Preconditions checked by contract:**
 
 1. `sub_card_address` exists in `SubCardRegistrations` with `active == true`.
-2. `signature` is a valid ML-DSA-44 signature from the **master card's primary card key** over `sig_payload`. The press resolves the holder's public key from the master card's `CardDocument` on IPFS and verifies it off-chain before submission; the contract verifies press authorization via §6.1 write gate.
-3. Press authorization checks (§6.1) pass for the master card's policy.
+2. Press authorization checks (§6.1) pass for the master card's policy.
 
-The primary card key is the exclusive authorization for sub-card deregistration. Sub-card keys cannot authorize their own deregistration. If the primary card key has been lost and not yet recovered, the holder must complete key recovery before deregistering sub-cards. After recovery from a key compromise, all sub-cards should be deregistered and re-issued.
+> **Master signature is press-side only.** The press verifies that `signature` is a valid ML-DSA-44 signature from the master card's primary card key over `sig_payload`, resolving the holder's public key from the master card's `CardDocument` on IPFS before submission. The contract does not re-verify the signature. Sub-card keys cannot authorize their own deregistration. If the primary card key has been lost and not yet recovered, the holder must complete key recovery before deregistering sub-cards.
+
+After recovery from a key compromise, all sub-cards should be deregistered and re-issued.
 
 **State changes:**
 
@@ -440,16 +443,13 @@ The primary card key is the exclusive authorization for sub-card deregistration.
 
 ```
 ClaimOpenOffer(
-    offer_id           bytes32,     — keccak256(canonical CBOR of OpenMarkOffer including issuer_sig)
+    offer_id           bytes32,     — keccak256(canonical RFC 8785 JSON of OpenCardOffer including issuer_sig)
     max_acceptances    uint64,      — type(uint64).max means unconstrained (press encodes document null as this);
                                      0 means zero acceptances permitted (offer always reverts)
     expires_at         uint64,      — Unix timestamp; 0 means unconstrained (press encodes document null as 0)
     card_address       bytes32,     — New card to register
     initial_log_cid    bytes,       — CID of genesis CardDocument
     policy_address     bytes32,
-    issuer_sig_payload bytes,       — Canonical CBOR of the OpenMarkOffer (for issuer sig verification)
-    issuer_signature   bytes[2420], — ML-DSA-44 sig from offer issuer over issuer_sig_payload
-                                      (issuer key is ML-DSA-44 — IPFS identity key, not secp256r1)
     press_sig_payload  bytes,
     press_signature    bytes[64]    — secp256r1 signature (r||s) from press over keccak256(press_sig_payload)
 ) → void
@@ -459,8 +459,9 @@ ClaimOpenOffer(
 
 1. `expires_at == 0 OR block.timestamp < expires_at`.
 2. `max_acceptances == type(uint64).max OR OpenOfferUseCounts[offer_id] < max_acceptances`.
-3. `issuer_signature` verifies against the issuer card's public key over `issuer_sig_payload`.
-4. Press authorization checks (same as §4.1 steps 2–4).
+3. Press authorization checks (same as §4.1 steps 2–4).
+
+> **Issuer signature verification is press-side only.** The press verifies the ML-DSA-44 issuer signature on the `OpenCardOffer` document before submitting `ClaimOpenOffer`. The contract does not receive or re-verify the issuer signature. A press submitting a claim for an offer with an invalid issuer signature is detectable by observers and constitutes a press policy violation (press-side error E-14).
 
 **State changes (all atomic):**
 
@@ -478,7 +479,7 @@ ClaimOpenOffer(
 RegisterPolicy(
     policy_address       bytes32,    — On-chain registry address of the new policy card
     authorizer_pubkey    bytes[64],  — secp256r1 public key (x||y) for press management under this policy
-    governance_payload   bytes,      — Canonical CBOR of RegisterPolicyPayload
+    governance_payload   bytes,      — Canonical RFC 8785 JSON of RegisterPolicyPayload
     governance_sigs      bytes[]     — Array of secp256r1 signatures (r||s, 64 bytes each) from
                                        governance key holders; verified via RIP-7212
 ) → void
@@ -663,7 +664,7 @@ RotateOnChainKeyScheme(
     policy_address     bytes32,
     press_address      bytes32,
     new_mldsa44_pubkey bytes[1312],  — Full ML-DSA-44 public key (1312 bytes)
-    rotation_payload   bytes,        — Canonical CBOR of RotateOnChainKeySchemePayload
+    rotation_payload   bytes,        — Canonical RFC 8785 JSON of RotateOnChainKeySchemePayload
     secp256r1_sig      bytes[64],    — secp256r1 signature (r||s) over keccak256(rotation_payload),
                                        from current registered secp256r1 press key
     mldsa44_sig        bytes[2420]   — ML-DSA-44 signature over keccak256(rotation_payload),
@@ -705,7 +706,7 @@ RotateOnChainKeyScheme(
 
 ---
 
-## 4.11 Gas Payment and Rate Limiting
+## 4.12 Gas Payment and Rate Limiting
 
 All on-chain writes require ETH (Arbitrum One) for gas. **Only presses hold funded Arbitrum wallets and submit transactions.** End users never pay gas directly.
 
@@ -713,14 +714,14 @@ All on-chain writes require ETH (Arbitrum One) for gas. **Only presses hold fund
 
 | Operation | Who pays gas |
 |---|---|
-| `RegisterCard`, `UpdateMarkHead`, `ClaimOpenOffer` | Issuing organization's press |
-| `DeregisterSubCard` | Issuing organization's press |
+| `RegisterCard`, `UpdateCardHead`, `ClaimOpenOffer` | Issuing organization's press |
 | `RegisterSubCard` | Requesting app's pre-funded gas account |
+| `DeregisterSubCard` | Requesting app's pre-funded gas account; issuing organization's press sponsors if balance insufficient |
 | Governance operations | Governance body's press |
 
-**Issuing organization's press** covers all card creation, card updates (whether issuer- or holder-initiated), sub-card deregistration, and open-offer claims. Holders do not hold or spend ETH directly; they submit signed requests to the press, which submits on their behalf. This applies equally to holder-initiated updates (self-revocation, key rotation) and issuer-initiated updates.
+**Issuing organization's press** covers all card creation, card updates (whether issuer- or holder-initiated), and open-offer claims. Holders do not hold or spend ETH directly; they submit signed requests to the press, which submits on their behalf. This applies equally to holder-initiated updates (self-revocation, key rotation) and issuer-initiated updates.
 
-**Requesting app's pre-funded gas account** covers only `RegisterSubCard`. The app organization pre-funds a balance with the press before requesting sub-card registrations. The press deducts the gas cost from the app's balance on each registration and rejects requests when the balance is insufficient.
+**Requesting app's pre-funded gas account** covers `RegisterSubCard` and `DeregisterSubCard`. The app organization pre-funds a balance with the press before requesting sub-card operations. The press deducts the gas cost from the app's balance on each operation. For `DeregisterSubCard`: if the app account is empty, the issuing organization's press sponsors the cost — deregistration must never be blocked by a depleted app balance, since stranding an active sub-card key is a security risk.
 
 **Rate limiting.** To prevent abuse, presses enforce the following default limits per rolling 7-day window:
 
@@ -728,7 +729,7 @@ All on-chain writes require ETH (Arbitrum One) for gas. **Only presses hold fund
 |---|---|---|
 | `RegisterSubCard` | Per holder | 10 |
 | `DeregisterSubCard` | Per holder | 10 |
-| `UpdateMarkHead` (1xx codes) | Per holder | 20 |
+| `UpdateCardHead` (1xx codes) | Per holder | 20 |
 | All press-funded writes | Per policy | 1,000 |
 | `RegisterSubCard` | Per app card | 500 |
 
@@ -738,9 +739,66 @@ The per-app-card limit guards against a single app exhausting press capacity or 
 
 **Acceptance criteria:**
 - [ ] A press rejects a `RegisterSubCard` request if the requesting app's gas balance is insufficient to cover the transaction before submitting.
+- [ ] A press submits a `DeregisterSubCard` even if the requesting app's gas balance is zero, sponsoring the cost from the issuing organization's press balance.
 - [ ] A press rejects a `RegisterSubCard` if the holder or app card has reached its per-entity weekly limit.
 - [ ] A press rejects a press-funded write that would push the per-policy weekly total over the limit.
 - [ ] A suspicious-activity notification is sent when a holder's or app card's 7-day write count exceeds 80% of any configured limit.
+
+---
+
+---
+
+## 4.13 RegisterAddressForward
+
+Records an address-level forward on the old card's `CardEntry` when a holder rotates their master key and the card's on-chain address changes. This is a companion to the card-level `successor` link (written to the IPFS log as a 1xx entry) and provides a registry-level redirect that survives IPFS content loss.
+
+```
+RegisterAddressForward(
+    old_address    bytes32,      — Registry address of the card being superseded
+                                   (keccak256 of the old public key).
+    new_address    bytes32,      — Registry address of the successor card
+                                   (keccak256 of the new public key).
+    secp256r1_sig  bytes[64]     — secp256r1 signature over the canonical payload
+                                   (see below), signed by the old card's currently
+                                   registered secp256r1 key.
+)
+```
+
+**Payload signed by `secp256r1_sig`:**
+
+```json
+{
+  "op":          "register_address_forward",
+  "old_address": "<base64url bytes32>",
+  "new_address": "<base64url bytes32>",
+  "nonce":       "<base64url>",
+  "deadline_block": <uint64>
+}
+```
+
+**Authorization checks:**
+
+1. `old_address` must exist in `CardEntries` (`exists == true`).
+2. `new_address` must exist in `CardEntries` (`exists == true`). The successor card must be registered before the forward is set.
+3. `old_address.forward_to` must be zero — a forward may only be registered once. Attempting to overwrite returns error E-27.
+4. The old card's log must contain no 8xx or 9xx revocation entries (verified off-chain by the press; the contract does not inspect IPFS). If a revocation has been written before the forward is registered, the press must reject the `RegisterAddressForward` request. Returns error E-28 if the contract detects a conflict via the `last_press_address` field. (Full revocation detection requires IPFS access; the press is responsible for enforcing ordering.)
+5. `secp256r1_sig` must verify against the key registered in `PressAuthorizations` for the old card — specifically, the press that last wrote to `old_address`.
+
+**On success:**
+
+- Sets `CardEntries[old_address].forward_to = new_address`.
+- Emits `AddressTransition(old_address, new_address, timestamp)`.
+
+**Called by:** The press on behalf of the card holder, as part of the master key rotation flow (see `key_rotation.md §3.4` step 4a). Gas is paid by the issuing organization's press.
+
+**Acceptance criteria:**
+
+- [ ] `RegisterAddressForward` succeeds when `old_address` and `new_address` both exist and `old_address.forward_to` is zero.
+- [ ] `RegisterAddressForward` returns E-27 if `old_address.forward_to` is already set.
+- [ ] `RegisterAddressForward` returns E-28 if the press determines the old card has been revoked.
+- [ ] `RegisterAddressForward` returns E-03 if `secp256r1_sig` does not verify against the registered key.
+- [ ] After a successful call, `GetCardEntry(old_address).forward_to == new_address`.
+- [ ] The `AddressTransition` event is emitted with correct `old_address`, `new_address`, and `timestamp`.
 
 ---
 
@@ -750,7 +808,7 @@ These are view functions — no state change, no fee beyond RPC costs.
 
 | Function | Returns | Description |
 |---|---|---|
-| `GetCardEntry(card_address bytes32)` | `CardEntry` | Full entry including `log_head_cid`, `policy_address`, `last_press_address`, `exists` |
+| `GetCardEntry(card_address bytes32)` | `CardEntry` | Full entry including `log_head_cid`, `policy_address`, `last_press_address`, `forward_to`, `exists` |
 | `GetPressAuthorization(policy_address, press_address bytes32)` | `PressAuthEntry` | Key, active flag, timestamps |
 | `GetPolicyAuthorizer(policy_address bytes32)` | `bytes[64]` | Authorizer secp256r1 public key (x||y) for the policy |
 | `GetSubCardEntry(sub_card_address bytes32)` | `SubCardEntry` | Master address, log head snapshot, active flag |
@@ -765,12 +823,12 @@ These are view functions — no state change, no fee beyond RPC costs.
 
 ### 6.1 Card Write Gate
 
-The following check is applied on every call to `RegisterCard`, `UpdateMarkHead`, and `ClaimOpenOffer`. Failure at any step reverts the transaction with the corresponding error code (§8).
+The following check is applied on every call to `RegisterCard`, `UpdateCardHead`, and `ClaimOpenOffer`. Failure at any step reverts the transaction with the corresponding error code (§8).
 
 ```
 1. Resolve policy_address:
    - RegisterCard:    use the supplied policy_address argument.
-   - UpdateMarkHead:  read CardEntries[card_address].policy_address.
+   - UpdateCardHead:  read CardEntries[card_address].policy_address.
    - ClaimOpenOffer:  use the supplied policy_address argument.
 
 2. Confirm policy_address ∈ PolicyAuthorizerKeys.
@@ -791,7 +849,7 @@ The following check is applied on every call to `RegisterCard`, `UpdateMarkHead`
    Increment next_sequence by 1 on success.
    → Error: SEQUENCE_MISMATCH
 
-7. (UpdateMarkHead only) Confirm prev_log_cid matches current
+7. (UpdateCardHead only) Confirm prev_log_cid matches current
    CardEntries[card_address].log_head_cid.
    → Error: STALE_PREV_CID
 ```
@@ -912,7 +970,17 @@ GovernanceKeysRotated(
     version            uint32,
     timestamp          uint64
 )
+
+AddressTransition(
+    old_address        bytes32,  — Registry address of the superseded card
+                                   (keccak256 of the old public key)
+    new_address        bytes32,  — Registry address of the successor card
+                                   (keccak256 of the new public key)
+    timestamp          uint64
+)
 ```
+
+**`AddressTransition` purpose.** This event is the on-chain archive of address changes resulting from master key rotations. Off-chain indexers can build an `old_address → new_address` lookup table from these events, enabling resolution of old addresses even when the old card's IPFS content is no longer pinned and the IPFS-level `successor` field is unreachable. See `key_rotation.md §3.3`.
 
 **Note:** Events do not include the new governance keys or press public keys in plaintext — these are available from the call data on the same transaction. Emitting 1,312-byte public keys in events would significantly increase log storage costs.
 
@@ -922,21 +990,21 @@ GovernanceKeysRotated(
 
 | Code | Name | Trigger |
 |---|---|---|
-| E-01 | `MARK_ALREADY_EXISTS` | `RegisterCard` called for an address already in `CardEntries` |
-| E-02 | `MARK_NOT_FOUND` | Operation targets an address not in `CardEntries` |
+| E-01 | `CARD_ALREADY_EXISTS` | `RegisterCard` called for an address already in `CardEntries` |
+| E-02 | `CARD_NOT_FOUND` | Operation targets an address not in `CardEntries` |
 | E-03 | `UNRECOGNIZED_POLICY` | `policy_address` not in `PolicyAuthorizerKeys` |
 | E-04 | `PRESS_NOT_AUTHORIZED` | No entry in `PressAuthorizations` for (policy, press) |
 | E-05 | `PRESS_REVOKED` | Entry exists but `active == false` |
 | E-06 | `INVALID_PRESS_SIGNATURE` | secp256r1 verification failure (via RIP-7212) for press signature; after Phase 3 upgrade: ML-DSA-44 failure |
 | E-07 | `SEQUENCE_MISMATCH` | Press payload `sequence` does not equal `PressAuthEntry.next_sequence` |
 | E-07G | `NONCE_REUSED` | Governance payload nonce seen in a prior governance transaction |
-| E-08 | `STALE_PREV_CID` | `prev_log_cid` in `UpdateMarkHeadPayload` does not match stored head |
+| E-08 | `STALE_PREV_CID` | `prev_log_cid` in `UpdateCardHeadPayload` does not match stored head |
 | E-09 | `POLICY_ALREADY_REGISTERED` | `RegisterPolicy` for an already-registered address |
-| E-10 | `SUB_MARK_NOT_FOUND` | `DeregisterSubCard` for an address not in `SubCardRegistrations` |
-| E-11 | `SUB_MARK_ALREADY_ACTIVE` | `RegisterSubCard` for an address already registered and active |
+| E-10 | `SUB_CARD_NOT_FOUND` | `DeregisterSubCard` for an address not in `SubCardRegistrations` |
+| E-11 | `SUB_CARD_ALREADY_ACTIVE` | `RegisterSubCard` for an address already registered and active |
 | E-12 | `OFFER_EXPIRED` | `ClaimOpenOffer` after `expires_at` |
 | E-13 | `OFFER_AT_CAPACITY` | `ClaimOpenOffer` when `use_count >= max_acceptances` |
-| E-14 | `INVALID_ISSUER_SIGNATURE` | Issuer ML-DSA-44 verification failure in `ClaimOpenOffer` (issuer keys are always ML-DSA-44 — IPFS identity keys) |
+| E-14 | `INVALID_ISSUER_SIGNATURE` | **Press-side rejection** — press detected an invalid ML-DSA-44 issuer signature on the `OpenCardOffer` document before submitting `ClaimOpenOffer`. Not an on-chain revert; the press refuses to submit. |
 | E-15 | `GOVERNANCE_VERSION_MISMATCH` | Governance payload version does not match stored version |
 | E-16 | `INVALID_GOVERNANCE_SIGNATURE` | One or more governance secp256r1 signatures fail RIP-7212 verification (or ML-DSA-44 after Phase 3 upgrade) |
 | E-17 | `DUPLICATE_SIGNER` | Two governance signatures use the same key |
@@ -944,11 +1012,13 @@ GovernanceKeysRotated(
 | E-19 | `QUORUM_TOO_LOW` | `RotateGovernanceKeys` proposes `new_quorum <= len(new_keys)/2` |
 | E-20 | `KEYSET_TOO_SMALL` | `RotateGovernanceKeys` proposes fewer than 3 keys |
 | E-21 | `LOG_CID_TOO_LONG` | CID bytes exceed 64-byte maximum |
-| E-22 | `INVALID_MASTER_SIGNATURE` | Master card holder signature fails in `RegisterSubCard` |
+| E-22 | `INVALID_MASTER_SIGNATURE` | **Press-side rejection** — press detected an invalid ML-DSA-44 master card holder signature before submitting `RegisterSubCard` or `DeregisterSubCard`. Not an on-chain revert; the press refuses to submit. |
 | E-23 | `KEY_SCHEME_ALREADY_UPGRADED` | `RotateOnChainKeyScheme` called for a press already on ML-DSA-44 (`key_scheme == 1`) |
 | E-24 | `SCHEME_UPGRADE_NOT_AVAILABLE` | `RotateOnChainKeyScheme` called while contract is still in Phase 1 (`key_scheme_phase == 0`) |
 | E-25 | `ROTATION_PAYLOAD_EXPIRED` | `RotateOnChainKeyScheme` `deadline_block` has passed |
 | E-26 | `MLDSA44_KEY_HASH_MISMATCH` | `new_mldsa44_pubkey` in `RotateOnChainKeyScheme` does not hash to the stored `mldsa44_key_hash` |
+| E-27 | `FORWARD_ALREADY_SET` | `RegisterAddressForward` called for an `old_address` that already has a non-zero `forward_to` |
+| E-28 | `FORWARD_ON_REVOKED_CARD` | **Press-side rejection** — press detected that the old card already has an 8xx or 9xx revocation entry before the forward was registered. Not an on-chain revert; the press refuses to submit. |
 
 ---
 
@@ -959,13 +1029,13 @@ The following questions must be resolved before the contract is deployed or befo
 | ID | Area | Question | Priority |
 |---|---|---|---|
 | ~~**OQ-2**~~ | Engineering | ~~**ML-DSA-44 Stylus gas cost.**~~ **Resolved 2026-06-14.** On-chain write authorization switched to secp256r1 / RIP-7212 precompile. ML-DSA-44 is no longer used for on-chain verification in Phase 1. Estimated write cost ~$0.05–0.10 (calldata dominated by secp256r1 at 64-byte sig + 64-byte pubkey vs. ML-DSA-44's 2,420 + 1,312 bytes). ML-DSA-44 Stylus verifier is deferred to Phase 3 of the on-chain key upgrade path (ADR-012). | ~~Critical / Blocking~~ |
-| **OQ-15** | Governance | **Bootstrap: who sets the initial governance keysets?** The contract deployer controls the initial `GovernanceKeysets` state. No governance quorum can authorize itself before it exists. The bootstrap process — how the initial key holders are chosen, published, and audited before the contract goes live — is a governance charter question with significant trust implications. Should the initial deployment be timelocked or require a multisig from recognized stakeholders? | **Critical / Blocking** |
-| **OQ-16** | Engineering | **SubCard holder key verification.** `RegisterSubCard` requires verifying a signature from the master card holder (not the press). The contract needs access to the holder's public key to do this on-chain. Options: (a) store `holder_pubkey` in `CardEntries` at `RegisterCard` time (~1,312 bytes/card); (b) require presses to mediate all sub-card registrations (adds press dependency to a user-sovereign key operation); (c) verify off-chain and use a press-countersigned payload (weakens the user-sovereign model). This is a significant design decision. | **High** |
-| **OQ-4** | Engineering | **Recipient-initiated writes.** Can a card holder directly call `UpdateMarkHead` (e.g., for self-revocation) without going through a press? Direct writes require a paymaster (holder may not hold ETH) and require the contract to verify the holder's key rather than a press key. Press-mediated writes are simpler but add a liveness dependency on the press for holder-initiated changes. | **High** |
-| **OQ-17** | Engineering | **Nonce storage and pruning.** The contract must track used nonces to prevent replay attacks on press signatures and governance payloads. If nonces are stored indefinitely, the contract's storage grows unboundedly. Options: (a) timestamp-scoped nonces (discard nonces older than N days, reject payloads with timestamps outside the window); (b) sequence numbers per press address (simpler but requires per-press state). The nonce scheme must be compatible with the timestamp field already included in signed payloads. | **High** |
+| ~~**OQ-15**~~ | Governance | ~~**Bootstrap: who sets the initial governance keysets?**~~ **Resolved 2026-06-14.** Deploy with 1-of-1 governance keyset (single deployer key). `RotateGovernanceKeys` expands the keyset as governance members are added; quorum required to add/remove members once multiple members exist. Implemented in §3.6. | ~~Critical / Blocking~~ |
+| ~~**OQ-16**~~ | Engineering | ~~**SubCard holder key verification.**~~ **Resolved 2026-06-15 (INC-22).** Press mediates all sub-card registration and verifies the ML-DSA-44 master signature off-chain before submitting. Holder signature retained in calldata for auditability. Contract checks only press authorization (§6.1 write gate). Press-side E-22 if invalid. | ~~High~~ |
+| ~~**OQ-4**~~ | Engineering | ~~**Recipient-initiated writes.**~~ **Resolved 2026-06-14.** All writes go through a press. Holder-initiated `UpdateCardHead` (self-revocation, key rotation) is submitted through a press; gas is paid by the issuing organization's press. Holders do not hold or spend ETH directly. | ~~High~~ |
+| ~~**OQ-17**~~ | Engineering | ~~**Nonce storage and pruning.**~~ **Resolved 2026-06-14.** Per-press sequence numbers: `PressAuthEntry` has `next_sequence: uint64`; press-signed payloads include `"sequence": <uint64>`; contract checks `sequence == next_sequence` and increments on success. No nonce table or pruning required. Governance payloads retain timestamp-scoped random nonces. Implemented in §3.3. | ~~High~~ |
 | ~~**OQ-18**~~ | Engineering | ~~**Contract upgradeability.**~~ **Resolved 2026-06-14.** Modular verifier architecture adopted (option c): immutable storage contract + upgradeable verifier module (§6.3). The verifier module starts as a thin RIP-7212 wrapper (Phase 1) and is upgraded to a ML-DSA-44 Stylus WASM verifier via `UpgradeVerifier` governance operation with 48-hour timelock when the key scheme upgrade occurs. | ~~High~~ |
-| **OQ-3** | Engineering | **Minimum IPFS replication before on-chain write.** When a press calls `RegisterCard` or `UpdateMarkHead`, it includes an IPFS CID. If the content is not yet replicated (the CID is not resolvable), verifiers will be unable to fetch the log entry. Should the protocol require presses to confirm a minimum replication count before submitting the on-chain transaction? How is this enforced? | **Medium** |
-| **OQ-19** | Engineering | **Batch write operation.** High-volume presses may want to register or update multiple cards in a single Arbitrum One transaction to reduce per-card gas overhead. A `BatchUpdateMarkHeads(updates[])` function could amortize the base transaction cost. This adds implementation complexity but may be necessary for press economics at scale. | **Medium** |
+| **OQ-3** | Engineering | **Minimum IPFS replication before on-chain write.** When a press calls `RegisterCard` or `UpdateCardHead`, it includes an IPFS CID. If the content is not yet replicated (the CID is not resolvable), verifiers will be unable to fetch the log entry. Should the protocol require presses to confirm a minimum replication count before submitting the on-chain transaction? How is this enforced? | **Medium** |
+| **OQ-19** | Engineering | **Batch write operation.** High-volume presses may want to register or update multiple cards in a single Arbitrum One transaction to reduce per-card gas overhead. A `BatchUpdateCardHeads(updates[])` function could amortize the base transaction cost. This adds implementation complexity but may be necessary for press economics at scale. | **Medium** |
 | **OQ-20** | Governance | **Policy deregistration.** Once a policy is registered via `RegisterPolicy`, can it be deregistered? The current design has no delete operation for `PolicyAuthorizerKeys`. Removing a policy address would cause all presses authorized under it to lose write authority and all cards under it to become non-writable. This may be a desired kill-switch capability for compromised or abandoned policies, but it must be governed carefully. | **Medium** |
 | **OQ-14** | Governance | **Coercion resistance / governance key holder identity.** Should governance body key holders be pseudonymous (organizations or anonymous participants, harder to coerce) or identifiable (named individuals/organizations with public accountability, easier to hold accountable but more coercible)? Deferred pending governance charter design. Carried forward from `ARCHITECTURE.md` ADR-011. | **Medium** |
 | **OQ-21** | Engineering | **Event indexing and the `approved_presses` sync problem.** ADR-011 notes that the `approved_presses` array in the policy card's IPFS content should be kept in sync with on-chain `PressAuthorizations` by tooling. The contract's `PressAuthorized` and `PressRevoked` events are the trigger. Should the protocol specify a canonical indexer interface (e.g., a subgraph schema) to make this sync reliable across implementations? | **Low** |

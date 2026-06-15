@@ -56,7 +56,7 @@ An epoch must be opened before the first issuance record can be posted. A new ep
      "epoch_id":       "<string — e.g. ISO year '2026' for annual, or sequential integer>",
      "epoch_start":    "<ISO 8601 timestamp>",
      "auditor_key_packages": [ ... ],
-     "press_signature": "<ML-DSA-44 sig over canonical CBOR of all above fields>"
+     "press_signature": "<ML-DSA-44 sig over canonical RFC 8785 JSON of all above fields>"
    }
    ```
 
@@ -109,7 +109,7 @@ An epoch closes on any of the following:
      "entry_count":      <integer — number of PressIssuanceRecord entries decrypted>,
      "entries_hash":     "<base64url — SHA3-256 of concatenated CIDs of all decrypted entries in log order>",
      "findings":         "<free text — 'no issues found' if clean; otherwise describe anomalies>",
-     "auditor_signature":"<ML-DSA-44 sig over canonical CBOR of all above fields>"
+     "auditor_signature":"<ML-DSA-44 sig over canonical RFC 8785 JSON of all above fields>"
    }
    ```
 

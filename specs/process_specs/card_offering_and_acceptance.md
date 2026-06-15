@@ -19,9 +19,9 @@ Card offering and acceptance is the process by which a press issues a targeted c
 | Actor | Role |
 |---|---|
 | **Requester** | Initiates the issuance request (may be the administrator, the recipient, or a third party, depending on policy) |
-| **Issuer's wallet service** | Assembles the card offer blob, signs it with the press sub-card key, and delivers it to the recipient |
-| **Press** | Verifies predicates; validates the completed card; posts to IPFS and registers on-chain |
-| **Recipient** | Reviews the offer, generates a keypair, countersigns to accept ownership |
+| **Issuer (offerer) / their wallet service** | Constructs the card offer and signs it with the **offerer's own card key** (`issuer_signature`); presents it to the recipient for countersignature; validates the countersigned result before forwarding it to the press |
+| **Press** | Verifies predicates and policy compliance; signs the completed, countersigned card with the **press sub-card key** (`press_signature`); posts to IPFS and registers on-chain |
+| **Recipient** | Reviews the offer, generates a keypair, countersigns to accept ownership (`holder_signature`) |
 | **Administrator** | Receives SCIP courtesy copy; may be notified of issuance |
 
 ---
@@ -63,13 +63,13 @@ Card offering and acceptance is the process by which a press issues a targeted c
 ### Phase 3: Offer Assembly and Signing
 
 6. The **issuer's wallet service** assembles the proposed card JSON (`CardDocument`):
-   - Populates all protocol-required fields: `policy_id`, `press_card`, `issued_at`.
-   - Leaves `recipient_pubkey` and `holder_signature` absent (offer phase).
+   - Populates protocol-required fields: `policy_id`, `issuer_card` (the offerer's own card), `press_card` (the press that will validate and register), `issued_at`.
+   - Leaves `recipient_pubkey`, `holder_signature`, and `press_signature` absent (offer phase).
    - Populates all required `field_definitions` fields per the policy.
 
-7. The **issuer's wallet service** canonically serializes the offer document (canonical CBOR per RFC 8949 §4.2 with protocol-specific overrides for binary fields and timestamps).
+7. The **issuer's wallet service** canonically serializes the offer (canonical RFC 8785 JSON).
 
-8. The **issuer's wallet service** signs the canonical serialization with its press sub-card private key → `offer_signature`.
+8. The **issuer** signs the canonical serialization with the **offerer's own card key** → `issuer_signature`. (The offerer does not hold the press key; the press signs separately in Phase 6.)
 
 ### Phase 4: Offer Delivery
 
@@ -81,10 +81,10 @@ Card offering and acceptance is the process by which a press issues a targeted c
 
 11. The recipient's client receives the offer. If no keyring exists, the keyring setup flow runs first (see `wallet_backup_and_recovery.md`).
 
-12. The client decodes the offer and walks the press sub-card chain to a trusted root. If chain verification fails at any link, the offer is rejected before being shown to the recipient.
+12. The client decodes the offer, verifies `issuer_signature` against the offerer's card key, and walks the offerer's (`issuer_card`) chain to a trusted root. If signature or chain verification fails at any link, the offer is rejected before being shown to the recipient.
 
 13. The client displays a review screen showing:
-    - Press identity and chain summary.
+    - Offerer identity and chain summary.
     - Full field values from the offer.
     - The governing policy's mutable pointer and `valid_until` (if set).
     - What countersigning commits the recipient to.
@@ -95,36 +95,38 @@ Card offering and acceptance is the process by which a press issues a targeted c
     - The client generates a fresh ML-DSA-44 keypair for this card.
     - The private key is stored in the keyring before proceeding (ensuring recoverability).
     - The recipient's public key is added to the card JSON as `recipient_pubkey`.
-    - The client canonically serializes the complete card document (including `recipient_pubkey`).
-    - The client signs with the new private key → `holder_signature`.
+    - The client canonically serializes the offer including `recipient_pubkey` (excluding `holder_signature` and `press_signature`).
+    - The client signs with the new private key → `holder_signature`, and returns the countersigned card to the offerer.
 
-### Phase 6: Completion and Registration
+### Phase 6: Validation and Registration
 
-16. The recipient's client sends the completed card — containing `offer_signature`, `recipient_pubkey`, and `holder_signature` — to the press. The press validates the completed card: confirms both signatures verify against their respective keys, all required fields are present, and field values conform to the policy schema. If validation passes, the press posts the card to IPFS.
+16. The **offerer** validates the countersigned card — confirms `holder_signature` verifies against `recipient_pubkey` and covers the offer the offerer issued — then forwards it to the **press**.
 
-17. The press creates a new Arbitrum One registry entry for the card, with the genesis CID as the initial log head. This write is signed with the press sub-card key and verified on-chain against `approved_presses`.
+17. The **press** validates the completed card: confirms `issuer_signature` and `holder_signature` verify against their respective keys, the offerer satisfies `requester_predicate`, all required fields are present, and field values conform to the policy schema. If validation passes, the press signs the complete document with its **press sub-card key** → `press_signature`, and posts the card to IPFS.
 
-18. The press ensures an audit epoch is open for this policy. If not, it opens one first (see `log_auditing.md`).
+18. The press creates a new Arbitrum One registry entry for the card, with the genesis CID as the initial log head. This write is authorized on-chain by the press's secp256r1 key registered in `PressAuthorizations` (see `ARCHITECTURE.md` ADR-011).
 
-19. The press constructs a `PressIssuanceRecord` containing:
+19. The press ensures an audit epoch is open for this policy. If not, it opens one first (see `log_auditing.md`).
+
+20. The press constructs a `PressIssuanceRecord` containing:
     - `epoch_id` — identifier of the current open audit epoch.
     - `card_cid` — CID of the completed card document.
     - `issued_at` — matching the card's `issued_at` field.
     - `requester_card` — mutable pointer of the requester (if present).
     - `offer_type: "targeted"`.
 
-20. The press encrypts the record with the current epoch AEK (AES-GCM, fresh 96-bit nonce per entry) and appends it to the policy card's IPFS log, then updates the policy card's Arbitrum One registry pointer to the new log head.
+21. The press encrypts the record with the current epoch AEK (AES-GCM, fresh 96-bit nonce per entry) and appends it to the policy card's IPFS log, then updates the policy card's Arbitrum One registry pointer to the new log head.
 
-21. The press produces a **Signed Card Inclusion Proof (SCIP)**:
+22. The press produces a **Signed Card Inclusion Proof (SCIP)**:
     - `card_cid` — CID of the completed card document.
     - `policy_log_entry_index` — position in the policy press log.
     - `policy_log_root_at_inclusion` — CID of the policy log head at time of issuance.
     - `issued_at` — matching the card's `issued_at`.
     - `press_signature` — ML-DSA-44 signature over all above fields.
 
-22. The press sends the SCIP and a confirmation to the recipient via HTTPS to their wallet service endpoint.
+23. The press sends the SCIP and a confirmation to the recipient via HTTPS to their wallet service endpoint.
 
-23. The press sends an audit record (card CID + SCIP) to the administrator via HTTPS to their wallet service endpoint.
+24. The press sends an audit record (card CID + SCIP) to the administrator via HTTPS to their wallet service endpoint.
 
 ---
 
@@ -135,7 +137,8 @@ Card offering and acceptance is the process by which a press issues a targeted c
 - The recipient holds the private key for `recipient_pubkey` in their keyring.
 - The recipient holds the SCIP as proof of issuance.
 - The issuance is recorded in the policy's encrypted audit log.
-- Any verifier can confirm: card content conforms to the policy schema, the press sub-card that signed it is in `approved_presses`, and the recipient's chain satisfied `recipient_predicate` — all from publicly available data.
+- The completed card carries all three signatures: `issuer_signature` (offerer), `holder_signature` (recipient), and `press_signature` (press).
+- Any verifier can confirm: all three signatures verify, card content conforms to the policy schema, the press that signed it is registered in `PressAuthorizations` for the policy, and the recipient's chain satisfied `recipient_predicate` — all from publicly available data.
 
 ---
 

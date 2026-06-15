@@ -51,7 +51,7 @@ Policy creation is the process by which an authorizer defines and publishes the 
 2. The drafter validates the policy JSON against the protocol schema (CLI tool recommended). Confirm:
    - `field_definitions` is present and non-empty.
    - All `update_policy` predicates use valid predicate syntax.
-   - No field name collides with protocol-required fields (`policy_id`, `press_card`, `recipient_pubkey`, `issued_at`, `offer_signature`, `holder_signature`).
+   - No field name collides with protocol-required fields (`policy_id`, `issuer_card`, `press_card`, `recipient_pubkey`, `issued_at`, `issuer_signature`, `holder_signature`, `press_signature`).
 
 3. The drafter delivers the proposed policy JSON to the authorizer out of band (e.g., via email, secure file transfer, or in-person review).
 

@@ -14,7 +14,7 @@ Every message in the Card Protocol shares a common signed envelope. The envelope
 
 ### Address Model
 
-A card's **registry address** (its mutable pointer hash in the Arbitrum One card registry) is its messaging address. For private and selectively-shared cards this is `keccak256(sign(private_key, "card-address-v1"))`; for fully public cards it is derived from the public key. This hash appears in the `recipients` and `senders` fields of every message envelope.
+A card's **registry address** (its mutable pointer hash in the Arbitrum One card registry) is its messaging address. It is always derived from the card's public key: `keccak256(recipient_pubkey)` (see `ARCHITECTURE.md` ADR-006). This hash appears in the `recipients` and `senders` fields of every message envelope.
 
 **Routing** (determining which wallet service holds a given card hash and delivering the encrypted payload to it) is handled by the wallet service layer, not the message envelope. See `process_specs/message_routing.md` for the routing protocol. The message envelope itself is E2E encrypted; wallet services see only the recipient hash from the routing header, not sender identity or message content.
 
@@ -30,19 +30,19 @@ A card's **registry address** (its mutable pointer hash in the Arbitrum One card
     "timestamp":    "<ISO 8601>",
     "in_reply_to":  "<hash of prior payload>",
     "edit_of":      "<hash of prior payload>",
-    "retracts":     "<hash of prior payload>"
+    "retracts":     "<hash of prior payload>",
+    "forwards":     "<hash of the original payload being forwarded — set only on a ForwardPackage forward_envelope>"
   },
   "signatures": [
     {
-      "signer_card": "<card hash of signing sub-card>",
       "public_key":   "<ML-DSA-44 public key, base64url>",
-      "signature":    "<ML-DSA-44 signature over canonical CBOR of payload, base64url>"
+      "signature":    "<ML-DSA-44 signature over canonical RFC 8785 JSON of payload, base64url>"
     }
   ]
 }
 ```
 
-`in_reply_to`, `edit_of`, and `retracts` are mutually exclusive. `type` is inside the payload and therefore covered by the signature — a recipient cannot be tricked about what kind of message they received. The hash of the canonical payload is the message ID; there is no separate `id` field.
+`edit_of`, `retracts`, and `forwards` are mutually exclusive (`in_reply_to` may accompany any of them). `forwards` is set only on the `forward_envelope` of a `ForwardPackage` (see `protocol-objects.md §5.1` and `process_specs/card_signing.md`). `type` is inside the payload and therefore covered by the signature — a recipient cannot be tricked about what kind of message they received. The hash of the canonical payload is the message ID; there is no separate `id` field. Each entry in `signatures` carries only `public_key` and `signature`; the signer's card hash is derived as `keccak256(public_key)` and is not stored in the entry.
 
 `senders` lists the card hashes of the cards whose identity is being asserted by this message, parallel to the `signatures` array. A signer sub-card maps to exactly one sender master card. For most message types the sender list has one entry; co-signed messages may have several.
 
@@ -138,21 +138,21 @@ A signed revision to a prior message. Both sender and recipient maintain the ful
 
 ### 5. `card_offer`
 
-A press delivers a targeted card offer to a prospective holder.
+The offerer delivers a targeted card offer to a prospective holder.
 
 ```json
 {
   "type": "card_offer",
   "content": {
-    "offer_cid":       "<IPFS CID of the signed CardDocument offer>",
-    "policy_pointer":  "<mutable pointer of the governing policy card>",
-    "offer_signature": "<press ML-DSA-44 signature over the offer, base64url>",
-    "expires":         "<ISO 8601>"
+    "offer_cid":        "<IPFS CID of the signed CardDocument offer>",
+    "policy_pointer":   "<mutable pointer of the governing policy card>",
+    "issuer_signature": "<offerer ML-DSA-44 signature over the offer, base64url>",
+    "expires":          "<ISO 8601>"
   }
 }
 ```
 
-**Notes.** The full `CardDocument` (offer phase, without `recipient_pubkey` and `holder_signature`) is posted to IPFS first; this message carries the CID and a copy of the press signature for immediate verification without an IPFS fetch. The `senders` list contains the press sub-card pointer; `recipients` contains the prospective holder's card pointer.
+**Notes.** The full `CardDocument` (offer phase, without `recipient_pubkey`, `holder_signature`, and `press_signature`) is posted to IPFS first; this message carries the CID and a copy of the offerer's `issuer_signature` for immediate verification without an IPFS fetch. The `senders` list contains the offerer's card pointer; `recipients` contains the prospective holder's card pointer.
 
 ---
 
@@ -375,28 +375,7 @@ A message to or from a card attached to an LLM or other AI model, following the 
 
 ---
 
-### 13. `capability_grant`
-
-Shares a capability bundle (address + decryption key) for a private card, enabling selective disclosure.
-
-```json
-{
-  "type": "capability_grant",
-  "content": {
-    "card_address":     "<address secret-derived address of the private card>",
-    "decryption_key":   "<decryption key for the private card's content>",
-    "scope":            "read | read_and_share",
-    "expires":          "<ISO 8601 — optional>",
-    "context":          "<human-readable note on intended use>"
-  }
-}
-```
-
-**Notes.** This message should always be encrypted (end-to-end encryption required). The `decryption_key` in the content is the per-card decryption key from the card's privacy model — not the holder's master key. `scope: read_and_share` permits the recipient to further delegate the capability; `read` does not.
-
----
-
-### 14. `introduction`
+### 13. `introduction`
 
 A card introduces two cards that don't yet share a trust path, bootstrapping their mutual discovery.
 
@@ -416,7 +395,7 @@ A card introduces two cards that don't yet share a trust path, bootstrapping the
 
 ---
 
-### 15. `announcement`
+### 14. `announcement`
 
 A one-to-many broadcast from a card to a group of recipients, such as a press or community announcement.
 
@@ -436,7 +415,7 @@ A one-to-many broadcast from a card to a group of recipients, such as a press or
 
 ---
 
-### 16. `read_receipt`
+### 15. `read_receipt`
 
 Acknowledges that a message was delivered and opened.
 
@@ -455,7 +434,7 @@ Acknowledges that a message was delivered and opened.
 
 ---
 
-### 17. `delete`
+### 16. `delete`
 
 A recipient's request to remove a message from one or more stores. Not guaranteed — the request may be declined, and is always declined if the target message has an active `flag` against it.
 
@@ -483,7 +462,7 @@ A recipient's request to remove a message from one or more stores. Not guarantee
 
 ---
 
-### 18. `flag`
+### 17. `flag`
 
 Reports a message to the press (or any authorized card) that issued a card attached to that message. Flags are the entry point to the 6xx/9xx revocation pipeline and serve as a community safety mechanism.
 
@@ -524,7 +503,7 @@ Reports a message to the press (or any authorized card) that issued a card attac
 
 ---
 
-### 19. `error`
+### 18. `error`
 
 A structured error response to any message type that requires a reply.
 
@@ -565,13 +544,12 @@ A structured error response to any message type that requires a reply.
 | 12 | `mcp.tool_result` | Tool card | Agent card | Yes | Correlates via call_id |
 | 12 | `mcp.prompt` | Any card | Model card | Yes | |
 | 12 | `mcp.resource` | Model card | Any card | Yes | Content pinned to IPFS |
-| 13 | `capability_grant` | Any card | Any card | Yes | Always encrypted |
-| 14 | `introduction` | Any card | Both parties | Yes | `vouch` flag |
-| 15 | `announcement` | Any card | Many cards | Yes | Broadcast |
-| 16 | `read_receipt` | Any card | Original sender | Yes | Opt-in only |
-| 17 | `delete` | Recipient card | Sender / all | Yes | Not honored if flagged |
-| 18 | `flag` | Any card | Press of flagged card | Yes | Entry to 6xx/9xx pipeline; not anonymous |
-| 19 | `error` | Any card | Request sender | Yes | Structured error response |
+| 13 | `introduction` | Any card | Both parties | Yes | `vouch` flag |
+| 14 | `announcement` | Any card | Many cards | Yes | Broadcast |
+| 15 | `read_receipt` | Any card | Original sender | Yes | Opt-in only |
+| 16 | `delete` | Recipient card | Sender / all | Yes | Not honored if flagged |
+| 17 | `flag` | Any card | Press of flagged card | Yes | Entry to 6xx/9xx pipeline; not anonymous |
+| 18 | `error` | Any card | Request sender | Yes | Structured error response |
 
 ---
 
@@ -581,7 +559,7 @@ A structured error response to any message type that requires a reply.
 
 **MSG-OQ-1: Type field routing vs. encryption.** `type` is inside the payload, covered by the signature. This means a message server cannot route by type without decrypting the envelope. Should `type` (or a coarse routing category like `system | human | machine`) be in an unencrypted outer header, accepting that it leaks traffic metadata? Or should all routing be by recipient address only?
 
-**MSG-OQ-2: `senders` field necessity.** The `signatures` array already implies sender identity via `signer_card`. The proposed `senders` field (master card pointer) is a convenience, but it requires the sender to include their master card pointer in the plaintext payload — which may be more than they want to reveal. Should `senders` be omitted and clients infer master identity via the sub-card to master link, or is the explicit field worth the disclosure?
+**MSG-OQ-2: `senders` field necessity.** The `signatures` array already implies sender identity via the signing `public_key` (the signer's card hash is `keccak256(public_key)`). The proposed `senders` field (master card pointer) is a convenience, but it requires the sender to include their master card pointer in the plaintext payload — which may be more than they want to reveal. Should `senders` be omitted and clients infer master identity via the sub-card to master link, or is the explicit field worth the disclosure?
 
 **MSG-OQ-3: Message type versioning.** As new types are added, clients that don't recognize a type will fail silently or noisily. Should the envelope include a `min_version` field, a capability negotiation phase, or just rely on `type` namespacing (e.g., `text/v2`)?
 
@@ -617,7 +595,7 @@ A structured error response to any message type that requires a reply.
 
 ### Capability grants and introductions
 
-**MSG-OQ-14: Capability grant revocation.** Once a `capability_grant` message delivers a decryption key, the sender cannot un-deliver it. Revocation of the underlying card revokes chain validity, but the decryption key for already-fetched content remains valid. Should capability grants have an explicit expiry enforced by the card's privacy model, or is this a policy concern outside the message spec?
+**MSG-OQ-14: ~~Capability grant revocation.~~ Removed 2026-06-15.** The `capability_grant` message type was removed along with the private-card privacy model (ADR-006 revision). Cards are public; there is no per-card decryption key to grant or revoke. (Number retained to preserve cross-references.)
 
 **MSG-OQ-15: Introduction acceptance semantics.** An `introduction` message does not require a response. Should there be a corresponding `introduction_accepted` / `introduction_declined` type, or is first contact after an introduction sufficient signal?
 

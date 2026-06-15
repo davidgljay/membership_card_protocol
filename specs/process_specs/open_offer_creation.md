@@ -50,7 +50,7 @@ Open offers are only permitted when the policy card has `allow_open_offers: true
    - **display_message:** Optional human-readable context shown to recipients in the wallet UI.
    - **redirect_url:** URL to redirect recipients to after successful issuance (e.g., an onboarding page).
 
-2. The issuer assembles the `OpenMarkOffer` document:
+2. The issuer assembles the `OpenCardOffer` document:
    ```json
    {
      "offer_type":       "open",
@@ -76,15 +76,15 @@ Open offers are only permitted when the policy card has `allow_open_offers: true
 
 ### Phase 2: Signing
 
-4. The issuer canonically serializes all fields of the `OpenMarkOffer` document except `issuer_signature` (canonical CBOR per RFC 8949 §4.2 with protocol-specific overrides).
+4. The issuer canonically serializes all fields of the `OpenCardOffer` document except `issuer_signature` (canonical RFC 8785 JSON).
 
 5. The issuer signs the canonical serialization with their sub-card private key → `issuer_signature`.
 
-6. The **offer ID** is computed as: `hash(canonical CBOR of the complete document including issuer_signature)`. This is the key used in the Arbitrum One on-chain acceptance counter (`openOfferUseCounts`). It is unforgeable and unique per issuer.
+6. The **offer ID** is computed as: `hash(canonical RFC 8785 JSON of the complete document including issuer_signature)`. This is the key used in the Arbitrum One on-chain acceptance counter (`openOfferUseCounts`). It is unforgeable and unique per issuer.
 
 ### Phase 3: Publishing
 
-7. The issuer submits the signed `OpenMarkOffer` document to a wallet service via HTTPS POST.
+7. The issuer submits the signed `OpenCardOffer` document to a wallet service via HTTPS POST.
 
 8. The wallet service stores the offer and generates a **claim link**:
    - Short form: `card://claim?o=<base64url of offer>` (suitable for QR codes and deep links).
@@ -106,13 +106,13 @@ Open offers are only permitted when the policy card has `allow_open_offers: true
 
 ## On-Chain Counter Initialization
 
-The Arbitrum One acceptance counter for this offer (`openOfferUseCounts[offer_id]`) is **lazily initialized** — no pre-registration transaction is required. The counter is created and atomically incremented on the first successful claim. The press includes the `offer_id`, `max_acceptances`, `expires_at`, and `issuer_signature` in calldata alongside each card registration so the contract can enforce constraints atomically.
+The Arbitrum One acceptance counter for this offer (`openOfferUseCounts[offer_id]`) is **lazily initialized** — no pre-registration transaction is required. The counter is created and atomically incremented on the first successful claim. The press verifies the issuer's ML-DSA-44 signature off-chain as part of its pre-flight validation before submitting any transaction. The press then includes the `offer_id`, `max_acceptances`, and `expires_at` in calldata alongside each card registration so the contract can enforce capacity and expiry constraints atomically. The `issuer_signature` is not passed to the contract.
 
 ---
 
 ## Postconditions
 
-- A signed `OpenMarkOffer` document is stored on the wallet service.
+- A signed `OpenCardOffer` document is stored on the wallet service.
 - A claim link is available for distribution.
 - The Arbitrum One counter for this offer is not yet initialized (lazy; created on first claim).
 - Any recipient who follows the claim link and submits a valid claim will receive a card, subject to the stated constraints.
@@ -139,5 +139,5 @@ The Arbitrum One acceptance counter for this offer (`openOfferUseCounts[offer_id
 - `card_offering_and_acceptance.md` — the targeted issuance alternative
 - `policy_creation.md` — where `allow_open_offers` is set
 - `card_protocol_spec.md §2` — Open offer issuance flow section
-- `protocol-objects.md §6` — `OpenMarkOffer` object reference
+- `protocol-objects.md §6` — `OpenCardOffer` object reference
 - `protocol-objects.md §14` — `RegistryEntry` (open offer counter) object reference

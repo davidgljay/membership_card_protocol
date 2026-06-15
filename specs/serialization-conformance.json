@@ -222,6 +222,67 @@
       },
       "expected_json": "{\"entry_type\":\"revocation\",\"prev_log_root\":\"AAEC\",\"revocation\":{\"code\":700,\"effective_date\":\"2026-05-19T00:00:00Z\",\"note\":\"Role ended\"},\"version\":3}",
       "notes": "Keys sorted: \"entry_type\" < \"prev_log_root\" < \"revocation\" < \"version\"; inner: \"code\" < \"effective_date\" < \"note\""
+    },
+    {
+      "id": "TC-23",
+      "description": "CardDocument issuer-signature input — fields present at offer time before the offerer signs; ancestry_pubkeys populated with two entries",
+      "input": {
+        "ancestry_pubkeys": ["DEAD", "F00D"],
+        "issued_at": "2026-06-15T00:00:00Z",
+        "issuer_card": "BAED",
+        "policy_id": "AAEC",
+        "press_card": "CAFE"
+      },
+      "expected_json": "{\"ancestry_pubkeys\":[\"DEAD\",\"F00D\"],\"issued_at\":\"2026-06-15T00:00:00Z\",\"issuer_card\":\"BAED\",\"policy_id\":\"AAEC\",\"press_card\":\"CAFE\"}",
+      "notes": "Issuer-signature input: recipient_pubkey, holder_signature, press_signature are absent (not yet added); issuer_signature is absent (it is the output of this step). Key order: ancestry_pubkeys < issued_at < issuer_card < policy_id < press_card. ancestry_pubkeys sorts first because 'a' (U+0061) < every other initial letter here."
+    },
+    {
+      "id": "TC-24",
+      "description": "CardDocument holder-signature input — issuer_signature and recipient_pubkey added; holder_signature and press_signature still absent",
+      "input": {
+        "ancestry_pubkeys": ["DEAD", "F00D"],
+        "issued_at": "2026-06-15T00:00:00Z",
+        "issuer_card": "BAED",
+        "issuer_signature": "BEEF",
+        "policy_id": "AAEC",
+        "press_card": "CAFE",
+        "recipient_pubkey": "FACE"
+      },
+      "expected_json": "{\"ancestry_pubkeys\":[\"DEAD\",\"F00D\"],\"issued_at\":\"2026-06-15T00:00:00Z\",\"issuer_card\":\"BAED\",\"issuer_signature\":\"BEEF\",\"policy_id\":\"AAEC\",\"press_card\":\"CAFE\",\"recipient_pubkey\":\"FACE\"}",
+      "notes": "Holder-signature input: adds issuer_signature and recipient_pubkey to TC-23; excludes holder_signature and press_signature. Key order: ancestry_pubkeys < issued_at < issuer_card < issuer_signature < policy_id < press_card < recipient_pubkey. Note issuer_card < issuer_signature because 'd' (U+0064) < 's' (U+0073) at position 7."
+    },
+    {
+      "id": "TC-25",
+      "description": "CardDocument press-signature input — holder_signature added; press_signature still absent; this is the byte sequence the press signs",
+      "input": {
+        "ancestry_pubkeys": ["DEAD", "F00D"],
+        "holder_signature": "B00B",
+        "issued_at": "2026-06-15T00:00:00Z",
+        "issuer_card": "BAED",
+        "issuer_signature": "BEEF",
+        "policy_id": "AAEC",
+        "press_card": "CAFE",
+        "recipient_pubkey": "FACE"
+      },
+      "expected_json": "{\"ancestry_pubkeys\":[\"DEAD\",\"F00D\"],\"holder_signature\":\"B00B\",\"issued_at\":\"2026-06-15T00:00:00Z\",\"issuer_card\":\"BAED\",\"issuer_signature\":\"BEEF\",\"policy_id\":\"AAEC\",\"press_card\":\"CAFE\",\"recipient_pubkey\":\"FACE\"}",
+      "notes": "Press-signature input: all fields except press_signature. Key order: ancestry_pubkeys < holder_signature < issued_at < issuer_card < issuer_signature < policy_id < press_card < recipient_pubkey. holder_signature ('h') < issued_at ('i') < issuer_card ('i','s','s','u','e','r','_','c') < issuer_signature ('i','s','s','u','e','r','_','s')."
+    },
+    {
+      "id": "TC-26",
+      "description": "CardDocument with ancestry_pubkeys: [] — root base case (INC-41); complete stored document with all five signature fields present",
+      "input": {
+        "ancestry_pubkeys": [],
+        "holder_signature": "B00B",
+        "issued_at": "2026-06-15T00:00:00Z",
+        "issuer_card": "BAED",
+        "issuer_signature": "BEEF",
+        "policy_id": "AAEC",
+        "press_card": "CAFE",
+        "press_signature": "DEED",
+        "recipient_pubkey": "FACE"
+      },
+      "expected_json": "{\"ancestry_pubkeys\":[],\"holder_signature\":\"B00B\",\"issued_at\":\"2026-06-15T00:00:00Z\",\"issuer_card\":\"BAED\",\"issuer_signature\":\"BEEF\",\"policy_id\":\"AAEC\",\"press_card\":\"CAFE\",\"press_signature\":\"DEED\",\"recipient_pubkey\":\"FACE\"}",
+      "notes": "Pins that ancestry_pubkeys: [] serializes as the two-character token '[]' — a present empty array, NOT field omission (which would remove the key entirely per A.3). This is the INC-41 normative requirement for trusted-root / root-parent cards. All nine mandatory CardDocument fields present; key order: ancestry_pubkeys < holder_signature < issued_at < issuer_card < issuer_signature < policy_id < press_card < press_signature < recipient_pubkey."
     }
   ]
 }

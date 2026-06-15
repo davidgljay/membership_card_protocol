@@ -53,18 +53,20 @@ The app assembles a `SubCardDocument` (see `protocol-objects.md §16`):
 
 ```json
 {
-  "holder_primary_card": "<mutable pointer of the holder's primary card>",
-  "app_card":            "<mutable pointer of this app's card>",
-  "capabilities":        ["<message type>", "..."],
-  "recipient_pubkey":    "<base64url — new ML-DSA-44 public key>",
-  "issued_at":           "<ISO 8601>",
-  "valid_until":         "<ISO 8601 — optional>",
-  "attestation_level":   "T2",
-  "attestation_proof":   "<base64url — App Attest / Play Integrity assertion, omitted if T1>"
+  "holder_primary_card":        "<mutable pointer of the holder's primary card>",
+  "holder_primary_card_pubkey": "<base64url — ML-DSA-44 public key of the holder's primary card, 1312 bytes raw>",
+  "app_card":                   "<mutable pointer of this app's card>",
+  "app_card_pubkey":            "<base64url — ML-DSA-44 public key of the app's card, 1312 bytes raw>",
+  "capabilities":               ["<message type>", "..."],
+  "recipient_pubkey":           "<base64url — new ML-DSA-44 public key>",
+  "issued_at":                  "<ISO 8601>",
+  "valid_until":                "<ISO 8601 — optional>",
+  "attestation_level":          "T2",
+  "attestation_proof":          "<base64url — App Attest / Play Integrity assertion, omitted if T1>"
 }
 ```
 
-The app signs canonical CBOR of this document with its app card key → `app_signature`. The partially-signed document is sent to the wallet.
+The app signs canonical RFC 8785 JSON of this document (including `holder_primary_card_pubkey` and `app_card_pubkey`, without the two signature fields) with its app card key → `app_signature`. The partially-signed document is sent to the wallet.
 
 **Delivery channel.** The app sends the request to the wallet via an HTTPS callback or platform deep link. The delivery mechanism is determined by the platform integration layer (see `messaging_protocol.md`).
 
@@ -72,11 +74,14 @@ The app signs canonical CBOR of this document with its app card key → `app_sig
 
 Before presenting the request to the user, the wallet:
 
-1. Verifies `app_signature` against the app's card key.
-2. Walks the `app_card` chain to confirm it reaches the governance authority's app-certification policy root.
-3. Checks the app card's log for any revocation entries.
-4. Queries the EAS annotation layer for third-party annotations on the app's card.
-5. Verifies the attestation: if `attestation_level` is `"T2"`, verifies the `attestation_proof` assertion against the platform's attestation service and confirms the attested key hash matches `recipient_pubkey`. If `attestation_level` is `"T1"`, confirms the platform keystore reports the key as hardware-backed. If the policy does not accept T1 and the level is not T2, blocks the request.
+1. Verifies `app_signature` against the app's card key (`app_card_pubkey` from the document).
+2. Applies the binding checks for both parent-pubkey hints:
+   - Confirms `keccak256(holder_primary_card_pubkey)` equals the `holder_primary_card` pointer address. A mismatch is a hard rejection.
+   - Confirms `keccak256(app_card_pubkey)` equals the `app_card` pointer address. A mismatch is a hard rejection.
+3. Walks the `app_card` chain using `app_card_pubkey` (deriving the content key as `HKDF-SHA3-256(app_card_pubkey, info="card-content-v1")` to decrypt the app card, then continuing via the app card's `ancestry_pubkeys`) to confirm it reaches the governance authority's app-certification policy root.
+4. Checks the app card's log for any revocation entries.
+5. Queries the EAS annotation layer for third-party annotations on the app's card.
+6. Verifies the attestation: if `attestation_level` is `"T2"`, verifies the `attestation_proof` assertion against the platform's attestation service and confirms the attested key hash matches `recipient_pubkey`. If `attestation_level` is `"T1"`, confirms the platform keystore reports the key as hardware-backed. If the policy does not accept T1 and the level is not T2, blocks the request.
 
 **Outcomes:**
 
@@ -104,7 +109,7 @@ The user approves or denies.
 
 ### Step 4: Wallet Countersigns
 
-The holder's primary card key signs canonical CBOR of the partially-signed document (including `app_signature`, without `holder_signature`) → `holder_signature`. The completed `SubCardDocument` is posted to IPFS.
+The holder's primary card key signs canonical RFC 8785 JSON of the partially-signed document (including `app_signature` and both parent-pubkey fields `holder_primary_card_pubkey` and `app_card_pubkey`, without `holder_signature`) → `holder_signature`. The completed `SubCardDocument` is posted to IPFS.
 
 ### Step 5: Registration On-Chain
 
@@ -251,7 +256,7 @@ The wallet is the enforcement point. It:
 - [ ] The sub-card private key is generated inside hardware-backed keystore storage, scoped to the app's signing identity.
 - [ ] The sub-card private key is never exposed in plaintext outside the hardware keystore, even to the app that holds it.
 - [ ] Both `app_signature` (app card key) and `holder_signature` (holder primary card key) are present and independently verifiable in every completed `SubCardDocument`.
-- [ ] A verifier can confirm a statement signed with a sub-card chains to the holder's primary card and the app's card without contacting the wallet or the app.
+- [ ] A verifier can confirm a statement signed with a sub-card chains to the holder's primary card and the app's card without contacting the wallet or the app, by reading `holder_primary_card_pubkey` and `app_card_pubkey` from the decrypted sub-card document, applying the keccak256 binding checks, decrypting the master and app cards, and then continuing the chain walk via those cards' own `ancestry_pubkeys`.
 - [ ] Verifiers reject sub-card signatures on message types not present in the sub-card's `capabilities` whitelist.
 - [ ] Verifiers reject sub-card signatures where `valid_until` has passed.
 - [ ] Revoking a sub-card does not affect the holder's primary card or other sub-cards held by other apps.

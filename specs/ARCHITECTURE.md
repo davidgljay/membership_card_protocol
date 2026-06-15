@@ -1,4 +1,4 @@
-# Card Protocol — Arcardecture Decision Record
+# Card Protocol — Architecture Decision Record
 
 **Version:** 1.1  
 **Date:** 2026-06-14  
@@ -12,10 +12,10 @@
 1. [System Overview](#system-overview)
 2. [ADR-001: Registry Substrate — Arbitrum One](#adr-001-registry-substrate--arbitrum-one)
 3. [ADR-002: Off-Chain Content Storage — IPFS](#adr-002-off-chain-content-storage--ipfs)
-4. [ADR-003: Append-Only Log Arcardecture](#adr-003-append-only-log-arcardecture)
+4. [ADR-003: Append-Only Log Architecture](#adr-003-append-only-log-architecture)
 5. [ADR-004: Cryptographic Primitives — ML-DSA-44 and ML-KEM](#adr-004-cryptographic-primitives--ml-dsa-44-and-ml-kem)
 6. [ADR-005: Press Model and Key Custody](#adr-005-press-model-and-key-custody)
-7. [ADR-006: Privacy Model — Client-Side, Private by Default](#adr-006-privacy-model--client-side-private-by-default)
+7. [ADR-006: Address Model — Single Public Derivation](#adr-006-address-model--single-public-derivation)
 8. [ADR-007: Transport Layer — HTTPS](#adr-007-transport-layer--https)
 9. [ADR-008: Annotation Layer — EAS on Arbitrum One](#adr-008-annotation-layer--eas-on-arbitrum-one)
 10. [ADR-009: Key Management — Two-Tier with YubiKey Recovery](#adr-009-key-management--two-tier-with-yubikey-recovery)
@@ -116,7 +116,7 @@ Use **IPFS** for all off-chain content. The on-chain registry stores only CID po
 
 ---
 
-## ADR-003: Append-Only Log Arcardecture
+## ADR-003: Append-Only Log Architecture
 
 **Status:** Accepted
 
@@ -165,12 +165,10 @@ The press log records each issuance event, encrypted under the current audit epo
   "notify_holder": true,
   "updater_message": "<optional message forwarded to holder>",
   "intent_signature": {
-    "signer_card": "<mutable pointer in registry of updater's sub-card — base64url>",
     "public_key": "<ML-DSA-44 public key — base64url>",
     "signature": "<sig over canonical RFC 8785 JSON of UpdateIntentPayload — base64url>"
   },
   "press_signature": {
-    "signer_card": "<mutable pointer in registry of press's sub-card — base64url>",
     "public_key": "<ML-DSA-44 public key — base64url>",
     "signature": "<sig over canonical RFC 8785 JSON of complete LogEntry excluding press_signature — base64url>"
   }
@@ -243,15 +241,15 @@ A **card press** is a service that verifies policy compliance and issues cards o
 
 ### Decision
 
-**Key custody is user-sovereign.** The press never holds a card holder's signing key.
+**Key custody is user-sovereign.** The press holds neither the holder's nor the offerer's signing key.
 
-The issuance flow is a **mutual-signing pattern**:
+The issuance flow is a **three-party signing pattern**, signed in a fixed order:
 
-1. The press verifies policy compliance, assembles the proposed card JSON (without the recipient's public key), and signs it as a **signed offer** — attesting that this press verified policy compliance.
-2. The recipient independently generates their own ML-DSA-44 keypair, adds their public key, and **countersigns** the completed card.
-3. Both signatures are present in every completed card. The press's signature is a statement about policy adherence; the recipient's countersignature is an assertion of identity and acceptance.
+1. The **offerer** (issuer) constructs the offer (the proposed card JSON without the recipient's public key) and signs it with the **offerer's own card key** → `issuer_signature`.
+2. The **recipient** independently generates their own ML-DSA-44 keypair, adds their public key, and **countersigns** → `holder_signature`. The offerer validates the countersigned result.
+3. The **press** validates policy compliance and signs the completed, countersigned card with its **press sub-card key** → `press_signature`, then registers it on-chain. The press signature is applied last.
 
-The press's signing key is the private key for its **press sub-card** — a sub-card of a specific policy card that authorizes it to issue under that policy. No separate press key type exists.
+All three signatures are present in every completed targeted card: `issuer_signature` attests the offerer authored the offer, `holder_signature` is the recipient's assertion of identity and acceptance, and `press_signature` is the press's statement of policy adherence. The press's content-signing key is the ML-DSA-44 key of its **press sub-card**; the offerer's key is a separate key the press never holds.
 
 ### Press Authorization Structure
 
@@ -267,11 +265,10 @@ The Arbitrum One registry contract enforces press authorization via two on-chain
 
 ### Privacy Properties of the Press
 
-The press is deliberately constrained in what it can observe:
+The press's observable role is constrained by the audit-encryption model and by card-content encryption (ADR-006):
 
-- **The press never sees plaintext CIDs.** The client encrypts the CID before handoff; the press posts ciphertext.
-- **The press never knows the address derivation secret.** The client derives the registry address locally and tells the press where to write.
-- **The press does record the card CID in its press log**, encrypted to each auditor's public key. This provides the policy authorizer an auditable recovery path if a recipient loses their capability bundle.
+- **The press records each issuance in its press log**, encrypted under the audit epoch AEK (ADR-003) so only auditors — not the press operator — can read the issuance history.
+- **On-chain CIDs are public; card content is encrypted.** The press posts the plaintext CID to the registry, but the IPFS content at that CID is encrypted with AES-256-GCM under a content key derived from the card's public key (ADR-006). Anyone holding the card's public key can derive the content key and decrypt the document; the content is opaque ciphertext to anyone without it.
 
 ### Self-Hosted Presses
 
@@ -285,32 +282,53 @@ A docker-compose reference stack enables self-hosted press deployment. Self-host
 
 ---
 
-## ADR-006: Privacy Model — Client-Side, Private by Default
+## ADR-006: Address Model — Single Public Derivation
 
-**Status:** Accepted
+**Status:** Accepted (revised 2026-06-15 — private/selectively-shared card postures removed)
 
 ### Context
 
-The registry contract must support a range of privacy postures, from fully public credentials to credentials that are invisible to anyone without a capability bundle.
+Earlier versions supported three privacy postures (fully public, selectively shared, fully private) with a secret-derived registry address, encrypted on-chain CIDs, a per-card content-decryption key, and capability bundles. This added significant complexity (two keys per card, capability-grant delivery and revocation, address-secret custody) for a confidentiality property that the protocol does not require: a credential is meant to be presentable and verifiable, and message-level confidentiality is already provided by end-to-end message encryption (ADR-007).
 
 ### Decision
 
-Privacy is entirely **client-side**. The registry contract is neutral. At creation time, the client chooses from three modes:
+A card's registry address is **always** derived from its public key:
+
+```
+address = keccak256(recipient_pubkey)
+```
+
+The on-chain CID is stored in **plaintext**. IPFS card content is **encrypted**: a content key is derived from the card's public key and used to encrypt the card document with AES-256-GCM. A party must hold the card's public key to read its content — the public key serves as both the address-derivation credential (via `keccak256`) and the content-decryption credential (via HKDF).
+
+**Content encryption scheme:**
+
+```
+content_key  = HKDF-SHA3-256(ikm=recipient_pubkey, info="card-content-v1")
+ipfs_payload = { "nonce": <96-bit random, base64url>,
+                 "ciphertext": AES-256-GCM.Encrypt(content_key, card_document_bytes, nonce) }
+```
+
+A fresh nonce is generated for each IPFS write (each new log entry). The nonce is stored alongside the ciphertext in the IPFS payload object; the content key itself is never stored. There is no address secret, no separate capability bundle, and no per-card decryption key distinct from the public key.
 
 | Mode | Registry address derivation | CID on-chain | IPFS content |
 |---|---|---|---|
-| **Fully public** | `pubkey-derived` | Plaintext | Plaintext |
-| **Selectively shared** | `keccak256(sign(private_key, "card-address-v1"))` | Encrypted | Plaintext |
-| **Fully private** | `keccak256(sign(private_key, "card-address-v1"))` | Encrypted | Encrypted |
+| **Single mode** | `keccak256(recipient_pubkey)` | Plaintext | AES-256-GCM, key = `HKDF-SHA3-256(recipient_pubkey)` |
 
-**Two keys per private card:**
+**What an observer sees without the public key:** registry transactions, when they occurred, the fee payer (the press wallet), and the on-chain address (a one-way hash of the public key). Card content on IPFS is opaque ciphertext. **With the public key:** the address is derivable, the content key is derivable, and the full card document is readable. Confidentiality between parties (messaging) is provided at the transport layer (ML-KEM, ADR-007) independently of this model.
 
-- **Address secret** — derives the registry address. Never shared. Controls who can locate the account on-chain.
-- **Decryption key** — decrypts the on-chain CID. Shareable independently. Controls who can read the log head.
+### Ancestor Key Hint — `ancestry_pubkeys`
 
-**Capability bundle:** to share a private card, the owner provides the recipient with an `(address, decryption_key)` pair. The decryption key can be ECDH-wrapped to the recipient's public key, tying it to their identity and preventing trivial forwarding.
+Because card content is encrypted under a key derived from the card's own public key, and because ancestors are referenced only by their on-chain address (`keccak256(recipient_pubkey)` — a one-way hash), a third-party verifier walking the chain cannot independently derive any ancestor's public key from the address alone. To preserve the "verifiable by anyone" property, every card document carries an **`ancestry_pubkeys`** field: an ordered array of ML-DSA-44 public keys (1,312 bytes each, base64url), one per ancestor the verifier must traverse to reach a trusted root, ordered from immediate parent up toward the root.
 
-**What an observer always sees:** that transactions are happening to the registry contract, when they occurred, and the fee payer (the press wallet). They cannot correlate transactions to identities, content, or each other without the address secret.
+**How a chain walker uses `ancestry_pubkeys`:** After decrypting the leaf card (using the signer's inline `public_key`), the verifier reads `ancestry_pubkeys` and, for each entry, (1) derives the expected on-chain address as `keccak256(entry_pubkey)` and confirms it matches the address being resolved; (2) derives the content key as `HKDF-SHA3-256(entry_pubkey, info="card-content-v1")` and decrypts the ancestor document; (3) verifies the ancestor's issuer signature using `entry_pubkey`. If the address check fails or decryption fails, the entry is rejected immediately — the array cannot be used to substitute a forged ancestor.
+
+**Security property:** `ancestry_pubkeys` is an **untrusted hint**. A verifier MUST confirm `keccak256(entry_pubkey)` equals the on-chain address it is resolving (the pointer it walks to) before trusting the key. A wrong or forged pubkey either yields an address mismatch (caught by the binding check) or produces an AES-GCM authentication failure on the encrypted ciphertext (caught by decryption). Either failure is a hard rejection. Per-link on-chain addresses remain the authoritative source of truth; `ancestry_pubkeys` is a performance optimization that enables parallel fetching and decryption without additional round-trips.
+
+**Signing coverage:** `ancestry_pubkeys` is a protocol-required immutable field set at issuance. It is present in the offer when the offerer signs (`issuer_signature`), present when the holder countersigns (`holder_signature`), and present when the press signs (`press_signature`). All three signatures commit to its contents.
+
+**Policy cards:** Policy cards carry `ancestry_pubkeys` under the same convention (ordered from the immediate parent up toward root). A verifier walking the policy creation chain uses the same array and the same binding check. **Root base case and walk termination:** a self-rooted trusted-root policy card — one whose own on-chain address is registered in `PolicyAuthorizerKeys` — carries `ancestry_pubkeys: []`. The empty array `[]` is a legal, signed value; it is distinct from omission (the field is always present). The chain walk terminates successfully when the next address to resolve is registered in the on-chain `PolicyAuthorizerKeys` table; at that point `chain_reaches_trusted_root` is set to `true`. If `ancestry_pubkeys` is exhausted (or `[]`) and the terminal card's address is **not** in `PolicyAuthorizerKeys`, the chain does not reach a trusted root.
+
+**Sub-card boundary — `holder_primary_card_pubkey` and `app_card_pubkey`:** Because almost all signed statements are produced by a **sub-card** (not a master card), verification enters at a sub-card whose parents are referenced only by their on-chain addresses (one-way keccak256 hashes). To unlock those parent cards and then continue via their `ancestry_pubkeys`, every `SubCardDocument` (see `protocol-objects.md §16`) carries two additional protocol-required fields: `holder_primary_card_pubkey` (ML-DSA-44 public key of the card referenced by `holder_primary_card`) and `app_card_pubkey` (ML-DSA-44 public key of the card referenced by `app_card`). These fields apply the same design as `ancestry_pubkeys` one level down — they are untrusted hints bound by a keccak256 check: the verifier MUST confirm `keccak256(holder_primary_card_pubkey)` equals the `holder_primary_card` pointer address (and likewise for `app_card_pubkey` / `app_card`) before deriving a content key or verifying a signature. A mismatch, or an AES-GCM authentication failure when decrypting the referenced card, is a hard rejection. Once the master and app cards are decrypted, their own `ancestry_pubkeys` fields carry the walk the rest of the way to the trusted root. Both fields are set at sub-card issuance and are covered by both `app_signature` and `holder_signature`.
 
 ### Key Separation for Policy Authorizers
 
@@ -393,7 +411,7 @@ A holder's private keys are the root of their identity. Loss means permanent los
 
 ### Decision
 
-**Two-tier key arcardecture:**
+**Two-tier key architecture:**
 
 - **Master card key** — high-stakes key for creating sub-cards and key rotations. Stored in an **encrypted keyring blob on IPFS**, encrypted with a key derived from `passkey + service_secret`. Neither the passkey nor the service secret alone can decrypt it.
 - **Sub-card keys** — day-to-day signing keys, one per device. Stored in **secure device storage** (Secure Enclave on Apple, TPM on others). All routine signing operations use sub-card keys; the master key is cold.
@@ -459,7 +477,7 @@ A stolen YubiKey cannot complete recovery if a valid cancellation is submitted b
 │                          Client (Holder)                              │
 │  - Keyring (encrypted, IPFS-backed)                                  │
 │  - Sub-card keys in Secure Enclave / TPM                            │
-│  - Derives registry address locally (private mode)                   │
+│  - Derives registry address as keccak256(public_key)                 │
 │  - Countersigns card offers                                         │
 │  - Verifies chain before displaying any offer or message             │
 │  - Decrypts inbound routing envelope payloads                       │
@@ -473,31 +491,30 @@ A stolen YubiKey cannot complete recovery if a valid cancellation is submitted b
 ### 1. Card Issuance (First-Time Recipient)
 
 ```
-Administrator / Requester
-  → submits issuance request to press
-
-Press
-  → resolves requester + recipient chains, evaluates predicates
-  → checks revocation entries on all chain links
-  → assembles proposed card JSON (recipient_pubkey empty)
-  → signs with press sub-card key → signed offer
+Offerer (issuer) / their wallet service
+  → assembles proposed card JSON (issuer_card, press_card; recipient_pubkey empty)
+  → signs with offerer's own card key → issuer_signature (signed offer)
   → encodes as card://invite?o=<base64>
 
 Recipient
   → opens invitation link
-  → client verifies press sub-card chain before showing offer
+  → client verifies issuer_signature + offerer chain before showing offer
   → [keychain setup if first time]
-  → reviews offer (issuer identity, field values, policy)
+  → reviews offer (offerer identity, field values, policy)
   → generates fresh ML-DSA-44 keypair
   → adds public key to card JSON
-  → countersigns canonical serialization
+  → countersigns canonical serialization → holder_signature
+  → returns countersigned card to offerer
 
-Completed card (both signatures)
-  → posted to IPFS → CID returned
+Offerer
+  → validates holder_signature → forwards to press
 
 Press
+  → validates predicates, revocation, schema, issuer_signature + holder_signature
+  → signs completed card with press sub-card key → press_signature
+  → posts to IPFS → CID returned
   → creates registry entry on Arbitrum One (initial log head CID)
-    signed by press sub-card key
+    authorized by press secp256r1 key in PressAuthorizations
   → constructs issuance log entry, encrypted to each auditor via ML-KEM
   → appends to policy card's IPFS log + updates policy card's registry pointer
   → produces Signed Card Inclusion Proof (SCIP)
@@ -510,9 +527,30 @@ Press
 Verifier receives signed message or card pointer
   → verify signature against canonical payload (no network call)
   → resolve signing sub-card's registry address on Arbitrum One
-  → confirm sub-card appears in master card's active sub-card list
-  → fetch chain CIDs from IPFS (parallelized via cached chain array)
-    for each link: verify issuer signature, check scope attenuation
+  → decrypt leaf sub-card using signer's public_key from SignatureEntry
+      content_key = HKDF-SHA3-256(public_key, info="card-content-v1")
+  → read holder_primary_card_pubkey and app_card_pubkey from decrypted SubCardDocument
+      (sub-card boundary: these are untrusted hints for the immediate parent cards)
+      confirm keccak256(holder_primary_card_pubkey) == holder_primary_card address
+         (binding check — mismatch → hard reject)
+      confirm keccak256(app_card_pubkey) == app_card address
+         (binding check — mismatch → hard reject)
+      derive content_key = HKDF-SHA3-256(holder_primary_card_pubkey, info="card-content-v1")
+         and decrypt master card (AES-GCM auth failure → hard reject)
+      confirm sub-card appears in master card's active sub-card list
+      verify master card holder's ML-DSA-44 signature on sub-card registration
+      derive content_key = HKDF-SHA3-256(app_card_pubkey, info="card-content-v1")
+         and decrypt app card (AES-GCM auth failure → hard reject)
+      walk app card's ancestry_pubkeys to confirm chain reaches governance root
+  → read ancestry_pubkeys from decrypted master card (ordered, immediate parent first)
+  → fetch chain CIDs from IPFS (parallelized via cached chain array + ancestry_pubkeys)
+    for each ancestor link:
+      1. confirm keccak256(ancestry_pubkeys[i]) == on-chain address being resolved
+         (binding check — mismatch → reject immediately)
+      2. derive content_key = HKDF-SHA3-256(ancestry_pubkeys[i], info="card-content-v1")
+         and decrypt ancestor document (AES-GCM auth failure → reject)
+      3. verify issuer ML-DSA-44 signature, check scope attenuation
+      per-link on-chain addresses remain authoritative; ancestry_pubkeys is an untrusted hint
   → resolve all mutable pointers in chain on Arbitrum One (parallelized)
     for each link: read log for revocation entries, apply code semantics:
       7xx — before effective_date: valid; after: new issuances rejected
@@ -625,7 +663,7 @@ These are engineering and design questions from the spec that have not yet been 
 | **Unauthorized press/policy registration (spam)** | Low | Medium | `RegisterPolicy` and `AuthorizePress` both require governance quorum signatures. No party can unilaterally create root policies or register presses. |
 | **Press key compromise** | Low | Medium | Revoking the press entry via `RevokePress` (governance quorum required) removes its write authority. Previously-issued cards are unaffected. The press cannot forge user signatures (user-sovereign key custody). |
 | **YubiKey stolen before 72-hour cancellation window** | Low | Medium | Multi-channel notifications give holder 72 hours to cancel. After recovery, old YubiKey should be treated as potentially compromised; holder should rotate backup registration. |
-| **OrbitDB legacy references causing confusion** | Medium | Low | Some early raw notes reference OrbitDB. This arcardecture supersedes those notes. OrbitDB is **not** part of the trust model; the linked-CID-chain + on-chain anchoring pattern is authoritative. |
+| **OrbitDB legacy references causing confusion** | Medium | Low | Some early raw notes reference OrbitDB. This architecture supersedes those notes. OrbitDB is **not** part of the trust model; the linked-CID-chain + on-chain anchoring pattern is authoritative. |
 | **Post-quantum transition risk for Ed25519 legacy tooling** | Low | Medium | ML-DSA-44 is FIPS 204 standardized. YubiKey hardware support is emerging. Where necessary, hybrid signatures (Ed25519 + ML-DSA) can be used during transition. |
 
 ---
