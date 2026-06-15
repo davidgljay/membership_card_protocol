@@ -40,10 +40,10 @@ For first-time recipients who need to create a wallet, see `open_offer_acceptanc
 
 ### Phase 1: Offer Display and Verification
 
-1. The recipient follows the claim link. The wallet service fetches and decodes the `OpenMarkOffer` document.
+1. The recipient follows the claim link. The wallet service fetches and decodes the `OpenCardOffer` document.
 
 2. The wallet service — or the recipient's existing wallet client — verifies the offer before displaying it:
-   - Verify `issuer_signature` over the canonical CBOR of all offer fields (excluding the signature itself).
+   - Verify `issuer_signature` over the canonical RFC 8785 JSON of all offer fields (excluding the signature itself).
    - Resolve the issuer's card chain to a trusted root. If chain verification fails, **reject the offer before displaying it**.
    - Confirm the named press sub-card pointer appears in the policy's `approved_presses`. If not, reject.
 
@@ -76,12 +76,12 @@ For first-time recipients who need to create a wallet, see `open_offer_acceptanc
 7. The client assembles the `claim_payload`:
    ```json
    {
-     "offer":            { <verbatim OpenMarkOffer document including issuer_signature> },
+     "offer":            { <verbatim OpenCardOffer document including issuer_signature> },
      "recipient_pubkey": "<base64url — the freshly generated ML-DSA-44 public key>"
    }
    ```
 
-8. The client canonically serializes `claim_payload` (canonical CBOR per RFC 8949 §4.2 with protocol-specific overrides).
+8. The client canonically serializes `claim_payload` (canonical RFC 8785 JSON).
 
 9. The client signs the canonical serialization with the **new card's private key** → `recipient_signature`.
 
@@ -99,12 +99,12 @@ For first-time recipients who need to create a wallet, see `open_offer_acceptanc
 
 11. The press validates the submission:
     - Re-verify `claim_payload.offer.issuer_signature` over the offer document.
-    - Verify `recipient_signature` over the canonical CBOR of `claim_payload`.
+    - Verify `recipient_signature` over the canonical RFC 8785 JSON of `claim_payload`.
     - Confirm `claim_payload.offer.press_card` matches the receiving press's own sub-card pointer.
     - Confirm the policy has `allow_open_offers: true`.
     - Submit an atomic Arbitrum One transaction that: verifies the issuer's ML-DSA-44 signature over the offer payload; checks `block.timestamp < expires_at` (if set); checks `openOfferUseCounts[offer_id] < max_acceptances` (if set); atomically increments the counter and registers the card. If any check fails, the transaction reverts.
 
-12. If validation succeeds, the press assembles the `CardDocument` from `proposed_fields` plus `recipient_pubkey`, signs it with the press sub-card key (`offer_signature`), and posts it to IPFS.
+12. If validation succeeds, the press assembles the `CardDocument` from `proposed_fields` plus `recipient_pubkey`, signs it with the press sub-card key (`press_signature`), and posts it to IPFS. (The offerer's `issuer_signature` on the `OpenCardOffer` and the recipient's `holder_signature` are the other two signatures.)
 
 13. The press registers the card on Arbitrum One (included in the atomic transaction from Step 11).
 
@@ -169,5 +169,5 @@ For first-time recipients who need to create a wallet, see `open_offer_acceptanc
 - `wallet_backup_and_recovery.md` — recovery path when the passkey is unavailable
 - `card_offering_and_acceptance.md` — targeted issuance alternative
 - `card_protocol_spec.md §4` — receiving a card feature spec (open offer receipt flow)
-- `protocol-objects.md §6` — `OpenMarkOffer` object reference
+- `protocol-objects.md §6` — `OpenCardOffer` object reference
 - `protocol-objects.md §7` — `OpenOfferClaimSubmission` object reference

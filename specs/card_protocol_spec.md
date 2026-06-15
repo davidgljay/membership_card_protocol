@@ -29,16 +29,19 @@ This document specifies the behavior of eight core features:
 
 A card's stable address is an entry in the Card registry contract deployed on Arbitrum One. The on-chain entry is a mutable pointer to the current head CID of an append-only log stored on IPFS. The log is immutable and content-addressed; only the pointer moves as new entries are appended.
 
-**Privacy posture** is determined entirely by client-side choices at creation time. The contract is neutral. Three modes are supported:
+**Address derivation.** A card's registry address is always `keccak256(recipient_pubkey)` — a one-way derivation from the card's public key. The on-chain entry stores the current IPFS log head CID in plaintext, but the IPFS content at that CID is **encrypted**. (See `ARCHITECTURE.md` ADR-006.)
 
-- **Fully public:** pubkey-derived registry address; plaintext CID on-chain. Discoverable by anyone who knows the owner's public key.
-- **Selectively shared:** secret-derived registry address (from `keccak256(sign(private_key, "card-address-v1"))`); encrypted CID on-chain. Only parties holding the capability bundle (address + decryption key) can find and read the card.
-- **Fully private:** secret-derived registry address; encrypted CID; encrypted IPFS content. Only capability bundle holders can read any layer.
+**Content encryption.** Every card document stored on IPFS is encrypted with AES-256-GCM using a content key derived from the card's public key:
 
-**Two keys per private card:**
+```
+content_key  = HKDF-SHA3-256(ikm=recipient_pubkey, info="card-content-v1")
+ipfs_payload = { "nonce": <96-bit random, base64url>,
+                 "ciphertext": AES-256-GCM.Encrypt(content_key, card_document_bytes, nonce) }
+```
 
-- **Address secret** — derives the registry address. Controls who can locate the account. Never shared.
-- **Decryption key** — decrypts the on-chain CID. Grants read access. Can be shared independently.
+A fresh nonce is generated for each log entry. The public key is the single credential needed to derive the address (via `keccak256`) and decrypt the content (via HKDF). There is no separate address secret and no per-card decryption key distinct from the public key itself. A party cannot read a card's content by knowing its address alone — they must hold the public key. Sharing a card means sharing its public key.
+
+Confidentiality of *messages* between cards is a separate concern handled by end-to-end message encryption in the transport layer (ML-KEM; see ADR-007), not by the card address model.
 
 ### Protocol-Required Fields
 
@@ -47,11 +50,18 @@ Every issued card contains a fixed set of immutable protocol-required fields set
 | Field | Type | Description |
 |---|---|---|
 | `policy_id` | `cid` | CID of the policy card at time of issuance |
-| `press_card` | `card-pointer` | Mutable pointer in registry of the press sub-card that issued this card |
+| `issuer_card` | `card-pointer` | Mutable pointer in registry of the offerer (issuer) who constructed and first-signed the offer |
+| `press_card` | `card-pointer` | Mutable pointer in registry of the press sub-card that validated and registered this card |
 | `recipient_pubkey` | `base64url` | The recipient's ML-DSA-44 public key (1,312 bytes) |
 | `issued_at` | `timestamp` | Timestamp of issuance |
-| `offer_signature` | `base64url` | The press's ML-DSA-44 signature over the canonical offer payload |
-| `holder_signature` | `base64url` | The recipient's ML-DSA-44 countersignature over the completed card |
+| `ancestry_pubkeys` | `array of base64url` | Ordered array of ML-DSA-44 public keys (1,312 bytes each) for every ancestor card a verifier must resolve to walk this card's chain to a trusted root — covering the issuer chain and the press/policy chain as applicable. Ordered from immediate parent up toward the root. Set at issuance and covered by all three signatures. **Root base case:** a card whose own address is registered in the on-chain `PolicyAuthorizerKeys` table (a trusted root) carries `ancestry_pubkeys: []` — the empty array. `[]` is a legal, signed value distinct from omission; the field is REQUIRED and always present. A card whose immediate parent is a registered trusted root likewise carries `[]`. **Untrusted hint:** the verifier MUST confirm `keccak256(entry_pubkey)` equals the on-chain address being resolved for each entry; a wrong or forged pubkey yields an address mismatch or undecryptable ciphertext and MUST be rejected. Per-link on-chain addresses remain authoritative. |
+| `issuer_signature` | `base64url` | The offerer's ML-DSA-44 signature over the constructed offer (first signature); `ancestry_pubkeys` is present and covered |
+| `holder_signature` | `base64url` | The recipient's ML-DSA-44 countersignature over the offer including their `recipient_pubkey` (second signature); `ancestry_pubkeys` is present and covered |
+| `press_signature` | `base64url` | The press's ML-DSA-44 signature over the completed, countersigned card, applied last after the press validates policy compliance (third signature); `ancestry_pubkeys` is present and covered |
+
+Targeted cards are signed in a fixed three-party sequence: the **offerer** (issuer) constructs the offer and signs it with their own card key (`issuer_signature`); the **recipient** adds their public key and countersigns (`holder_signature`); the offerer validates the countersigned result; the card is then sent to the **press**, which validates policy compliance, signs with its press sub-card key (`press_signature`), and registers it on-chain. The press key is never held by the offerer's wallet service — these are distinct parties and keys.
+
+**Exception — directly-issued policy cards.** A policy card is issued directly by an authorizer with no press in the loop (§1). Such a card carries `issuer_signature` (the authorizer) and `holder_signature` (the administrator) but **no** `press_signature` and no `press_card`; `press_signature`/`press_card` are required only for cards issued through a press.
 
 **Policy compliance is always anchored to `policy_id`.** When verifying that a card conforms to its governing policy — checking `field_definitions`, `recipient_predicate`, `requester_predicate`, or `approved_presses` membership — verifiers MUST use the content at the `policy_id` CID (the immutable content snapshot embedded at issuance), not the policy's current mutable pointer head. Subsequent changes to the live policy card cannot retroactively invalidate cards issued under a prior policy snapshot.
 
@@ -146,9 +156,19 @@ Combinators may be nested to arbitrary depth.
 
 { "chain_depth_at_most": <integer> }
 // The subject's chain has at most N links
+
+{ "code_equals": <integer> }
+// The update code of the current log entry equals this value.
+// Valid only inside revocation_permissions predicates (8xx–9xx context).
+// Allows a policy to grant a specific party permission for one specific code
+// without granting permission for the entire range.
+// Example: { "all_of": [{ "is_holder": true }, { "code_equals": 910 }] }
+// grants holders permission to post code 910 but no other 9xx code.
 ```
 
 Predicates are finite and non-recursive. Evaluation is deterministic from publicly-available chain data; any verifier can re-evaluate independently.
+
+**Predicate evaluation context.** Most leaf predicates (`issued_under_template`, `chain_includes`, `card_field_matches`, `is_holder`, `is_issuer`, `chain_depth_at_most`) evaluate properties of the **subject's card chain** — the chain of the party whose authorization is being checked. `code_equals` is the sole exception: it evaluates a property of the **current operation** (the update code being submitted), not the subject's chain. It is only meaningful inside `revocation_permissions` predicates where a specific code is being authorized.
 
 ### The Update & Revocation Code System
 
@@ -214,16 +234,16 @@ See `specs/update_codes.md` for the full registry, authority rules per code, and
 
 ### The Press Model
 
-**Key custody is user-sovereign.** The press never holds a card holder's signing key. The press signs card offers with its own card key — attesting that it verified policy compliance — but the holder generates their own keypair and countersigns the offer to accept it. The press's signature is a statement about policy adherence, not an identity claim on behalf of the holder.
+**Key custody is user-sovereign.** The press never holds a card holder's signing key — nor does it hold the offerer's key. A targeted card is signed by three distinct parties in order: the **offerer** signs the constructed offer with their own card key (`issuer_signature`); the **holder** generates their own keypair and countersigns (`holder_signature`); and the **press**, after validating policy compliance, signs the completed countersigned card with its press sub-card key (`press_signature`) and registers it. The press's signature is a statement about policy adherence, not an identity claim on behalf of the offerer or holder.
 
 A **card press** is a service (self-hosted or commercial) that:
 1. Holds a **press sub-card** — a sub-card of a specific policy card, authorizing it to issue cards under that policy.
-2. Verifies that issuance requests satisfy the policy's predicates.
-3. Signs card offers with its press sub-card key.
+2. Verifies that issuance requests satisfy the policy's predicates and that the offerer's `issuer_signature` and the holder's `holder_signature` are valid.
+3. Signs the completed, countersigned card with its press sub-card key (`press_signature`), last in the sequence.
 4. Posts completed cards to IPFS and updates the Arbitrum One registry.
 5. Logs each issuance in the policy card's audit log, encrypted to each auditor card's public key.
 
-The press's signing key is the private key for its press sub-card — no separate press key type exists. Presses hold funded Arbitrum One wallets to pay for on-chain writes. Most end users never interact with IPFS or the chain directly.
+Presses hold two keys serving distinct roles. The **on-chain key** is a secp256r1 (P-256) keypair registered in the `PressAuthorizations` table on Arbitrum One; it authorizes registry writes and is verified on-chain using the RIP-7212 precompile (~3,450 gas). The **IPFS key** is an ML-DSA-44 (FIPS 204) keypair whose public key appears in the press's card document on IPFS; it signs card content, log entries, and SCIPs, and is verified off-chain by presses and verifiers. The keccak256 hash of the press's ML-DSA-44 public key is stored on-chain in `PressAuthorizations` to enable a future Phase 3 upgrade to full on-chain post-quantum verification without re-registering. Presses hold funded Arbitrum One wallets to pay for on-chain writes. Most end users never interact with IPFS or the chain directly.
 
 ---
 
@@ -432,7 +452,7 @@ This walk is independent of the standard chain walk used for card issuance. It t
 - [ ] A policy card whose `valid_until` has passed is rejected by the press at policy load time.
 - [ ] A verifier who fetches the policy card by CID can confirm the authorizer's signature and walk the chain to a trusted root without contacting the authorizer.
 - [ ] Updating a policy field with a signature that does not satisfy the field's `update_policy` is rejected by verifiers as invalid.
-- [ ] A press sub-card whose mutable pointer does not appear in `approved_presses` is rejected by the Arbitrum One registry contract.
+- [ ] A press whose secp256r1 key is not registered as an active entry in `PressAuthorizations` for the relevant policy is rejected by the Arbitrum One registry contract.
 
 #### Nice-to-Have (P1)
 
@@ -496,12 +516,12 @@ Once a policy card is live and a press is authorized, the press must accept issu
 
 This check does not prevent issuance from proceeding if the press is already registered — it is a gate applied when the press first loads a policy. Re-running it when the policy card or any ancestor is updated is recommended.
 
-**Smart contract enforcement.** The Arbitrum One registry contract enforces a single rule: writes to the registry must be signed by a key that is registered as an active press sub-card for the relevant policy. Specifically:
+**Smart contract enforcement.** The Arbitrum One registry contract enforces a single rule: writes to the registry must be authorized by a key registered in the `PressAuthorizations` table for the relevant policy. Specifically:
 
-- Creating a new card registry entry requires a signature from a key registered as a press sub-card whose mutable pointer appears in the policy card's `approved_presses`.
-- The contract verifies this by checking the press sub-card's own registry entry (which is on-chain) and confirming it is not revoked.
-- Updating an existing card registry entry (posting a new log head) requires a signature from the press key (for press-initiated updates) or from a key that has been explicitly granted write authority for that entry via a prior on-chain grant.
-- The contract does **not** evaluate predicate expressions, walk chains, or fetch IPFS content. Semantic compliance is verified post-hoc by observers.
+- Creating a new card registry entry requires a secp256r1 signature from a press key registered in `PressAuthorizations` for the policy. The contract verifies this signature on-chain using the RIP-7212 precompile.
+- The contract checks that the press entry in `PressAuthorizations` is active (not revoked) for the given policy address.
+- Updating an existing card registry entry (posting a new log head) requires a secp256r1 signature from the registered press key (for press-initiated updates) or from a key explicitly granted write authority via a prior on-chain grant.
+- The contract does **not** evaluate predicate expressions, walk chains, fetch IPFS content, or verify ML-DSA-44 signatures. Semantic compliance and ML-DSA-44 content verification are performed off-chain by presses and verifiers.
 
 **Issuance flow.**
 
@@ -509,12 +529,12 @@ This check does not prevent issuance from proceeding if the press is already reg
 2. The press resolves the requester's card chain and evaluates `requester_predicate`. If absent, this step passes automatically.
 3. The press resolves the recipient's card chain and evaluates `recipient_predicate`. If absent, this step passes automatically.
 4. For each card in both chains, the press checks for revocation entries. For each revocation found, the press confirms the effective date is after the current time (i.e., the card was valid when evaluated). If any ancestor is revoked with an effective date at or before now, the press refuses to issue.
-5. The press assembles the proposed card JSON: all protocol-required fields populated (with `recipient_pubkey` left empty), and all `field_definitions` fields populated per the policy.
-6. The press signs the canonical serialization of the proposed card JSON with its press sub-card key, producing the **signed offer**. This signature attests that this press verified policy compliance and generated this offer.
+5. The **offerer's wallet service** assembles the proposed card JSON: protocol-required fields populated (`issuer_card`, `press_card`, `policy_id`, `issued_at`, and `ancestry_pubkeys` — the ordered array of ancestor ML-DSA-44 public keys from immediate parent up toward the root; `recipient_pubkey` left empty), and all `field_definitions` fields populated per the policy. (In targeted mode the offerer constructs the offer; the request at step 1 carries the offerer's parameters.)
+6. The **offerer** signs the canonical serialization of the offer with the **offerer's own card key**, producing `issuer_signature` — the **signed offer**. `ancestry_pubkeys` is included in the signed payload. The press key is not used here.
 7. The offer is delivered to the recipient: as an invitation link (base64 payload in a URL, e.g., `card://invite?o=<base64>`) for first-time recipients, or via HTTPS POST to the recipient's wallet service endpoint for existing holders.
-8. The recipient reviews the offer (see §4), generates a keypair, adds their public key, and countersigns the completed card.
-9. The completed card — containing both the press's offer signature and the recipient's countersignature — is posted to IPFS. Either the recipient's client or the press may perform this posting.
-10. The press creates a registry entry on Arbitrum One for the new card, with the initial log head CID, signed with its press sub-card key.
+8. The recipient reviews the offer (see §4), generates a keypair, adds their public key, and countersigns → `holder_signature`. The countersigned card is returned to the offerer, who validates `holder_signature` and forwards it to the press.
+9. The **press** validates the countersigned card (both `issuer_signature` and `holder_signature` verify; predicates and schema satisfied), signs the complete document with its press sub-card key → `press_signature`, and posts it to IPFS. Either the press or the recipient's client may perform the IPFS posting after `press_signature` is applied.
+10. The press creates a registry entry on Arbitrum One for the new card, with the initial log head CID; the write is authorized on-chain by the press's secp256r1 key in `PressAuthorizations`.
 11. The press constructs an issuance log entry containing the new card's CID and the current `epoch_id`, and encrypts it under the current audit epoch's AEK (AES-GCM). If no epoch is open for this policy, the press opens one first — generating a fresh AEK and posting an `AuditEpochEntry` to the policy log — before encrypting the entry. The press operator cannot read these entries.
 12. The press appends the log entry to the policy card's IPFS log and updates the policy card's Arbitrum One registry entry to point to the new log head.
 13. The press produces a **Signed Card Inclusion Proof (SCIP)**: a small signed object binding the new card's CID to its log entry index and the log root at time of inclusion. The SCIP is signed with the press's sub-card key.
@@ -549,24 +569,23 @@ This check does not prevent issuance from proceeding if the press is already reg
 6. If the recipient accepts: the client generates a fresh ML-DSA-44 keypair for this card, stores the private key in the keyring, and assembles an **open offer claim payload**: `{ "offer": <verbatim OpenCardOffer document>, "recipient_pubkey": <new public key> }`. The client signs the canonical RFC 8785 JSON of this claim payload with the new private key, producing a `recipient_signature`.
 7. The wallet service submits an **OpenOfferClaimSubmission** to the approved press via HTTPS POST: `{ "claim_payload": { "offer": ..., "recipient_pubkey": ... }, "recipient_signature": ... }`. See `protocol-objects.md` §7 for the full schema.
 8. The press validates: (a) the issuer's signature over the offer document is valid; (b) the press's own sub-card is listed in `approved_presses`; (c) the policy card has `allow_open_offers: true`; (d) the press independently checks `expires_at` and reads `OpenOfferUseCounts[offer_id]` on-chain to confirm capacity — this is the press's own pre-flight, separate from the contract's atomic enforcement (see below). If validation fails at any step, the press rejects with a specific error code before submitting any transaction.
-9. The press signs the per-recipient card with its press sub-card key (producing `offer_signature`), calls `ClaimOpenOffer` on-chain (which atomically re-validates constraints and registers the card), then posts the completed card to IPFS.
+9. The press signs the per-recipient card with its press sub-card key (producing `press_signature`), calls `ClaimOpenOffer` on-chain (which atomically re-validates constraints and registers the card), then posts the completed card to IPFS. (The offerer's authorization for an open offer is the `issuer_signature` on the `OpenCardOffer` document; the recipient's countersignature is `holder_signature`.)
 10. The press confirms completion to the wallet service. The wallet service updates the recipient's keyring to include the new card address and presents a confirmation screen, then redirects the recipient to `redirect_url` (displaying the destination URL to the recipient first).
 11. An issuance log entry is encrypted to each auditor and appended to the policy card's IPFS log, as in the targeted issuance flow. A courtesy notification is sent to the issuer via HTTPS to their wallet service endpoint.
 
-**Open offer smart contract enforcement.** For cards submitted under an open card offer, the press calls `ClaimOpenOffer` (see `registry_contract.md §4.5`) — a separate on-chain entrypoint that combines issuer signature verification, acceptance-count enforcement, and card registration in a single atomic transaction. `ClaimOpenOffer` is distinct from `RegisterCard`; a press must not call `RegisterCard` for open-offer claims. No pre-registration of the offer on-chain is required; the acceptance counter (`OpenOfferUseCounts[offer_id]`) is lazily initialized on the first accepted claim.
+**Open offer smart contract enforcement.** For cards submitted under an open card offer, the press calls `ClaimOpenOffer` (see `registry_contract.md §4.5`) — a separate on-chain entrypoint that combines acceptance-count enforcement and card registration in a single atomic transaction. `ClaimOpenOffer` is distinct from `RegisterCard`; a press must not call `RegisterCard` for open-offer claims. No pre-registration of the offer on-chain is required; the acceptance counter (`OpenOfferUseCounts[offer_id]`) is lazily initialized on the first accepted claim.
 
-**Dual verification is required for open offers.** Open offers present a larger abuse surface than targeted issuance — any bearer may claim without individual issuer review, and a misconfigured or malicious press could otherwise bypass `max_acceptances` by calling `RegisterCard` directly. To prevent this, offer constraints are verified independently by both the press (pre-flight, before the transaction is submitted) and the contract (on-chain, atomically with registration). Neither check is a substitute for the other.
+**Press pre-flight verification.** Before submitting `ClaimOpenOffer`, the press verifies the issuer's ML-DSA-44 signature over the `OpenCardOffer` document (confirming `max_acceptances`, `expires_at`, and all offer terms were set by the issuer and have not been tampered with). A press that submits a claim for an offer with an invalid issuer signature violates press policy and is subject to observable detection and deregistration (E-14). The contract does not re-verify the issuer signature on-chain.
 
-The press calls `ClaimOpenOffer` with: `offer_id` (keccak256 of the canonical RFC 8785 JSON of the complete offer document including `issuer_signature`), `max_acceptances` (`null` in the document is encoded as `type(uint64).max` in calldata; any other value is passed as-is), `expires_at` (`null` encoded as `0`), `issuer_signature`, and the standard card registration fields.
+The press calls `ClaimOpenOffer` with: `offer_id` (keccak256 of the canonical RFC 8785 JSON of the complete offer document including `issuer_signature`), `max_acceptances` (`null` in the document is encoded as `type(uint64).max` in calldata; any other value is passed as-is), `expires_at` (`null` encoded as `0`), and the standard card registration fields.
 
 The contract executes the following checks atomically with card registration:
 
-1. Verifies the issuer's ML-DSA-44 signature over the offer payload (confirms `max_acceptances` and `expires_at` were set by the issuer and have not been tampered with).
-2. Confirms `block.timestamp < expires_at` (skipped if `expires_at` is `0`, meaning unconstrained).
-3. Looks up `OpenOfferUseCounts[offer_id]` and confirms the current count is less than `max_acceptances` (skipped if `max_acceptances` is `type(uint64).max`, meaning unconstrained).
-4. Atomically increments `OpenOfferUseCounts[offer_id]` and registers the card.
+1. Confirms `block.timestamp < expires_at` (skipped if `expires_at` is `0`, meaning unconstrained).
+2. Looks up `OpenOfferUseCounts[offer_id]` and confirms the current count is less than `max_acceptances` (skipped if `max_acceptances` is `type(uint64).max`, meaning unconstrained).
+3. Atomically increments `OpenOfferUseCounts[offer_id]` and registers the card (with press authorization checks per §6.1).
 
-If any check fails, the transaction reverts and the card is not registered. The press surfaces a specific rejection reason to the wallet service (E-12: offer expired, E-13: offer at capacity, E-14: invalid issuer signature). A recipient who loses the race to the last acceptance slot receives a clear error rather than a spinner timeout.
+If any check fails, the transaction reverts and the card is not registered. The press surfaces a specific rejection reason to the wallet service (E-12: offer expired, E-13: offer at capacity). A recipient who loses the race to the last acceptance slot receives a clear error rather than a spinner timeout.
 
 **Key separation.** The policy authorizer's card key and any auditor's card key must be separate from each other. A compromised auditor key must not grant policy control.
 
@@ -607,12 +626,13 @@ On epoch close, the procedure is:
 
 - [ ] A press whose sub-card pointer does not appear in `approved_presses` cannot write to the Arbitrum One registry.
 - [ ] A press whose sub-card is revoked with an effective date at or before now cannot write to the Arbitrum One registry.
-- [ ] A completed card contains both the press's offer signature and the recipient's countersignature; any verifier can confirm both independently without contacting the press.
+- [ ] A completed card contains all three signatures — the offerer's `issuer_signature`, the recipient's `holder_signature`, and the press's `press_signature` — and any verifier can confirm all three independently without contacting the press.
 - [ ] At epoch open, each active auditor receives an independently-wrapped copy of the epoch AEK, decryptable only with their card's private key; the AEK wrappings are posted in an `AuditEpochEntry` in the policy log.
 - [ ] Issuance log entries are encrypted under the epoch AEK; neither the press operator nor any party without an auditor's private key can read them.
 - [ ] On epoch close, the auditor produces a signed `AuditEpochCommitment` (entry count + hash commitment over all entry CIDs + findings) before destroying the AEK; the commitment CID is recorded in the policy log.
 - [ ] A future compromise of an auditor's card key cannot decrypt entries from epochs whose AEKs have been destroyed.
 - [ ] A post-hoc verifier can confirm: (a) the card's content conforms to the `field_definitions` in the policy snapshot at `policy_id` CID, (b) the press sub-card that signed it appears in the `approved_presses` array from that same snapshot, and (c) the recipient's chain satisfies `recipient_predicate` from that snapshot if one is specified.
+- [ ] A third-party verifier can walk the full issuer and press/policy chain of any card by reading `ancestry_pubkeys` from the decrypted card, deriving each ancestor's address as `keccak256(entry_pubkey)` and content key as `HKDF-SHA3-256(entry_pubkey, info="card-content-v1")`, and confirming the derived address matches the on-chain address being resolved before decrypting; a pubkey that yields an address mismatch or an undecryptable ciphertext is rejected.
 - [ ] The SCIP is delivered to recipient and administrator via HTTPS within a reasonable latency window of the card being posted.
 - [ ] A press refuses to accept an open card offer submission when the policy card does not have `allow_open_offers: true`.
 - [ ] A press refuses to accept an open card offer submission when the issuer's signature over the offer document does not verify.
@@ -748,18 +768,18 @@ A card recipient — whether a first-time participant or an existing holder — 
 #### Must-Have (P0)
 
 **First-time recipient flow (invitation link).**
-1. The administrator or press assembles the proposed card JSON with all issuer-populated fields and `recipient_pubkey` left empty.
-2. The press verifies requester and recipient predicates (if present), checks chain revocation, then signs the proposed card JSON with its press sub-card key — producing the **signed offer**.
+1. The offerer's wallet service assembles the proposed card JSON with all issuer-populated fields, `issuer_card`, `press_card`, and `recipient_pubkey` left empty.
+2. The offerer signs the offer with the **offerer's own card key** → `issuer_signature` (the **signed offer**). The offerer's wallet service does not hold the press key.
 3. The offer is encoded as `card://invite?o=<base64>` and delivered out of band.
 4. The recipient opens the link. If no keychain exists, the client presents the keychain setup flow (§3) before proceeding.
-5. The client decodes the offer and walks the press sub-card's chain to a trusted root. If the chain fails verification, the offer is rejected before being shown to the user.
-6. The client presents a review screen: issuer identity (chain summary), card content and field values, the policy and schema governing it, and what countersigning commits the recipient to.
-7. If the recipient accepts: the client generates a fresh ML-DSA-44 keypair for this card, stores the private key in the keyring, adds the public key to the card JSON, and signs the canonical serialization with the new private key.
-8. The completed card — containing the press's offer signature, the recipient's public key, and the recipient's countersignature — is posted to IPFS. Either the recipient's client or the press may post it.
+5. The client verifies `issuer_signature` and walks the offerer's (`issuer_card`) chain to a trusted root. If verification fails, the offer is rejected before being shown to the user.
+6. The client presents a review screen: offerer identity (chain summary), card content and field values, the policy and schema governing it, and what countersigning commits the recipient to.
+7. If the recipient accepts: the client generates a fresh ML-DSA-44 keypair for this card, stores the private key in the keyring, adds the public key to the card JSON, and signs the canonical serialization with the new private key → `holder_signature`.
+8. The countersigned card is returned to the offerer, who validates `holder_signature` and forwards it to the press. The press validates predicates, revocation, and schema, then signs the completed card with its press sub-card key → `press_signature`. The completed card — `issuer_signature`, `recipient_pubkey`, `holder_signature`, `press_signature`, and `ancestry_pubkeys` — is posted to IPFS by the press or the recipient's client.
 9. The press creates the card's registry entry on Arbitrum One and logs the issuance.
 10. The press delivers the SCIP and confirmation to the recipient via HTTPS to the wallet service endpoint.
 
-**Existing recipient flow (HTTPS delivery).** Steps 1–2 as above. The press sends the signed offer via HTTPS to the recipient's wallet service endpoint, identified from the recipient's registered wallet address. Steps 4–10 as above, omitting keychain setup.
+**Existing recipient flow (HTTPS delivery).** Steps 1–2 as above. The signed offer is sent via HTTPS to the recipient's wallet service endpoint, identified from the recipient's registered wallet address. Steps 4–10 as above, omitting keychain setup.
 
 **Open card offer receipt flow.**
 
@@ -862,12 +882,10 @@ After issuance, authorized parties need to record changes to a card — from pos
   "notify_holder": true | false,
   "updater_message": "<optional — included in the holder notification if notify_holder is true>",
   "intent_signature": {
-    "signer_card": "<mutable pointer in registry of updater's card>",
     "public_key": "<ML-DSA-44 public key>",
     "signature": "<ML-DSA-44 sig over canonical serialization of the update intent payload>"
   },
   "press_signature": {
-    "signer_card": "<mutable pointer in registry of press sub-card>",
     "public_key": "<ML-DSA-44 public key>",
     "signature": "<ML-DSA-44 sig over canonical serialization of the complete entry>"
   }
@@ -1001,12 +1019,12 @@ Card holders need to sign arbitrary messages using their card identity. Signatur
     "recipients":  ["<mutable pointer>", "<mutable pointer>"],
     "timestamp":   "<ISO 8601>",
     "in_reply_to": "<hash of prior payload — optional>",
-    "edit_of":     "<hash of prior payload — optional, mutually exclusive with retracts>",
-    "retracts":    "<hash of prior payload — optional, mutually exclusive with edit_of>"
+    "edit_of":     "<hash of prior payload — optional, mutually exclusive with retracts and forwards>",
+    "retracts":    "<hash of prior payload — optional, mutually exclusive with edit_of and forwards>",
+    "forwards":    "<hash of the original payload being forwarded — optional, mutually exclusive with edit_of and retracts; see Forwarding below>"
   },
   "signatures": [
     {
-      "signer_card": "<mutable pointer in registry of signing sub-card>",
       "public_key": "<ML-DSA-44 public key>",
       "signature": "<sig over canonical serialization of payload>"
     }
@@ -1018,24 +1036,28 @@ Card holders need to sign arbitrary messages using their card identity. Signatur
 1. The sender assembles the payload: content, recipient mutable pointers, timestamp, and optional reply/edit/retraction fields.
 2. The client canonically serializes the payload (canonical RFC 8785 JSON — see Appendix A).
 3. The client signs the canonical serialization using the current device's sub-card private key. The master key is not accessed.
-4. The signature, sub-card registry address, and ML-DSA-44 public key are added to the `signatures` array.
+4. The signature and the ML-DSA-44 public key are added to the `signatures` array. The signing sub-card's registry address is not included — verifiers derive it as `keccak256(public_key)`.
 5. For parallel co-signing, each additional signer independently repeats steps 3–4 and appends their entry.
 6. The message ID is the hash of the canonical payload serialization. There is no separate ID field.
 
-**Recipient binding.** The `recipients` array is part of the signed payload; modifying it invalidates all signatures. A message whose recipient list does not include the receiving card is valid but flagged as forwarded rather than direct.
+**Recipient binding.** The `recipients` array is part of the signed payload; modifying it invalidates all signatures. A message whose recipient list does not include the receiving card MUST NOT be treated as a valid direct message — delivering an original envelope to a party not in its `recipients` is an unauthenticated relay and is rejected. Such a message is only valid when delivered inside a `ForwardPackage` whose `forward_envelope.payload.recipients` includes the receiving card (see Forwarding below).
 
 **Edit and retraction.**
 - An **edit** is a new signed envelope with `edit_of` pointing to the prior payload hash. The original is not mutated. Authorization: signers must chain to the same master card(s) as the original.
 - A **retraction** is a new signed envelope with `retracts` pointing to the prior payload hash. No new content is proposed; the sender formally withdraws the original statement. Same authorization rules as edits.
 - Successive edits form a linked list (`A → A' → A''`). Each is independently verifiable.
-- `edit_of` and `retracts` are mutually exclusive.
+- `edit_of`, `retracts`, and `forwards` are mutually exclusive.
+
+**Forwarding.** A message forwarded to a party not in the original `recipients` MUST be transmitted as a **ForwardPackage** (see `protocol-objects.md §5.1`): a pair `{ original_envelope, forward_envelope }`. The `forward_envelope` is a new signed envelope by the forwarder whose `payload.forwards` equals the message ID of `original_envelope.payload` and whose `payload.recipients` lists the new recipients. The original envelope is unmodified and its signatures remain independently verifiable; the forwarder's signature commits only to the act of forwarding and the new recipient set, not to the original content. Verifiers establish *forwarded from* (from `original_envelope.signatures[].public_key`), *forwarded by* (from `forward_envelope.signatures[].public_key`), and *forwarded to* (`forward_envelope.payload.recipients`).
 
 **Acceptance criteria:**
 - [ ] Any party with the signed envelope can verify the signature using the inline public key without a network call.
 - [ ] Modifying any field in the payload invalidates all signatures.
 - [ ] Two independent signers over the same canonical payload produce independently-verifiable signatures in the same envelope.
 - [ ] An edit signed by a party who does not chain to the original signer's master card is flagged as unauthorized by verifiers.
-- [ ] A payload with both `edit_of` and `retracts` set is rejected at the client before signing.
+- [ ] A payload with more than one of `edit_of`, `retracts`, `forwards` set is rejected at the client before signing.
+- [ ] An original envelope delivered to a party not in its `recipients` without a `ForwardPackage` is rejected as an unauthenticated relay.
+- [ ] A `ForwardPackage` whose `forward_envelope.payload.forwards` does not match the original payload's message ID is rejected.
 - [ ] The message ID (payload hash) is deterministic across clients given the same inputs.
 
 #### Nice-to-Have (P1)
@@ -1068,14 +1090,14 @@ A recipient or service needs to determine: whether each signature is cryptograph
 
 ### Non-Goals
 
-- **Not:** Making trust decisions on behalf of the application. The verification machinery returns facts; the application layer acts on them.
+- **Not:** Making trust decisions on behalf of the application. The verification machinery returns facts; the application layer acts on them. (One exception: when verification finds a card that does **not** conform to its policy snapshot, the verifier reports the responsible press to the Press Registry Body — see step 5. This is an accountability obligation, not an application-level trust decision.)
 - **Not:** Verifying encrypted messages without the decryption key.
 
 ### User Stories
 
 **As a message recipient,** I want my client to automatically verify every received message and surface a trust indicator, so that I can assess the content without manually checking chain validity.
 
-**As a server operator,** I want to call `CardAuth.verifyResponse(request, response, policy)` and receive a structured result, so that I do not implement chain verification myself.
+**As a server operator,** I want to call a verification library and receive a structured result, so that I do not implement chain verification myself. (The concrete npm API is deferred to a future npm-package spec.)
 
 **As a verifier checking historical validity,** I want to confirm whether a message signed six months ago by a now-revoked card was valid at the time, so that I can treat historical statements appropriately depending on the revocation code.
 
@@ -1087,11 +1109,17 @@ A recipient or service needs to determine: whether each signature is cryptograph
 
 1. **Signature validity.** Verify the signature against the canonical serialization of the payload using the inline public key. No network call required.
 
-2. **Sub-card to master link.** Resolve the signing sub-card's registry address. Confirm the sub-card appears in the active sub-card list of its claimed master card's current metadata, and that the master card's signature on the sub-card registration is valid.
+2. **Sub-card to master link.** Derive the signing sub-card's registry address as `keccak256(public_key)` from the `SignatureEntry`. Decrypt the leaf sub-card document (content key = `HKDF-SHA3-256(public_key, info="card-content-v1")`). Read `holder_primary_card_pubkey` and `app_card_pubkey` from the decrypted `SubCardDocument` (see `protocol-objects.md §16`); these are untrusted hints — confirm `keccak256(holder_primary_card_pubkey)` equals the `holder_primary_card` pointer address and `keccak256(app_card_pubkey)` equals the `app_card` pointer address before use (a mismatch or an AES-GCM decryption failure on either parent card is a hard rejection). Derive `HKDF-SHA3-256(holder_primary_card_pubkey, info="card-content-v1")` to decrypt the master card and confirm the sub-card appears in its active sub-card list; verify the master card holder's ML-DSA-44 signature on the sub-card registration using `holder_primary_card_pubkey`. See `process_specs/card_validation.md` Stage 2 for the full procedure.
 
 2a. **Capability check (sub-cards only).** If the signing sub-card has an associated `SubCardDocument` (see `protocol-objects.md §16`), retrieve it and confirm the message's `type` field appears in the sub-card's `capabilities` array. If the message type is absent from the whitelist, reject the signature regardless of cryptographic validity. If no `SubCardDocument` exists (legacy or wallet primary-key signature), skip this step.
 
-3. **Chain walk (historical).** Using the cached chain array in the card's signed metadata, fetch all ancestor version CIDs from IPFS in parallel. For each link: verify the issuer's signature, confirm scope attenuation, confirm the chain array matches the per-link issuer references (array is a hint; per-link references are authoritative).
+3. **Chain walk (historical).** The master card was already decrypted in step 2. Read `ancestry_pubkeys` from the decrypted master card (set at master card issuance, ordered from immediate parent up toward root). Using both `ancestry_pubkeys` (for pubkey/content-key derivation) and the cached chain array of version CIDs (for parallel IPFS fetches), walk every ancestor from the master card up to the trusted root. **Walk termination:** the walk terminates successfully when the next on-chain address to resolve is present in the `PolicyAuthorizerKeys` table — i.e., it is a registered trusted root. Equivalently, when a card's `ancestry_pubkeys` is `[]` (the root base case) and the card's own on-chain address is registered in `PolicyAuthorizerKeys`, the walk ends at that card and `chain_reaches_trusted_root` is set to `true`. If `ancestry_pubkeys` is `[]` but the card is **not** registered in `PolicyAuthorizerKeys`, the chain does not reach a trusted root; record `chain_reaches_trusted_root: false`. For each non-empty ancestor entry:
+   a. Take the next entry from `ancestry_pubkeys` (the ancestor's ML-DSA-44 public key, a hint).
+   b. Derive the expected on-chain address as `keccak256(entry_pubkey)` and confirm it equals the on-chain address being resolved (the mutable pointer from the prior link). **If the address does not match, reject: the array entry is forged or incorrect.**
+   c. Derive the ancestor's content key as `HKDF-SHA3-256(entry_pubkey, info="card-content-v1")` and decrypt the ancestor card document. **If decryption fails (authentication tag mismatch), reject.**
+   d. Verify the issuer's ML-DSA-44 signature on the ancestor document using `entry_pubkey`.
+   e. Confirm scope attenuation and confirm the chain array entry matches the per-link issuer reference (array is a hint; per-link on-chain addresses are authoritative).
+   Per-link on-chain addresses always govern; `ancestry_pubkeys` is an untrusted performance hint whose entries are individually validated against those addresses.
 
 4. **Revocation check (current).** Resolve all mutable pointers in the chain on Arbitrum One in parallel. For each link, read the append-only log for entries with codes 8xx or 9xx. Apply semantics by code range:
    - **1xx–7xx entries:** Not revocations; do not affect the card's validity status.
@@ -1100,7 +1128,7 @@ A recipient or service needs to determine: whether each signature is cryptograph
    - If multiple 8xx or 9xx entries exist, the one with the earliest effective date governs.
    - If revocation data is stale beyond an acceptable freshness window, flag as stale (default: treat as rejection).
 
-5. **Policy match (for authentication flows).** Resolve the card's governing policy using the `policy_id` CID embedded in the CardDocument — not the policy's current mutable pointer head. Evaluate `requester_predicate` and `recipient_predicate` from that snapshot against the presented chain. If any predicate fails, reject. Confirm the signing press sub-card appears in the `approved_presses` array from that same `policy_id` snapshot; a press added or removed from the live policy after issuance does not affect the validity of cards issued before that change.
+5. **Policy compliance and match.** Resolve the card's governing policy using the `policy_id` CID embedded in the CardDocument — not the policy's current mutable pointer head. For **every** verified card, confirm its field values conform to `field_definitions` and that the signing press was authorized for the policy. If the card does not conform, record it non-compliant and submit a non-compliance report to the **Press Registry Body** (the body that authorizes/revokes presses, ADR-011): a press must verify content before posting, so non-compliant content on-chain means the responsible press failed its duty and is accountable (up to `RevokePress`). Additionally, for authentication flows, evaluate `requester_predicate` and `recipient_predicate` from the `policy_id` snapshot against the presented chain; if any predicate fails, reject. (A press added to or removed from the live policy after issuance does not affect the validity of cards issued before that change.) See `process_specs/card_validation.md` Stage 5 for the full procedure.
 
 5a. **Policy creation compliance check (for policy-level verification).** When verifying a policy card itself (rather than an ordinary issued card), walk the policy creation chain — alternating between the policy card's holder card and that card's own policy — and collect all `policy_creation` field restrictions. At each step, use the `policy_id` CID from the card under evaluation to fetch the policy snapshot in effect at issuance. Confirm the policy's `field_definitions` satisfy every collected restriction drawn from those snapshots. If any restriction is violated, the policy is flagged as non-compliant; cards issued under it inherit this flag. Verifiers may apply their own tolerance policy for non-compliant policies (e.g., reject entirely, warn, or accept with reduced trust).
 
@@ -1131,30 +1159,14 @@ A recipient or service needs to determine: whether each signature is cryptograph
 }
 ```
 
-**npm package API:**
-
-```javascript
-// Server — authentication request lifecycle
-CardAuth.createRequest({ requesterCard, policyCid, purpose, callback, sessionId })
-CardAuth.verifyResponse(request, response, policy)
-
-// Server — session and account management
-CardAuth.bindSession(masterCardPointer, sessionData)
-CardAuth.lookupAccount(masterCardPointer)
-CardAuth.notifyUser(masterCardPointer, message, signingCard)
-
-// Client — message verification
-CardAuth.verifyEnvelope(signedEnvelope, trustedRoots, freshnessPolicy)
-
-// Client — keyring integration
-CardAuth.parseRequest(deepLinkOrQrPayload)
-CardAuth.findMatchingCards(request, localKeyring)
-CardAuth.signResponse(request, chosenCard, subCardKey)
-CardAuth.deliverResponse(request, signedResponse)
-```
+**npm package API:** The concrete package API (function names and signatures) is deferred to a dedicated npm-package specification and is intentionally not fixed here. This spec defines the verification semantics and structured result that any such package must implement.
 
 **Acceptance criteria:**
-- [ ] A 5-link chain verifies in the same order of magnitude as a 1-link chain (parallel fetch via cached chain array).
+- [ ] A 5-link chain verifies in the same order of magnitude as a 1-link chain (parallel fetch via cached chain array and `ancestry_pubkeys`).
+- [ ] For each entry in `ancestry_pubkeys`, the verifier confirms `keccak256(entry_pubkey)` equals the on-chain address being resolved before using the key to decrypt or verify; a mismatch causes the chain walk to abort with a rejection.
+- [ ] A forged or substituted `ancestry_pubkeys` entry either yields an address mismatch (rejected) or produces an AES-GCM authentication failure on the encrypted ancestor document (rejected); a walker cannot be deceived into accepting a wrong ancestor.
+- [ ] A trusted-root policy card carries `ancestry_pubkeys: []` (the empty array, present and signed — not omitted) and verifies as `chain_reaches_trusted_root: true` when its own on-chain address is found in `PolicyAuthorizerKeys`.
+- [ ] A card with `ancestry_pubkeys: []` whose own on-chain address is **not** registered in `PolicyAuthorizerKeys` verifies as `chain_reaches_trusted_root: false`.
 - [ ] A signature from a currently-revoked card with an 8xx code and an effective date after the signing timestamp returns `was_valid_at_signing_time: true` and `is_currently_valid: false`.
 - [ ] A signature from a card with an 8xx revocation and an effective date before the signing timestamp returns `was_valid_at_signing_time: false` and `is_currently_valid: false`.
 - [ ] A signature from a card with a 9xx revocation and an effective date before the signing timestamp returns `was_valid_at_signing_time: false` and `is_currently_valid: false`.
@@ -1343,10 +1355,10 @@ If no wallet is registered in CHAPI, the wallet's credential handler page is not
 ## Timeline Considerations
 
 - **Canonical serialization format** is resolved: RFC 8785 (JSON Canonicalization Scheme — JCS). Deterministic JSON with lexicographic key sorting, no whitespace, standard JSON string escaping. See Appendix A. This must be implemented in the npm package and validated against the conformance test corpus before the API is locked.
-- **Arbitrum One registry contract** must implement ML-DSA-44 signature verification via Stylus, performed in full on-chain. The hash-commitment shortcut pattern (store only a hash of the press public key, verify signature off-chain) is explicitly rejected: it degrades the contract from a write gatekeeper to a passive log, enabling spam writes from anyone who knows a valid press public key. Full on-chain verification is required before contract deployment.
+- **Arbitrum One registry contract** uses secp256r1 (P-256) via the RIP-7212 precompile (~3,450 gas per verify) for all on-chain write authorization in Phase 1. This is the split signing model (ADR-012): presses hold a secp256r1 key for on-chain authorization and an ML-DSA-44 key for IPFS content signing. The keccak256 hash of each press's ML-DSA-44 public key is stored on-chain in `PressAuthorizations`, enabling a Phase 3 upgrade to full on-chain post-quantum verification without re-registration. Full ML-DSA-44 on-chain verification via Stylus is deferred to Phase 3.
 - **Trusted root configuration UX** is a dependency for client-side verification and keychain setup — design work should begin in parallel with protocol engineering.
 - TEE hardening is explicitly P2 and does not gate v1 work.
-- The Arbitrum One substrate is resolved. Gas cost estimates should be finalized against current Arbitrum One blob-era pricing; ML-DSA-44 signature calldata (~2,420 bytes per registry write vs. 64 bytes for Ed25519) will increase per-write cost by an estimated 3–8x, expected to remain under $0.25 per write.
+- The Arbitrum One substrate is resolved. Gas cost estimates should be finalized against current Arbitrum One blob-era pricing; secp256r1 calldata (64 bytes per signature via RIP-7212) keeps per-write costs low, expected to remain well under $0.10 per write.
 
 ---
 

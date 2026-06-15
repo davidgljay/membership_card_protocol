@@ -69,7 +69,7 @@ Updates are classified by a three-digit code (1xx–9xx) that signals the semant
    - `note` is optional and may be included with any update code. If present, it is appended to the card's notes array (see Notes Array below). It is distinct from `revocation.note`, which is internal to the revocation record and not surfaced in the notes array.
    - Set `notify_holder: false` for adversarial scenarios (e.g., a 9xx revocation where notification would be harmful). The policy may also suppress notification for specific code prefixes.
 
-3. The updater canonically serializes the `UpdateIntentPayload` (canonical CBOR per RFC 8949 §4.2 with protocol-specific overrides).
+3. The updater canonically serializes the `UpdateIntentPayload` (canonical RFC 8785 JSON).
 
 4. The updater signs the canonical serialization with their current sub-card private key → `intent_signature`.
 
@@ -86,7 +86,7 @@ Updates are classified by a three-digit code (1xx–9xx) that signals the semant
    - **Updater not revoked:** Confirm the updater's card has no 8xx or 9xx entry with `effective_date` ≤ now.
    - **Authorization — field updates (codes 1xx–7xx):** For each field in `field_updates`, confirm the updater's card chain satisfies that field's `update_policy` predicate (from the policy's `field_definitions`). All predicates must be satisfied by the same updater.
    - **Authorization — revocations (codes 8xx–9xx):** Confirm the updater's card chain satisfies `revocation_permissions` for the given code range. If `revocation_permissions` is absent from the policy, the default applies: 8xx by holder or issuer, 9xx by issuer only.
-   - **Immutable fields:** Confirm no `field_updates` entry targets a protocol-required immutable field (`policy_id`, `press_card`, `recipient_pubkey`, `issued_at`, `offer_signature`, `holder_signature`).
+   - **Immutable fields:** Confirm no `field_updates` entry targets a protocol-required immutable field (`policy_id`, `issuer_card`, `press_card`, `recipient_pubkey`, `issued_at`, `issuer_signature`, `holder_signature`, `press_signature`).
    - **Code consistency:** 8xx–9xx entries must include `revocation` and no `field_updates`; 1xx–7xx entries must include `field_updates` and no `revocation`.
    - **Erasure eligibility:** If the entry carries `erasure: true`, confirm the policy specifies `erasable: true`. Reject otherwise.
    - **Timestamp freshness:** Reject intents with timestamps outside the acceptable replay-prevention window.

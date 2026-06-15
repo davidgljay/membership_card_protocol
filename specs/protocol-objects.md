@@ -5,7 +5,7 @@
 **Status:** In Review  
 **Amends:** v0.1 — §14 write authorization updated from ML-DSA-44/Stylus to secp256r1/RIP-7212 per ADR-012. Press dual-key model note added.
 
-This document is the canonical reference for every structured object in the Card Protocol. Each object is shown as an annotated JSON template (the developer-facing input surface). Objects that are signed or hashed use **canonical CBOR** (RFC 8949 deterministic encoding with protocol-specific overrides) as the byte sequence over which signatures are computed — see Appendix A of `card_protocol_spec.md` for the full serialization rules.
+This document is the canonical reference for every structured object in the Card Protocol. Each object is shown as an annotated JSON template (the developer-facing input surface). Objects that are signed or hashed use **canonical RFC 8785 JSON** (JSON Canonicalization Scheme — deterministic Unicode code-point ordered JSON, no whitespace) as the byte sequence over which signatures are computed — see Appendix A of `card_protocol_spec.md` for the full serialization rules.
 
 ---
 
@@ -33,11 +33,10 @@ This document is the canonical reference for every structured object in the Card
 
 ### SignatureEntry
 
-Appears inside several objects wherever a single party's ML-DSA-44 signature is recorded.
+Appears inside several objects wherever a single party's ML-DSA-44 signature is recorded. A SignatureEntry carries only the public key and the signature; the signer's registry address is derived as `keccak256(public_key)` and is never stored in the entry. (All cards use public-key-derived addresses — see §1 *Address derivation* and `ARCHITECTURE.md` ADR-006.)
 
 ```json
 {
-  "signer_card": "<base64url — mutable pointer in registry of the signing sub-card>",
   "public_key":   "<base64url — ML-DSA-44 public key, 1312 bytes raw>",
   "signature":    "<base64url — ML-DSA-44 signature, 2420 bytes raw>"
 }
@@ -45,28 +44,37 @@ Appears inside several objects wherever a single party's ML-DSA-44 signature is 
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `signer_card` | `card-pointer` | Yes | On-chain registry address of the signing sub-card |
-| `public_key` | `base64url` | Yes | Must match the key registered to `signer_card` |
-| `signature` | `base64url` | Yes | Over canonical CBOR of the stated payload (varies per object) |
+| `public_key` | `base64url` | Yes | The signing sub-card's ML-DSA-44 public key; the signer's registry address is derived as `keccak256(public_key)` |
+| `signature` | `base64url` | Yes | Over canonical RFC 8785 JSON of the stated payload (varies per object) |
 
 ---
 
 ## 1. CardDocument
 
 **Stored on:** IPFS  
-**Signed by:** Press (offer), then Holder (countersignature)  
-**Serialized for signing:** Canonical CBOR of the full document (offer phase: without `holder_signature` and `recipient_pubkey`; final phase: complete document)
+**Signed by:** Issuer/offerer (`issuer_signature`), then Holder (`holder_signature` countersignature), then Press (`press_signature`, applied last after validation)  
+**Serialized for signing:** Canonical RFC 8785 JSON. `issuer_signature` covers the offer (all fields except `recipient_pubkey`, `holder_signature`, `press_signature`; `ancestry_pubkeys` is present and included). `holder_signature` covers the offer plus `recipient_pubkey` (all fields except `holder_signature` and `press_signature`; `ancestry_pubkeys` is present and included). `press_signature` covers the complete countersigned document (all fields except `press_signature`; `ancestry_pubkeys` is present and included).
 
 The genesis document of a card. Every card — including policy cards, press sub-cards, and user cards — begins life as a CardDocument posted to IPFS. Its CID is recorded as the initial log head in the Arbitrum One registry.
 
 ```json
 {
   "policy_id":        "<base64url — CID of the governing policy card>",
-  "press_card":      "<base64url — mutable pointer in registry of the issuing press sub-card>",
+  "issuer_card":      "<base64url — mutable pointer in registry of the offerer (issuer) who constructed the offer>",
+  "press_card":      "<base64url — mutable pointer in registry of the press sub-card that validated and registered this card>",
   "recipient_pubkey": "<base64url — recipient's ML-DSA-44 public key, 1312 bytes raw>",
   "issued_at":        "<ISO 8601 timestamp>",
-  "offer_signature":  "<base64url — press's ML-DSA-44 signature over canonical CBOR of the offer payload>",
-  "holder_signature": "<base64url — holder's ML-DSA-44 countersignature over canonical CBOR of the completed card>",
+  "ancestry_pubkeys": [
+    "<base64url — ML-DSA-44 public key of the immediate parent (issuer card), 1312 bytes raw>",
+    "<base64url — ML-DSA-44 public key of the next ancestor up the issuer chain>",
+    "...",
+    "<base64url — ML-DSA-44 public key of the press card>",
+    "<base64url — ML-DSA-44 public key of the press card's issuer (policy card holder), if applicable>",
+    "..."
+  ],
+  "issuer_signature": "<base64url — offerer's ML-DSA-44 signature over canonical RFC 8785 JSON of the offer (excludes recipient_pubkey, holder_signature, press_signature)>",
+  "holder_signature": "<base64url — holder's ML-DSA-44 countersignature over the offer including recipient_pubkey (excludes holder_signature, press_signature)>",
+  "press_signature":  "<base64url — press's ML-DSA-44 signature over the complete countersigned document (excludes press_signature), applied last after validation>",
 
   "<policy-defined fields>": "..."
 }
@@ -75,24 +83,27 @@ The genesis document of a card. Every card — including policy cards, press sub
 | Field | Type | Required | Mutable | Notes |
 |---|---|---|---|---|
 | `policy_id` | `cid` | Yes | No | Pinned to the policy at time of issuance |
-| `press_card` | `card-pointer` | Yes | No | Identifies the issuing press; used to walk the authorization chain |
+| `issuer_card` | `card-pointer` | Yes | No | The offerer who constructed and first-signed the offer; used to evaluate `requester_predicate` and verify `issuer_signature` |
+| `press_card` | `card-pointer` | Yes | No | Identifies the press that validated and registered the card; used to walk the authorization chain |
 | `recipient_pubkey` | `base64url` | Yes | No | Added by holder before countersigning; empty in the offer phase |
-| `issued_at` | `timestamp` | Yes | No | Set by press at offer creation |
-| `offer_signature` | `base64url` | Yes | No | Press signs the offer payload (all fields except `recipient_pubkey` and `holder_signature`) |
-| `holder_signature` | `base64url` | Yes | No | Holder signs the complete document (all fields including `recipient_pubkey`) |
+| `issued_at` | `timestamp` | Yes | No | Set by the offerer at offer construction |
+| `ancestry_pubkeys` | `array of base64url` | Yes | No | Ordered array of ML-DSA-44 public keys (1312 bytes each, base64url) for every ancestor card a verifier must resolve to walk this card's chain to a trusted root. Ordered from immediate parent (the issuer card's public key) up toward the root, covering the issuer chain and the press/policy chain as applicable. Set at issuance; covered by all three signatures. **Root base case:** a card whose own address is a registered trusted root (present in the on-chain `PolicyAuthorizerKeys` table) carries `ancestry_pubkeys: []` — the empty array. `[]` is a legal, signed value; omission of the field is a schema violation. A card whose immediate parent is a registered trusted root likewise carries `[]` (the parent is already the termination point). **This field is always present.** This is an **untrusted hint**: the verifier MUST confirm `keccak256(entry_pubkey)` equals the on-chain address it is resolving for each entry; a wrong or forged pubkey yields an address mismatch or an undecryptable ciphertext and MUST be rejected. Per-link on-chain addresses remain authoritative. |
+| `issuer_signature` | `base64url` | Yes | No | Offerer signs the offer (all fields except `recipient_pubkey`, `holder_signature`, `press_signature`) |
+| `holder_signature` | `base64url` | Yes | No | Holder signs the offer plus `recipient_pubkey` (all fields except `holder_signature`, `press_signature`) |
+| `press_signature` | `base64url` | Yes | No | Press signs the complete countersigned document (all fields except `press_signature`), applied last after validating policy compliance |
 | `supersedes` | `card-pointer` | No | No | Present only on un-revocation cards: the mutable pointer of the prior card this card corrects. Set by the issuer at genesis. See `card_protocol_spec.md §Background`. |
 | `supersession_note` | `text` | No | No | Human-readable explanation of why this card supersedes the one pointed to by `supersedes`. Present only when `supersedes` is set. |
 
-**Signing sequence:**
-1. Press assembles the document with all policy-defined fields and `issued_at`, leaving `recipient_pubkey` and `holder_signature` absent.
-2. Press signs canonical CBOR of the current document → `offer_signature`.
-3. Holder reviews, generates fresh ML-DSA-44 keypair, adds `recipient_pubkey`.
-4. Holder signs canonical CBOR of the complete document → `holder_signature`.
-5. Completed document is posted to IPFS.
+**Signing sequence (three parties, fixed order):**
+1. The **offerer's wallet service** assembles the document with all policy-defined fields, `issuer_card`, `press_card`, `issued_at`, and `ancestry_pubkeys` (the ordered array of ancestor ML-DSA-44 public keys, from immediate parent toward root), leaving `recipient_pubkey`, `holder_signature`, and `press_signature` absent.
+2. The offerer signs canonical RFC 8785 JSON of that offer with the offerer's card key → `issuer_signature`. `ancestry_pubkeys` is present and covered by this signature.
+3. The offer is presented to the recipient, who reviews, generates a fresh ML-DSA-44 keypair, adds `recipient_pubkey`, and signs canonical RFC 8785 JSON of the offer-plus-pubkey → `holder_signature`. `ancestry_pubkeys` is present and covered by this signature.
+4. The offerer validates the countersigned result (confirms the recipient countersigned the intended offer).
+5. The countersigned card is sent to the **press**, which validates policy compliance, signs canonical RFC 8785 JSON of the complete document with its press sub-card key → `press_signature`, posts it to IPFS, and registers it on-chain. `ancestry_pubkeys` is present and covered by this signature.
 
 **Press dual-key model:** Each press card carries two distinct public keys with separate roles:
-- `recipient_pubkey` (ML-DSA-44, 1312 bytes) — the press's IPFS identity key. Used for `offer_signature` above and for all content stored on IPFS. Quantum-resistant from day one because IPFS content is permanent.
-- secp256r1 key (64 bytes, uncompressed x||y) — the press's on-chain write authorization key. Registered separately in the on-chain `PressAuthorizations` table (not in this CardDocument). Verified via RIP-7212 precompile on each `RegisterCard` / `UpdateMarkHead` call. Rotatable; upgradeable to ML-DSA-44 via ADR-012 upgrade path.
+- `recipient_pubkey` (ML-DSA-44, 1312 bytes) — the press's IPFS identity key. Used for `press_signature` above and for all content stored on IPFS. Quantum-resistant from day one because IPFS content is permanent.
+- secp256r1 key (64 bytes, uncompressed x||y) — the press's on-chain write authorization key. Registered separately in the on-chain `PressAuthorizations` table (not in this CardDocument). Verified via RIP-7212 precompile on each `RegisterCard` / `UpdateCardHead` call. Rotatable; upgradeable to ML-DSA-44 via ADR-012 upgrade path.
 
 These are independent keys. Rotating the secp256r1 on-chain key does not affect the ML-DSA-44 IPFS identity key, and vice versa.
 
@@ -113,16 +124,23 @@ A code-102 `successor` entry carries a `pending_until` field and is not effectiv
 **Stored on:** IPFS  
 **Is a:** CardDocument (same protocol-required fields plus the policy fields below)
 
-A policy card is a CardDocument whose content defines the rules for a class of cards. All the protocol-required fields of CardDocument apply. The additional fields below are the policy's own field values (analogous to the policy-defined fields of any card, but standardised across all policies).
+A policy card is a CardDocument whose content defines the rules for a class of cards. All the protocol-required fields of CardDocument apply, including `ancestry_pubkeys`. The additional fields below are the policy's own field values (analogous to the policy-defined fields of any card, but standardised across all policies).
+
+**`ancestry_pubkeys` on policy cards:** Policy cards have ancestry chains (the authorizer's card chain, and for press-issued policies, the press chain as well). The `ancestry_pubkeys` array is required on policy cards and follows the same convention as for ordinary cards: ordered from the immediate parent (the authorizer/issuer card's public key) up toward the root of the trust chain. A verifier walking the policy creation chain to evaluate `policy_creation` constraints uses the same `ancestry_pubkeys` hint and the same binding check (`keccak256(entry_pubkey)` must equal the on-chain address being resolved). **Root base case for policy cards:** a self-rooted trusted-root policy card — one whose own address is registered in `PolicyAuthorizerKeys` — carries `ancestry_pubkeys: []`. The empty array `[]` is the valid, signed value for this case; the field is still REQUIRED and MUST be present (not omitted).
 
 ```json
 {
   "policy_id":        "<base64url — CID of the meta-policy governing this policy card>",
-  "press_card":      "<base64url — mutable pointer in registry of the policy authorizer's card>",
+  "issuer_card":      "<base64url — mutable pointer in registry of the policy authorizer's card>",
   "recipient_pubkey": "<base64url — administrator's ML-DSA-44 public key>",
   "issued_at":        "<ISO 8601 timestamp>",
-  "offer_signature":  "<base64url>",
-  "holder_signature": "<base64url>",
+  "ancestry_pubkeys": [
+    "<base64url — ML-DSA-44 public key of the authorizer (issuer) card, 1312 bytes raw>",
+    "<base64url — ML-DSA-44 public key of the next ancestor up the issuer chain>",
+    "..."
+  ],
+  "issuer_signature": "<base64url — authorizer's signature over the offer>",
+  "holder_signature": "<base64url — administrator's countersignature>",
 
   "field_definitions": [
     {
@@ -180,8 +198,8 @@ A policy card is a CardDocument whose content defines the rules for a class of c
 **On-chain pointer:** Arbitrum One registry entry for the card points to the current log head CID  
 **Signed by:** Updater (`intent_signature`) then Press (`press_signature`)  
 **Serialized for signing:**
-- `intent_signature` covers canonical CBOR of the `UpdateIntentPayload` (see §4)
-- `press_signature` covers canonical CBOR of the complete `LogEntry` document excluding the `press_signature` field itself
+- `intent_signature` covers canonical RFC 8785 JSON of the `UpdateIntentPayload` (see §4)
+- `press_signature` covers canonical RFC 8785 JSON of the complete `LogEntry` document excluding the `press_signature` field itself
 
 Every post-genesis state change to a card — field updates, annotations, and revocations — is a LogEntry appended to the card's IPFS log. The log is a singly-linked list; each entry points back to the prior head. The Arbitrum One registry tracks only the current head CID.
 
@@ -205,14 +223,12 @@ Every post-genesis state change to a card — field updates, annotations, and re
   "updater_message": "<optional text — included in holder notification if notify_holder is true>",
 
   "intent_signature": {
-    "signer_card": "<base64url — mutable pointer in registry of updater's sub-card>",
     "public_key":   "<base64url — updater's ML-DSA-44 public key>",
-    "signature":    "<base64url — sig over canonical CBOR of the UpdateIntentPayload>"
+    "signature":    "<base64url — sig over canonical RFC 8785 JSON of the UpdateIntentPayload>"
   },
   "press_signature": {
-    "signer_card": "<base64url — mutable pointer in registry of press sub-card>",
     "public_key":   "<base64url — press's ML-DSA-44 public key>",
-    "signature":    "<base64url — sig over canonical CBOR of the complete LogEntry excluding press_signature>"
+    "signature":    "<base64url — sig over canonical RFC 8785 JSON of the complete LogEntry excluding press_signature>"
   }
 }
 ```
@@ -245,7 +261,7 @@ Every post-genesis state change to a card — field updates, annotations, and re
 
 **Transmitted to:** Press (via HTTPS)  
 **Signed by:** Updater  
-**Serialized for signing:** Canonical CBOR of this object; becomes the `intent_signature` payload
+**Serialized for signing:** Canonical RFC 8785 JSON of this object; becomes the `intent_signature` payload
 
 The object the updater signs before submitting to a press. The press validates predicates against this payload and, if valid, assembles it into a LogEntry by adding `version`, `prev_log_root`, and `press_signature`.
 
@@ -286,7 +302,7 @@ The intent does **not** include `version` or `prev_log_root` — those are added
 
 **Transmitted via:** OHTTP (optional) / HTTPS  
 **Signed by:** One or more card holders (parallel co-signing)  
-**Serialized for signing:** Canonical CBOR of the `payload` object only (not the outer envelope)
+**Serialized for signing:** Canonical RFC 8785 JSON of the `payload` object only (not the outer envelope)
 
 The primary object for card-authenticated communication and for authentication responses (§9). The canonical envelope format is defined in `messaging_protocol.md §1`; this section is the normative schema reference.
 
@@ -299,14 +315,14 @@ The primary object for card-authenticated communication and for authentication r
     "recipients":  ["<base64url — mutable pointer>", "..."],
     "timestamp":   "<ISO 8601 timestamp>",
     "in_reply_to": "<base64url — hash of prior payload — optional>",
-    "edit_of":     "<base64url — hash of prior payload — optional; mutually exclusive with retracts>",
-    "retracts":    "<base64url — hash of prior payload — optional; mutually exclusive with edit_of>"
+    "edit_of":     "<base64url — hash of prior payload — optional; mutually exclusive with retracts and forwards>",
+    "retracts":    "<base64url — hash of prior payload — optional; mutually exclusive with edit_of and forwards>",
+    "forwards":    "<base64url — hash of the original payload being forwarded — optional; mutually exclusive with edit_of and retracts; see ForwardPackage below>"
   },
   "signatures": [
     {
-      "signer_card": "<base64url — mutable pointer in registry of signing sub-card>",
       "public_key":   "<base64url — ML-DSA-44 public key>",
-      "signature":    "<base64url — sig over canonical CBOR of the payload object>"
+      "signature":    "<base64url — sig over canonical RFC 8785 JSON of the payload object>"
     }
   ]
 }
@@ -320,11 +336,33 @@ The primary object for card-authenticated communication and for authentication r
 | `payload.recipients` | `card-pointer-array` | Yes | Mutable pointers of intended recipients; part of the signed payload |
 | `payload.timestamp` | `timestamp` | Yes | ISO 8601; replay prevention |
 | `payload.in_reply_to` | `base64url` | No | Hash of the payload this is replying to |
-| `payload.edit_of` | `base64url` | No | Hash of the payload this supersedes; mutually exclusive with `retracts` |
-| `payload.retracts` | `base64url` | No | Hash of the payload being retracted; mutually exclusive with `edit_of` |
+| `payload.edit_of` | `base64url` | No | Hash of the payload this supersedes; mutually exclusive with `retracts` and `forwards` |
+| `payload.retracts` | `base64url` | No | Hash of the payload being retracted; mutually exclusive with `edit_of` and `forwards` |
+| `payload.forwards` | `base64url` | No | Hash of the original payload being forwarded; mutually exclusive with `edit_of` and `retracts`. Set only on the `forward_envelope` of a `ForwardPackage` (§5.1) |
 | `signatures` | array of SignatureEntry | Yes | One entry per signer; each covers the same canonical payload bytes |
 
-The **message ID** is the hash of the canonical CBOR of `payload`. There is no separate ID field.
+The **message ID** is the hash of the canonical RFC 8785 JSON of `payload`. There is no separate ID field.
+
+### 5.1 ForwardPackage
+
+**Transmitted via:** OHTTP (optional) / HTTPS  
+**Signed by:** The original signer(s) (inside `original_envelope`) and the forwarder (inside `forward_envelope`)
+
+Forwarding a message to a party not in the original `recipients` array MUST use a `ForwardPackage` — a pair of envelopes that together establish the original sender, the forwarder, and the new recipients. Delivering only the original envelope to a party not listed in its `recipients` is an unauthenticated relay and MUST be rejected by verifiers (see `card_protocol_spec.md §6` and `process_specs/card_signing.md`).
+
+```json
+{
+  "original_envelope": { "<original SignedMessageEnvelope, unmodified>" },
+  "forward_envelope":  { "<new SignedMessageEnvelope signed by the forwarder>" }
+}
+```
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `original_envelope` | SignedMessageEnvelope | Yes | The original message, unmodified; all its signatures remain independently verifiable |
+| `forward_envelope` | SignedMessageEnvelope | Yes | Signed by the forwarder; its `payload.forwards` MUST equal the message ID (canonical-payload hash) of `original_envelope.payload`, and its `payload.recipients` lists the new recipients |
+
+The forwarder's signature commits only to the fact of forwarding and the new recipient set — not to the original content. The forwarder is not a co-signer of the original payload. From the pair, verifiers establish: **forwarded from** (addresses derived from `original_envelope.signatures[].public_key`), **forwarded by** (addresses derived from `forward_envelope.signatures[].public_key`), and **forwarded to** (`forward_envelope.payload.recipients`).
 
 ---
 
@@ -332,7 +370,7 @@ The **message ID** is the hash of the canonical CBOR of `payload`. There is no s
 
 **Stored on:** Wallet service (HTTPS); may also be pinned to IPFS  
 **Signed by:** Issuer  
-**Serialized for signing:** Canonical CBOR of all fields except `issuer_signature`
+**Serialized for signing:** Canonical RFC 8785 JSON of all fields except `issuer_signature`
 
 A pre-signed batch authorization allowing any bearer to claim a card under this policy without individual issuer review. The policy card must have `allow_open_offers: true`.
 
@@ -352,7 +390,7 @@ When a recipient accepts, their wallet wraps this document in an `OpenOfferClaim
     "<field name>": "<issuer-populated value>",
     "...": "..."
   },
-  "issuer_signature":  "<base64url — ML-DSA-44 sig over canonical CBOR of all above fields>"
+  "issuer_signature":  "<base64url — ML-DSA-44 sig over canonical RFC 8785 JSON of all above fields>"
 }
 ```
 
@@ -367,9 +405,9 @@ When a recipient accepts, their wallet wraps this document in an `OpenOfferClaim
 | `display_message` | `text` | No | Human-readable context shown in wallet UI |
 | `redirect_url` | `text` | No | Wallet redirects recipient here after issuance |
 | `proposed_fields` | object | Yes | Issuer-populated field values for issued cards |
-| `issuer_signature` | `base64url` | Yes | Covers canonical CBOR of all fields except itself |
+| `issuer_signature` | `base64url` | Yes | Covers canonical RFC 8785 JSON of all fields except itself |
 
-The **offer ID** used for on-chain counter tracking is `hash(canonical CBOR of the complete document including issuer_signature)`. This binds the offer ID to the issuer's signature, making it unique per issuer and unforgeable. The contract stores a per-offer-ID acceptance counter in `openOfferUseCounts` (see §14).
+The **offer ID** used for on-chain counter tracking is `hash(canonical RFC 8785 JSON of the complete document including issuer_signature)`. This binds the offer ID to the issuer's signature, making it unique per issuer and unforgeable. The contract stores a per-offer-ID acceptance counter in `openOfferUseCounts` (see §14).
 
 ---
 
@@ -377,7 +415,7 @@ The **offer ID** used for on-chain counter tracking is `hash(canonical CBOR of t
 
 **Transmitted to:** Press (via HTTPS POST from wallet service)  
 **Signed by:** Recipient  
-**Serialized for signing:** Canonical CBOR of `claim_payload` (see below)
+**Serialized for signing:** Canonical RFC 8785 JSON of `claim_payload` (see below)
 
 The object the wallet service POSTs to the press when a recipient accepts an open card offer. The press uses `claim_payload.offer.proposed_fields` to construct the `CardDocument`, adding `recipient_pubkey` and signing the result as in the targeted issuance flow.
 
@@ -387,7 +425,7 @@ The object the wallet service POSTs to the press when a recipient accepts an ope
     "offer":           { "<verbatim OpenCardOffer document including issuer_signature>" },
     "recipient_pubkey": "<base64url — recipient's freshly-generated ML-DSA-44 public key, 1312 bytes raw>"
   },
-  "recipient_signature": "<base64url — recipient's ML-DSA-44 sig over canonical CBOR of claim_payload>"
+  "recipient_signature": "<base64url — recipient's ML-DSA-44 sig over canonical RFC 8785 JSON of claim_payload>"
 }
 ```
 
@@ -395,18 +433,20 @@ The object the wallet service POSTs to the press when a recipient accepts an ope
 |---|---|---|---|
 | `claim_payload.offer` | OpenCardOffer | Yes | Verbatim; press re-verifies `issuer_signature` over this |
 | `claim_payload.recipient_pubkey` | `base64url` | Yes | Public key for the new card; press copies this into the assembled `CardDocument` |
-| `recipient_signature` | `base64url` | Yes | Sig over canonical CBOR of the entire `claim_payload` object (offer + recipient_pubkey); press verifies before proceeding |
+| `recipient_signature` | `base64url` | Yes | Sig over canonical RFC 8785 JSON of the entire `claim_payload` object (offer + recipient_pubkey); press verifies before proceeding |
 
 **Press validation on receipt:**
 
 1. Re-verify `claim_payload.offer.issuer_signature` over the offer document.
-2. Verify `recipient_signature` over canonical CBOR of `claim_payload`.
+2. Verify `recipient_signature` over canonical RFC 8785 JSON of `claim_payload`.
 3. Confirm `claim_payload.offer.press_card` matches the receiving press's own sub-card pointer.
 4. Confirm the policy has `allow_open_offers: true`.
 5. **Press pre-flight (before transaction):** read `OpenOfferUseCounts[offer_id]` on-chain and independently verify `expires_at` and capacity. Reject with a specific error before submitting any transaction if either constraint would be violated.
-6. Assemble and countersign the `CardDocument` from `proposed_fields` + `recipient_pubkey`, then call `ClaimOpenOffer` on-chain (which independently re-validates constraints atomically with card registration). If the transaction reverts, surface the contract error code (E-12, E-13, or E-14) to the wallet service. See `registry_contract.md §4.5`.
+6. Assemble and countersign the `CardDocument` from `proposed_fields` + `recipient_pubkey`, then call `ClaimOpenOffer` on-chain (which independently re-validates constraints atomically with card registration). If the transaction reverts, surface the contract error code (E-12 or E-13) to the wallet service. Note: E-14 (invalid issuer signature) is a press-side rejection at step 1 above — it is never surfaced from the contract. See `registry_contract.md §4.5`.
 
 **Note on the recipient's key:** `recipient_pubkey` in the claim payload is logically equivalent to the same field added by the holder in the targeted issuance flow — the recipient generates it fresh at claim time and its private counterpart never leaves their device.
+
+**Note on `ancestry_pubkeys` in open offer claims:** When the press assembles the `CardDocument` from an `OpenOfferClaimSubmission`, it populates `ancestry_pubkeys` from the issuer card's chain (resolved at claim time) plus the press card's chain as applicable. The `issuer_signature` in the original `OpenCardOffer` covers `proposed_fields` but not `ancestry_pubkeys` (because the open offer does not include per-recipient card assembly); the per-recipient `holder_signature` and `press_signature` on the assembled `CardDocument` cover `ancestry_pubkeys` and bind it to the specific issuance.
 
 ---
 
@@ -414,7 +454,7 @@ The object the wallet service POSTs to the press when a recipient accepts an ope
 
 **Hosted at:** Single-use HTTPS URL (requesting site's infrastructure)  
 **Signed by:** Requesting site (using its own card key)  
-**Serialized for signing:** Canonical CBOR of all fields except `request_signature`
+**Serialized for signing:** Canonical RFC 8785 JSON of all fields except `request_signature`
 
 The object a site creates when it wants a user to authenticate with a card. Hosted at a single-use URL and fetched by the wallet service via CHAPI.
 
@@ -441,7 +481,7 @@ The object a site creates when it wants a user to authenticate with a card. Host
   },
   "redirect_uri":     "<URL to redirect user to after completion; must contain literal {code}>",
   "expires_at":       "<ISO 8601 timestamp>",
-  "request_signature":"<base64url — ML-DSA-44 sig from the requester's card key over canonical CBOR of all above fields>"
+  "request_signature":"<base64url — ML-DSA-44 sig from the requester's card key over canonical RFC 8785 JSON of all above fields>"
 }
 ```
 
@@ -489,9 +529,8 @@ The object the wallet posts after user approval. The `signed_statement` is a sta
     },
     "signatures": [
       {
-        "signer_card": "<base64url — mutable pointer of sub-card used to sign>",
         "public_key":   "<base64url>",
-        "signature":    "<base64url — sig over canonical CBOR of payload>"
+        "signature":    "<base64url — sig over canonical RFC 8785 JSON of payload>"
       }
     ]
   },
@@ -516,7 +555,7 @@ The requesting site verifies `signed_statement` per §7 (chain walk, revocation 
 **Signed Card Inclusion Proof**  
 **Produced by:** Press  
 **Delivered to:** Recipient (and courtesy copy to administrator) via HTTPS to wallet service endpoints  
-**Serialized for signing:** Canonical CBOR of all fields except `press_signature`
+**Serialized for signing:** Canonical RFC 8785 JSON of all fields except `press_signature`
 
 A small signed object that binds a newly-issued card's CID to its position in the policy's issuance log at time of inclusion. The recipient retains this as verifiable proof of issuance.
 
@@ -527,9 +566,8 @@ A small signed object that binds a newly-issued card's CID to its position in th
   "policy_log_root_at_inclusion":"<base64url — CID of the policy card's log head at time of issuance>",
   "issued_at":                  "<ISO 8601 timestamp>",
   "press_signature": {
-    "signer_card": "<base64url — mutable pointer in registry of press sub-card>",
     "public_key":   "<base64url>",
-    "signature":    "<base64url — sig over canonical CBOR of all above fields>"
+    "signature":    "<base64url — sig over canonical RFC 8785 JSON of all above fields>"
   }
 }
 ```
@@ -576,7 +614,7 @@ The on-IPFS storage format for each encrypted entry:
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `epoch_id` | `text` | Yes | Identifies which epoch AEK decrypts this entry; stored in plaintext |
-| `card_cid` | `cid` | Yes | Links to the issued card; enables auditor-assisted recovery if holder loses capability bundle |
+| `card_cid` | `cid` | Yes | Links to the issued card; gives auditors an issuance record for the policy |
 | `scip_cid` | `cid` | Yes | Links to the SCIP for this issuance |
 | `issued_at` | `timestamp` | Yes | Must match the card's `issued_at` |
 | `requester_card` | `card-pointer` | No | Present for targeted issuance; absent for open offer claims |
@@ -608,7 +646,7 @@ Posted to the policy log at the start and end of each audit epoch. On open, it d
   ],
   "commitment_cid": "<base64url — CID of the AuditEpochCommitment on IPFS; present only when status is 'closed'>",
   "close_reason":   "<text — 'calendar_boundary' | 'key_rotation' | 'auditor_change'; present only when status is 'closed'>",
-  "press_signature": "<ML-DSA-44 signature over canonical CBOR of all above fields>"
+  "press_signature": "<ML-DSA-44 signature over canonical RFC 8785 JSON of all above fields>"
 }
 ```
 
@@ -651,7 +689,7 @@ The permanent audit record for a closed epoch. The auditor produces this documen
   "entry_count":      <integer>,
   "entries_hash":     "<base64url — SHA3-256 of the concatenated CIDs of all decrypted entries in log order>",
   "findings":         "<free text — summary of audit findings; 'no issues found' if clean>",
-  "auditor_signature": "<ML-DSA-44 signature over canonical CBOR of all above fields>"
+  "auditor_signature": "<ML-DSA-44 signature over canonical RFC 8785 JSON of all above fields>"
 }
 ```
 
@@ -684,10 +722,8 @@ The on-chain records managed by the Card registry contract. Not JSON documents �
 
 ```
 CardEntry {
-    log_head_cid       bytes    — Current IPFS log head CID.
-                                  Public mode:  plaintext CID bytes.
-                                  Private mode: ML-KEM-encrypted CID bytes.
-                                  Updated on every successful RegisterCard or UpdateMarkHead call.
+    log_head_cid       bytes    — Current IPFS log head CID, stored as plaintext CID bytes.
+                                  Updated on every successful RegisterCard or UpdateCardHead call.
 
     policy_address     bytes32  — On-chain registry address of the policy card under which
                                   this card was issued. Set at RegisterCard time; immutable
@@ -695,7 +731,7 @@ CardEntry {
                                   PressAuthorizations[policy_address, press_address].
 
     last_press_address bytes32  — On-chain registry address of the press sub-card whose key
-                                  signed the most recent write (RegisterCard or UpdateMarkHead).
+                                  signed the most recent write (RegisterCard or UpdateCardHead).
                                   Updated on every successful write. Provides an on-chain
                                   attribution trail independent of IPFS content.
 
@@ -705,12 +741,7 @@ CardEntry {
 }
 ```
 
-**Address derivation** (client-side; not enforced by the contract):
-
-| Privacy mode | Derivation |
-|---|---|
-| Public | `keccak256(recipient_pubkey)` |
-| Private | `keccak256(sign(recipient_private_key, "card-address-v1"))` |
+**Address derivation** (client-side; not enforced by the contract): a card's address is always `keccak256(recipient_pubkey)`. There is a single public derivation — no private/secret-derived addresses (see `ARCHITECTURE.md` ADR-006).
 
 **Write authorization:** A write to `log_head_cid` requires a valid secp256r1 signature (r||s, 64 bytes) from a press whose key is registered in the on-chain `PressAuthorizations` table for the card's `policy_address`. The contract verifies this signature via the RIP-7212 precompile before accepting the write. The press also registers an `mldsa44_key_hash` at authorization time to support the future on-chain key scheme upgrade to ML-DSA-44 (see ADR-012 in `ARCHITECTURE.md`). Note: the `recipient_pubkey` in the IPFS-stored `CardDocument` is always ML-DSA-44 (IPFS identity key) — the secp256r1 key is a separate on-chain-only authorization key. (Note: the IPFS-stored `approved_presses` field in the policy card is an audit surface kept in sync with on-chain state; in the event of a discrepancy, on-chain state is authoritative — see ADR-011 in `ARCHITECTURE.md`.)
 
@@ -718,13 +749,13 @@ CardEntry {
 
 ```
 OpenOfferUseCounts (mapping: bytes32 → uint64)
-  offer_id   (bytes32)  — hash(canonical CBOR of the complete OpenCardOffer document
+  offer_id   (bytes32)  — hash(canonical RFC 8785 JSON of the complete OpenCardOffer document
                            including issuer_signature); lazily initialized on first use
   use_count  (uint64)   — number of accepted claims; atomically incremented on each
                            successful card registration under this offer
 ```
 
-The contract performs the following checks atomically with card registration for open offer submissions: (1) verifies the issuer's ML-DSA-44 signature over the offer payload (issuer keys are IPFS identity keys — always ML-DSA-44); (2) verifies the press's secp256r1 signature via RIP-7212; (3) confirms `block.timestamp < expires_at` (skipped if `expires_at` is null); (4) confirms `OpenOfferUseCounts[offer_id] < max_acceptances` (skipped if `max_acceptances` is null); (5) atomically increments the counter and registers the card. If any check fails, the transaction reverts.
+The press verifies the issuer's ML-DSA-44 signature over the offer payload before submitting any transaction (press-side pre-flight; see `registry_contract.md §4.5`). The contract then performs the following checks atomically with card registration: (1) verifies the press's secp256r1 signature via RIP-7212; (2) confirms `block.timestamp < expires_at` (skipped if `expires_at` is null); (3) confirms `OpenOfferUseCounts[offer_id] < max_acceptances` (skipped if `max_acceptances` is null); (4) atomically increments the counter and registers the card. If any check fails, the transaction reverts.
 
 For the full storage layout, write operations, read operations, governance tables, events, and error codes, see `specs/object_specs/registry_contract.md`.
 
@@ -737,6 +768,8 @@ For the full storage layout, write operations, read operations, governance table
 **IPFS document:** See §16 (SubCardDocument) for the full off-chain record; §15 describes only the on-chain registration entry.
 
 Maps a sub-card's registry address to its holder's primary card and the requesting app's card. Also records the primary card's log head CID at registration time, enabling scope-attenuation checks — a sub-card cannot use authority the primary card did not have at the time of registration.
+
+**Note on parent public keys:** The on-chain `SubCardRegistration` stores only the *addresses* (`holderPrimaryCardAddress`, `appCardAddress`) of the parent cards — it does not store their public keys. The ML-DSA-44 public keys needed to decrypt those parent cards and walk their chains are carried in the IPFS `SubCardDocument` (§16) as `holder_primary_card_pubkey` and `app_card_pubkey`. Verifiers read those fields from the decrypted sub-card document and apply the keccak256 binding check before using them.
 
 ```json
 {
@@ -758,53 +791,59 @@ Maps a sub-card's registry address to its holder's primary card and the requesti
 
 **Stored on:** IPFS  
 **Signed by:** App card key (first), then Holder primary card key (countersignature)  
-**Serialized for signing:** Canonical CBOR of the full document (offer phase: without `app_signature` and `holder_signature`; countersign phase: including `app_signature`, without `holder_signature`; final: complete)
+**Serialized for signing:** Canonical RFC 8785 JSON of the full document (offer phase: without `app_signature` and `holder_signature`; countersign phase: including `app_signature`, without `holder_signature`; final: complete)
 
 The genesis document for a sub-card — a device-bound, app-specific credential that delegates a scoped subset of a holder's signing authority to a specific application. Unlike `CardDocument`, which is initiated by the press, a `SubCardDocument` is initiated and first-signed by the **requesting app** using its own app card key, then countersigned by the **holder** using their primary card key. There is no press in sub-card issuance; the wallet is the authorizing party.
 
 ```json
 {
-  "holder_primary_card": "<base64url — mutable pointer of the holder's primary card>",
-  "app_card":            "<base64url — mutable pointer of the requesting app's card>",
-  "capabilities":        ["<message type string>", "..."],
-  "recipient_pubkey":    "<base64url — sub-card ML-DSA-44 public key, 1312 bytes raw>",
-  "issued_at":           "<ISO 8601 timestamp>",
-  "valid_until":         "<ISO 8601 timestamp — optional; absent means no expiry>",
-  "attestation_level":   "T2 | T1",
-  "attestation_proof":   "<base64url — App Attest / Play Integrity assertion scoped to recipient_pubkey hash; omitted if attestation_level is T1>",
-  "app_signature":       "<base64url — app card key ML-DSA-44 signature over canonical CBOR of document without both signature fields>",
-  "holder_signature":    "<base64url — holder primary card key ML-DSA-44 signature over canonical CBOR of document including app_signature, without holder_signature>"
+  "holder_primary_card":        "<base64url — mutable pointer of the holder's primary card>",
+  "holder_primary_card_pubkey": "<base64url — ML-DSA-44 public key of the holder's primary card, 1312 bytes raw>",
+  "app_card":                   "<base64url — mutable pointer of the requesting app's card>",
+  "app_card_pubkey":            "<base64url — ML-DSA-44 public key of the app's card, 1312 bytes raw>",
+  "capabilities":               ["<message type string>", "..."],
+  "recipient_pubkey":           "<base64url — sub-card ML-DSA-44 public key, 1312 bytes raw>",
+  "issued_at":                  "<ISO 8601 timestamp>",
+  "valid_until":                "<ISO 8601 timestamp — optional; absent means no expiry>",
+  "attestation_level":          "T2 | T1",
+  "attestation_proof":          "<base64url — App Attest / Play Integrity assertion scoped to recipient_pubkey hash; omitted if attestation_level is T1>",
+  "app_signature":              "<base64url — app card key ML-DSA-44 signature over canonical RFC 8785 JSON of document without both signature fields>",
+  "holder_signature":           "<base64url — holder primary card key ML-DSA-44 signature over canonical RFC 8785 JSON of document including app_signature, without holder_signature>"
 }
 ```
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `holder_primary_card` | `card-pointer` | Yes | Mutable pointer of the card this sub-card delegates from; establishes the chain-of-trust link on verification |
+| `holder_primary_card_pubkey` | `base64url` | Yes | ML-DSA-44 public key (1312 bytes raw) of the card referenced by `holder_primary_card`. **Untrusted hint**: the verifier MUST confirm `keccak256(holder_primary_card_pubkey)` equals the `holder_primary_card` pointer address before using it to derive a content key or verify a signature. A mismatch, or an AES-GCM authentication failure when decrypting the referenced card, is a hard rejection. Set at sub-card issuance; covered by both `app_signature` and `holder_signature`. |
 | `app_card` | `card-pointer` | Yes | Mutable pointer of the requesting app's card; must chain to the governance authority's app-certification policy |
+| `app_card_pubkey` | `base64url` | Yes | ML-DSA-44 public key (1312 bytes raw) of the card referenced by `app_card`. **Untrusted hint**: the verifier MUST confirm `keccak256(app_card_pubkey)` equals the `app_card` pointer address before using it to derive a content key or verify a signature. A mismatch, or an AES-GCM authentication failure when decrypting the referenced card, is a hard rejection. Set at sub-card issuance; covered by both `app_signature` and `holder_signature`. |
 | `capabilities` | `array of text` | Yes | Whitelist of message type strings this sub-card may sign (e.g. `["auth_response", "exchange_offer"]`). An empty array is valid but non-functional. |
 | `recipient_pubkey` | `base64url` | Yes | ML-DSA-44 public key generated in device hardware-backed secure storage; 1312 bytes raw |
 | `issued_at` | `timestamp` | Yes | Set by the app at document assembly time |
 | `valid_until` | `timestamp` | No | Optional expiry; verifiers must reject signatures from expired sub-cards |
 | `attestation_level` | `text` | Yes | `"T2"` (full app attestation; default and required) or `"T1"` (hardware-backed key storage only; permitted only if the governing policy explicitly accepts it). See `subcards.md §Attestation Tiers`. |
 | `attestation_proof` | `base64url` | Conditional | Present when `attestation_level` is `"T2"`: the platform attestation assertion (iOS App Attest certificate / Android Play Integrity token) scoped to the hash of `recipient_pubkey`. Omitted when `attestation_level` is `"T1"`. |
-| `app_signature` | `base64url` | Yes | App's card key signature over canonical CBOR of the document without `app_signature` or `holder_signature` |
-| `holder_signature` | `base64url` | Yes | Holder's primary card key signature over canonical CBOR of the document including `app_signature`, without `holder_signature` |
+| `app_signature` | `base64url` | Yes | App's card key signature over canonical RFC 8785 JSON of the document without `app_signature` or `holder_signature`. Covers `holder_primary_card_pubkey` and `app_card_pubkey`. |
+| `holder_signature` | `base64url` | Yes | Holder's primary card key signature over canonical RFC 8785 JSON of the document including `app_signature`, without `holder_signature`. Covers `holder_primary_card_pubkey` and `app_card_pubkey`. |
+
+**Serialized for signing:** Canonical RFC 8785 JSON. `app_signature` covers all fields except `app_signature` and `holder_signature` (both `holder_primary_card_pubkey` and `app_card_pubkey` are present and included). `holder_signature` covers all fields including `app_signature`, except `holder_signature` (both `holder_primary_card_pubkey` and `app_card_pubkey` are present and included).
 
 **Signing sequence:**
 
 1. App generates a fresh ML-DSA-44 keypair in device hardware-backed secure storage → `recipient_pubkey`. The private key is scoped to the app's signing identity; it cannot be exported.
 2. App requests an attestation assertion scoped to `hash(recipient_pubkey)` from the platform (iOS App Attest / Android Play Integrity for T2; or skips for T1) → `attestation_proof`.
-3. App assembles the document with all fields except the two signature fields.
-4. App signs canonical CBOR of that document → `app_signature`.
+3. App assembles the document with all fields — including `holder_primary_card_pubkey` (the ML-DSA-44 public key of the holder's primary card) and `app_card_pubkey` (the ML-DSA-44 public key of the app's card) — except the two signature fields.
+4. App signs canonical RFC 8785 JSON of that document → `app_signature`. Both `holder_primary_card_pubkey` and `app_card_pubkey` are present and covered by this signature.
 5. App sends the partially-signed document to the wallet.
-6. Wallet verifies `app_signature`, walks the `app_card` chain to confirm it chains to the governance authority's app-certification policy root, and verifies the `attestation_proof` (or confirms T1 is policy-permitted if `attestation_level` is `"T1"`).
+6. Wallet verifies `app_signature`, confirms `keccak256(holder_primary_card_pubkey)` equals the `holder_primary_card` pointer address and `keccak256(app_card_pubkey)` equals the `app_card` pointer address (binding checks), walks the `app_card` chain using `app_card_pubkey` to confirm it chains to the governance authority's app-certification policy root, and verifies the `attestation_proof` (or confirms T1 is policy-permitted if `attestation_level` is `"T1"`).
 7. Wallet presents to the user: app identity (from `app_card`), requested `capabilities`, and optional `valid_until`. User approves or denies.
    - **Wallet self-signing exception:** When the wallet is the requesting app (i.e. `app_card` is the wallet's own card), step 7 is skipped. The user already trusts the wallet with their primary key.
-8. Holder's primary card key signs canonical CBOR of the document including `app_signature`, without `holder_signature` → `holder_signature`.
+8. Holder's primary card key signs canonical RFC 8785 JSON of the document including `app_signature`, without `holder_signature` → `holder_signature`. Both `holder_primary_card_pubkey` and `app_card_pubkey` are present and covered by this signature.
 9. Completed SubCardDocument is posted to IPFS.
 10. Sub-card is registered on Arbitrum One via `RegisterSubCard` (see §15).
 
-**Verifier chain walk.** A verifier encountering a signature from a sub-card must confirm: (1) the message type appears in the sub-card's `capabilities`; (2) `valid_until` has not passed; (3) `app_signature` is valid; (4) `holder_signature` is valid; (5) `app_card` chains to the governance app-certification policy root; (6) the sub-card is not revoked in the on-chain registry; (7) `attestation_level` is `"T2"` unless the governing policy explicitly accepts `"T1"`.
+**Verifier chain walk.** A verifier encountering a signature from a sub-card must: (1) confirm the message type appears in the sub-card's `capabilities`; (2) confirm `valid_until` has not passed; (3) verify `app_signature` is valid; (4) verify `holder_signature` is valid; (5) read `holder_primary_card_pubkey` from the decrypted sub-card document; (6) confirm `keccak256(holder_primary_card_pubkey)` equals the `holder_primary_card` pointer address — if the addresses do not match, reject; (7) derive the master card's content key as `HKDF-SHA3-256(holder_primary_card_pubkey, info="card-content-v1")` and decrypt the master card from IPFS — if AES-GCM authentication fails, reject; (8) confirm the sub-card appears in the master card's active sub-card list; (9) read `holder_primary_card_pubkey`'s counterpart `app_card_pubkey`, confirm `keccak256(app_card_pubkey)` equals the `app_card` pointer address, decrypt the app card using `HKDF-SHA3-256(app_card_pubkey, info="card-content-v1")`, and confirm `app_card` chains to the governance app-certification policy root (using the app card's own `ancestry_pubkeys` to continue the walk); (10) confirm the sub-card is not revoked in the on-chain registry; (11) confirm `attestation_level` is `"T2"` unless the governing policy explicitly accepts `"T1"`. Per-link on-chain addresses remain authoritative; `holder_primary_card_pubkey` and `app_card_pubkey` are untrusted hints whose validity is established by the binding check before use.
 
 ---
 
@@ -850,20 +889,21 @@ CardEntry (Arbitrum One)
 
 ## Serialization Quick Reference
 
-Objects marked **CBOR-signed** use canonical CBOR per Appendix A of `card_protocol_spec.md` as the byte sequence over which signatures are computed. Objects marked **JSON** use standard JSON (no canonical form required).
+Objects marked **RFC 8785-signed** use canonical RFC 8785 JSON per Appendix A of `card_protocol_spec.md` as the byte sequence over which signatures are computed. Objects marked **JSON** use standard JSON (no canonical form required).
 
 | Object | Storage | Signing serialization |
 |---|---|---|
-| CardDocument | IPFS | CBOR-signed (offer phase, then complete) |
-| PolicyCardDocument | IPFS | CBOR-signed (same as CardDocument) |
-| LogEntry | IPFS | CBOR-signed (`intent_signature` over UpdateIntentPayload; `press_signature` over complete LogEntry) |
-| UpdateIntentPayload | In-transit | CBOR-signed |
-| SignedMessageEnvelope | In-transit | CBOR-signed (payload only) |
-| OpenCardOffer | HTTPS / IPFS | CBOR-signed (all except `issuer_signature`) |
-| OpenOfferClaimSubmission | In-transit (HTTPS POST to press) | `recipient_signature` covers canonical CBOR of `claim_payload`; `claim_payload.offer.issuer_signature` separately verified by press |
-| AuthenticationRequest | HTTPS | CBOR-signed (all except `request_signature`) |
+| CardDocument | IPFS | RFC 8785-signed (offer phase, then complete); `ancestry_pubkeys` is in the signed payload for all three signatures |
+| PolicyCardDocument | IPFS | RFC 8785-signed (same as CardDocument); `ancestry_pubkeys` is required and in the signed payload |
+| LogEntry | IPFS | RFC 8785-signed (`intent_signature` over UpdateIntentPayload; `press_signature` over complete LogEntry) |
+| UpdateIntentPayload | In-transit | RFC 8785-signed |
+| SignedMessageEnvelope | In-transit | RFC 8785-signed (payload only) |
+| OpenCardOffer | HTTPS / IPFS | RFC 8785-signed (all except `issuer_signature`) |
+| OpenOfferClaimSubmission | In-transit (HTTPS POST to press) | `recipient_signature` covers canonical RFC 8785 JSON of `claim_payload`; `claim_payload.offer.issuer_signature` separately verified by press |
+| AuthenticationRequest | HTTPS | RFC 8785-signed (all except `request_signature`) |
 | AuthenticationResponse | In-transit | Not signed as a whole; contains a SignedMessageEnvelope |
-| SCIP | In-transit / IPFS | CBOR-signed (all except `press_signature`) |
+| SCIP | In-transit / IPFS | RFC 8785-signed (all except `press_signature`) |
 | PressIssuanceRecord | IPFS (encrypted) | Not signed; encrypted via ML-KEM |
-| CardEntry | Arbitrum One | On-chain; write authorized by ML-DSA-44 sig verified by Stylus against `PressAuthorizations` table |
-| SubCardRegistration | Arbitrum One | On-chain; write authorized by master card key |
+| CardEntry | Arbitrum One | On-chain; write authorized by secp256r1 sig verified via RIP-7212 precompile against `PressAuthorizations` table |
+| SubCardRegistration | Arbitrum One | On-chain; write authorized by press secp256r1 sig (§6.1 write gate); master card holder ML-DSA-44 sig verified off-chain by press |
+| SubCardDocument | IPFS | RFC 8785-signed (`app_signature` over all fields except both signature fields; `holder_signature` over all fields including `app_signature`); `holder_primary_card_pubkey` and `app_card_pubkey` are present and covered by both signatures |

@@ -19,28 +19,28 @@ A card's **registry address** (its entry in the Arbitrum One card registry contr
 - The card's **mutable pointer** (the on-chain key whose value is the current log head CID)
 - The card's **messaging address** (the `to` field in the routing header, and the values in `recipients` / `senders` inside the signed message envelope)
 
-For private and selectively-shared cards the address is derived as:
+The address is always derived from the card's public key:
 
 ```
-registry_address = keccak256(sign(private_key, "card-address-v1"))
+registry_address = keccak256(recipient_pubkey)
 ```
 
-For fully public cards it is derived from the card's public key. In both cases the address is a fixed-length hash that any party can use to address a message without knowing which wallet service holds the card. The hash alone is sufficient; no additional directory is needed at send time once the routing table is warm.
+The address is a fixed-length hash that any party who holds the card's public key can use to address a message without knowing which wallet service holds the card. The hash alone is sufficient; no additional directory is needed at send time once the routing table is warm.
 
 ---
 
 ## Wallet Service Registry
 
-Wallet services are registered on-chain in a dedicated **Wallet Service Registry** table in the card registry contract. A registered wallet service has:
+> **Status note (INC-35 decision, 2026-06-15):** The Wallet Service Registry is **off-chain**. It will not live in the card registry contract. The full registry design — discovery endpoint, registration/revocation protocol, `wallet_service_id` assignment — will be specified in the wallet service spec. This document uses `wallet_service_id` as a stable opaque identifier; treat it as a placeholder until that spec is written.
+
+Wallet services are registered in an off-chain **Wallet Service Registry** maintained by wallet service operators. A registered wallet service has:
 
 | Field | Description |
 |---|---|
-| `wallet_service_id` | Stable on-chain identifier (bytes32) |
+| `wallet_service_id` | Stable identifier for this wallet service (format TBD in wallet service spec) |
 | `endpoint` | Base HTTPS URL accepting inbound routing envelopes |
 | `transport_flags` | Bitmask of supported transports (see Transport Extensibility below) |
-| `active` | Boolean — revoked wallet services cannot receive routed messages |
-
-Registration and revocation follow the same governance pattern as press authorization (ADR-011): a governance quorum signs each `RegisterWalletService` / `RevokeWalletService` call.
+| `active` | Whether this wallet service is currently accepting routed messages |
 
 Wallet services announce which cards they hold by emitting on-chain events when a card is registered to or migrated from them. All wallet services subscribe to these events to maintain their local routing tables.
 
