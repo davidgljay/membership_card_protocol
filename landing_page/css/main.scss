@@ -1,0 +1,318 @@
+---
+---
+
+$text-color:       #111;
+$background-color: #f7f7f3;
+$brand-color:      rgb(31, 55, 10);
+$light-green:      #4c8817;
+
+$grey-color:       #50514f;
+$grey-color-light: lighten($grey-color, 40%);
+$grey-color-dark:  darken($grey-color, 25%);
+
+// variables.less
+$theme-primary: rgb(31, 55, 10);
+$theme-dark: rgb(31, 55, 10);
+$theme-light: #708c57;
+$theme-green: rgb(31, 55, 10);
+
+// Import partials from `sass_dir` (defaults to `_sass`)
+@import
+        "mixins",
+        "base"
+;
+
+// Custom CSS
+
+header {
+  background-image: url("/img/header.jpg");
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-color: $theme-green;
+  height: 100vh;
+  min-height: 100vh;
+  color: $theme-green;
+}
+
+.header-content-inner {
+  max-width: none;
+  width: 100%;
+  margin-top: 0;
+  text-align: right;
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+  flex-wrap: wrap;
+  h1 {
+    text-align: right;
+  }
+}
+
+.header-text-panel {
+  background: rgba(255, 255, 255, 0.8);
+  max-width: 560px;
+  padding: 2.5rem 3rem;
+  text-align: right;
+  box-sizing: border-box;
+  font-size: 30px;
+  font-weight: 300;
+
+  h1,
+  h2 {
+    text-align: right;
+  }
+}
+
+@media (min-width: 768px) {
+  header .header-content .header-content-inner {
+    max-width: none;
+    width: 100%;
+    margin-left: 0;
+    margin-right: 0;
+  }
+}
+
+header .header-content .header-content-inner h1 {
+  text-transform: none;
+}
+
+h1 {
+  font-size: 40px;
+  font-weight: 500;
+}
+
+h2 {
+  font-weight: 300;
+  margin-top: 40px;
+}
+
+h3 {
+  font-size: 22px;
+}
+
+body, h1, h2, h3, h4, h5, h6 {
+  font-family: 'Montserrat', 'Open Sans', 'Helvetica Neue', Arial, sans-serif;
+}
+
+body {
+  font-weight: 400;
+}
+
+#mainNav {
+  background-color: rgba($theme-green, .9)
+}
+
+p {
+  color: lighten($text-color, 40%);
+  font-weight: 300;
+}
+
+li {
+  margin-top: 10px;
+}
+
+section {
+  padding: 50px;
+}
+
+section .row {
+  margin-top: 25px;
+  margin-bottom: 25px;
+}
+
+.navbar-right {
+  margin-right: 20px;
+}
+
+.navbar-default.affix .navbar-header .navbar-brand{
+  color: #fff;
+}
+
+.navbar-default.affix .nav > li > a {
+  color: #fff;
+}
+
+.navbar-default .nav > li > a {
+  color: #fff;
+}
+
+.navbar-default .nav > li > a:hover {
+  color: $theme-light;
+}
+
+.navbar-default.affix .nav > li > a:hover {
+  color: $theme-light;
+}
+
+.navbar-default .nav > li > a.active {
+  color: $theme-light;
+}
+
+.mobile-menu {
+  display: none;
+  margin-left: 40px;
+
+  a {
+    color: #fff;
+  }
+}
+
+// Placeholder illustration blocks: swap the <img> src for real
+// artwork once it's available. These styles keep the layout intact
+// in the meantime.
+img[src^="/img/placeholder-"] {
+  display: block;
+  width: 100%;
+  max-width: 320px;
+  min-height: 220px;
+  margin-left: auto;
+  margin-right: auto;
+  border-radius: 16px;
+  background-color: $grey-color-light;
+  border: 2px dashed $grey-color;
+  object-fit: cover;
+}
+
+.arrow-wrapper {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.scrolldown-arrow {
+  width: 70px;
+  position: absolute;
+  top: 85vh;
+}
+
+@media (max-width: 768px) {
+
+  header {
+    height: auto;
+    min-height: 70vh;
+    .header-content {
+      padding: 100px 15px 20px 15px;
+
+      .header-text-panel {
+        font-size: 20px;
+      }
+    }
+  }
+
+  .header-text-panel {
+    max-width: 100%;
+    padding: 1.75rem 1.25rem;
+  }
+
+  .navbar-brand {
+    font-size: 14px;
+  }
+  .navbar-default .navbar-header .navbar-brand {
+    color: #fff;
+  }
+  .mobile-menu {
+    display: block;
+  }
+  .section-heading {
+    margin-top: 30px;
+  }
+  .scrolldown-arrow {
+    display: none;
+  }
+}
+
+@media (max-width: 1200px) {
+
+  header {
+    .header-content-inner {
+      h1 {
+        padding-top: 30px;
+      }
+    }
+  }
+
+  .navbar-brand {
+    font-size: 14px;
+  }
+
+  .navbar-default .navbar-header .navbar-brand {
+    color: #fff;
+  }
+
+  .section-heading {
+    margin-top: 30px;
+  }
+}
+
+hr.primary {
+  border-color: $theme-primary;
+}
+
+hr.white {
+  border-color: #fff;
+}
+
+.text-white {
+  color: #fff;
+  p {
+    color: #fff;
+  }
+}
+
+.text-light-grey {
+  color: $grey-color-light;
+}
+
+.text-grey {
+  color: $grey-color-dark;
+}
+
+.text-green {
+  color: $theme-green;
+}
+
+.text-light-green {
+  color: $light-green;
+}
+
+.light-bold {
+  font-weight: 500;
+}
+
+.bg-green {
+  background-color: $theme-green;
+
+  ::selection {
+    background: #fff;
+    color: $theme-primary;
+  }
+
+  a {
+    color: $theme-light;
+    font-weight: 400;
+  }
+}
+
+.wrap-reverse {
+  display: flex;
+  flex-wrap: wrap-reverse;
+  justify-content: center;
+}
+
+.btn-big {
+  font-size: 22px;
+  font-weight: 500;
+}
+
+.footer {
+  font-size: 11px;
+  color: $grey-color-light;
+  font-weight: 100;
+  margin-top: 20px;
+  margin-bottom: 40px;
+}
+
+.mb-40 {
+  margin-bottom: 40px;
+}
