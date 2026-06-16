@@ -35,7 +35,7 @@ expires bounds how long the request is valid.
 signature is the requester's signature over the canonical serialization of the request fields. The keyring verifies this before doing anything else: if the signature doesn't match the requester Card's keys, the request is rejected and the user never sees it. This is the defense against forged authentication prompts from phishing sites.
 
 The whole request is encoded into a URL like:
-card://request?r=<base64(signed_request)>
+mcard://request?r=<base64(signed_request)>
 Or, equivalently, into a QR code containing the same payload for desktop-to-mobile handoff.
 
 Keyring Evaluation

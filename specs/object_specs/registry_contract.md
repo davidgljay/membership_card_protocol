@@ -20,7 +20,7 @@
    - 3.5 [OpenOfferUseCounts](#35-openofferusecounts)
    - 3.6 [GovernanceKeysets](#36-governancekeysets)
 4. [Write Operations](#4-write-operations)
-   - 4.1 [RegisterCard](#41-registermark)
+   - 4.1 [RegisterCard](#41-registercard)
    - 4.2 [UpdateCardHead](#42-updatecardhead)
    - 4.3 [RegisterSubCard](#43-registersubcard)
    - 4.4 [DeregisterSubCard](#44-deregistersubcard)
@@ -191,12 +191,25 @@ Maps a sub-card's registry address to its master card's registry address and the
 SubCardRegistrations: mapping (bytes32 → SubCardEntry)
 
 SubCardEntry {
-    master_card_address     bytes32   — Registry address of the master card.
+    master_card_address     bytes32   — Registry address of the master card (the holder's
+                                        primary card). The on-chain entry identifies the master
+                                        but does not store the app card address; the app card
+                                        address and app signature live in the IPFS SubCardDocument
+                                        (see §16 of protocol-objects.md) pointed to by
+                                        sub_card_doc_cid below.
 
     registration_log_head   bytes     — Log head CID of the master card at the time this
                                         sub-card was registered. Used for scope-attenuation
                                         verification: the sub-card cannot have been granted
                                         authority the master did not hold at registration time.
+
+    sub_card_doc_cid        bytes     — CID of the SubCardDocument stored on IPFS. This is the
+                                        authoritative off-chain record containing the app card
+                                        address (app_card), the app card pubkey (app_card_pubkey),
+                                        the app's signature (app_signature), the holder's
+                                        countersignature (holder_signature), and all other
+                                        sub-card metadata. Maximum 64 bytes (same CID size limit
+                                        as log_head_cid). Format is not validated by the contract.
 
     active                  bool      — True until DeregisterSubCard is called. Verifiers
                                         reject signatures from sub-cards with active=false.
@@ -368,8 +381,13 @@ UpdateCardHead(
 ```
 RegisterSubCard(
     sub_card_address       bytes32,    — Registry address of the new sub-card
-    master_card_address    bytes32,    — Registry address of the master card
+    master_card_address    bytes32,    — Registry address of the master card (holder's primary card).
+                                         The app card address is NOT stored on-chain; it lives in the
+                                         IPFS SubCardDocument pointed to by sub_card_doc_cid.
     registration_log_head  bytes,      — Current log_head_cid of master card (snapshot for scope check)
+    sub_card_doc_cid       bytes,      — CID of the SubCardDocument on IPFS, which contains the
+                                         app card address (app_card), app card pubkey, app signature,
+                                         and holder countersignature. Maximum 64 bytes.
     master_sig_payload     bytes,      — Canonical RFC 8785 JSON of the RegisterSubCardPayload
     master_signature       bytes[2420] — ML-DSA-44 signature over master_sig_payload,
                                          using the master card's holder key.
@@ -387,6 +405,7 @@ RegisterSubCard(
   "sub_card_address":         "<base64url — bytes32>",
   "master_card_address":      "<base64url — bytes32>",
   "registration_log_head":    "<base64url — CID bytes>",
+  "sub_card_doc_cid":         "<base64url — CID bytes of the SubCardDocument on IPFS>",
   "sequence":                 <uint64 — must equal PressAuthorizations[policy][press].next_sequence>,
   "timestamp":                "<ISO 8601>"
 }
@@ -401,9 +420,11 @@ RegisterSubCard(
 
 > **Master signature is press-side only.** The press verifies `master_signature` (ML-DSA-44) off-chain against the holder public key from the card's `CardDocument` (fetched from IPFS) before submitting. The contract does not re-verify the master signature. The holder signature in calldata is retained as an auditable proof of holder intent. A press submitting a sub-card registration without a valid holder signature is detectable by observers and constitutes a press policy violation (press-side error E-22).
 
+> **App-chain verification is press-side only.** Before submitting `RegisterSubCard`, the press reads the `SubCardDocument` at `sub_card_doc_cid` from IPFS, verifies `app_signature`, and walks the `app_card` chain using `app_card_pubkey` to confirm it reaches the governance authority's app-certification policy root (applying the keccak256 binding check: `keccak256(app_card_pubkey)` must equal the `app_card` pointer address, and each subsequent hop uses the app card's own `ancestry_pubkeys`). The contract stores only the CID pointer to this document; it does not perform any app-chain verification. Runtime verifiers rely on the press having completed this check at registration time — they do not re-walk the app-certification chain independently (see `protocol-objects.md §16` Verifier chain walk).
+
 **State changes:**
 
-- Creates `SubCardRegistrations[sub_card_address] = { master_card_address, registration_log_head, active: true, registered_at: block.timestamp, deregistered_at: 0 }`.
+- Creates `SubCardRegistrations[sub_card_address] = { master_card_address, registration_log_head, sub_card_doc_cid, active: true, registered_at: block.timestamp, deregistered_at: 0 }`.
 
 ---
 
@@ -781,7 +802,7 @@ RegisterAddressForward(
 1. `old_address` must exist in `CardEntries` (`exists == true`).
 2. `new_address` must exist in `CardEntries` (`exists == true`). The successor card must be registered before the forward is set.
 3. `old_address.forward_to` must be zero — a forward may only be registered once. Attempting to overwrite returns error E-27.
-4. The old card's log must contain no 8xx or 9xx revocation entries (verified off-chain by the press; the contract does not inspect IPFS). If a revocation has been written before the forward is registered, the press must reject the `RegisterAddressForward` request. Returns error E-28 if the contract detects a conflict via the `last_press_address` field. (Full revocation detection requires IPFS access; the press is responsible for enforcing ordering.)
+4. The old card's log must contain no 8xx or 9xx revocation entries. Because the contract is revocation-agnostic and cannot read IPFS content, this check is performed by the press before submitting. If the press finds that a revocation has already been written to the old card's log, it must reject the `RegisterAddressForward` request and return error E-28 to the caller. The contract does not enforce this constraint on-chain; E-28 is a press-side rejection. (The `last_press_address` field does not encode revocation status; full revocation detection requires reading the IPFS log.)
 5. `secp256r1_sig` must verify against the key registered in `PressAuthorizations` for the old card — specifically, the press that last wrote to `old_address`.
 
 **On success:**
@@ -789,7 +810,7 @@ RegisterAddressForward(
 - Sets `CardEntries[old_address].forward_to = new_address`.
 - Emits `AddressTransition(old_address, new_address, timestamp)`.
 
-**Called by:** The press on behalf of the card holder, as part of the master key rotation flow (see `key_rotation.md §3.4` step 4a). Gas is paid by the issuing organization's press.
+**Called by:** The press on behalf of the card holder, as part of the master key rotation flow (see `key_rotation.md §2.4` step 4a). Gas is paid by the issuing organization's press.
 
 **Acceptance criteria:**
 
@@ -811,7 +832,7 @@ These are view functions — no state change, no fee beyond RPC costs.
 | `GetCardEntry(card_address bytes32)` | `CardEntry` | Full entry including `log_head_cid`, `policy_address`, `last_press_address`, `forward_to`, `exists` |
 | `GetPressAuthorization(policy_address, press_address bytes32)` | `PressAuthEntry` | Key, active flag, timestamps |
 | `GetPolicyAuthorizer(policy_address bytes32)` | `bytes[64]` | Authorizer secp256r1 public key (x||y) for the policy |
-| `GetSubCardEntry(sub_card_address bytes32)` | `SubCardEntry` | Master address, log head snapshot, active flag |
+| `GetSubCardEntry(sub_card_address bytes32)` | `SubCardEntry` | Master card address, log head snapshot, `sub_card_doc_cid` (CID of the IPFS SubCardDocument), active flag. The app card address and app signature are in the SubCardDocument at that CID, not stored on-chain. |
 | `GetOpenOfferCount(offer_id bytes32)` | `uint64` | Current acceptance count |
 | `GetGovernanceKeyset(body_id GovernanceBodyId)` | `GovernanceKeyset` | Active keys, quorum, version |
 | `IsPressActive(policy_address, press_address bytes32)` | `bool` | Quick check for verifiers |
@@ -925,6 +946,9 @@ CardHeadUpdated(
 SubCardRegistered(
     sub_card_address   bytes32,
     master_address     bytes32,
+    sub_card_doc_cid   bytes,    — CID of the SubCardDocument on IPFS; off-chain indexers use
+                                   this to read the app card address, app signature, and other
+                                   sub-card metadata without a separate on-chain lookup
     timestamp          uint64
 )
 
@@ -980,7 +1004,7 @@ AddressTransition(
 )
 ```
 
-**`AddressTransition` purpose.** This event is the on-chain archive of address changes resulting from master key rotations. Off-chain indexers can build an `old_address → new_address` lookup table from these events, enabling resolution of old addresses even when the old card's IPFS content is no longer pinned and the IPFS-level `successor` field is unreachable. See `key_rotation.md §3.3`.
+**`AddressTransition` purpose.** This event is the on-chain archive of address changes resulting from master key rotations. Off-chain indexers can build an `old_address → new_address` lookup table from these events, enabling resolution of old addresses even when the old card's IPFS content is no longer pinned and the IPFS-level `successor` field is unreachable. See `key_rotation.md §2.3`.
 
 **Note:** Events do not include the new governance keys or press public keys in plaintext — these are available from the call data on the same transaction. Emitting 1,312-byte public keys in events would significantly increase log storage costs.
 

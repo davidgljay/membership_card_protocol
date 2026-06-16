@@ -40,7 +40,7 @@ Entries with codes 1xx–7xx use `field_updates` and do not carry an `effective_
 **Notes on 1xx:**
 - Codes 100 and 101 are holder-initiated; code 102 is issuer-initiated; code 103 is holder cancellation of a pending issuer-initiated rotation.
 - A code-102 entry carries a `pending_until` field and is not effective until that timestamp elapses without a code-103 cancellation.
-- Codes 100 and 101 are used for master card key rotation; see `key_rotation.md §3.3` and `§3.4`. Codes 102 and 103 are used for the issuer-recovery flow; see `key_rotation.md §3.5`.
+- Codes 100 and 101 are used for master card key rotation; see `key_rotation.md §2.3` and `§2.4`. Codes 102 and 103 are used for the issuer-recovery flow; see `key_rotation.md §2.6`.
 
 ### 2xx — Positive Context
 
@@ -94,7 +94,7 @@ Within the 7xx range, lower subcodes indicate more honorable circumstances; high
 
 **Notes on 8xx:**
 - Code 811 applies to a specific sub-card (device-bound, app-specific credential). It does not revoke the holder's primary card or other sub-cards. See `key_rotation.md §1.3`.
-- Code 810 applies when the master signing key of a card is believed compromised. See `key_rotation.md §3.4`.
+- Code 810 applies when the master signing key of a card is believed compromised. See `key_rotation.md §2.5`.
 - Code 801 is holder-initiated voluntary surrender, e.g. when performing a planned key rotation (the old card is surrendered after the successor is established).
 
 ### 9xx — Loud Revocations
@@ -138,5 +138,5 @@ To define a new code:
 - `card_protocol_spec.md §Background Concepts — The Update & Revocation Code System` — range descriptions, verification semantics, and historical signature semantics
 - `key_rotation.md §8.2` — 1xx codes (100–103) for key rotation
 - `key_rotation.md §1.3` — code 811 for sub-card emergency rotation
-- `key_rotation.md §3.4` — code 810 for master key compromise
+- `key_rotation.md §2.5` — code 810 for master key compromise
 - `key_rotation.md §5` — code 910 for full wallet compromise

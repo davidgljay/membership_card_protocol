@@ -73,7 +73,7 @@ Card offering and acceptance is the process by which a press issues a targeted c
 
 ### Phase 4: Offer Delivery
 
-9. **First-time recipient (invitation link):** The **issuer's wallet service** encodes the offer as `card://invite?o=<base64>` and delivers it out of band (email, QR code, etc.).
+9. **First-time recipient (invitation link):** The **issuer's wallet service** encodes the offer as `mcard://invite?o=<base64>` and delivers it out of band (email, QR code, etc.).
 
 10. **Existing recipient (HTTPS delivery):** The **issuer's wallet service** POSTs the signed offer directly to the recipient's wallet service endpoint.
 
@@ -102,7 +102,7 @@ Card offering and acceptance is the process by which a press issues a targeted c
 
 16. The **offerer** validates the countersigned card — confirms `holder_signature` verifies against `recipient_pubkey` and covers the offer the offerer issued — then forwards it to the **press**.
 
-17. The **press** validates the completed card: confirms `issuer_signature` and `holder_signature` verify against their respective keys, the offerer satisfies `requester_predicate`, all required fields are present, and field values conform to the policy schema. If validation passes, the press signs the complete document with its **press sub-card key** → `press_signature`, and posts the card to IPFS.
+17. The **press** validates the completed card: confirms `issuer_signature` and `holder_signature` verify against their respective keys, the offerer satisfies `requester_predicate`, all required fields are present, and field values conform to the policy schema. If validation passes, the press signs the complete document with its **press sub-card key** → `press_signature`, and posts the card to IPFS **encrypted** under the ADR-006 content key (`HKDF-SHA3-256(recipient_pubkey, info="card-content-v1")`, AES-256-GCM). This is the first point at which content encryption applies — the offer-phase document (steps 6–8) was not content-encrypted because `recipient_pubkey` was not yet present.
 
 18. The press creates a new Arbitrum One registry entry for the card, with the genesis CID as the initial log head. This write is authorized on-chain by the press's secp256r1 key registered in `PressAuthorizations` (see `ARCHITECTURE.md` ADR-011).
 

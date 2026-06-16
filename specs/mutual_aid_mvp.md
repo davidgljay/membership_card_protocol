@@ -194,7 +194,7 @@ A lightweight mobile app or PWA that stores sub-Card keys in the device's secure
 
 | Question | Owner | Blocking? |
 |----------|-------|-----------|
-| ~~Product name~~ | David | **Resolved:** product name is "Card" / "Card Protocol" per naming convention (INC-23) |
+| **Product name** | David | **Open** — the underlying protocol is the "Card Protocol," but this mutual-aid product needs its own distinct name. No product name has been chosen; the `[Product Name]` placeholders throughout this document correctly reflect that. (INC-23 resolved the *protocol* name only.) |
 | Key custody UX: what happens when a member loses access to their keyring? What is the recovery flow visible to the user? | Engineering + Design | Yes — must be designed before onboarding flow |
 | WhatsApp onboarding mechanism: does this flow through Rhizal, a standalone Card Protocol bot, or a hybrid? | Engineering | Yes — determines onboarding architecture |
 | Monetization model: free for communities, grant-funded, freemium with paid tiers, or something else? | David | No — but affects scope of impact measurement features |

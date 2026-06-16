@@ -30,7 +30,7 @@ Updates are classified by a three-digit code (1xx–9xx) that signals the semant
 
 - The target card exists on IPFS and is registered on Arbitrum One.
 - The updater holds a card whose chain satisfies the relevant authorization predicate.
-- The updater has a press sub-card key available for signing.
+- The updater has a sub-card key available for signing.
 - At least one press is listed in `approved_presses` for the target card's policy.
 
 ---
@@ -86,9 +86,8 @@ Updates are classified by a three-digit code (1xx–9xx) that signals the semant
    - **Updater not revoked:** Confirm the updater's card has no 8xx or 9xx entry with `effective_date` ≤ now.
    - **Authorization — field updates (codes 1xx–7xx):** For each field in `field_updates`, confirm the updater's card chain satisfies that field's `update_policy` predicate (from the policy's `field_definitions`). All predicates must be satisfied by the same updater.
    - **Authorization — revocations (codes 8xx–9xx):** Confirm the updater's card chain satisfies `revocation_permissions` for the given code range. If `revocation_permissions` is absent from the policy, the default applies: 8xx by holder or issuer, 9xx by issuer only.
-   - **Immutable fields:** Confirm no `field_updates` entry targets a protocol-required immutable field (`policy_id`, `issuer_card`, `press_card`, `recipient_pubkey`, `issued_at`, `issuer_signature`, `holder_signature`, `press_signature`).
+   - **Immutable fields:** Confirm no `field_updates` entry targets a protocol-required immutable field (`policy_id`, `issuer_card`, `press_card`, `recipient_pubkey`, `issued_at`, `ancestry_pubkeys`, `past_keys`, `issuer_signature`, `holder_signature`, `press_signature`). Note: `successor` (codes 100/101/102), `supersedes`, and `supersession_note` are protocol-reserved fields that may be set post-issuance via the defined update-code mechanisms and are NOT in this immutable list.
    - **Code consistency:** 8xx–9xx entries must include `revocation` and no `field_updates`; 1xx–7xx entries must include `field_updates` and no `revocation`.
-   - **Erasure eligibility:** If the entry carries `erasure: true`, confirm the policy specifies `erasable: true`. Reject otherwise.
    - **Timestamp freshness:** Reject intents with timestamps outside the acceptable replay-prevention window.
 
 8. If any check fails, the press rejects the intent with a specific error code and does not post. The updater receives the rejection reason via the submission channel.
@@ -131,7 +130,7 @@ Each entry in the derived notes array has the following shape:
 }
 ```
 
-Notes are immutable once posted — they are part of the signed log and cannot be edited or removed (subject to the card's erasure policy). A note may accompany any update code; the `update_code` field in the derived object lets readers understand the context in which the note was written (e.g., a 2xx commendation note vs. a 6xx concern note).
+Notes are immutable once posted — they are part of the signed log and cannot be edited or removed. A note may accompany any update code; the `update_code` field in the derived object lets readers understand the context in which the note was written (e.g., a 2xx commendation note vs. a 6xx concern note).
 
 ---
 
@@ -171,7 +170,6 @@ If two update intents are submitted concurrently and one is posted first, the se
 | `revocation_permissions` not satisfied | Updater does not have revocation authority; requester must use an authorized party |
 | `prev_log_root` is stale (concurrent update race) | Updater re-fetches current log head and resubmits |
 | IPFS post fails | Press retries; does not write on-chain until IPFS CID is confirmed |
-| Erasure attempted on non-erasable card | Press rejects; policy must specify `erasable: true` |
 
 ---
 

@@ -298,9 +298,9 @@ A card's registry address is **always** derived from its public key:
 address = keccak256(recipient_pubkey)
 ```
 
-The on-chain CID is stored in **plaintext**. IPFS card content is **encrypted**: a content key is derived from the card's public key and used to encrypt the card document with AES-256-GCM. A party must hold the card's public key to read its content — the public key serves as both the address-derivation credential (via `keccak256`) and the content-decryption credential (via HKDF).
+The on-chain CID is stored in **plaintext**. IPFS card content is **encrypted** — but only for the **registered** card document that the press posts after the recipient countersigns. The content-encryption scheme requires a `recipient_pubkey`, which exists only once the holder has countersigned and the card is complete.
 
-**Content encryption scheme:**
+**Content encryption scheme (registered card only):**
 
 ```
 content_key  = HKDF-SHA3-256(ikm=recipient_pubkey, info="card-content-v1")
@@ -310,11 +310,14 @@ ipfs_payload = { "nonce": <96-bit random, base64url>,
 
 A fresh nonce is generated for each IPFS write (each new log entry). The nonce is stored alongside the ciphertext in the IPFS payload object; the content key itself is never stored. There is no address secret, no separate capability bundle, and no per-card decryption key distinct from the public key.
 
+**Offer-phase exemption.** An offer-phase `CardDocument` (the proposed card before the recipient has countersigned, without `recipient_pubkey`, `holder_signature`, or `press_signature`) has no `recipient_pubkey` yet, so the ADR-006 content key is undefined for it. Offer-phase documents are **not** content-encrypted under this scheme. They are conveyed to the prospective recipient either in the clear within the delivery payload (e.g. the `mcard://invite` URL for open offers) or protected only by the **transport / E2E message encryption** used to deliver the `card_offer` message (ML-KEM per ADR-007). ADR-006 content encryption begins only when the press posts the completed, registered card — the document that now has `recipient_pubkey`, `holder_signature`, and `press_signature` all present.
+
 | Mode | Registry address derivation | CID on-chain | IPFS content |
 |---|---|---|---|
-| **Single mode** | `keccak256(recipient_pubkey)` | Plaintext | AES-256-GCM, key = `HKDF-SHA3-256(recipient_pubkey)` |
+| **Single mode (registered card)** | `keccak256(recipient_pubkey)` | Plaintext | AES-256-GCM, key = `HKDF-SHA3-256(recipient_pubkey)` |
+| **Offer phase** | N/A — card not yet registered | N/A | Not content-encrypted; delivered in clear or via E2E transport (ADR-007) |
 
-**What an observer sees without the public key:** registry transactions, when they occurred, the fee payer (the press wallet), and the on-chain address (a one-way hash of the public key). Card content on IPFS is opaque ciphertext. **With the public key:** the address is derivable, the content key is derivable, and the full card document is readable. Confidentiality between parties (messaging) is provided at the transport layer (ML-KEM, ADR-007) independently of this model.
+**What an observer sees without the public key:** registry transactions, when they occurred, the fee payer (the press wallet), and the on-chain address (a one-way hash of the public key). Registered card content on IPFS is opaque ciphertext. **With the public key:** the address is derivable, the content key is derivable, and the full registered card document is readable. Confidentiality between parties (messaging) is provided at the transport layer (ML-KEM, ADR-007) independently of this model.
 
 ### Ancestor Key Hint — `ancestry_pubkeys`
 
@@ -352,7 +355,13 @@ OHTTP (Oblivious HTTP, RFC 9458) and the Nym mixnet are optional transport upgra
 
 ### Routing
 
-A card's **on-chain registry address** (its mutable pointer hash) is also its **messaging address**. Wallet services maintain a local routing table — `{ card_hash → wallet_service_id }` — derived from on-chain card registration and migration events. Routing a message requires only a local table lookup followed by a single HTTPS POST; no external directory query is needed at send time.
+Two distinct mappings are involved in the routing model; they must not be conflated:
+
+1. **`card_hash → current log-head CID`** — resolving a card's mutable pointer to its current card document on IPFS. This mapping **is on-chain**: the registry contract stores `CardEntries[card_address].log_head_cid`, updated by the press on every `RegisterCard` or `UpdateCardHead` write. Any reader can resolve it with a single contract call; no wallet service is involved.
+
+2. **`card_hash → wallet_service_id`** — identifying which wallet service currently holds a card, so a sender knows where to deliver an E2E-encrypted message. This mapping is **off-chain**: it is maintained in the Wallet Service Registry (off-chain) and replicated across wallet services via binding announcements. There is no `wallet_service_id` field in `RegisterCard` calldata and no on-chain migration event; routing state is populated and kept current entirely off-chain. The full design of the Wallet Service Registry and its binding-announcement protocol is deferred to the wallet service spec (per the INC-35 decision).
+
+A card's **on-chain registry address** (its mutable pointer hash) is therefore also its stable **messaging address** — the same value used in both mappings. Routing a message requires only a local routing-table lookup followed by a single HTTPS POST; no external directory query is needed at send time.
 
 See `process_specs/message_routing.md` for the full routing flow, routing envelope format, migration handling, and transport capability flags.
 
@@ -449,7 +458,7 @@ A stolen YubiKey cannot complete recovery if a valid cancellation is submitted b
 │  └──────────────┬──────────────┘                                    │
 └─────────────────┼───────────────────────────────────────────────────┘
                   │ card hash (mutable pointer) → current log head CID
-                  │ card registration events → wallet service routing tables
+                  │ (on-chain only; wallet-service routing tables are off-chain)
                   ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                            IPFS                                      │
@@ -494,7 +503,7 @@ A stolen YubiKey cannot complete recovery if a valid cancellation is submitted b
 Offerer (issuer) / their wallet service
   → assembles proposed card JSON (issuer_card, press_card; recipient_pubkey empty)
   → signs with offerer's own card key → issuer_signature (signed offer)
-  → encodes as card://invite?o=<base64>
+  → encodes as mcard://invite?o=<base64>
 
 Recipient
   → opens invitation link
@@ -585,9 +594,11 @@ Verifiers
 Requesting site
   → creates authentication request object:
       session_id, purpose, requester_card (mutable pointer),
+      requester_pubkey (ML-DSA-44 public key of the card referenced by requester_card),
       payload (content + nonce), required_predicate, callbacks.https,
       optional callbacks.ohttp
-  → signs request with requester's card key (request_signature)
+  → signs request with requester's card key (request_signature covers all fields
+      including requester_pubkey)
   → hosts request object at a single-use HTTPS URL
   → calls CHAPI with the request URL (not the payload)
 
@@ -598,8 +609,12 @@ CHAPI mediator
 
 Wallet service
   → fetches request object via HTTPS from single-use URL
-  → verifies request_signature against requester's card public key
-  → walks requester's card chain to trusted root, checks revocation (per §7)
+  → binding check: confirms keccak256(requester_pubkey) == requester_card address;
+      a mismatch is a hard rejection before display
+  → verifies request_signature against requester_pubkey
+  → derives requester card content key: HKDF-SHA3-256(requester_pubkey, info="card-content-v1"),
+      decrypts requester card; AES-GCM failure is a hard rejection before display
+  → walks requester's card chain to trusted root via ancestry_pubkeys, checks revocation (per §7)
   → evaluates required_predicate against user's available cards
   → presents to user: requester's verified chain identity, purpose,
       payload content, required predicate summary
@@ -607,14 +622,17 @@ Wallet service
 
 On approval:
   → wallet selects qualifying card (or user chooses from chooser)
-  → generates signed message envelope (§6) with type "auth_response", content.nonce echoed from request
+  → generates signed message envelope (§6) with type "auth_response",
+      content: { statement, context: { session_id, ... }, nonce }
+      (statement + nonce from request payload; session_id echoed from request into content.context)
   → sends authentication response to requester:
       preferred: OHTTP → callbacks.ohttp (IP privacy, lower latency)
       fallback:  HTTPS → callbacks.https (always available)
 
 Requesting site
   → receives authentication response via OHTTP / HTTPS
-  → runs full §7 verification: chain walk, revocation, predicate, nonce match
+  → runs full §7 verification: chain walk, revocation, predicate,
+      content.context.session_id match, content.nonce match
   → on success: generates single-use confirmation_code, returns it in response
 
 Wallet service
@@ -648,6 +666,7 @@ These are engineering and design questions from the spec that have not yet been 
 | OQ-12 | Engineering | Is a transparency log of approved press implementations operated by the protocol foundation needed? Relevant if TEE attestation is added in P2. | Low (P2 dependency) |
 | OQ-13 | Design | Should wallet services publish a `/.well-known/card-wallet.json` manifest advertising their supported transports (HTTPS, OHTTP gateway)? If yes, requesting sites can construct the correct `callbacks` block without trial-and-error; if no, sites advertise all transports they support and wallets pick. | Medium |
 | OQ-14 | Governance | **Coercion resistance / governance key holder identity.** Should governance body key holders be pseudonymous (organizations or anonymous participants, harder to coerce) or identifiable (named individuals/organizations with public accountability, easier to hold accountable but more coercible)? Deferred pending governance charter design. See also red-team Finding 1.4-B (press legal compulsion). | Medium |
+| OQ-15 | Governance | **Chain amendment authority for harmful content.** A malicious press could attach a link to harmful content (e.g., NCII) to a widely-held badge, then let their reputation absorb the cost while leaving the badge holder exposed. Mitigation: allow a co-signed amendment to the CID chain — mark holder + governance body both sign — that re-routes the linked-CID-chain to skip the offending entry and updates the on-chain head. Normal protocol traversal would see a clean history; the amendment itself (not the removed content) is visible in Arbitrum One transaction history. The on-chain record would effectively read "SEALED at this point" — transparent about the redaction without preserving the harm. Note: this does not apply to EAS annotations, which are on-chain state and cannot be amended this way. Requires defining amendment authority, quorum, and appeal process. Defer to post-v1 governance design. | Medium |
 
 ---
 
@@ -792,7 +811,8 @@ Sets `active = false` for the given (policyAddress, pressAddress) pair. Callable
 
 The policy card's IPFS content includes an `approved_presses` array listing the mutable pointers of authorized press sub-cards. This field is retained as an **audit surface**: tooling (press operators, policy administrators, monitoring agents) should keep it in sync with the on-chain `PressAuthorizations` table. However:
 
-- **On-chain state is authoritative** for contract enforcement. A press listed in `approved_presses` but absent from `PressAuthorizations` cannot write to the registry. A press in `PressAuthorizations` with `active = false` cannot write even if it still appears in `approved_presses`.
+- **On-chain state is authoritative** for contract enforcement and for **verification**. A press listed in `approved_presses` but absent from `PressAuthorizations` cannot write to the registry. A press in `PressAuthorizations` with `active = false` cannot write even if it still appears in `approved_presses`.
+- **Verifiers consult on-chain `PressAuthorizations`**, not the IPFS `approved_presses` audit surface, to confirm a press's authorization when validating a card (see `card_validation.md` Stage 5 step 24 and `open_offer_acceptance_*.md` Phase 1). The `approved_presses` array is a non-authoritative snapshot that may lag on-chain state; where the two diverge, on-chain `PressAuthorizations` governs.
 - **Discrepancies between IPFS and on-chain state are a monitoring signal**, not a protocol error. They indicate that tooling has failed to sync the IPFS content after an on-chain authorization change.
 - The press service's reference implementation should update `approved_presses` as part of its `AuthorizePress` and `RevokePress` workflows, immediately after the on-chain transaction confirms.
 

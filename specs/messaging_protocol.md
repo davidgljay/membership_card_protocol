@@ -154,6 +154,8 @@ The offerer delivers a targeted card offer to a prospective holder.
 
 **Notes.** The full `CardDocument` (offer phase, without `recipient_pubkey`, `holder_signature`, and `press_signature`) is posted to IPFS first; this message carries the CID and a copy of the offerer's `issuer_signature` for immediate verification without an IPFS fetch. The `senders` list contains the offerer's card pointer; `recipients` contains the prospective holder's card pointer.
 
+**Offer-phase content encryption.** The offer-phase document referenced by `offer_cid` is **not** content-encrypted under the ADR-006 scheme (it has no `recipient_pubkey` yet, so the content key is undefined). If posted to IPFS, it is stored in plaintext at that CID. The confidentiality of the offer is instead provided by the E2E encryption of this `card_offer` message itself (ML-KEM per ADR-007) — the offer document is protected in transit, not at rest. If public IPFS posting is a concern (e.g. for a sensitive targeted offer), the offerer MAY omit the IPFS post and carry the full offer document inline in the E2E-encrypted `card_offer` message body instead of as a CID reference; in that case `offer_cid` may be absent. Either way, the offer-phase `CardDocument` is not content-encrypted at rest until the press posts the completed, registered card (which has `recipient_pubkey` and all three signatures).
+
 ---
 
 ### 6. `card_offer_accepted`
@@ -172,7 +174,7 @@ The holder sends back the countersigned, completed card document.
 }
 ```
 
-**Notes.** Sent from the holder back to the press (and optionally to an administrator). The press uses this to complete on-chain registration and issue the SCIP. The `senders` list contains the holder's existing master card pointer (not the new card's pointer, which doesn't exist yet on-chain).
+**Notes.** Sent from the holder back to the press (and optionally to an administrator). The press uses this to complete on-chain registration and issue the SCIP. The `senders` list contains the holder's existing master card pointer (not the new card's pointer, which doesn't exist yet on-chain). The `card_cid` in this message references the **completed, registered** `CardDocument` that the press posts to IPFS after registration — the first document that has `recipient_pubkey` present and is therefore content-encrypted under ADR-006 (`content_key = HKDF-SHA3-256(recipient_pubkey, info="card-content-v1")`). The `offer_cid` still references the unencrypted offer-phase document.
 
 ---
 
@@ -236,7 +238,7 @@ A service requests authentication from a card holder — "Sign in with your card
 
 **Notes.** The `senders` list contains the requesting service's card pointer. The `signatures` array contains the service's signature over the request — the keyring verifies this before showing anything to the user, defending against forged auth prompts. The `callback` field is an HTTPS URL; the auth response is POSTed there directly.
 
-Also deliverable as a deep link: `card://auth?r=<base64(envelope)>` or QR code for desktop-to-mobile handoff.
+Also deliverable as a deep link: `mcard://auth?r=<base64(envelope)>` or QR code for desktop-to-mobile handoff.
 
 ---
 
@@ -248,13 +250,18 @@ The holder responds to an `auth_request`.
 {
   "type": "auth_response",
   "content": {
-    "nonce":      "<echoed from auth_request.content.nonce — replay prevention>",
-    "session_id": "<echoed from auth_request.content.session_id>"
+    "statement": "<copied from AuthenticationRequest.payload.content — the text the user is signing>",
+    "context":   { "session_id": "<echoed from AuthenticationRequest.session_id — correlation>", "<other contextual fields>": "..." },
+    "nonce":     "<echoed from AuthenticationRequest.payload.nonce — replay prevention>"
   }
 }
 ```
 
-**Notes.** Signed by the holder's current device sub-card (not the master key). `senders` contains the holder's master card pointer (the stable account identifier the service binds the session to); `recipients` contains the requester's card pointer — both are at the envelope level and need not be repeated in `content`. The service verifies: `content.nonce` matches the issued challenge, `timestamp` freshness, signature validity, sub-card to master link, master card chain walk, and policy predicate match — in that order.
+**Notes.** Signed by the holder's current device sub-card (not the master key). `senders` contains the holder's master card pointer (the stable account identifier the service binds the session to); `recipients` contains the requester's card pointer — both are at the envelope level and need not be repeated in `content`.
+
+`content` follows the canonical `auth_response` schema defined in `protocol-objects.md §9` and `card_protocol_spec.md §8`: `{ statement, context, nonce }`. `context` is an **object** (not a plain string) that carries `session_id` and any other correlation metadata — `session_id` lives here so that it is part of the signed payload and the requester can verify the response is bound to the session it initiated. `statement` and `nonce` are copied verbatim from the corresponding fields of the `AuthenticationRequest`.
+
+The service verifies: `content.nonce` matches the issued challenge, `content.context.session_id` matches the issued `session_id`, `timestamp` freshness, signature validity, sub-card to master link, master card chain walk, and policy predicate match — in that order.
 
 ---
 

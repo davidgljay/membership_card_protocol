@@ -26,7 +26,7 @@ numbered OQs anywhere.
 
 ### ~~X-1 — Protocol name is unsettled~~ ✅ RESOLVED 2026-06-14
 
-**Decision:** The canonical term is **"card"** (membership card). URI scheme is `card://`. Package name is `card-validator` / `CardAuth`. Object names are `CardDocument`, `CardEntry`, etc. On-chain function is `RegisterCard`. All files and filenames have been updated; no remaining "chitt" or "mark" (as protocol term) references exist in the codebase.
+**Decision:** The canonical term is **"card"** (membership card). URI scheme is `mcard://`. Package name is `card-validator` / `CardAuth`. Object names are `CardDocument`, `CardEntry`, etc. On-chain function is `RegisterCard`. All files and filenames have been updated; no remaining "chitt" or "mark" (as protocol term) references exist in the codebase.
 
 ### ~~X-2 — `registry_contract.md` and `protocol-objects.md` describe the on-chain entry differently~~ ✅ RESOLVED 2026-06-14
 
@@ -687,6 +687,372 @@ d. **TC-26 — `CardDocument` with `ancestry_pubkeys: []` (the INC-41 root base 
 > verification path actually *enters* at a sub-card, and `SubCardDocument` was not given the same
 > ancestor-pubkey treatment. INC-40 is the missing half of the INC-37 decision; INC-41 and INC-42 are
 > the base-case and test-coverage loose ends of the same change.
+
+---
+
+## 0g. Fifth-pass review 2026-06-15 — pubkey-availability gap in other verification-trigger objects
+
+A fifth sweep on 2026-06-15 checked whether the content-encryption + address-by-hash model breaks
+verification in objects **other** than `CardDocument`/`SubCardDocument` (which INC-37 and INC-40
+fixed). It does. The same root cause recurs: **any object that references a card by *pointer* (an
+on-chain address = `keccak256(pubkey)`, one-way) and then asks a relying party to verify that card's
+signature or walk its chain is unsatisfiable, because the relying party cannot recover the card's
+public key from the pointer, and the card's IPFS content is encrypted under that public key.** Three
+concrete instances remain unfixed, each on a primary protocol flow.
+
+> **The general principle (recommended as a protocol invariant):** every signed object that obliges a
+> relying party to verify a pointer-referenced card's signature, decrypt it, or walk its chain MUST
+> embed that card's **public key**, bound by `keccak256(pubkey) == pointer`. The referenced card's own
+> `ancestry_pubkeys` (INC-37) then carries any further walk to the root — so only the **single
+> immediate pubkey** needs to be added to each object, not a full ancestry array. Adopt this as a
+> standing rule and audit every object against it. Current status of the inventory: `CardDocument`
+> ✅ (INC-37), `SubCardDocument` ✅ (INC-40), `OpenCardOffer` ✅ (INC-44), `AuthenticationRequest`
+> ✅ (INC-45), `PressIssuanceRecord` ✅ (INC-43), EAS annotation ✗ (underspecified — see note).
+
+### Substantive gaps (all the same class as INC-40)
+
+~~**INC-43 — Auditors cannot decrypt the issued cards they are auditing; `PressIssuanceRecord` carries only `card_cid` and a `requester_card` pointer (High).**~~
+~~The audit model is a core feature: auditors decrypt the per-epoch press log and "review the decrypted
+records for policy compliance (e.g., that issuances match expected predicates)" (`log_auditing.md`
+step 3). But `PressIssuanceRecord` (`protocol-objects.md §11`) contains only `card_cid` (CID of the
+*encrypted* issued `CardDocument`) and an optional `requester_card` **pointer** — no recipient public
+key. An auditor can fetch the issued card's ciphertext but cannot derive its content key
+(`HKDF-SHA3-256(recipient_pubkey, "card-content-v1")`) to decrypt it, so the audit is reduced to CIDs
+and timestamps and **cannot inspect the card's field values or verify predicate compliance** — the
+stated purpose of the audit. **Resolution:** add `recipient_pubkey` (the issued card's public key) to
+the `PressIssuanceRecord` plaintext. It is already encrypted under the epoch AEK, so the key is
+exposed only to auditors — no privacy loss. With it, the auditor decrypts the issued card and uses the
+card's own `ancestry_pubkeys` for any chain walk. Update `protocol-objects.md §11` and
+`log_auditing.md`.~~
+
+✅ RESOLVED 2026-06-15 — `recipient_pubkey` (base64url ML-DSA-44, 1312 bytes) added to `PressIssuanceRecord` plaintext as a required field. The press populates it from the `CardDocument` it just assembled — zero extra work at issuance time. The outer on-IPFS envelope (`epoch_id` / `nonce` / `ciphertext`) is unchanged; `recipient_pubkey` lives only inside the AEK-encrypted plaintext, exposed only to auditors. Auditor usage: derive `content_key = HKDF-SHA3-256(recipient_pubkey, info="card-content-v1")`, decrypt the issued card at `card_cid`, and inspect fields and predicate compliance; walk the card's chain via its `ancestry_pubkeys` if needed. Binding check: auditor SHOULD confirm `keccak256(recipient_pubkey)` equals the card's on-chain registry address; mismatch or AES-GCM auth failure MUST be flagged in `findings`. Files updated: `protocol-objects.md §11` (JSON example, field table, envelope-vs-plaintext note, binding check paragraph); `process_specs/log_auditing.md` (step 3 rewritten with sub-steps a–f, new Acceptance Criteria section); `card_protocol_spec.md §2` (press-log construction prose and acceptance criterion).
+
+~~**INC-44 — Open-offer recipients (and the press) cannot verify the offer; `OpenCardOffer` carries the issuer only as a pointer (Blocking for the open-offer path).**~~
+~~`open_offer_acceptance_new_wallet.md`/`…_existing_wallet.md` both require the recipient's wallet to
+"Verify `issuer_signature` over the canonical RFC 8785 JSON of all offer fields" and "Resolve the
+issuer's card chain to a trusted root … reject the offer before displaying it" if that fails; the
+press re-verifies `issuer_signature` press-side. But `OpenCardOffer` (`protocol-objects.md §6`)
+contains `issuer_card` (a **pointer**) and `issuer_signature` (a bare base64url, not a `SignatureEntry`
+with an inline key) — and **no issuer public key**. The recipient therefore cannot verify
+`issuer_signature` at all, and cannot decrypt the issuer's card to walk its chain. As written, the
+offer "could not be verified" path triggers unconditionally; the open-offer flow is unsatisfiable.
+**Resolution:** add `issuer_pubkey` to `OpenCardOffer`, covered by `issuer_signature` and bound by
+`keccak256(issuer_pubkey) == issuer_card`. The recipient verifies the signature with it, then decrypts
+the issuer card and walks via that card's `ancestry_pubkeys`. Update `protocol-objects.md §6`,
+`open_offer_creation.md`, and both `open_offer_acceptance_*` specs.~~
+
+✅ RESOLVED 2026-06-15 — `issuer_pubkey` (base64url ML-DSA-44, 1312 bytes) added to `OpenCardOffer` as a required field, set by the issuer at offer creation, covered by `issuer_signature`. Binding check: verifier MUST confirm `keccak256(issuer_pubkey) == issuer_card` before use; mismatch or AES-GCM failure is a hard rejection. Files updated: `protocol-objects.md §6` (JSON, field table, "Serialized for signing", offer_id note) and `§7` (press validation step 1 binding check); `open_offer_creation.md` (step 2 JSON example, step 4 prose); `open_offer_acceptance_new_wallet.md` (step 2 verification, step 16 press validation); `open_offer_acceptance_existing_wallet.md` (step 2 verification, step 11 press validation).
+
+~~**INC-45 — Auth-request verifiers cannot verify the request; `AuthenticationRequest` carries the requester only as a pointer (Blocking for the auth path).**~~
+~~`card_protocol_spec.md §8` and `ARCHITECTURE.md` data-flow §4 require the wallet to verify
+`request_signature` "before displaying" and to "walk the requester's card chain to a trusted root …
+rejected before display" on failure. But `AuthenticationRequest` (`protocol-objects.md §8`) carries
+`requester_card` (a **pointer**) and `request_signature` (bare base64url) — **no requester public
+key**. The wallet cannot verify the signature or decrypt the requester's card to walk its chain.
+**Resolution:** add `requester_pubkey` to `AuthenticationRequest`, covered by `request_signature` and
+bound by `keccak256(requester_pubkey) == requester_card`. Update `protocol-objects.md §8`,
+`card_protocol_spec.md §8`, and the ARCHITECTURE data flow.~~
+
+✅ RESOLVED 2026-06-15 — `requester_pubkey` (base64url ML-DSA-44, 1312 bytes) added to `AuthenticationRequest` as a required field, set by the requesting site, covered by `request_signature`. Binding check: wallet MUST confirm `keccak256(requester_pubkey) == requester_card` before use; mismatch or AES-GCM failure when decrypting the requester card is a hard rejection. Files updated: `protocol-objects.md §8` (JSON, field table, "Serialized for signing", binding-check and verifier-usage paragraphs); `card_protocol_spec.md §8` (request object JSON, steps 3–4 of the direct fetch flow, acceptance criteria); `ARCHITECTURE.md` Key Data Flows §4 (requesting-site creation step, wallet verification steps).
+
+> **Note — EAS annotations (same class, currently underspecified).** ADR-008 says annotations are
+> "signed by the annotator's card" and "filterable by the signing card's chain" (chain walk), but no
+> annotation object is defined in `protocol-objects.md`. Whatever object EAS points to must likewise
+> carry the **annotator's public key** (bound to the annotator's card pointer) so a verifier can check
+> the signature and walk the annotator's chain under content encryption. Fold this into the annotation
+> object spec when it is written; tracked here so the invariant above is applied to it.
+
+| ID | Severity | One-line | Primary docs in conflict |
+|---|---|---|---|
+| ~~INC-43~~ | ~~High~~ | ~~`PressIssuanceRecord` gives auditors only `card_cid` + a `requester_card` pointer; no recipient pubkey, so auditors cannot decrypt the issued card to verify predicate compliance — hollowing the audit~~ ✅ RESOLVED 2026-06-15 — `recipient_pubkey` added to `PressIssuanceRecord` plaintext; AEK-encrypted so auditor-only; outer envelope unchanged. | — |
+| ~~INC-44~~ | ~~Blocking*~~ | ~~`OpenCardOffer` references the issuer only by pointer + a bare `issuer_signature`; recipient/press cannot recover the issuer pubkey to verify the signature or walk the issuer chain (which the acceptance specs require before display)~~ ✅ RESOLVED 2026-06-15 — `issuer_pubkey` added to `OpenCardOffer`; covered by `issuer_signature`; binding check `keccak256(issuer_pubkey) == issuer_card` required before use | — |
+| ~~INC-45~~ | ~~Blocking**~~ | ~~`AuthenticationRequest` references the requester only by pointer + a bare `request_signature`; wallet cannot recover the requester pubkey to verify the signature or walk the requester chain before display~~ ✅ RESOLVED 2026-06-15 — `requester_pubkey` added to `AuthenticationRequest`; covered by `request_signature`; binding check `keccak256(requester_pubkey) == requester_card` required before use | — |
+
+\* Blocking for the open-offer issuance path. \*\* Blocking for the authentication path.
+
+> **Root cause (same as INC-37/INC-40):** content encryption makes a card's public key a prerequisite
+> capability for reading/verifying it, but several signed objects still pass card identity as a
+> one-way pointer only. The fix is mechanical and uniform — embed the immediate pubkey, bound by
+> `keccak256`, and lean on the referenced card's `ancestry_pubkeys` for the rest. Applying the
+> invariant above once, across all objects, closes this class for good. These three can be resolved
+> together in a single editorial pass like the INC-40 fix.
+
+---
+
+## 0h. Sixth-pass review 2026-06-15 — line-by-line read of registry_contract / key_rotation / messaging
+
+A full line-by-line read of `object_specs/registry_contract.md`, `key_rotation.md`, and
+`messaging_protocol.md` (the three files not deeply re-read in passes 0c–0g). Findings below are
+**not** in any prior INC/OQ list. None are in the pubkey-availability class of §0g; these are schema
+mismatches, an undefined field, stale cross-references from earlier renumbering, and one consequence
+of the encryption model in the offer phase.
+
+### Schema / mechanism
+
+~~**INC-46 — On-chain sub-card registration schema disagrees between `registry_contract.md §3.4` and `protocol-objects.md §15` (Medium).**~~ ✅ RESOLVED 2026-06-15
+`registry_contract.md §3.4` (authoritative for on-chain structure) defines `SubCardEntry` as
+`master_card_address`, `registration_log_head`, `active`, `registered_at`, `deregistered_at` — and
+`RegisterSubCard §4.3` stores exactly those. But `protocol-objects.md §15` describes the on-chain
+`SubCardRegistration` as `holderPrimaryCardAddress`, `appCardAddress`, `registrationLogHeadCid`, and
+says `appCardAddress` is "used to verify the app's certification chain **on-chain**." Two conflicts:
+(1) **field naming** — `master_card_address` vs `holderPrimaryCardAddress`, `registration_log_head`
+vs `registrationLogHeadCid`; (2) **`appCardAddress` does not exist in the contract** — the contract
+neither stores the app card address nor performs any on-chain app-chain verification (app-chain
+verification is done off-chain by the wallet, per `subcards.md` and the INC-40 model). **Decision
+needed:** reconcile §15 to the contract — adopt one set of field names, and either drop
+`appCardAddress` and the "verified on-chain" claim from §15 (app-chain checks are off-chain) or add
+`appCardAddress` to `SubCardEntry` if an on-chain app reference is actually wanted. Note the master
+card is also called the "primary card" / `holder_primary_card` elsewhere — pick one term.
+
+**Resolution (2026-06-15):** On-chain `SubCardEntry` stores `master_card_address` (the holder's master card registry address), `registration_log_head` (log head CID snapshot for scope-attenuation), and a new `sub_card_doc_cid` field — the CID of the `SubCardDocument` on IPFS. The app card address (`app_card`), app card pubkey (`app_card_pubkey`), and app signature (`app_signature`) live in the IPFS `SubCardDocument` (§16) pointed to by `sub_card_doc_cid`. The on-chain entry does **not** store the app card address. `holderPrimaryCardAddress` → `master_card_address`; `registrationLogHeadCid` → `registration_log_head`; `appCardAddress` dropped entirely from the on-chain entry. App-chain verification (confirming `app_card` chains to the governance app-certification policy root) is performed **by the press at registration time** — the press fetches the `SubCardDocument` from IPFS, verifies `app_signature`, and walks the `app_card` certification chain before submitting `RegisterSubCard`. Runtime verifiers rely on the press's registration-time validation and do not re-walk the app certification chain independently. **Trust consequence:** relying parties now trust the press's app-chain validation rather than re-deriving it themselves at runtime — the same trust model already in use for the master signature (E-22), open-offer issuer signature (E-14), and forward-registration revocation check (E-28). The `app_card_pubkey` and `holder_primary_card_pubkey` fields are preserved in `SubCardDocument` (INC-40 fix) — `holder_primary_card_pubkey` is still used by runtime verifiers to decrypt/walk the holder's master chain; `app_card_pubkey` is used by the press at registration and may be used by auditors. Files updated: `registry_contract.md §3.4` (added `sub_card_doc_cid` to `SubCardEntry`), `§4.3` (`RegisterSubCard` call args, payload, state changes, press-side app-chain note), `§5` (`GetSubCardEntry` description), `§7` (`SubCardRegistered` event carries `sub_card_doc_cid`); `protocol-objects.md §15` (field names reconciled, `appCardAddress` dropped, `sub_card_doc_cid` added, app-chain press-side note), `§16` (Verifier chain walk updated — runtime verifiers do not re-walk app chain; app-certification note added), Object Relationship Summary updated, Serialization Quick Reference `SubCardRegistration` row updated; `subcards.md` (Step 5 rewritten as press-side app-chain verification + registration, Acceptance Criteria updated); `card_validation.md` Stage 2 (steps 11–12 updated — sub-card active check added; app-certification-chain walk removed from runtime; app_signature still verified; Stage 3 note updated; Error Paths updated).
+
+~~**INC-47 — `past_keys` is used as a `CardDocument` field but is not defined in the object spec (Medium, signing-relevant).**~~
+~~`key_rotation.md §2.3/§2.4` require "the new card's document includes a `past_keys` array" (objects
+of `{pubkey, valid_from, rotated_at}`) so a holder of the new key can derive content keys for
+historical entries after a master-key rotation — with a dedicated acceptance criterion (§2.7). But
+`past_keys` appears in **no** `CardDocument` definition: it is absent from `protocol-objects.md §1`
+(JSON, field table, and "Serialized for signing" lists) and from the `card_protocol_spec.md`
+Protocol-Required Fields table. Because it lives in the card document, it is almost certainly inside
+the signed bytes — so its absence from the object spec is a signing-critical omission. **Decision
+needed:** add `past_keys` to `protocol-objects.md §1` and `card_protocol_spec.md` (type, optionality
+— absent/empty on a never-rotated card, akin to `ancestry_pubkeys: []`), and place it in the
+issuer/holder/press signature coverage lists.~~
+
+✅ **RESOLVED 2026-06-15.** `past_keys` is now formally defined as a `CardDocument` field in `protocol-objects.md §1` (JSON example, field table, and "Serialized for signing" header) and added to the Protocol-Required Fields table in `card_protocol_spec.md`. **Optionality:** omitted entirely on cards that have never been the product of a rotation (not `null`, not `[]`) — consistent with the RFC 8785 "absent optional fields must be omitted" rule. **Ordering:** oldest-first (confirmed from `key_rotation.md §2.3` and stated explicitly in the field table). **Signing coverage:** covered by all three signatures (`issuer_signature`, `holder_signature`, `press_signature`); not in any exclusion list; immutable from genesis (populated at offer-assembly time by the offerer's wallet service, before any signature is applied). **Cross-reference added** to `key_rotation.md §2.3` noting `protocol-objects.md §1` as the authoritative schema. **Conformance vector:** deferred as a follow-on (analogous to INC-42) — the vector requires computing canonical RFC 8785 bytes over a multi-entry `past_keys` array, which should be validated against the live conformance corpus rather than hand-computed here.
+
+~~**INC-49 — Offer-phase card documents have no defined content-encryption key (Medium).**~~ ✅ RESOLVED 2026-06-15
+
+ADR-006 content encryption applies only to the **registered** card document the press posts to IPFS after the recipient countersigns — the document that now has `recipient_pubkey` present. Offer-phase `CardDocument`s (without `recipient_pubkey`, `holder_signature`, or `press_signature`) are **not** content-encrypted under ADR-006; they are delivered to the prospective recipient in the clear within the invite payload or protected only by the E2E message encryption used to deliver the `card_offer` message (ML-KEM per ADR-007). The "every card document" framing in ADR-006 has been corrected to scope it to registered cards. Files updated: `ARCHITECTURE.md` ADR-006 (offer-phase exemption note and revised table); `card_protocol_spec.md` "Content encryption" section (offer-phase exemption paragraph); `messaging_protocol.md §5` `card_offer` notes (offer-phase plaintext / transport-encrypted; inline-carry option noted) and `§6` `card_offer_accepted` notes (completed card is content-encrypted); `protocol-objects.md §1` signing-sequence step 5 and new "Content encryption and the offer phase" paragraph; `process_specs/card_offering_and_acceptance.md` step 17; `process_specs/open_offer_acceptance_existing_wallet.md` step 12; `process_specs/open_offer_acceptance_new_wallet.md` step 17.
+
+~~**INC-50 — `messaging_protocol.md §10 auth_response` content schema diverges from the canonical auth_response (Low–Medium, signing-relevant).**~~ ✅ RESOLVED 2026-06-15
+
+The auth_response payload is signed, so its `content` field set must be singular across specs. The
+INC-5 resolution and `protocol-objects.md §9` / `card_protocol_spec.md §8` define auth_response
+`content` as `{ statement, context, nonce }`. But `messaging_protocol.md §10` (v0.1, predates the
+INC-5 harmonization) shows `content: { nonce, session_id }` — different field set (`statement` and
+`context` absent; `session_id` present in content rather than at the envelope level).
+
+**Decision:** `session_id` is folded into `content.context`, which becomes an **object** (not a plain string). The canonical auth_response `content` is `{ statement, context: { session_id, ... }, nonce }` across all three specs. `session_id` inside `content.context` is **signed** (cryptographically bound to the holder's signature); the top-level `session_id` outside `signed_statement` is an **unsigned** convenience field for HTTP routing only. Files updated: `messaging_protocol.md §10` (content schema updated to `{ statement, context: { session_id }, nonce }`; Notes expanded to explain signed vs unsigned `session_id` and the canonical schema); `protocol-objects.md §9` (JSON example updated; `context` shown as an object; field table expanded; signed-vs-unsigned note added; verification sentence updated to check both `content.context.session_id` and `content.nonce`); `card_protocol_spec.md §8` step 7 (wallet assembly updated; verification sentence updated; new acceptance criterion for `content.context.session_id` added); `ARCHITECTURE.md §4` auth flow (wallet "generates" line expanded to full `content` schema; requester verification line updated).
+
+### Hygiene / lower severity
+
+~~**INC-48 — Stale `key_rotation.md §3.x` cross-references after the INC-34 renumber (Medium; broken cross-refs across 4 files).**~~
+~~INC-34 folded `key_rotation.md §2` into §1.5 and renumbered the old §3 (Master Card Key Rotation) to
+§2. The citing documents were not updated and still point to the old numbers: `protocol-objects.md`
+line ~118 (`§3.5`), `update_codes.md` lines ~43 (`§3.3`/`§3.4`/`§3.5`), ~97 (`§3.4`), ~141 (`§3.4`),
+and `registry_contract.md` lines ~792 (`§3.4 step 4a`) and ~983 (`§3.3`). Correct targets after the
+renumber: old `§3.3` (Address Transitions) → **§2.3**; old `§3.4` (Planned flow / step 4a) → **§2.4**;
+code-810 emergency → **§2.5**; old `§3.5` (Issuer-recovery / code 102/103) → **§2.6**. Also an
+*internal* error: `key_rotation.md §7.2`'s code-102 row says "see §2.5" but issuer recovery is
+**§2.6**. **Fix:** repoint all of these.~~
+
+✅ **RESOLVED 2026-06-15.** All stale `§3.x` refs repointed to `§2.x` across 4 files (`protocol-objects.md`, `update_codes.md`, `registry_contract.md`, `key_rotation.md`) and the internal §7.2 slip (code-102 row "see §2.5" → "see §2.6") corrected.
+
+**Additional low-severity items:**
+- ~~**`registry_contract.md` TOC anchor `#41-registermark`** (line 23) still carries the "mark"
+  artifact — INC-39 fixed only the `§4.2` anchor (`#42-updatecardhead`). Update to
+  `#41-registercard`.~~ ✅ **RESOLVED 2026-06-15** — Anchor updated to `#41-registercard`.
+- ~~**`registry_contract.md §4.13` precondition 4 / error `E-28`** state the *contract* "detects a
+  conflict via the `last_press_address` field" when the old card has been revoked. The contract is
+  revocation-agnostic (§4.2 note) and cannot read the IPFS log; `last_press_address` does not encode
+  revocation. Revocation ordering is enforced **press-side only** (E-28 is already labelled a
+  press-side rejection). Drop the "contract detects" wording to avoid implying an on-chain check that
+  cannot exist.~~ ✅ **RESOLVED 2026-06-15** — Precondition 4 reworded: revocation check is explicitly press-side; E-28 is a press-side rejection; the contract's revocation-agnostic nature is stated; `last_press_address` no-revocation-encoding note added.
+
+| ID | Severity | One-line | Primary docs in conflict |
+|---|---|---|---|
+| ~~**INC-46**~~ | ~~Medium~~ | ~~On-chain sub-card schema differs: `master_card_address` (+no app addr) in the contract vs `holderPrimaryCardAddress`/`appCardAddress`/`registrationLogHeadCid` "verified on-chain" in §15~~ ✅ RESOLVED 2026-06-15 — On-chain stores `master_card_address` + `registration_log_head` + new `sub_card_doc_cid` (CID of IPFS SubCardDocument); app card address + app signature in IPFS only; app-certification chain walk is press-side at registration; runtime verifiers rely on press validation. | `registry_contract.md §3.4/§4.3` vs `protocol-objects.md §15` |
+| ~~**INC-47**~~ | ~~Medium~~ | ~~`past_keys` required on the card document by `key_rotation.md` but undefined in the `CardDocument` object spec (and signing coverage unspecified)~~ ✅ RESOLVED 2026-06-15 — `past_keys` defined in `protocol-objects.md §1` + `card_protocol_spec.md`; optionality (omitted when absent, not `[]`), oldest-first ordering, and signing coverage (all three signatures, no exclusion list) all specified; cross-reference added to `key_rotation.md §2.3`; conformance vector deferred as follow-on. | ~~`key_rotation.md §2.3/§2.4/§2.7` vs `protocol-objects.md §1`, `card_protocol_spec.md`~~ |
+| ~~**INC-48**~~ | ~~Medium~~ | ~~Stale `key_rotation.md §3.x` cross-references (INC-34 renumber not propagated) in 4 files + one internal `§2.5`/`§2.6` slip~~ ✅ RESOLVED 2026-06-15 | ~~`protocol-objects.md`, `update_codes.md`, `registry_contract.md`, `key_rotation.md`~~ |
+| ~~**INC-49**~~ | ~~Medium~~ | ~~Offer-phase `CardDocument` has no `recipient_pubkey`, so ADR-006's content-encryption key is undefined for the offer document referenced by `offer_cid`~~ ✅ RESOLVED 2026-06-15 — ADR-006 content encryption applies only to the registered card; offer-phase documents are not content-encrypted (no `recipient_pubkey` yet); delivered in clear or via E2E transport (ADR-007). | — |
+| ~~**INC-50**~~ | ~~Low–Med~~ | ~~`messaging §10 auth_response` content `{nonce, session_id}` ≠ canonical `{statement, context, nonce}`~~ ✅ RESOLVED 2026-06-15 — `session_id` folded into `content.context` (object); canonical auth_response content is `{statement, context: {session_id, ...}, nonce}` across `messaging_protocol.md §10`, `protocol-objects.md §9`, and `card_protocol_spec.md §8`. | ~~`messaging_protocol.md §10` vs `protocol-objects.md §9`, `card_protocol_spec.md §8`~~ |
+
+> **Pattern:** INC-46/INC-47/INC-50 are object-schema drift between `protocol-objects.md` (and
+> `key_rotation.md`) and their authoritative counterparts; INC-48 is unpropagated renumbering from the
+> INC-34 fix; INC-49 is a genuine design gap the encryption model opens in the offer phase. None block
+> the others, but INC-47 and INC-49 are signing/encryption-relevant and should be settled before the
+> card schema and the offer flow are frozen.
+
+---
+
+## 0i. Seventh-pass review 2026-06-15 — post-fix verification + remaining process specs
+
+A seventh pass: (a) verified the INC-46…INC-50 fixes for new contradictions, and (b) read the
+process specs not yet deeply reviewed (`card_signing.md`, `card_updates.md`, `message_routing.md`,
+and spot-checks of the others). Several findings are **propagation gaps from the latest fixes**
+(INC-46, INC-37/47, INC-35) plus a couple of pre-existing omissions. None are in any prior list.
+
+### Signing / schema-critical
+
+~~**INC-53 — `card_signing.md` payload omits `senders`, which is a Required signed field in the other two envelope specs (Medium–High, signing-critical).**~~ ✅ RESOLVED 2026-06-16
+`protocol-objects.md §5` and `messaging_protocol.md §1` both define `payload.senders` as **Required**
+(master-card pointers, parallel to `signatures`). But `card_signing.md` Phase 1 — the **signer-side**
+assembly that actually builds and signs the payload — omits `senders` entirely from its payload object
+and validation. Because the signature commits to the canonical payload byte-for-byte, an
+implementation following `card_signing.md` produces different bytes (no `senders` key) than one
+following protocol-objects/messaging — a silent cross-implementation verification break. (Note:
+**MSG-OQ-2** asks whether `senders` should exist at all; this must be decided, then made consistent in
+all three places.) **Fix:** either add `senders` to `card_signing.md`'s payload assembly + example +
+validation, or resolve MSG-OQ-2 to drop `senders` everywhere — but the three envelope specs must end
+with one field set.
+
+~~**INC-54 — The immutable-field guard omits `ancestry_pubkeys` and `past_keys` (Medium).**~~ ✅ RESOLVED 2026-06-16
+`card_updates.md` step 7 ("Immutable fields") rejects `field_updates` targeting `policy_id`,
+`issuer_card`, `press_card`, `recipient_pubkey`, `issued_at`, and the three signatures — but **not**
+`ancestry_pubkeys` (INC-37) or `past_keys` (INC-47), both of which are immutable, signed,
+protocol-required fields. As written, an updater could post a `field_update` mutating them and the
+press's explicit guard would not reject it. **Fix:** add `ancestry_pubkeys` and `past_keys` to the
+immutable-field list in `card_updates.md` step 7 (and confirm `card_protocol_spec.md §5`'s generic
+"protocol-required immutable fields" wording is understood to include them).
+
+### Mechanism / propagation gaps from recent fixes
+
+~~**INC-51 — `protocol-objects.md §16` still says "There is no press in sub-card issuance" — contradicts the INC-46 press-side model (Medium).**~~ ✅ RESOLVED 2026-06-16 — `protocol-objects.md §16` opening sentence reworded: the app initiates and first-signs, the holder countersigns (authorizing the delegation), and the press verifies the app-certification chain off-chain and submits `RegisterSubCard` on-chain. "There is no press in sub-card issuance" removed; the holder/wallet is now described as the delegating party and the press as the on-chain registration party.
+The INC-46 fix made the **press** validate the app-certification chain and call `RegisterSubCard`
+(`subcards.md` "Step 5: Press Validates the App Card Chain and Registers On-Chain"). But
+`protocol-objects.md §16` still stated *"There is no press in sub-card issuance; the wallet is the
+authorizing party."* That is now false. **Fix:** reword §16 to reflect that a press participates
+(verifies the app chain off-chain and submits the on-chain registration), while the holder/wallet is
+the delegating party that countersigns with the primary key.
+
+~~**INC-52 — `DeregisterSubCard` gas payer is stated three different ways (Medium).**~~ ✅ RESOLVED 2026-06-16 — Both `subcards.md` statements updated to match `registry_contract.md §4.12`: the "Authorization for Deregistration" section now states app pre-funded account pays; issuing org's press sponsors if balance insufficient; deregistration never blocked. The SM-GAS resolution bullet updated to add the press-sponsor fallback for `DeregisterSubCard` (while keeping `RegisterSubCard` as app-always-pays with no fallback).
+The INC-27 resolution (in `registry_contract.md §4.4/§4.12`) is: the app's pre-funded account pays for
+`DeregisterSubCard`, and the **issuing org's press sponsors only if the app balance is insufficient**
+(so deregistration is never blocked). But `subcards.md` disagreed with itself and with the contract:
+line ~210 said deregistration "gas is paid by the issuing organization's press" (press pays outright);
+line ~287 (SM-GAS resolution) said app-initiated `DeregisterSubCard` is "always the requesting app's
+responsibility" (no sponsor fallback). **Fix:** align both `subcards.md` statements to
+`registry_contract.md §4.12` — app pays; issuing-org press sponsors as a fallback when the app balance
+is insufficient.
+
+~~**INC-55 — `message_routing.md` body still relies on on-chain routing structures the INC-35 decision removed (Medium).**~~ ✅ RESOLVED 2026-06-16 — `message_routing.md` §Local Routing Tables reworked: the three numbered items now describe off-chain binding announcements (card registration, migration, startup sync) via the off-chain Wallet Service Registry rather than on-chain events. The claim that the routing table is "derived entirely from on-chain events," the `RegisterCard`-calldata `wallet_service_id` reference, and the `MigrateCard` on-chain event in the Card Migration section are all replaced by off-chain binding and announcement wording. The `410 Gone` redelivery mechanism is unchanged. Related-Specs footnote for `registry_contract.md` updated to note routing state is off-chain (INC-35).
+`message_routing.md`'s INC-35 status note correctly says the Wallet Service Registry is **off-chain**.
+But the body still specifies on-chain mechanisms: routing tables "derived entirely from on-chain
+events," `RegisterCard` calldata that "includes the `wallet_service_id`," and a "card migration event
+posted on-chain." None of these exist in `registry_contract.md` — `RegisterCard` has no
+`wallet_service_id` parameter and there is no `MigrateCard` event (only `AddressTransition`, for key
+rotation). The doc thus contradicts both its own status note and the contract. **Fix:** rework the
+routing-table derivation to an off-chain mechanism (or, if on-chain hints are genuinely wanted, that is
+a contract change that must be re-opened against INC-35 — but as written it is unimplementable).
+
+### Lower severity / undefined-field
+
+~~**INC-56 — `erasure` / `erasable` are used but undefined in the object spec (Low–Medium).**~~ ✅ RESOLVED 2026-06-16 — `erasable` (boolean, optional, default false; immutable, set at policy issuance; governs whether `erasure: true` may appear on revocation entries) added to `PolicyCardDocument` (§2) JSON example and field table. `erasure` (boolean, optional; valid only on 8xx/9xx entries; part of signed `UpdateIntentPayload` and copied verbatim into `LogEntry`) added to `UpdateIntentPayload` (§4) and `LogEntry` (§3) JSON examples and field tables. Press rejects `erasure: true` if the policy does not have `erasable: true`. Cross-references to `card_protocol_spec.md §952` and `card_updates.md §Phase 3` added in the field notes. *(superseded by INC-60 — erasure removed)*
+`card_protocol_spec.md §2`/acceptance and `card_updates.md` step 7 / error paths reference an
+`erasure: true` flag on an update and an `erasable: true` policy field, but neither is defined in
+`protocol-objects.md`: `PolicyCardDocument §2` has no `erasable`, and `UpdateIntentPayload §4` /
+`LogEntry §3` have no `erasure`. **Fix:** add `erasable` to `PolicyCardDocument` and `erasure` to
+`UpdateIntentPayload`/`LogEntry` (with signing/immutability treatment), or remove the erasure feature
+if out of scope for v1.
+
+~~**INC-57 — Verifiers check press authorization against the IPFS `approved_presses` snapshot, but ADR-011 makes on-chain `PressAuthorizations` authoritative (Medium).**~~ ✅ RESOLVED 2026-06-16 — Decision: on-chain `PressAuthorizations` is authoritative for verification; `approved_presses` is an advisory cross-check only. `card_validation.md` step 24 rewritten: verifier checks the on-chain `PressAuthorizations` table (via `GetPressAuthorization` / `IsPressActive`) as the normative authorization source; IPFS `approved_presses` may be consulted as advisory; on-chain governs where they diverge. Point-in-time note added: a press later revoked on-chain was still authorized at issuance; `policy_compliant: false` applies only if no prior active window covers `issued_at`. Both `open_offer_acceptance_new_wallet.md` and `open_offer_acceptance_existing_wallet.md` Phase 1 step 2 (offer verification) and error-path rows updated to check on-chain `PressAuthorizations` as the authoritative source. `ARCHITECTURE.md` ADR-011 "Integration with IPFS `approved_presses`" section updated with an explicit bullet: "Verifiers consult on-chain `PressAuthorizations`…not the IPFS `approved_presses` audit surface."
+`card_validation.md` step 24 and both `open_offer_acceptance_*` specs confirm "the press sub-card
+appears in `approved_presses`" (the IPFS policy-snapshot array) as the authorization check. ADR-011
+designates `approved_presses` a **non-authoritative audit surface** that "may diverge" from the
+authoritative on-chain `PressAuthorizations`. A verifier consulting only `approved_presses` can
+therefore disagree with on-chain authority (accept a press revoked on-chain but still listed, or reject
+one authorized on-chain but not yet synced). **Decision needed:** specify what a verifier consults —
+on-chain `PressAuthorizations` (authoritative, current-state), the issuance-time policy snapshot
+(point-in-time but non-authoritative), or both — and reconcile the verification specs with ADR-011.
+
+### Hygiene / minor
+
+- ~~**`card_updates.md` Preconditions** say the updater needs "a **press** sub-card key available for
+  signing" — but the updater signs the intent with their **own** sub-card key (step 4). Drop "press".~~ ✅ RESOLVED 2026-06-16 — `card_updates.md` Preconditions line changed from "a **press** sub-card key available for signing" to "a sub-card key available for signing".
+- ~~**`past_keys` provenance (follow-on to INC-47):** `past_keys` is the *holder's* key history but is "populated by the offerer's wallet service at offer-assembly time" and first-covered by `issuer_signature`. The specs don't say how the offerer obtains the holder's prior-key history, and conceptually the holder is the authority on it (the `holder_signature` is the meaningful attestation). Clarify provenance — likely the holder/wallet supplies `past_keys` during the rotation request.~~ ✅ RESOLVED 2026-06-16 — Provenance clarified in `protocol-objects.md §1` (`past_keys` field note) and `card_protocol_spec.md` Protocol-Required Fields table: during a master-key rotation, the holder/wallet supplies their prior-key history to the offerer as part of the rotation request; the offerer includes it verbatim in the assembled offer; the **holder is the authority on their own key history** — the authoritative attestation is `holder_signature`; `issuer_signature` and `press_signature` also cover the bytes. Signing coverage decision unchanged.
+- ~~**`policy_creation.md` still uses `PolicyMarkDocument`** (×2, lines ~40 and ~122) — the rename
+  artifact first noted in §0d hygiene is **still unfixed**; rename to `PolicyCardDocument`.~~ ✅ RESOLVED 2026-06-16 — Both occurrences in `policy_creation.md` (step 1 prose and Related Specs link) renamed to `PolicyCardDocument`. Grep confirms zero `PolicyMarkDocument` remaining in `specs/`.
+- ~~**`mutual_aid_mvp.md`** still contains unfilled `[Product Name]` placeholders throughout, while its
+  open-questions table marks "Product name" resolved to "Card / Card Protocol" — note that conflates the
+  *protocol* name with the *product* (the mutual-aid app) name; the product still has no name and the
+  placeholders remain.~~ ✅ RESOLVED 2026-06-16 — `mutual_aid_mvp.md` open-questions table row corrected: "Product name" is now **Open** with a note that INC-23 resolved the *protocol* name ("Card Protocol") only; the mutual-aid product name is a distinct open product decision. `[Product Name]` placeholders left as-is.
+
+| ID | Severity | One-line | Primary docs in conflict |
+|---|---|---|---|
+| ~~**INC-51**~~ | ~~Medium~~ | ~~`protocol-objects.md §16` "no press in sub-card issuance" contradicts INC-46 press-side app-chain verification + registration~~ ✅ RESOLVED 2026-06-16 — §16 reworded: press verifies app chain off-chain and submits `RegisterSubCard`; holder/wallet is the delegating party. | — |
+| ~~**INC-52**~~ | ~~Medium~~ | ~~`DeregisterSubCard` gas payer stated 3 ways (subcards line ~210 press-pays, line ~287 app-always, contract §4.12 app-with-press-fallback)~~ ✅ RESOLVED 2026-06-16 — Both `subcards.md` statements aligned to `registry_contract.md §4.12`: app pays; press sponsors if app balance insufficient; deregistration never blocked. | — |
+| ~~**INC-53**~~ | ~~Med–High~~ | ~~`card_signing.md` payload omits `senders`, a Required signed field in protocol-objects §5 / messaging §1 (signing-critical; tied to MSG-OQ-2)~~ ✅ RESOLVED 2026-06-16 — `senders` added to `card_signing.md` Phase 1 payload JSON, field-by-field description (master-card pointer(s), parallel to `signatures`, required, part of the signed payload), and Phase 1 local-validation list (step 2). One-line note added that MSG-OQ-2 (drop `senders` for sender-privacy) remains an open future option; current schema includes `senders` in all three specs. Payload field set in `card_signing.md` now matches `protocol-objects.md §5` exactly: `type`, `content`, `senders`, `recipients`, `timestamp`, `in_reply_to`, `edit_of`, `retracts`, `forwards`. | — |
+| ~~**INC-54**~~ | ~~Medium~~ | ~~Immutable-field guard omits `ancestry_pubkeys` and `past_keys`~~ ✅ RESOLVED 2026-06-16 — `ancestry_pubkeys` and `past_keys` added to the immutable-field list in `card_updates.md` step 7. A note clarifies that `successor`, `supersedes`, and `supersession_note` are protocol-reserved *updatable* fields and are NOT in the immutable list. `card_protocol_spec.md §5` acceptance criterion updated with a parenthetical enumerating the complete immutable set (`policy_id`, `issuer_card`, `press_card`, `recipient_pubkey`, `issued_at`, `ancestry_pubkeys`, `past_keys`, `issuer_signature`, `holder_signature`, `press_signature`). | — |
+| ~~**INC-55**~~ | ~~Medium~~ | ~~`message_routing.md` body uses on-chain `wallet_service_id` calldata + migration event (don't exist; removed by INC-35) — contradicts its own off-chain status note and the contract~~ ✅ RESOLVED 2026-06-16 — §Local Routing Tables and Card Migration reworked to off-chain binding/announcement model; `MigrateCard` on-chain event removed; `410 Gone` retry kept; Related Specs footnote updated. | — |
+| ~~**INC-56**~~ | ~~Low–Med~~ | ~~`erasure`/`erasable` referenced in spec but undefined in `protocol-objects.md` (§2/§3/§4)~~ ✅ RESOLVED 2026-06-16 — `erasable` added to `PolicyCardDocument §2` (immutable, default false); `erasure` added to `UpdateIntentPayload §4` and `LogEntry §3` (optional, revocation-only, signed, copied verbatim into log entry). *(superseded by INC-60 — erasure removed)* | — |
+| ~~**INC-57**~~ | ~~Medium~~ | ~~Verifiers check `approved_presses` (IPFS, non-authoritative per ADR-011) for press authorization instead of on-chain `PressAuthorizations`~~ ✅ RESOLVED 2026-06-16 — `card_validation.md` step 24 rewrites press-auth check to on-chain `PressAuthorizations` (authoritative) with `approved_presses` advisory; point-in-time note added. Both open-offer acceptance specs updated. ADR-011 verifier guidance bullet added. | — |
+
+> **Pattern:** INC-51/52/55 are the latest fixes (INC-46, INC-27/35) not fully propagated to sibling
+> docs — the recurring "edited the named file, not its siblings" pattern. INC-53/54 are the
+> envelope/immutable-field schemas not catching up to the `senders` decision and the INC-37/47 field
+> additions. INC-56/57 are pre-existing under-specifications surfaced by the full process-spec read.
+> INC-53 and INC-54 are the signing-critical ones to prioritize.
+
+---
+
+## 0j. Eighth-pass review 2026-06-16 — post-fix verification of the INC-51…57 batch
+
+Verified the INC-51…57 + hygiene fixes all landed (greps clean). Three issues were **introduced or
+exposed by that batch** — two are the recurring "fixed the named file, not its sibling" pattern, one is
+a genuine design gap that defining the `erasure` field surfaced.
+
+~~**INC-58 — `ARCHITECTURE.md` ADR-007 still describes on-chain routing, contradicting the INC-55 off-chain rework (Medium).**~~ ✅ RESOLVED 2026-06-16
+INC-55 reworked `message_routing.md` so the `{card_hash → wallet_service_id}` table is maintained
+off-chain (no `wallet_service_id` in `RegisterCard` calldata, no on-chain migration event). But
+`ARCHITECTURE.md` ADR-007 (line ~358) still says the routing table is *"derived from **on-chain card
+registration and migration events**,"* and the Component Map (line ~455) shows *"card registration
+events → wallet service routing tables."* These now contradict both `message_routing.md` and
+`registry_contract.md` (which has no such calldata/event). **Fix:** update ADR-007's routing paragraph
+and the Component Map annotation to the off-chain model (routing state maintained off-chain via the
+Wallet Service Registry; mechanism deferred to the wallet service spec), consistent with the INC-35/55
+decision.
+
+**Decision:** ADR-007 now explicitly distinguishes the two mappings: (1) `card_hash → log-head CID` is on-chain (the registry contract `CardEntries[card_address].log_head_cid`); (2) `card_hash → wallet_service_id` used for message delivery is off-chain (Wallet Service Registry, design deferred to wallet service spec). The "derived from on-chain card registration and migration events" claim is removed. The Component Map annotation is corrected to note that wallet-service routing tables are off-chain.
+
+~~**INC-59 — INC-57's verification asks for an authorization "window covering `issued_at`" that on-chain state cannot provide (Medium).**~~ ✅ RESOLVED 2026-06-16
+`card_validation.md` step 24/98 now says the verifier rejects if the press was "not authorized for
+this policy at issuance (no entry, or `active = false` with no prior active window covering
+`issued_at`)." But `PressAuthEntry` (`registry_contract.md §3.3`) stores only the *most recent*
+`authorized_at`, a single `active` bool, and `revoked_at` — **not** a history of authorize/revoke/
+re-authorize windows. A verifier therefore cannot reconstruct whether the press was active at an
+arbitrary past `issued_at` (e.g., across a rotation or a revoke-then-reauthorize). Moreover, the card's
+**existence on-chain already proves** the press was active at registration — the contract's write gate
+enforced `active == true` at `RegisterCard`/`ClaimOpenOffer`. **Fix:** simplify the check — the
+on-chain registration is itself proof of authorization-at-write-time; the verifier consults current
+`PressAuthorizations` for present revocation status, and (consistent with revocation semantics) a
+press that is currently revoked does not retroactively invalidate cards it correctly registered while
+active. Drop the "prior active window covering `issued_at`" reconstruction that stored state can't
+support.
+
+**Decision:** On-chain registration proves authorization-at-write-time; verifier uses current `PressAuthorizations` only for present revocation context, which does not retroactively invalidate correctly-registered cards. "Active window covering `issued_at`" reconstruction removed from `card_validation.md` step 24.
+
+~~**INC-60 — `erasure` (now a defined field) conflicts with the append-only CID chain; reconciliation unspecified (Medium, design gap).**~~ ✅ RESOLVED 2026-06-16
+~~With `erasure: true` defined (INC-56), the mechanism's interaction with ADR-003's linked-CID-chain is
+unspecified. Each `LogEntry` chains via `prev_log_root` (the prior entry's CID), and verifiers walk
+head→genesis; `ancestry_pubkeys`/`past_keys` content-key derivation and version monotonicity also
+assume the chain is intact. "Redacting prior log entries, leaving only the revocation statement"
+(`card_protocol_spec.md §952`) would leave dangling `prev_log_root` pointers and break chain-walk,
+decryption, and version continuity — and because IPFS is content-addressed and immutable, "redaction"
+can only mean un-pinning (anyone who cached an entry still has it; the revocation's `prev_log_root`
+hash still commits to the redacted content). **Decision needed:** specify how an erasable card's chain
+is represented after erasure (e.g., the erasure entry becomes a new genesis with no `prev_log_root`, or
+carries a tombstone summarizing redacted versions), how verifiers treat a chain with a redacted
+interior, and what `erasure` actually guarantees given immutable content addressing (it is best-effort
+un-pinning, not cryptographic deletion — state this honestly). Alternatively defer the erasure feature
+to a later version if the chain reconciliation is out of scope for v1.~~
+
+**Decision:** Erasure feature removed entirely. Card logs are strictly append-only with no erasure mechanism; entries are never removed or redacted. The `erasable` policy field and the `erasure` update/log flag (added by INC-56) have been deleted from all specs (`protocol-objects.md §2/§3/§4`, `card_protocol_spec.md §852/§952/§961`, `process_specs/card_updates.md`). The Non-Goals statement in `card_protocol_spec.md §5` is now unconditional: retroactive removal of prior log entries is not supported, full stop. Revocation remains the mechanism for withdrawing standing — it appends a revocation entry rather than deleting anything.
+
+**Minor (this pass):** `card_signing.md` Forwarding — the `forward_envelope` payload requirements list
+(`forwards`, `recipients`, `content`, `timestamp`) omits `senders`, but after INC-53 `senders` is
+Required in every payload; the forward envelope's payload also needs `senders` (the forwarder's
+master-card pointer). Add it for consistency.
+
+| ID | Severity | One-line | Primary docs in conflict |
+|---|---|---|---|
+| ~~**INC-58**~~ | ~~Medium~~ | ~~ADR-007 + Component Map still say routing tables are derived from on-chain registration/migration events; INC-55 made routing off-chain~~ ✅ RESOLVED 2026-06-16 — ADR-007 now distinguishes on-chain `card→CID` resolution from off-chain `card→wallet_service` message routing; Component Map annotation corrected. | — |
+| ~~**INC-59**~~ | ~~Medium~~ | ~~Verification asks for a press "active window covering `issued_at`" that `PressAuthEntry` doesn't store; on-chain registration already proves authorization-at-write-time~~ ✅ RESOLVED 2026-06-16 — On-chain registration proves authorization-at-write-time; verifier uses current `PressAuthorizations` only for present revocation context, which does not retroactively invalidate correctly-registered cards; "active window covering `issued_at`" reconstruction removed from `card_validation.md` step 24. | — |
+| ~~**INC-60**~~ | ~~Medium~~ | ~~`erasure` (now defined) breaks the append-only `prev_log_root` chain / content-addressed immutability; reconciliation unspecified~~ ✅ RESOLVED 2026-06-16 — Erasure feature removed; logs are strictly append-only; `erasable`/`erasure` deleted from all specs. | — |
+
+> **Pattern (again):** INC-58 and INC-59 are the INC-55 and INC-57 fixes not propagated to ARCHITECTURE
+> ADR-007 and not reconciled with what the contract actually stores. INC-60 is a substantive design
+> question that defining the field exposed. None are blocking, but INC-60 should be settled (or the
+> feature deferred) before erasable policies ship.
 
 ---
 

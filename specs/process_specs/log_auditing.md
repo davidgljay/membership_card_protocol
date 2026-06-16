@@ -95,7 +95,13 @@ An epoch closes on any of the following:
    - Unwrap: `AEK = AES-GCM.Decrypt(wrapping_key, wrapped_aek)`.
    - Decrypt each entry: `PressIssuanceRecord = AES-GCM.Decrypt(AEK, ciphertext, nonce)`.
 
-3. The auditor reviews the decrypted records for policy compliance (e.g., that issuances match expected predicates, that no unauthorized press wrote to the log, that entry counts are consistent).
+3. The auditor reviews the decrypted records for policy compliance. For each decrypted `PressIssuanceRecord`:
+   a. Derive the issued card's content key: `content_key = HKDF-SHA3-256(recipient_pubkey, info="card-content-v1")`.
+   b. Fetch the issued `CardDocument` at `card_cid` from IPFS and decrypt it using `content_key`. An AES-GCM authentication failure is a hard rejection — flag the record in `findings` and do not treat it as a valid issuance.
+   c. SHOULD confirm `keccak256(recipient_pubkey)` equals the card's on-chain registry address (the card's mutable pointer). A mismatch indicates a malformed or forged record and MUST be flagged.
+   d. Inspect the decrypted card's field values against the policy's `field_definitions`, `recipient_predicate`, and `requester_predicate` to verify predicate compliance.
+   e. If further chain verification is needed, the decrypted card's `ancestry_pubkeys` array provides the ordered ancestor public keys for walking the issuer and press chains to a trusted root.
+   f. Verify that no unauthorized press wrote to the log, and that entry counts are consistent.
 
 4. The auditor produces an `AuditEpochCommitment`:
    ```json
@@ -174,6 +180,14 @@ When an auditor is removed from `auditors` via a policy field update:
 - The epoch AEK is destroyed; entries from the closed epoch are permanently undecryptable.
 - A verifier who later obtains the decrypted entries can compute `SHA3-256(concat of entry CIDs)` and confirm it matches `entries_hash` in the commitment.
 - The commitment proves the auditor processed all entries in sequence but does not prove they correctly classified each one.
+
+## Acceptance Criteria
+
+- [ ] An auditor can decrypt every `PressIssuanceRecord` in a closed epoch using only their wrapped epoch AEK copy.
+- [ ] For every decrypted record, the auditor can derive `content_key = HKDF-SHA3-256(recipient_pubkey, info="card-content-v1")`, fetch the issued card at `card_cid`, and successfully decrypt it (AES-GCM tag must pass).
+- [ ] For every decrypted record, the auditor can inspect the issued card's field values and verify they satisfy the policy's `field_definitions`, `recipient_predicate`, and `requester_predicate`.
+- [ ] Any record whose `keccak256(recipient_pubkey)` does not match the card's on-chain registry address, or whose issued card fails AES-GCM decryption, is flagged in `findings` and not counted as a valid issuance.
+- [ ] `recipient_pubkey` is never present in the outer IPFS envelope (`epoch_id` / `nonce` / `ciphertext`) — it appears only inside the AEK-encrypted plaintext.
 
 ---
 

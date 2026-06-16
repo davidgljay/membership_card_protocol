@@ -44,9 +44,11 @@ For recipients who already have a wallet, see `open_offer_acceptance_existing_wa
 1. The recipient follows the claim link — a URL hosted by the wallet service (e.g., `https://<wallet-service>/claim/<offer-id>`). The wallet service resolves the offer by ID and decodes the `OpenCardOffer` document. Because the link is hosted by the wallet service, the service that serves this page is also the service around which the recipient's wallet will be created.
 
 2. The wallet service verifies the offer before displaying it:
-   - Verify `issuer_signature` over the canonical RFC 8785 JSON of all offer fields (excluding the signature itself).
-   - Resolve the issuer's card chain to a trusted root. If chain verification fails, **reject the offer before displaying it** with a clear error: "This offer could not be verified. Do not proceed."
-   - Confirm the named press sub-card pointer appears in the policy's `approved_presses`. If not, reject.
+   - Confirm `keccak256(issuer_pubkey)` equals the `issuer_card` pointer address. A mismatch is a hard rejection — do not display the offer.
+   - Verify `issuer_signature` over the canonical RFC 8785 JSON of all offer fields (excluding the signature itself) using `issuer_pubkey`.
+   - Derive the issuer card's content key as `HKDF-SHA3-256(issuer_pubkey, info="card-content-v1")` and decrypt the issuer card. An AES-GCM authentication failure is a hard rejection.
+   - Walk the issuer's card chain to a trusted root using the issuer card's `ancestry_pubkeys`. If chain verification fails, **reject the offer before displaying it** with a clear error: "This offer could not be verified. Do not proceed."
+   - Confirm the named press sub-card is authorized for this policy by checking the **on-chain `PressAuthorizations` table** (`IsPressActive` for the policy's on-chain address). This is the authoritative check (see `ARCHITECTURE.md` ADR-011). The IPFS `approved_presses` array from the policy snapshot may be consulted as an advisory cross-check; where the two diverge, on-chain `PressAuthorizations` governs. If the press is not active in the on-chain table, reject the offer.
 
 3. The wallet service displays the offer review screen:
    - **Issuer identity:** Card pointer, chain summary (who issued the issuer's card, tracing to a trusted root).
@@ -114,13 +116,14 @@ For recipients who already have a wallet, see `open_offer_acceptance_existing_wa
 ### Phase 4: Press Validation and Issuance
 
 16. The press validates the submission:
-    - Re-verify `claim_payload.offer.issuer_signature` over the offer document.
+    - Confirm `keccak256(claim_payload.offer.issuer_pubkey)` equals the `claim_payload.offer.issuer_card` pointer address. A mismatch is a hard press-side rejection (E-14).
+    - Re-verify `claim_payload.offer.issuer_signature` over the canonical RFC 8785 JSON of all offer fields (excluding `issuer_signature`) using `issuer_pubkey`. An AES-GCM failure when decrypting the issuer card is also a hard rejection (E-14).
     - Verify `recipient_signature` over the canonical RFC 8785 JSON of `claim_payload`.
     - Confirm `claim_payload.offer.press_card` matches the receiving press's own sub-card pointer.
     - Confirm the policy has `allow_open_offers: true`.
-    - Submit an atomic Arbitrum One transaction that: verifies the issuer's ML-DSA-44 signature over the offer payload; checks `block.timestamp < expires_at` (if set); checks `openOfferUseCounts[offer_id] < max_acceptances` (if set); atomically increments the counter and registers the card. If any check fails, the transaction reverts.
+    - Submit an atomic Arbitrum One transaction that: checks `block.timestamp < expires_at` (if set); checks `openOfferUseCounts[offer_id] < max_acceptances` (if set); atomically increments the counter and registers the card. (Issuer-signature verification is press-side only — the contract does not receive or re-verify it.) If any check fails, the transaction reverts.
 
-17. If validation succeeds, the press assembles the `CardDocument` from `proposed_fields` plus `recipient_pubkey`, signs it with the press sub-card key (`press_signature`), and posts it to IPFS. (The offerer's `issuer_signature` on the `OpenCardOffer` and the recipient's `holder_signature` are the other two signatures.)
+17. If validation succeeds, the press assembles the `CardDocument` from `proposed_fields` plus `recipient_pubkey`, signs it with the press sub-card key (`press_signature`), and posts it to IPFS **encrypted** under the ADR-006 content key (`HKDF-SHA3-256(recipient_pubkey, info="card-content-v1")`, AES-256-GCM). (The offerer's `issuer_signature` on the `OpenCardOffer` and the recipient's `holder_signature` are the other two signatures.) This is the first point at which content encryption applies — the open offer document was not content-encrypted because no `recipient_pubkey` was present at offer-creation time.
 
 18. The press registers the card on Arbitrum One (included in the atomic transaction from Step 16).
 
@@ -155,7 +158,7 @@ For recipients who already have a wallet, see `open_offer_acceptance_existing_wa
 | Condition | Resolution |
 |---|---|
 | Offer issuer chain cannot be verified | Offer rejected before display; recipient should not proceed |
-| Press not in `approved_presses` | Offer rejected before display |
+| Press not active in on-chain `PressAuthorizations` for this policy | Offer rejected before display |
 | `expires_at` has passed | Press rejects with "offer expired"; wallet service shows clear error to recipient |
 | `max_acceptances` reached (race lost) | Press rejects with "offer full"; wallet service shows clear error to recipient |
 | Passkey creation fails on device | Wallet creation cannot complete; recipient must use a supported device or browser |

@@ -31,7 +31,7 @@ A card's stable address is an entry in the Card registry contract deployed on Ar
 
 **Address derivation.** A card's registry address is always `keccak256(recipient_pubkey)` — a one-way derivation from the card's public key. The on-chain entry stores the current IPFS log head CID in plaintext, but the IPFS content at that CID is **encrypted**. (See `ARCHITECTURE.md` ADR-006.)
 
-**Content encryption.** Every card document stored on IPFS is encrypted with AES-256-GCM using a content key derived from the card's public key:
+**Content encryption (registered card only).** Once the press posts the completed, registered card to IPFS — the document that has `recipient_pubkey`, `holder_signature`, and `press_signature` all present — it is encrypted with AES-256-GCM using a content key derived from the card's public key:
 
 ```
 content_key  = HKDF-SHA3-256(ikm=recipient_pubkey, info="card-content-v1")
@@ -40,6 +40,8 @@ ipfs_payload = { "nonce": <96-bit random, base64url>,
 ```
 
 A fresh nonce is generated for each log entry. The public key is the single credential needed to derive the address (via `keccak256`) and decrypt the content (via HKDF). There is no separate address secret and no per-card decryption key distinct from the public key itself. A party cannot read a card's content by knowing its address alone — they must hold the public key. Sharing a card means sharing its public key.
+
+**Offer-phase exemption.** An offer-phase `CardDocument` (the proposed card before the recipient countersigns, without `recipient_pubkey`, `holder_signature`, or `press_signature`) has no `recipient_pubkey`, so the content key above is undefined for it. Offer-phase documents are **not** content-encrypted under this scheme. They are conveyed to the prospective recipient either in the clear within the delivery payload (e.g. the `mcard://invite` URL for open offers) or protected only by the E2E message encryption used to deliver the `card_offer` message (ML-KEM per ADR-007) — not by the at-rest content-encryption scheme. Content encryption applies only at the moment the press posts the completed, registered card.
 
 Confidentiality of *messages* between cards is a separate concern handled by end-to-end message encryption in the transport layer (ML-KEM; see ADR-007), not by the card address model.
 
@@ -55,9 +57,10 @@ Every issued card contains a fixed set of immutable protocol-required fields set
 | `recipient_pubkey` | `base64url` | The recipient's ML-DSA-44 public key (1,312 bytes) |
 | `issued_at` | `timestamp` | Timestamp of issuance |
 | `ancestry_pubkeys` | `array of base64url` | Ordered array of ML-DSA-44 public keys (1,312 bytes each) for every ancestor card a verifier must resolve to walk this card's chain to a trusted root — covering the issuer chain and the press/policy chain as applicable. Ordered from immediate parent up toward the root. Set at issuance and covered by all three signatures. **Root base case:** a card whose own address is registered in the on-chain `PolicyAuthorizerKeys` table (a trusted root) carries `ancestry_pubkeys: []` — the empty array. `[]` is a legal, signed value distinct from omission; the field is REQUIRED and always present. A card whose immediate parent is a registered trusted root likewise carries `[]`. **Untrusted hint:** the verifier MUST confirm `keccak256(entry_pubkey)` equals the on-chain address being resolved for each entry; a wrong or forged pubkey yields an address mismatch or undecryptable ciphertext and MUST be rejected. Per-link on-chain addresses remain authoritative. |
-| `issuer_signature` | `base64url` | The offerer's ML-DSA-44 signature over the constructed offer (first signature); `ancestry_pubkeys` is present and covered |
-| `holder_signature` | `base64url` | The recipient's ML-DSA-44 countersignature over the offer including their `recipient_pubkey` (second signature); `ancestry_pubkeys` is present and covered |
-| `press_signature` | `base64url` | The press's ML-DSA-44 signature over the completed, countersigned card, applied last after the press validates policy compliance (third signature); `ancestry_pubkeys` is present and covered |
+| `past_keys` | `array of objects` *(optional)* | **Present only on cards produced by a master key rotation.** Omitted entirely on cards that have never been the product of a rotation (field omission, not `null` or `[]`, consistent with RFC 8785 absent-field convention). When present, lists all prior public keys held by the same holder, **oldest-first**, each as `{ "pubkey": "<base64url ML-DSA-44 public key>", "valid_from": "<ISO 8601>", "rotated_at": "<ISO 8601>" }`. **Provenance:** `past_keys` is the holder's own key history. During a master-key rotation, the holder/wallet supplies their prior-key history to the offerer as part of the rotation request; the offerer includes it verbatim in the assembled offer. The **holder is the authority on their own key history**: the authoritative attestation is the `holder_signature` — the holder countersigns, confirming the listed keys are theirs; `issuer_signature` and `press_signature` also cover the bytes. Immutable after issuance. **Covered by all three signatures** — not in any exclusion list. See `protocol-objects.md §1` for the formal field definition and `key_rotation.md §2.3` for rotation semantics. |
+| `issuer_signature` | `base64url` | The offerer's ML-DSA-44 signature over the constructed offer (first signature); `ancestry_pubkeys` and `past_keys` (if present) are covered |
+| `holder_signature` | `base64url` | The recipient's ML-DSA-44 countersignature over the offer including their `recipient_pubkey` (second signature); `ancestry_pubkeys` and `past_keys` (if present) are covered |
+| `press_signature` | `base64url` | The press's ML-DSA-44 signature over the completed, countersigned card, applied last after the press validates policy compliance (third signature); `ancestry_pubkeys` and `past_keys` (if present) are covered |
 
 Targeted cards are signed in a fixed three-party sequence: the **offerer** (issuer) constructs the offer and signs it with their own card key (`issuer_signature`); the **recipient** adds their public key and countersigns (`holder_signature`); the offerer validates the countersigned result; the card is then sent to the **press**, which validates policy compliance, signs with its press sub-card key (`press_signature`), and registers it on-chain. The press key is never held by the offerer's wallet service — these are distinct parties and keys.
 
@@ -529,9 +532,9 @@ This check does not prevent issuance from proceeding if the press is already reg
 2. The press resolves the requester's card chain and evaluates `requester_predicate`. If absent, this step passes automatically.
 3. The press resolves the recipient's card chain and evaluates `recipient_predicate`. If absent, this step passes automatically.
 4. For each card in both chains, the press checks for revocation entries. For each revocation found, the press confirms the effective date is after the current time (i.e., the card was valid when evaluated). If any ancestor is revoked with an effective date at or before now, the press refuses to issue.
-5. The **offerer's wallet service** assembles the proposed card JSON: protocol-required fields populated (`issuer_card`, `press_card`, `policy_id`, `issued_at`, and `ancestry_pubkeys` — the ordered array of ancestor ML-DSA-44 public keys from immediate parent up toward the root; `recipient_pubkey` left empty), and all `field_definitions` fields populated per the policy. (In targeted mode the offerer constructs the offer; the request at step 1 carries the offerer's parameters.)
-6. The **offerer** signs the canonical serialization of the offer with the **offerer's own card key**, producing `issuer_signature` — the **signed offer**. `ancestry_pubkeys` is included in the signed payload. The press key is not used here.
-7. The offer is delivered to the recipient: as an invitation link (base64 payload in a URL, e.g., `card://invite?o=<base64>`) for first-time recipients, or via HTTPS POST to the recipient's wallet service endpoint for existing holders.
+5. The **offerer's wallet service** assembles the proposed card JSON: protocol-required fields populated (`issuer_card`, `press_card`, `policy_id`, `issued_at`, and `ancestry_pubkeys` — the ordered array of ancestor ML-DSA-44 public keys from immediate parent up toward the root; `recipient_pubkey` left empty), plus `past_keys` if this card is the product of a master key rotation (omitted otherwise), and all `field_definitions` fields populated per the policy. (In targeted mode the offerer constructs the offer; the request at step 1 carries the offerer's parameters.)
+6. The **offerer** signs the canonical serialization of the offer with the **offerer's own card key**, producing `issuer_signature` — the **signed offer**. `ancestry_pubkeys` and `past_keys` (if present) are included in the signed payload. The press key is not used here.
+7. The offer is delivered to the recipient: as an invitation link (base64 payload in a URL, e.g., `mcard://invite?o=<base64>`) for first-time recipients, or via HTTPS POST to the recipient's wallet service endpoint for existing holders.
 8. The recipient reviews the offer (see §4), generates a keypair, adds their public key, and countersigns → `holder_signature`. The countersigned card is returned to the offerer, who validates `holder_signature` and forwards it to the press.
 9. The **press** validates the countersigned card (both `issuer_signature` and `holder_signature` verify; predicates and schema satisfied), signs the complete document with its press sub-card key → `press_signature`, and posts it to IPFS. Either the press or the recipient's client may perform the IPFS posting after `press_signature` is applied.
 10. The press creates a registry entry on Arbitrum One for the new card, with the initial log head CID; the write is authorized on-chain by the press's secp256r1 key in `PressAuthorizations`.
@@ -562,7 +565,7 @@ This check does not prevent issuance from proceeding if the press is already reg
 **Open offer issuance flow.**
 
 1. The issuer assembles the open card offer JSON, populates `proposed_fields` with all issuer-defined field values, signs the canonical serialization with their card key, and submits the signed offer to a wallet service.
-2. The wallet service stores the offer and generates a claim link (`card://claim?o=<base64>` or a wallet-service-hosted URL) for distribution.
+2. The wallet service stores the offer and generates a claim link (`mcard://claim?o=<base64>` or a wallet-service-hosted URL) for distribution.
 3. The issuer distributes the claim link via any channel (private message, QR code, email, etc.). The security of the resulting cards is bounded by the channel's trustworthiness.
 4. A recipient follows the claim link. The wallet service presents an offer review screen: issuer identity and chain summary, proposed field values, acceptance constraints (slots remaining if `max_acceptances` is set, expiry if `expires_at` is set), and the redirect destination URL.
 5. The recipient's client verifies the issuer's card chain to a trusted root and confirms the named press sub-card appears in the policy's `approved_presses`. If either check fails, the offer is rejected before display.
@@ -600,7 +603,7 @@ Audit log entries are secured by a per-epoch Audit Encryption Key (AEK) rather t
 3. Posts an `AuditEpochEntry` (see `protocol-objects.md` §12) to the policy log containing all per-auditor key packages, the epoch's `epoch_id` and `epoch_start`, and the press's ML-DSA-44 signature.
 4. Discards the raw AEK from memory immediately after distributing the wrapped copies. The press never retains plaintext access to the AEK.
 
-During the epoch, the press encrypts each `PressIssuanceRecord` with the epoch AEK: `AES-GCM.Encrypt(AEK, record, nonce)` where `nonce` is a fresh 96-bit random value per entry. The encrypted record is stored on IPFS. Each entry's `epoch_id` field identifies which epoch key the auditor should use to decrypt it.
+During the epoch, the press encrypts each `PressIssuanceRecord` with the epoch AEK: `AES-GCM.Encrypt(AEK, record, nonce)` where `nonce` is a fresh 96-bit random value per entry. The encrypted record is stored on IPFS. Each entry's `epoch_id` field identifies which epoch key the auditor should use to decrypt it. Each `PressIssuanceRecord` plaintext includes `recipient_pubkey` — the ML-DSA-44 public key of the issued `CardDocument` — so auditors can derive `content_key = HKDF-SHA3-256(recipient_pubkey, info="card-content-v1")` and decrypt the issued card to inspect its field values and verify predicate compliance. The press already holds this key at record-construction time (it is in the `CardDocument` the press just assembled and signed). This key lives only inside the encrypted plaintext; the outer IPFS envelope (`epoch_id` / `nonce` / `ciphertext`) is unchanged.
 
 *Closing an epoch.* An epoch closes on any of the following triggers:
 
@@ -630,6 +633,7 @@ On epoch close, the procedure is:
 - [ ] At epoch open, each active auditor receives an independently-wrapped copy of the epoch AEK, decryptable only with their card's private key; the AEK wrappings are posted in an `AuditEpochEntry` in the policy log.
 - [ ] Issuance log entries are encrypted under the epoch AEK; neither the press operator nor any party without an auditor's private key can read them.
 - [ ] On epoch close, the auditor produces a signed `AuditEpochCommitment` (entry count + hash commitment over all entry CIDs + findings) before destroying the AEK; the commitment CID is recorded in the policy log.
+- [ ] An auditor holding a wrapped epoch AEK can decrypt every issued card in the epoch: for each `PressIssuanceRecord`, the auditor derives `content_key = HKDF-SHA3-256(recipient_pubkey, info="card-content-v1")` from the record's `recipient_pubkey` field, fetches the card at `card_cid`, and decrypts it successfully; the decrypted card's fields and the issuer/recipient chain can then be inspected for predicate compliance.
 - [ ] A future compromise of an auditor's card key cannot decrypt entries from epochs whose AEKs have been destroyed.
 - [ ] A post-hoc verifier can confirm: (a) the card's content conforms to the `field_definitions` in the policy snapshot at `policy_id` CID, (b) the press sub-card that signed it appears in the `approved_presses` array from that same snapshot, and (c) the recipient's chain satisfies `recipient_predicate` from that snapshot if one is specified.
 - [ ] A third-party verifier can walk the full issuer and press/policy chain of any card by reading `ancestry_pubkeys` from the decrypted card, deriving each ancestor's address as `keccak256(entry_pubkey)` and content key as `HKDF-SHA3-256(entry_pubkey, info="card-content-v1")`, and confirming the derived address matches the on-chain address being resolved before decrypting; a pubkey that yields an address mismatch or an undecryptable ciphertext is rejected.
@@ -770,12 +774,12 @@ A card recipient — whether a first-time participant or an existing holder — 
 **First-time recipient flow (invitation link).**
 1. The offerer's wallet service assembles the proposed card JSON with all issuer-populated fields, `issuer_card`, `press_card`, and `recipient_pubkey` left empty.
 2. The offerer signs the offer with the **offerer's own card key** → `issuer_signature` (the **signed offer**). The offerer's wallet service does not hold the press key.
-3. The offer is encoded as `card://invite?o=<base64>` and delivered out of band.
+3. The offer is encoded as `mcard://invite?o=<base64>` and delivered out of band.
 4. The recipient opens the link. If no keychain exists, the client presents the keychain setup flow (§3) before proceeding.
 5. The client verifies `issuer_signature` and walks the offerer's (`issuer_card`) chain to a trusted root. If verification fails, the offer is rejected before being shown to the user.
 6. The client presents a review screen: offerer identity (chain summary), card content and field values, the policy and schema governing it, and what countersigning commits the recipient to.
 7. If the recipient accepts: the client generates a fresh ML-DSA-44 keypair for this card, stores the private key in the keyring, adds the public key to the card JSON, and signs the canonical serialization with the new private key → `holder_signature`.
-8. The countersigned card is returned to the offerer, who validates `holder_signature` and forwards it to the press. The press validates predicates, revocation, and schema, then signs the completed card with its press sub-card key → `press_signature`. The completed card — `issuer_signature`, `recipient_pubkey`, `holder_signature`, `press_signature`, and `ancestry_pubkeys` — is posted to IPFS by the press or the recipient's client.
+8. The countersigned card is returned to the offerer, who validates `holder_signature` and forwards it to the press. The press validates predicates, revocation, and schema, then signs the completed card with its press sub-card key → `press_signature`. The completed card — `issuer_signature`, `recipient_pubkey`, `holder_signature`, `press_signature`, `ancestry_pubkeys`, and `past_keys` (if present) — is posted to IPFS by the press or the recipient's client.
 9. The press creates the card's registry entry on Arbitrum One and logs the issuance.
 10. The press delivers the SCIP and confirmation to the recipient via HTTPS to the wallet service endpoint.
 
@@ -845,7 +849,7 @@ After issuance, authorized parties need to record changes to a card — from pos
 
 - **Not:** Allowing unilateral holder updates to fields not authorized by the update policy.
 - **Not:** Silent updates. Every update is a visible, signed log entry.
-- **Not:** Retroactive removal of prior log entries (except `erasable: true` cards, opt-in at issuance).
+- **Not:** Retroactive removal or redaction of prior log entries. The log is strictly append-only; entries are never removed or redacted. Revocation withdraws standing by appending a revocation entry — it does not delete anything.
 - **Not:** Special direct-write paths for any code range. All updates, including self-revocations, go through an approved press. Resilience against press downtime is achieved by listing multiple approved presses in `approved_presses`.
 
 ### User Stories
@@ -920,7 +924,7 @@ The intent does not include `version` or `prev_log_root` — those are added by 
    - Updater's card is not revoked (effective date check against current time).
    - For codes 1xx–7xx: the updater's card satisfies the `update_policy` predicate for each field in `field_updates`. If multiple fields are updated in one entry, all `update_policy` predicates must be satisfied by the same updater.
    - For codes 8xx–9xx: the updater's card satisfies the `revocation_permissions` predicate for the code range. If `revocation_permissions` is absent from the policy, the default is: 8xx by holder or issuer; 9xx by issuer only.
-   - No fields in `field_updates` are protocol-required immutable fields.
+   - No fields in `field_updates` are protocol-required immutable fields (the complete immutable set is: `policy_id`, `issuer_card`, `press_card`, `recipient_pubkey`, `issued_at`, `ancestry_pubkeys`, `past_keys`, `issuer_signature`, `holder_signature`, `press_signature`).
    - The code range is consistent with the entry content (8xx–9xx entries must include `revocation`; 1xx–7xx entries must include `field_updates`).
    - If any check fails, the press rejects the intent with a specific error code and does not post.
 4. The press assembles the complete entry: intent payload verbatim + `version` (current head version + 1) + `prev_log_root` (current head CID). The press signs the canonical RFC 8785 JSON of this complete assembled entry — **excluding the `press_signature` field itself** — with its press sub-card key, then appends the resulting `press_signature` field to the entry. The signature therefore covers everything that precedes it in the completed document.
@@ -945,8 +949,6 @@ This suppresses notification for all 5xx entries (programmatic updates). The upd
 - If multiple revocation entries exist on a card, the one with the earliest effective date governs.
 - The append-only log cannot remove a revocation entry. Un-revocation requires a successor card (see Background Concepts).
 
-**History erasure.** If the policy specifies `erasable: true` for a card, a revocation entry with `erasure: true` may redact prior log entries, leaving only the revocation statement. Cached copies held by others become unauthenticatable. Cards without `erasable: true` may be revoked but not erased.
-
 **On-chain anchoring.** After each update, the Arbitrum One registry entry for the card is updated to point to the new log head CID, providing a trusted timestamp and rollback resistance. Only the press sub-card key is required for this write; the contract verifies the press is in `approved_presses` for the policy.
 
 **Acceptance criteria:**
@@ -954,7 +956,6 @@ This suppresses notification for all 5xx entries (programmatic updates). The upd
 - [ ] A revocation intent whose updater does not satisfy `revocation_permissions` for the given code range is rejected by the press.
 - [ ] An 810 intent signed by the holder (satisfying `is_holder`) is accepted by the press without issuer involvement.
 - [ ] A verifier re-checking an update entry can independently confirm the updater's card satisfies the relevant `update_policy` or `revocation_permissions` predicate by evaluating the predicate against the updater's card chain.
-- [ ] An erasure update on a card whose policy does not have `erasable: true` is rejected by the press.
 - [ ] The monotonic version number and `prev_log_root` chain prevent replay and out-of-order posting of stale entries.
 - [ ] A verifier can reconstruct the full current state of a card by reading the append-only log from the first entry to the current head.
 - [ ] The press sends an HTTPS notification to the holder's wallet service endpoint after posting any update where `notify_holder` is true and the code prefix is not suppressed by the policy.
@@ -1240,6 +1241,7 @@ A service needs to verify that a user holds a card satisfying some predicate, or
   "purpose": "<human-readable description shown to user in wallet UI>",
   "requesting_site": "<origin of the requesting site, for display>",
   "requester_card": "<mutable pointer of the requesting site's own card>",
+  "requester_pubkey": "<base64url — ML-DSA-44 public key of the card referenced by requester_card, 1312 bytes raw>",
   "payload": {
     "content": "<the content the user is being asked to sign>",
     "context": "<optional: additional human-readable context>",
@@ -1256,11 +1258,11 @@ A service needs to verify that a user holds a card satisfying some predicate, or
   },
   "redirect_uri": "<URL to redirect user to after completion — must contain the literal string {code}>",
   "expires_at": "<ISO 8601 timestamp>",
-  "request_signature": "<ML-DSA-44 signature from the requester's card key over the canonical serialization of all above fields>"
+  "request_signature": "<ML-DSA-44 signature from the requester's card key over the canonical serialization of all above fields including requester_pubkey>"
 }
 ```
 
-`requester_card` and `request_signature` are required. A request without either must be rejected by the wallet before being shown to the user. The requester's card gives the user a verifiable trust chain for the requesting site. `callbacks.https` is required; `callbacks.ohttp` is optional for deployments that want IP-level privacy on the response leg.
+`requester_card`, `requester_pubkey`, and `request_signature` are required. A request without any of these must be rejected by the wallet before being shown to the user. The requester's card gives the user a verifiable trust chain for the requesting site. `callbacks.https` is required; `callbacks.ohttp` is optional for deployments that want IP-level privacy on the response leg.
 
 The request URL is single-use and expires at `expires_at`. Requests must not be reused across sessions. The `nonce` in the payload is incorporated into the signed statement and must be verified by the requesting site to prevent replay.
 
@@ -1272,11 +1274,11 @@ If no wallet is registered in CHAPI, the wallet's credential handler page is not
 
 1. The wallet service's credential handler page, once opened by CHAPI, receives the authentication request URL.
 2. The wallet fetches the request object from that URL via HTTPS.
-3. The wallet validates the request: confirms `expires_at` has not passed, confirms `requester_card` and `request_signature` are present, and verifies the `request_signature` against the canonical serialization of the request object using the requester's card public key.
-4. The wallet walks the requester's card chain to a trusted root and checks for revocation, exactly as in §7. If the chain fails verification or any link is revoked, the request is rejected before display.
+3. The wallet validates the request: confirms `expires_at` has not passed; confirms `requester_card`, `requester_pubkey`, and `request_signature` are present; confirms `keccak256(requester_pubkey)` equals the `requester_card` pointer address (a mismatch is a hard rejection — do not display); and verifies `request_signature` against the canonical RFC 8785 JSON of the request object (all fields except `request_signature`) using `requester_pubkey`.
+4. The wallet derives the requester card's content key as `HKDF-SHA3-256(requester_pubkey, info="card-content-v1")`, decrypts the requester card (an AES-GCM failure is a hard rejection), and walks the requester's card chain to a trusted root via that card's `ancestry_pubkeys`, checking for revocation exactly as in §7. If the chain fails verification or any link is revoked, the request is rejected before display.
 5. The wallet confirms the `required_predicate` against the user's available cards. If no qualifying card exists, the wallet shows a clear explanation rather than a generic error.
 6. The wallet presents the signing request to the user: the `purpose`, the requester's verified card identity and chain summary, `payload.content`, and a summary of the `required_predicate` if set. The wallet must clearly show what will be signed and who is asking — including the requester's trust lineage, not just their domain name.
-7. If the user approves: the wallet selects a qualifying card (or presents a chooser if multiple qualify), assembles a signed message envelope per §6 with `type: "auth_response"`, `content: { statement, context, nonce }` (copied from the request's `payload`), `senders` (the holder's master card pointer), `recipients` (`requester_card`), and `timestamp` (current time). The wallet signs the canonical RFC 8785 JSON of the payload with the selected sub-card key and assembles the authentication response.
+7. If the user approves: the wallet selects a qualifying card (or presents a chooser if multiple qualify), assembles a signed message envelope per §6 with `type: "auth_response"`, `content: { statement, context: { session_id, ... }, nonce }` (`statement` and `nonce` copied from the request's `payload`; `context` is an **object** whose `session_id` field is echoed from `AuthenticationRequest.session_id`), `senders` (the holder's master card pointer), `recipients` (`requester_card`), and `timestamp` (current time). The wallet signs the canonical RFC 8785 JSON of the payload with the selected sub-card key and assembles the authentication response.
 8. The wallet sends the authentication response to the requester via the preferred transport (see below). On success, the requester returns a `confirmation_code` — a short-lived, single-use opaque token — in the response body.
 9. The wallet redirects the user's browser to `redirect_uri` with `{code}` replaced by the `confirmation_code`. The requesting site's page picks up the code, looks up the associated signed response, and considers the session authenticated.
 
@@ -1296,16 +1298,19 @@ If no wallet is registered in CHAPI, the wallet's credential handler page is not
 
 - **HTTPS** — The wallet posts the response to `callbacks.https`. The requester can observe the wallet service's server IP. This is the standard transport and is required for all conforming implementations.
 
-**Verification.** On receiving an authentication response, the requesting site verifies the signed statement per §7: signature validity, chain walk to a trusted root, revocation check, predicate evaluation, and nonce match. The confirmation code is only issued after successful verification.
+**Verification.** On receiving an authentication response, the requesting site verifies the signed statement per §7: signature validity, chain walk to a trusted root, revocation check, predicate evaluation, `content.context.session_id` match (against the issued `session_id`), and `content.nonce` match. The confirmation code is only issued after successful verification.
 
 **Acceptance criteria:**
 
 - [ ] The requesting site's JavaScript code does not receive the wallet service's URL or identity from the CHAPI call.
-- [ ] A request missing `requester_card` or `request_signature` is rejected by the wallet before display.
-- [ ] A request whose `request_signature` does not verify against the requester's card public key is rejected before display.
+- [ ] A request missing `requester_card`, `requester_pubkey`, or `request_signature` is rejected by the wallet before display.
+- [ ] A request where `keccak256(requester_pubkey)` does not equal the `requester_card` pointer address is rejected before display.
+- [ ] A request whose `request_signature` does not verify against `requester_pubkey` is rejected before display.
+- [ ] A request whose requester's card cannot be decrypted with `HKDF-SHA3-256(requester_pubkey, info="card-content-v1")` is rejected before display.
 - [ ] A request whose requester's card chain cannot be walked to a trusted root is rejected before display.
 - [ ] The authentication request URL is single-use: a second fetch of the same URL after the response has been posted returns an error.
 - [ ] The `nonce` from the auth request appears in `signed_statement.payload.content.nonce`; a response with a mismatched or absent nonce is rejected.
+- [ ] The `session_id` from the auth request appears in `signed_statement.payload.content.context.session_id`; a response with a mismatched or absent `session_id` in `content.context` is rejected.
 - [ ] The `expires_at` on the request is enforced: a wallet that fetches an expired request must reject it and notify the user.
 - [ ] A confirmation code is only issued after the signed statement passes full §7 verification.
 - [ ] The confirmation code is single-use: presenting the same code twice is rejected.
@@ -1316,7 +1321,7 @@ If no wallet is registered in CHAPI, the wallet's credential handler page is not
 #### Nice-to-Have (P1)
 
 - **Wallet chooser UI.** When multiple cards in the user's wallet satisfy `required_predicate`, the wallet presents a chooser showing each qualifying card's policy and issuer, so the user can select which credential to present.
-- **CHAPI-free fallback.** A requesting site that does not use CHAPI can instead display a QR code or deep link (`card://auth?r=<request-url>`) that the user opens in their wallet app directly. Enables authentication flows on devices without CHAPI support.
+- **CHAPI-free fallback.** A requesting site that does not use CHAPI can instead display a QR code or deep link (`mcard://auth?r=<request-url>`) that the user opens in their wallet app directly. Enables authentication flows on devices without CHAPI support.
 - **OHTTP relay selection.** A protocol-level registry or well-known discovery endpoint for OHTTP relays trusted by the Card ecosystem, so requesting sites can advertise a relay without requiring wallet services to configure relay trust ad hoc.
 
 #### Future Considerations (P2)

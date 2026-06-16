@@ -8,7 +8,7 @@
 
 ## Overview
 
-Message routing describes how a wallet service determines which other wallet service holds a recipient card and delivers an encrypted message payload to it. The card's on-chain registry address — the same hash used as its mutable pointer — serves as its stable messaging address. No separate addressing scheme exists. Wallet services maintain local routing tables derived from on-chain registration events, enabling single-hop delivery with no external lookup at send time.
+Message routing describes how a wallet service determines which other wallet service holds a recipient card and delivers an encrypted message payload to it. The card's on-chain registry address — the same hash used as its mutable pointer — serves as its stable messaging address. No separate addressing scheme exists. Wallet services maintain local routing tables derived from off-chain binding announcements (via the Wallet Service Registry), enabling single-hop delivery with no external lookup at send time.
 
 ---
 
@@ -42,7 +42,7 @@ Wallet services are registered in an off-chain **Wallet Service Registry** maint
 | `transport_flags` | Bitmask of supported transports (see Transport Extensibility below) |
 | `active` | Whether this wallet service is currently accepting routed messages |
 
-Wallet services announce which cards they hold by emitting on-chain events when a card is registered to or migrated from them. All wallet services subscribe to these events to maintain their local routing tables.
+Wallet services maintain routing tables that map each card hash to the wallet service currently holding it. The exact mechanism by which wallet services learn card-to-wallet-service bindings — including the format of binding announcements, the discovery endpoint, and the migration-notification protocol — is deferred to the wallet service spec. This document uses `wallet_service_id` as a stable opaque identifier for a wallet service instance.
 
 ---
 
@@ -54,15 +54,15 @@ Each wallet service maintains a local index:
 routing_table: card_hash → wallet_service_id
 ```
 
-This table is populated and kept current by:
+This table is populated and kept current off-chain:
 
-1. **Card registration events** — when the press registers a new card on Arbitrum One, the registration calldata includes the `wallet_service_id` of the wallet service holding it. All wallet services receive this event and update their routing tables.
+1. **Card registration binding** — when a press registers a new card, the wallet service that holds the card's keys announces the card-to-wallet-service binding through the off-chain Wallet Service Registry mechanism (design deferred to the wallet service spec). Other wallet services receive this binding and update their routing tables.
 
-2. **Card migration events** — when a card migrates from one wallet service to another, the new wallet service posts a migration event on-chain, updating `routing_table[card_hash]` for all observers.
+2. **Card migration binding** — when a card migrates from one wallet service to another, the new wallet service announces the updated binding through the same off-chain mechanism, updating `routing_table[card_hash]` for all observers.
 
-3. **Startup sync** — a wallet service that has been offline or is starting fresh replays all card registration and migration events from the registry contract to rebuild its routing table from chain state.
+3. **Startup sync** — a wallet service that has been offline or is starting fresh fetches the current routing state from the off-chain Wallet Service Registry to rebuild its routing table.
 
-Because the routing table is derived entirely from on-chain events, it is eventually consistent across all wallet services. A stale routing table entry (card migrated but event not yet processed) results in delivery to the old wallet service, which returns a `410 Gone` response with the new wallet service's `wallet_service_id`; the sender retries against the correct destination.
+Because the routing table is maintained off-chain and replicated across wallet services via the Wallet Service Registry, it is eventually consistent. A stale routing table entry (card migrated but binding not yet processed) results in delivery to the old wallet service, which returns a `410 Gone` response with the new wallet service's `wallet_service_id`; the sender retries against the correct destination.
 
 ---
 
@@ -129,10 +129,11 @@ The originating wallet service being visible narrows the anonymity set for the s
 When a card holder moves their card from one wallet service to another, the routing table must update. The migration process:
 
 1. The holder authenticates to the new wallet service and initiates migration.
-2. The new wallet service posts a `MigrateCard` event on-chain: `{ card_hash, from_wallet_service_id, to_wallet_service_id }`, signed by the holder's card key.
-3. All wallet services receive the event and update `routing_table[card_hash]`.
-4. The old wallet service forwards any queued messages to the new wallet service and then drops the card from its store.
-5. Messages in flight addressed to the old wallet service during the migration window are handled via the `410 Gone` retry mechanism.
+2. The new wallet service announces the updated card-to-wallet-service binding through the off-chain Wallet Service Registry (design deferred to the wallet service spec), signed by the holder's card key. All wallet services receive the updated binding and update `routing_table[card_hash]`.
+3. The old wallet service forwards any queued messages to the new wallet service and then drops the card from its store.
+4. Messages in flight addressed to the old wallet service during the migration window are handled via the `410 Gone` retry mechanism.
+
+No on-chain event is posted for card migration; routing state is entirely off-chain.
 
 ---
 
@@ -172,5 +173,5 @@ Full sender anonymity at the wallet-service level requires Nym transport (`0x04`
 
 - `ARCHITECTURE.md ADR-007` — transport layer decisions; UMBRAL re-encryption; OHTTP
 - `specs/messaging_protocol.md` — `SignedMessageEnvelope` structure; message types; `recipients` and `senders` fields
-- `specs/object_specs/registry_contract.md` — card registration events; wallet service registry tables
+- `specs/object_specs/registry_contract.md` — on-chain card registry (note: routing state and the Wallet Service Registry are off-chain; see INC-35)
 - `specs/process_specs/card_offering_and_acceptance.md` — uses routing delivery (step 22: SCIP delivery to recipient wallet service)

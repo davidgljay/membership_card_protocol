@@ -39,23 +39,27 @@ Card signing is the process by which a card holder signs an arbitrary message us
 1. The signer assembles the `payload` object:
    ```json
    {
-     "type": "<string — see Message Types below>",
-     "content":      "<message body — optional when forwards is set>",
-     "recipients":   ["<mutable pointer>", "<mutable pointer>", ...],
-     "timestamp":    "<ISO 8601 timestamp>",
-     "in_reply_to":  "<hash of prior payload — optional>",
-     "edit_of":      "<hash of prior payload — optional; mutually exclusive with retracts and forwards>",
-     "retracts":     "<hash of prior payload — optional; mutually exclusive with edit_of and forwards>",
-     "forwards":     "<hash of original payload being forwarded — optional; mutually exclusive with edit_of and retracts>"
+     "type":        "<string — see Message Types below>",
+     "content":     "<message body — optional when forwards is set>",
+     "senders":     ["<mutable pointer of signer's master card>", ...],
+     "recipients":  ["<mutable pointer>", "<mutable pointer>", ...],
+     "timestamp":   "<ISO 8601 timestamp>",
+     "in_reply_to": "<hash of prior payload — optional>",
+     "edit_of":     "<hash of prior payload — optional; mutually exclusive with retracts and forwards>",
+     "retracts":    "<hash of prior payload — optional; mutually exclusive with edit_of and forwards>",
+     "forwards":    "<hash of original payload being forwarded — optional; mutually exclusive with edit_of and retracts>"
    }
    ```
    - `type` is required. It distinguishes human communication from programmatic messages. See [Message Types](#message-types) below.
+   - `content` carries the type-specific message body; it is optional only when `forwards` is set (the forwarded envelope provides the content).
+   - `senders` is required. It lists the mutable pointer(s) of the signing party's master card(s) — parallel to `signatures`, identifying the signer's master-card identity in the signed payload. Because `signatures` carries only the sub-card public key (from which only the sub-card's address is derived), `senders` is the explicit link from the signed bytes to the master-card identity. Note: MSG-OQ-2 (whether to drop `senders` for sender-privacy purposes and infer master identity via the sub-card→master link instead) remains an open future option, but the current schema includes `senders` in the payload here, in `protocol-objects.md §5`, and in `messaging_protocol.md §1`.
    - `recipients` must include at least the intended recipient(s)' mutable pointers. Including the signer's own pointer is optional but conventional for self-addressed records.
    - `timestamp` is the signing time; it must be within the acceptable freshness window as defined by the verifying party.
    - `in_reply_to`, `edit_of`, `retracts`, and `forwards` are optional. `edit_of`, `retracts`, and `forwards` are mutually exclusive — a payload with more than one of these set must be rejected at the client before signing.
 
 2. The client validates the payload locally:
    - Confirm `type` is a known value.
+   - Confirm `senders` is non-empty and lists the signer's master card pointer(s).
    - Confirm at most one of `edit_of`, `retracts`, `forwards` is set.
    - Confirm `recipients` is non-empty.
    - Confirm `timestamp` is current.

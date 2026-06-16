@@ -143,6 +143,8 @@ The registry-level forward and on-chain event are the resilient fallbacks if the
 ]
 ```
 
+`past_keys` is listed oldest-first. `valid_from` is the `issued_at` of the first card that used that key; `rotated_at` is when it was superseded by the next key. **Formal definition:** `past_keys` is a `CardDocument` field formally defined in `protocol-objects.md §1` (type, optionality, ordering, and signing coverage). This section defines the rotation semantics only; the object schema there is authoritative.
+
 A party who holds the new public key and needs to read historical content can use the `past_keys` entries to derive the content keys for earlier log entries. A party who holds only an old public key can still decrypt historical content directly; they can follow the registry-level `forward_to` to discover the new address but cannot read the new card's content without the new public key.
 
 **Ordering constraint.** The address forward (step 4a below) must be registered on-chain **before** the old card is revoked (step 5). Writing the forward requires the old secp256r1 key; once the old card's registry entry is revoked, the key is still valid for this one operation during the rotation window. Revoke first, then forward — is not permitted.
@@ -472,7 +474,7 @@ The canonical definitions for these codes are in `specs/update_codes.md`. The co
 |---|---|
 | 100 | Linked successor — planned key rotation or advancement (holder-initiated) |
 | 101 | Linked successor — emergency rotation (holder-initiated; prior key potentially compromised) |
-| 102 | Linked successor — issuer-initiated card recovery (72-hour pending window; see §2.5) |
+| 102 | Linked successor — issuer-initiated card recovery (72-hour pending window; see §2.6) |
 | 103 | Issuer-initiated recovery rotation cancelled by holder |
 
 Codes 100 and 101 are distinguished for auditors: a 100 signals routine housekeeping; a 101 signals that the prior key period's signatures should be treated with elevated skepticism. Code 102 entries carry a `pending_until` field and are not effective until that timestamp is reached; a code-103 entry referencing a code-102 entry by log CID permanently nullifies the pending rotation.

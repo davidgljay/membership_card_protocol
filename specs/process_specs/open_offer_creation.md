@@ -57,6 +57,7 @@ Open offers are only permitted when the policy card has `allow_open_offers: true
      "policy_id":        "<base64url — CID of the governing policy card>",
      "press_card":       "<base64url — mutable pointer of the approved press>",
      "issuer_card":      "<base64url — mutable pointer of the issuer's card>",
+     "issuer_pubkey":    "<base64url — ML-DSA-44 public key of the issuer's card, 1312 bytes raw>",
      "max_acceptances":  <integer | null>,
      "expires_at":       "<ISO 8601 timestamp | null>",
      "display_message":  "<optional human-readable context>",
@@ -68,6 +69,8 @@ Open offers are only permitted when the policy card has `allow_open_offers: true
    }
    ```
 
+   The `issuer_pubkey` field is the ML-DSA-44 public key of the card referenced by `issuer_card`. The issuer sets this at offer creation time; it is included in the canonical serialization that `issuer_signature` covers, so any tampering with `issuer_pubkey` invalidates the signature.
+
 3. The issuer validates the offer locally:
    - Confirm all required fields in the policy's `field_definitions` are present in `proposed_fields`.
    - Confirm field values conform to their type and validation constraints (regex, min/max, etc.).
@@ -76,7 +79,7 @@ Open offers are only permitted when the policy card has `allow_open_offers: true
 
 ### Phase 2: Signing
 
-4. The issuer canonically serializes all fields of the `OpenCardOffer` document except `issuer_signature` (canonical RFC 8785 JSON).
+4. The issuer canonically serializes all fields of the `OpenCardOffer` document except `issuer_signature` (canonical RFC 8785 JSON). This includes `issuer_pubkey`, which is therefore covered by the signature.
 
 5. The issuer signs the canonical serialization with their sub-card private key → `issuer_signature`.
 
@@ -87,7 +90,7 @@ Open offers are only permitted when the policy card has `allow_open_offers: true
 7. The issuer submits the signed `OpenCardOffer` document to a wallet service via HTTPS POST.
 
 8. The wallet service stores the offer and generates a **claim link**:
-   - Short form: `card://claim?o=<base64url of offer>` (suitable for QR codes and deep links).
+   - Short form: `mcard://claim?o=<base64url of offer>` (suitable for QR codes and deep links).
    - Hosted form: a wallet-service URL that serves the offer JSON on demand (suitable for long offers).
 
 9. The wallet service returns the claim link to the issuer.

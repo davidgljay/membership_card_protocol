@@ -37,7 +37,7 @@ Policy creation is the process by which an authorizer defines and publishes the 
 
 ### Phase 1: Draft
 
-1. The drafter assembles the policy JSON object (`PolicyMarkDocument`), populating:
+1. The drafter assembles the policy JSON object (`PolicyCardDocument`), populating:
    - `field_definitions` — the field schema for cards issued under this policy (required)
    - `recipient_predicate` — who may receive cards (optional; absent = unconstrained)
    - `requester_predicate` — who may request cards (optional; absent = unconstrained)
@@ -119,4 +119,4 @@ Policy creation is the process by which an authorizer defines and publishes the 
 - `card_updates.md` — used to add/remove auditors, presses, and update policy fields after publication
 - `log_auditing.md` — audit epoch lifecycle for cards issued under this policy
 - `card_protocol_spec.md §1` — full feature spec for policy creation
-- `protocol-objects.md §2` — `PolicyMarkDocument` object reference
+- `protocol-objects.md §2` — `PolicyCardDocument` object reference

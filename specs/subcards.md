@@ -111,11 +111,19 @@ The user approves or denies.
 
 The holder's primary card key signs canonical RFC 8785 JSON of the partially-signed document (including `app_signature` and both parent-pubkey fields `holder_primary_card_pubkey` and `app_card_pubkey`, without `holder_signature`) → `holder_signature`. The completed `SubCardDocument` is posted to IPFS.
 
-### Step 5: Registration On-Chain
+### Step 5: Press Validates the App Card Chain and Registers On-Chain
 
-The completed `SubCardDocument` is submitted to an approved press for the primary card's policy. The press calls `RegisterSubCard` on the Arbitrum One registry contract, creating a `SubCardRegistration` entry (see `protocol-objects.md §15`) linking the sub-card's address to both `holder_primary_card` and `app_card`.
+The completed `SubCardDocument` is submitted to an approved press for the primary card's policy. Before calling `RegisterSubCard`, the press:
 
-**Gas** is paid from the app's pre-funded gas account with the press (see `registry_contract.md §4.11`). The press rejects the registration request if the app's gas balance is insufficient before submitting any transaction. The app is responsible for maintaining a funded balance; the issuing organization's press does not cover sub-card registration costs.
+1. Fetches the `SubCardDocument` from IPFS (or receives it directly) and verifies `app_signature` against `app_card_pubkey`.
+2. Applies the binding check: confirms `keccak256(app_card_pubkey)` equals the `app_card` pointer address. A mismatch is a hard rejection.
+3. Walks the `app_card` chain using `app_card_pubkey` (deriving `HKDF-SHA3-256(app_card_pubkey, info="card-content-v1")` to decrypt the app card, then continuing via the app card's `ancestry_pubkeys`) to confirm it reaches the governance authority's app-certification policy root. Rejects the registration request if the chain does not reach a trusted root.
+
+This **app-chain verification is press-side and registration-time only**. Runtime verifiers (wallets, relying parties evaluating a sub-card-signed statement) do not independently re-walk the `app_card` certification chain — they rely on the press having validated it here, evidenced by the `sub_card_doc_cid` pointer on the on-chain `SubCardEntry`.
+
+The press then calls `RegisterSubCard` on the Arbitrum One registry contract, creating a `SubCardEntry` (see `protocol-objects.md §15`) that stores `master_card_address`, `registration_log_head`, and `sub_card_doc_cid` (the CID of the IPFS SubCardDocument). The app card address is **not** stored on-chain — it lives in the IPFS document at `sub_card_doc_cid`.
+
+**Gas** is paid from the app's pre-funded gas account with the press (see `registry_contract.md §4.12`). The press rejects the registration request if the app's gas balance is insufficient before submitting any transaction. The app is responsible for maintaining a funded balance; the issuing organization's press does not cover sub-card registration costs.
 
 The sub-card is now a live, independently-verifiable credential in the registry.
 
@@ -199,7 +207,7 @@ Sub-card revocations are submitted to an approved press (for the primary card's 
 
 ### Authorization for Deregistration
 
-Sub-card deregistration (the on-chain `DeregisterSubCard` call that marks a sub-card inactive) requires a signature from the holder's **primary card key** — not from the sub-card key itself, and not from the app. The press verifies this signature off-chain before submitting the transaction; gas is paid by the issuing organization's press.
+Sub-card deregistration (the on-chain `DeregisterSubCard` call that marks a sub-card inactive) requires a signature from the holder's **primary card key** — not from the sub-card key itself, and not from the app. The press verifies this signature off-chain before submitting the transaction; gas is paid from the requesting app's pre-funded account with the press. If the app's balance is insufficient, the issuing organization's press sponsors the cost so that deregistration is never blocked by a depleted balance (stranding an active sub-card key is a security risk). See `registry_contract.md §4.12`.
 
 This means sub-card keys cannot unilaterally deregister themselves. An app that wants to revoke its own sub-card (e.g., on uninstall) must request deregistration through the press, which requires the holder's primary key to be available. In practice, the holder's wallet signs the deregistration request; the app triggers the flow by notifying the wallet.
 
@@ -252,11 +260,13 @@ The wallet is the enforcement point. It:
 ## Acceptance Criteria
 
 - [ ] The wallet refuses to countersign a `SubCardDocument` whose `app_card` chain does not reach the governance authority's app-certification policy root.
+- [ ] The press re-verifies the `app_card` chain (using `app_card_pubkey` and `ancestry_pubkeys`) before submitting `RegisterSubCard`; the press rejects registration if the chain does not reach the governance app-certification root.
 - [ ] The wallet refuses to countersign for apps with a revocation-equivalent annotation on their card; the user is shown the reason.
 - [ ] The sub-card private key is generated inside hardware-backed keystore storage, scoped to the app's signing identity.
 - [ ] The sub-card private key is never exposed in plaintext outside the hardware keystore, even to the app that holds it.
 - [ ] Both `app_signature` (app card key) and `holder_signature` (holder primary card key) are present and independently verifiable in every completed `SubCardDocument`.
-- [ ] A verifier can confirm a statement signed with a sub-card chains to the holder's primary card and the app's card without contacting the wallet or the app, by reading `holder_primary_card_pubkey` and `app_card_pubkey` from the decrypted sub-card document, applying the keccak256 binding checks, decrypting the master and app cards, and then continuing the chain walk via those cards' own `ancestry_pubkeys`.
+- [ ] A runtime verifier can confirm a statement signed with a sub-card chains to the holder's primary card without contacting the wallet or the app, by reading `holder_primary_card_pubkey` from the decrypted sub-card document, applying the keccak256 binding check, decrypting the master card, and then continuing the chain walk to a trusted root via the master card's own `ancestry_pubkeys`. The runtime verifier does NOT re-walk the `app_card` certification chain — it relies on the press having validated this at registration time.
+- [ ] The on-chain `SubCardEntry` for every registered sub-card carries `sub_card_doc_cid` — the CID of the IPFS `SubCardDocument` containing the app card address, app card pubkey, app signature, and holder signature.
 - [ ] Verifiers reject sub-card signatures on message types not present in the sub-card's `capabilities` whitelist.
 - [ ] Verifiers reject sub-card signatures where `valid_until` has passed.
 - [ ] Revoking a sub-card does not affect the holder's primary card or other sub-cards held by other apps.
@@ -274,7 +284,7 @@ The wallet is the enforcement point. It:
 
 - **[Design — SM-SHARE-ALL]** Should the wallet support a "share all cards" option, or should per-card selection be mandatory? The latter is more privacy-preserving but may be friction-heavy for apps that legitimately need access to many cards.
 - **[Engineering — SM-OFFLINE]** How should the wallet handle a sub-card request that arrives while the user is offline? Queue and present on next open, or reject with a retry instruction?
-- ~~**[Engineering — SM-GAS]** Gas sponsorship: should the wallet offer to sponsor gas for sub-card registration, or is it always the app's responsibility?~~ ✅ **RESOLVED 2026-06-14** — Gas for `RegisterSubCard` and app-initiated `DeregisterSubCard` is always the requesting app's responsibility. The app pre-funds a gas account with the press; the press rejects the request if the balance is insufficient. The wallet does not sponsor sub-card registration gas.
+- ~~**[Engineering — SM-GAS]** Gas sponsorship: should the wallet offer to sponsor gas for sub-card registration, or is it always the app's responsibility?~~ ✅ **RESOLVED 2026-06-14 (updated 2026-06-16)** — Gas for `RegisterSubCard` is always the requesting app's responsibility; the press rejects the request if the balance is insufficient. Gas for `DeregisterSubCard` is the requesting app's responsibility; if the app balance is insufficient, the issuing organization's press sponsors the cost — deregistration must never be blocked by a depleted balance, since stranding an active sub-card key is a security risk. The wallet does not sponsor sub-card registration gas. See `registry_contract.md §4.12`.
 - **[Trust-and-Safety — SM-CADENCE]** What is the minimum audit cadence for apps to maintain their app card's standing? Per-version? Per-major-version? Time-based (every 90 days)?
 - **[Design — SM-RENEW]** When a user sets `valid_until` on a sub-card, should the wallet send a renewal reminder before expiry, or should the app re-request authorization?
 - **[Security — SM-SPAM]** The app pays gas for sub-card registration. Could a malicious app exploit this to spam the registry? Rate limiting per app card should be considered.
