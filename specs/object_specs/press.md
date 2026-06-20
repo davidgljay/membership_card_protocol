@@ -1,6 +1,6 @@
 # Card Protocol — Press Spec
 
-**Version:** 0.1 (draft)
+**Version:** 0.2 (draft)
 **Date:** 2026-06-20
 **Status:** Draft
 
@@ -54,7 +54,6 @@ A press has two distinct key pairs, serving distinct roles:
 - The public key is the press's IPFS identity. Its keccak256 hash is the press's on-chain registry address.
 - Used to produce `press_signature` in every `CardDocument` and `LogEntry` the press signs.
 - Used to produce `press_signature` in `SCIP` objects.
-- Used to sign `AuditEpochEntry` objects.
 - The private key is held in the container's runtime memory (loaded from the environment at startup). It never leaves the press process.
 
 **secp256r1 keypair (on-chain authorization key)**
@@ -178,18 +177,16 @@ CREATE TABLE policy_write_counts (
   PRIMARY KEY (policy_address, window_start)
 );
 
--- Tracks open audit epochs per policy.
--- NOTE: The AEK is held in-process memory only during an open epoch; it is
--- NOT persisted to this table. If the press restarts with an open epoch, the
--- AEK must be recovered via the wrapped copies held by auditors (see OQ-A3).
-CREATE TABLE audit_epochs (
-  policy_card_cid  TEXT    NOT NULL,
-  epoch_id         TEXT    NOT NULL,
-  status           TEXT    NOT NULL,  -- 'open' or 'closed'
-  epoch_start      INTEGER NOT NULL,  -- Unix timestamp
-  epoch_end        INTEGER,           -- Unix timestamp; null if still open
-  entry_count      INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (policy_card_cid, epoch_id)
+-- Pre-funded gas account balances for app cards, used for sub-card operations.
+-- Apps fund their balance by sending ETH to the press's Arbitrum address with their
+-- app_card_address (keccak256 of their ML-DSA-44 pubkey, hex-encoded) in the transaction calldata.
+-- The press monitors incoming ETH transfers and credits balances on confirmation.
+-- Deducted on RegisterSubCard; sponsored (from press balance) on DeregisterSubCard if zero.
+CREATE TABLE app_gas_accounts (
+  app_card_address  TEXT    NOT NULL PRIMARY KEY,  -- hex-encoded keccak256 of app ML-DSA-44 pubkey
+  balance_wei       TEXT    NOT NULL DEFAULT '0',  -- stored as string to avoid integer overflow
+  last_funded_at    INTEGER,                        -- Unix timestamp of most recent incoming transfer
+  last_debited_at   INTEGER                         -- Unix timestamp of most recent deduction
 );
 ```
 
@@ -227,6 +224,7 @@ The press exposes an HTTP API for inbound requests from issuers, holders, and ad
 | `POST` | `/sub-card/deregister` | Submit a signed deregistration request for a sub-card |
 | `GET`  | `/press` | Returns press metadata: `press_card_cid`, `policy_cids`, `log_heads`, `address` |
 | `GET`  | `/health` | Liveness check. Returns `200 OK` with `{ "status": "ok" }` if the press is operational |
+| `GET`  | `/app-gas/:address` | Returns the current pre-funded gas balance for an app card address: `{ "app_card_address": "0x...", "balance_wei": "..." }` |
 
 All `POST` endpoints accept `Content-Type: application/json`. All responses are JSON.
 
@@ -253,9 +251,8 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 2. Resolve the policy card from IPFS using `resolveCard(policy_cid)`.
 3. Confirm the policy's `valid_until` has not passed (if set).
 4. Confirm the press's own `press_card_cid` appears in `policy.approved_presses`.
-5. Confirm an open audit epoch exists for this policy (via `getOpenEpoch`); if not, call `openAuditEpoch` before proceeding.
-6. Call `evaluatePredicates(policy, requester_card, recipient_card)`.
-7. Call `checkRateLimits('register_card', requester_card_address, policy_address)`.
+5. Call `evaluatePredicates(policy, requester_card, recipient_card)`.
+6. Call `checkRateLimits('register_card', requester_card_address, policy_address)`.
 
 **Returns:** Validated policy snapshot and resolved card chains, or an error code.
 
@@ -327,7 +324,7 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 
 #### `pinToIPFS(content)`
 
-**Called by:** `publishCard`, `appendLogEntry`, `appendIssuanceRecord`, `openAuditEpoch`, `closeAuditEpoch`
+**Called by:** `publishCard`, `appendLogEntry`, `appendIssuanceRecord`
 **Purpose:** Upload bytes to web3.storage and return the root CID.
 
 **Steps:**
@@ -488,7 +485,7 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 
 #### `updateCardHeadOnChain(cardAddress, prevLogCid, newLogCid)`
 
-**Called by:** `appendLogEntry`, `appendIssuanceRecord` (for policy card log head)
+**Called by:** `appendLogEntry`
 **Purpose:** Submit `UpdateCardHead` to the registry contract.
 
 **Steps:**
@@ -650,7 +647,7 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 
 #### `getLogHead(policyCid)`
 
-**Called by:** `appendIssuanceRecord`, `openAuditEpoch`, `closeAuditEpoch`
+**Called by:** `appendIssuanceRecord`
 **Purpose:** Return the current log head CID for a policy card's press log.
 
 **Steps:**
@@ -664,15 +661,15 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 #### `appendIssuanceRecord(policyCid, cardCid, recipientPubkey, offerType)`
 
 **Called by:** `/issue/finalize` handler, `processOpenOfferClaim`
-**Purpose:** Encrypt a `PressIssuanceRecord` with the current epoch AEK, upload to IPFS, and update the policy card's log head.
+**Purpose:** Build a `PressIssuanceRecord`, deliver it to each auditor listed in the policy, and await confirmations.
 
 **Steps:**
 
-1. Call `getOpenEpoch(policyCid)` → `{ epoch_id, aek }`.
-2. Assemble the `PressIssuanceRecord` plaintext:
+1. Resolve the policy card via `resolveCard(policyCid)` to get `policy.auditors`.
+2. If `policy.auditors` is empty or absent, skip — no auditors to notify.
+3. Assemble the `PressIssuanceRecord` plaintext:
    ```json
    {
-     "epoch_id": "<epoch_id>",
      "card_cid": "<cardCid>",
      "recipient_pubkey": "<base64url — ML-DSA-44 pubkey>",
      "scip_cid": "<scip_cid>",
@@ -680,85 +677,18 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
      "offer_type": "<offerType>"
    }
    ```
-3. Encrypt with AES-256-GCM using the epoch AEK and a fresh 96-bit random nonce.
-4. Wrap in the outer storage envelope: `{ epoch_id (plaintext), nonce, ciphertext }`.
-5. Call `pinToIPFS(envelope)` → `record_cid`.
-6. Build a new log entry (append operation) linking to the current log head.
-7. Using `BEGIN IMMEDIATE` in SQLite to prevent concurrent appends: get current log head, construct the new linked entry, call `pinToIPFS(new_log_entry)`, then call `updateCardHeadOnChain(policy_card_address, prev_cid, new_cid)`.
-8. Update SQLite `policy_log_heads` and `audit_epochs.entry_count`.
+4. For each card address in `policy.auditors`, send the `PressIssuanceRecord` as an E2E encrypted message via the normal message routing layer (HTTPS to the auditor's wallet service endpoint, encrypted to the auditor card's public key).
+5. Await a confirmation message from each auditor acknowledging receipt and recording. Apply a configurable timeout (default: 30 seconds per auditor).
+6. If an auditor does not confirm within the timeout, log a warning and continue — issuance is not blocked by an unresponsive auditor. Alert the policy administrator.
+7. Record which auditors confirmed and which timed out in the press log (local SQLite only — not on IPFS).
 
-**Returns:** `{ record_cid, new_log_head_cid, entry_index }`.
+**Returns:** `{ confirmed_auditors: string[], timed_out_auditors: string[] }`.
 
 ---
 
 ### 5.7 Audit Epoch Management
 
-#### `getOpenEpoch(policyCid)`
-
-**Called by:** `appendIssuanceRecord`, `validateIssuanceRequest`
-**Purpose:** Return the current open audit epoch for a policy. Opens a new epoch if none exists.
-
-**Steps:**
-
-1. Query SQLite `audit_epochs` for `policy_card_cid = policyCid AND status = 'open'`.
-2. If found, return `{ epoch_id, aek }`.
-3. If not found, call `openAuditEpoch(policyCid)` and return the new epoch.
-
----
-
-#### `openAuditEpoch(policyCid)`
-
-**Called by:** `getOpenEpoch`
-**Purpose:** Start a new audit epoch, distribute the epoch AEK to all auditors, and post the `AuditEpochEntry` to the policy log.
-
-**Steps:**
-
-1. Generate a fresh 256-bit random AEK.
-2. Determine the `epoch_id` (convention: ISO year string for annual epochs; or a monotonically incrementing integer).
-3. Resolve the policy card via `resolveCard(policyCid)` to get the `auditors` list.
-4. For each auditor in `policy.auditors`:
-   - Fetch the auditor's card from IPFS.
-   - Derive the auditor's ML-KEM-768 public key (from auditor card's `recipient_pubkey` via HKDF or a dedicated KEM key field — see OQ-A1).
-   - Call `ML-KEM.Encaps(auditor_pubkey)` → `{ kem_ciphertext, kem_shared_secret }`.
-   - Derive wrap key: `HKDF-SHA3-256(kem_shared_secret, "audit-epoch-aek-v1")`.
-   - Encrypt AEK with AES-256-GCM using the wrap key → `wrapped_aek`.
-5. Assemble the `AuditEpochEntry`:
-   ```json
-   {
-     "type": "audit_epoch_entry",
-     "status": "open",
-     "epoch_id": "<epoch_id>",
-     "epoch_start": "<ISO 8601 now>",
-     "epoch_end": null,
-     "auditor_key_packages": [ ... ],
-     "commitment_cid": null,
-     "close_reason": null
-   }
-   ```
-6. Sign with the press's ML-DSA-44 key → `press_signature`.
-7. Call `pinToIPFS(epochEntry)` → `entry_cid`.
-8. Call `updateCardHeadOnChain(policy_card_address, prev_cid, entry_cid)` to anchor the open epoch in the policy log.
-9. Store `{ policy_card_cid, epoch_id, status: 'open', epoch_start }` in SQLite `audit_epochs`. Hold the AEK in process memory only; do not persist it. See OQ-A3 for the restart-recovery implications.
-
-**Returns:** `{ epoch_id, aek }`.
-
----
-
-#### `closeAuditEpoch(policyCid, closeReason)`
-
-**Called by:** Operator-initiated (e.g., at calendar year boundary, key rotation, or auditor change)
-**Purpose:** Close the current open epoch and post a closing `AuditEpochEntry` to the policy log.
-
-**Steps:**
-
-1. Fetch the current open epoch from SQLite.
-2. Assemble a closing `AuditEpochEntry` with `status: "closed"`, `epoch_end: now`, `close_reason`, and `auditor_key_packages: []`.
-3. Sign and pin to IPFS.
-4. Call `updateCardHeadOnChain(policy_card_address, prev_cid, closing_entry_cid)`.
-5. Update SQLite `audit_epochs` to `status: 'closed'`, record `epoch_end`.
-6. Destroy the in-memory AEK (zero the memory region). There is no persisted copy to clear.
-
-**Note:** After epoch close, the press must not generate issuance records for that epoch. `openAuditEpoch` must be called before the next issuance.
+Removed. Audit epochs and ML-KEM-based AEK distribution are replaced by direct auditor messaging (see §5.6). Auditors maintain their own records of issuance notifications received from the press.
 
 ---
 
@@ -958,12 +888,12 @@ Press-side error codes (not on-chain reverts). Returned in the HTTP response bod
 
 ## 9. Open Questions
 
-| ID | Area | Question |
+| ID | Area | Resolution |
 |---|---|---|
-| **OQ-A1** | Audit | `openAuditEpoch` requires ML-KEM-768 public keys for each auditor. `CardDocument` stores only ML-DSA-44 keys (`recipient_pubkey`). Where is the auditor's KEM public key stored? Options: a dedicated field in the auditor's `CardDocument`, a separate KEM key document on IPFS, or derived from the ML-DSA-44 key (not recommended — different security properties). This is required before `openAuditEpoch` can be implemented. |
-| **OQ-A2** | Gas | The app gas account ledger (pre-funded balances for `RegisterSubCard` and `DeregisterSubCard`) is not yet specified. What is the mechanism for apps to pre-fund their balance with the press — direct ETH transfer? A signed credit request? The press needs to track per-app balances and deduct on each sub-card operation. |
-| **OQ-A3** | Recovery | The AEK is held in process memory only during an open epoch (not persisted). If the press restarts unexpectedly during an open epoch, the AEK is lost from memory. To resume encrypting issuance records, the press must either: (a) coordinate with auditors to decapsulate the epoch AEK from their wrapped copies and re-supply it out-of-band (operationally complex), or (b) close the interrupted epoch immediately on restart and open a new one (losing some entries from the interrupted epoch's audit log). The preferred recovery path must be specified before production deployment. |
-| **OQ-A4** | Serialization | The canonical serialization format for all signed payloads is stated as RFC 8785 (see `ARCHITECTURE.md` ADR-010), but ADR-010 records this as unresolved. This spec proceeds on the assumption RFC 8785 is adopted. If CBOR is chosen instead, all `buildPressSignedPayload` and signing functions must be updated. |
+| ~~**OQ-A1**~~ | Audit | **Closed.** Auditor key distribution via ML-KEM is replaced by direct E2E messaging. Auditors are listed in `policy.auditors` as card addresses; the press messages each auditor at issuance time using the normal routing layer. No `kem_pubkey` field is required. |
+| ~~**OQ-A2**~~ | Gas | **Closed.** Apps pre-fund their gas balance by sending ETH directly to the press's Arbitrum One address with their `app_card_address` in the transaction calldata. See §3.3 `app_gas_accounts`. |
+| ~~**OQ-A3**~~ | Recovery | **Closed (no longer applicable).** AEK recovery is not needed — there is no AEK. The press does not hold any epoch key material. Auditors maintain their own records. |
+| ~~**OQ-A4**~~ | Serialization | **Closed (stale).** `ARCHITECTURE.md` ADR-010 is already Accepted — RFC 8785 (JCS) adopted. |
 
 ---
 

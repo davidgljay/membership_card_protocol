@@ -145,9 +145,9 @@ The protocol uses two log types with different privacy requirements:
 | Log type | Owner | Privacy | Anchored on-chain? |
 |---|---|---|---|
 | **Card log** | Card holder | Public or private (owner's choice) | Yes — head CID in Arbitrum One registry |
-| **Press log** | Press service | Private by default | Yes — head CID in policy card's registry entry |
+| **Press log** | Press service | Delivered to auditors by message; auditors hold local records | No |
 
-The press log records each issuance event, encrypted under the current audit epoch's AEK (AES-GCM, per-entry random nonce). The AEK is generated at epoch open and wrapped once per auditor via ML-KEM-768; each auditor receives only their own wrapped copy. The press operator cannot read these entries. See `card_protocol_spec.md §2` Audit Epoch Lifecycle for the full open/close procedure.
+The press log records each issuance event by delivering a `PressIssuanceRecord` to each card address listed in `policy.auditors` via E2E encrypted message. Auditors maintain their own local records and return a confirmation message to the press. The press does not maintain an encrypted IPFS issuance log.
 
 ### Log Entry Structure (Field Updates and Revocations)
 
@@ -200,7 +200,7 @@ The protocol uses a **split signing model** with two distinct signature schemes 
 
 - **IPFS / content signatures:** **ML-DSA-44** (FIPS 204, Module Lattice Digital Signature Algorithm). Used for all content signed to IPFS — card documents, log entries, SCIPs, message envelopes, audit epoch entries, and all other IPFS-stored artifacts. Post-quantum resistance is required here because IPFS content is permanent and cannot be re-signed after publish.
 - **On-chain write authorization:** **secp256r1 (P-256)** via the **RIP-7212 precompile** on Arbitrum One. Used for press write operations and governance operations. Keys are rotatable; the upgrade path to ML-DSA-44 on-chain is built in. See ADR-012.
-- **Key encapsulation (audit log encryption):** **ML-KEM-768** (FIPS 203, Module Lattice Key Encapsulation Mechanism, parameter set 768). ML-KEM-768 is the normatively pinned parameter set for this protocol.
+- **Key encapsulation (E2E message encryption):** **ML-KEM-768** (FIPS 203, Module Lattice Key Encapsulation Mechanism, parameter set 768). ML-KEM-768 is the normatively pinned parameter set for this protocol. Used for E2E message transport (ADR-007), including auditor notification messages.
 - **Canonical serialization:** RFC 8785 (JSON Canonicalization Scheme — JCS). Lexicographic key sort, no whitespace, standard JSON escaping, UTF-8 output. See ADR-010.
 
 ### Rationale for split model
@@ -267,7 +267,7 @@ The Arbitrum One registry contract enforces press authorization via two on-chain
 
 The press's observable role is constrained by the audit-encryption model and by card-content encryption (ADR-006):
 
-- **The press records each issuance in its press log**, encrypted under the audit epoch AEK (ADR-003) so only auditors — not the press operator — can read the issuance history.
+- **The press records each issuance by messaging each auditor** listed in `policy.auditors` with a `PressIssuanceRecord` (ADR-003). Auditors maintain their own local records.
 - **On-chain CIDs are public; card content is encrypted.** The press posts the plaintext CID to the registry, but the IPFS content at that CID is encrypted with AES-256-GCM under a content key derived from the card's public key (ADR-006). Anyone holding the card's public key can derive the content key and decrypt the document; the content is opaque ciphertext to anyone without it.
 
 ### Self-Hosted Presses
@@ -524,8 +524,7 @@ Press
   → posts to IPFS → CID returned
   → creates registry entry on Arbitrum One (initial log head CID)
     authorized by press secp256r1 key in PressAuthorizations
-  → constructs issuance log entry, encrypted to each auditor via ML-KEM
-  → appends to policy card's IPFS log + updates policy card's registry pointer
+  → sends PressIssuanceRecord to each auditor in policy.auditors via E2E encrypted message
   → produces Signed Card Inclusion Proof (SCIP)
   → sends SCIP + confirmation to recipient via HTTPS (to wallet service endpoint)
 ```

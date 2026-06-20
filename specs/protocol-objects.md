@@ -104,7 +104,7 @@ The genesis document of a card. Every card — including policy cards, press sub
 
 **Signing sequence (three parties, fixed order):**
 1. The **offerer's wallet service** assembles the document with all policy-defined fields, `issuer_card`, `press_card`, `issued_at`, `ancestry_pubkeys` (the ordered array of ancestor ML-DSA-44 public keys, from immediate parent toward root), and `past_keys` if applicable (present and oldest-first when this card is the product of a master key rotation; omitted otherwise), leaving `recipient_pubkey`, `holder_signature`, and `press_signature` absent.
-2. The offerer signs canonical RFC 8785 JSON of that offer with the offerer's card key → `issuer_signature`. `ancestry_pubkeys` and `past_keys` (if present) are covered by this signature.
+2. The offerer signs canonical RFC 8785 JSON of that offer with the offerer's card key → `issuer_signature`. `ancestry_pubkeys` and `past_keys` (if present) are covered by this signature. `recipient_pubkey` is excluded (not yet present).
 3. The offer is presented to the recipient, who reviews, generates a fresh ML-DSA-44 keypair, adds `recipient_pubkey`, and signs canonical RFC 8785 JSON of the offer-plus-pubkey → `holder_signature`. `ancestry_pubkeys` and `past_keys` (if present) are covered by this signature.
 4. The offerer validates the countersigned result (confirms the recipient countersigned the intended offer).
 5. The countersigned card is sent to the **press**, which validates policy compliance, signs canonical RFC 8785 JSON of the complete document with its press sub-card key → `press_signature`, posts it to IPFS encrypted under the ADR-006 content key, and registers it on-chain. `ancestry_pubkeys` and `past_keys` (if present) are covered by this signature.
@@ -192,7 +192,7 @@ A policy card is a CardDocument whose content defines the rules for a class of c
 | `field_definitions` | array | Yes | Schema for cards issued under this policy |
 | `recipient_predicate` | predicate | No | Chain predicate the recipient must satisfy; absent = unconstrained |
 | `requester_predicate` | predicate | No | Chain predicate the requester must satisfy; absent = unconstrained |
-| `auditors` | `card-pointer-array` | No | Auditors receive a per-epoch AEK (wrapped via ML-KEM-768 per auditor) giving them read access to all issuance log entries in that epoch. See `PressIssuanceRecord` §11 and `AuditEpochEntry` §12. |
+| `auditors` | `card-pointer-array` | No | Card addresses that the press notifies at issuance time by delivering a `PressIssuanceRecord` via E2E encrypted message. See `PressIssuanceRecord` §11 and press spec §5.6. |
 | `approved_presses` | `card-pointer-array` | No | Presses whose sub-card pointers may write to this policy's cards |
 | `valid_until` | `timestamp` | No | Press rejects issuance requests after this time |
 | `allow_open_offers` | `boolean` | No | Default `false`; must be `true` to permit open card offers under this policy |
@@ -615,136 +615,42 @@ A small signed object that binds a newly-issued card's CID to its position in th
 
 ## 11. PressIssuanceRecord
 
-**Stored on:** IPFS, within the policy card's append-only press log  
-**Encrypted with:** The current audit epoch's AEK (AES-GCM, per-entry random nonce)  
-**Access:** Only by auditors holding a wrapped copy of the epoch AEK; press operator cannot decrypt  
+**Delivered by:** Press, via E2E encrypted message to each card address in `policy.auditors` immediately after assembling and signing the `CardDocument`  
 **Written by:** Press (immediately after assembling and signing the `CardDocument`; the press already holds `recipient_pubkey` at that point — it is in the `CardDocument` the press just assembled)
 
-The plaintext content of each press log entry. Entries are encrypted under the epoch AEK shared across all auditors for that epoch (see `AuditEpochEntry` §12). Each entry carries `epoch_id` in plaintext so that auditors can identify which epoch key to use for decryption without reading the ciphertext.
-
-**Envelope vs. plaintext.** `recipient_pubkey` and all other fields in the JSON example below live inside the AEK-encrypted plaintext. The outer on-IPFS storage envelope — `epoch_id` (plaintext), `nonce`, and `ciphertext` — is unchanged and contains no public key material.
+The content of each issuance notification sent to auditors. The `PressIssuanceRecord` is delivered directly to each auditor card address listed in `policy.auditors` via E2E encrypted message using the normal message routing layer. Auditors maintain their own local records of issuance notifications received from the press.
 
 ```json
 {
-  "epoch_id":         "<string — identifies the audit epoch this entry belongs to>",
   "card_cid":         "<base64url — CID of the issued CardDocument>",
   "recipient_pubkey": "<base64url — ML-DSA-44 public key of the issued CardDocument, 1312 bytes raw>",
   "scip_cid":         "<base64url — CID of the SCIP posted to IPFS>",
   "issued_at":        "<ISO 8601 timestamp>",
-  "requester_card":   "<base64url — mutable pointer of the requester's card — optional>",
   "offer_type":       "targeted | open"
-}
-```
-
-The on-IPFS storage format for each encrypted entry (outer envelope — unchanged):
-
-```json
-{
-  "epoch_id":   "<string — plaintext; identifies epoch key>",
-  "nonce":      "<base64url — 96-bit random nonce>",
-  "ciphertext": "<base64url — AES-GCM.Encrypt(AEK, PressIssuanceRecord plaintext, nonce)>"
 }
 ```
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `epoch_id` | `text` | Yes | Identifies which epoch AEK decrypts this entry; stored in plaintext in the outer envelope |
 | `card_cid` | `cid` | Yes | Links to the issued card; gives auditors an issuance record for the policy |
-| `recipient_pubkey` | `base64url` | Yes | ML-DSA-44 public key of the issued `CardDocument` (1312 bytes raw). Auditor usage: derive `content_key = HKDF-SHA3-256(recipient_pubkey, info="card-content-v1")`, decrypt the issued card at `card_cid`, then inspect its field values and verify predicate compliance against the policy. This field is populated by the press from the `CardDocument` it just assembled — no extra work is required at issuance time. Lives inside the AEK-encrypted plaintext; exposed only to auditors. |
+| `recipient_pubkey` | `base64url` | Yes | ML-DSA-44 public key of the issued `CardDocument` (1312 bytes raw). Auditor usage: derive `content_key = HKDF-SHA3-256(recipient_pubkey, info="card-content-v1")`, decrypt the issued card at `card_cid`, then inspect its field values and verify predicate compliance against the policy. This field is populated by the press from the `CardDocument` it just assembled — no extra work is required at issuance time. |
 | `scip_cid` | `cid` | Yes | Links to the SCIP for this issuance |
 | `issued_at` | `timestamp` | Yes | Must match the card's `issued_at` |
-| `requester_card` | `card-pointer` | No | Present for targeted issuance; absent for open offer claims |
 | `offer_type` | `text` | Yes | `"targeted"` or `"open"` |
 
-**Binding and consistency check.** After decrypting the issued card at `card_cid`, the auditor SHOULD confirm `keccak256(recipient_pubkey)` equals the card's on-chain registry address (the card's mutable pointer in the registry). A mismatch indicates a malformed or forged record and MUST be flagged in the audit `findings`. Decryption success (AES-GCM authentication tag passes) also confirms the key is correct — an authentication failure is likewise a hard rejection and MUST be flagged.
+**Binding and consistency check.** After decrypting the issued card at `card_cid`, the auditor SHOULD confirm `keccak256(recipient_pubkey)` equals the card's on-chain registry address (the card's mutable pointer in the registry). A mismatch indicates a malformed or forged record and MUST be flagged in the audit findings.
 
 ---
 
 ## 12. AuditEpochEntry
 
-**Stored on:** IPFS, within the policy card's append-only press log  
-**Written by:** Press (at epoch open and epoch close)  
-**Signed by:** Press sub-card key
-
-Posted to the policy log at the start and end of each audit epoch. On open, it distributes the epoch AEK wrapped under each active auditor's ML-KEM public key. On close, it records the epoch's `AuditEpochCommitment` CID and cards the epoch as permanently closed.
-
-```json
-{
-  "type":           "audit_epoch_entry",
-  "status":         "open | closed",
-  "epoch_id":       "<string — e.g. '2026' for annual epochs, or sequential integer>",
-  "epoch_start":    "<ISO 8601 timestamp — set on open; null on close>",
-  "epoch_end":      "<ISO 8601 timestamp — set on close; null on open>",
-  "auditor_key_packages": [
-    {
-      "auditor_card":  "<base64url — mutable pointer of the auditor's card>",
-      "kem_ciphertext": "<base64url — ML-KEM.Encaps(auditor_pubkey) ciphertext; 1088 bytes for ML-KEM-768>",
-      "wrapped_aek":    "<base64url — AES-GCM.Encrypt(HKDF-SHA3-256(kem_shared_secret), AEK)>"
-    }
-  ],
-  "commitment_cid": "<base64url — CID of the AuditEpochCommitment on IPFS; present only when status is 'closed'>",
-  "close_reason":   "<text — 'calendar_boundary' | 'key_rotation' | 'auditor_change'; present only when status is 'closed'>",
-  "press_signature": "<ML-DSA-44 signature over canonical RFC 8785 JSON of all above fields>"
-}
-```
-
-| Field | Type | Required | Notes |
-|---|---|---|---|
-| `type` | `text` | Yes | Always `"audit_epoch_entry"` |
-| `status` | `text` | Yes | `"open"` when starting an epoch; `"closed"` when recording epoch closure |
-| `epoch_id` | `text` | Yes | Unique per epoch within a policy; convention is ISO year string for annual epochs |
-| `epoch_start` | `timestamp` | On open | UTC timestamp when this epoch began |
-| `epoch_end` | `timestamp` | On close | UTC timestamp when this epoch closed |
-| `auditor_key_packages` | `array` | On open | One entry per active auditor; empty array on close entry |
-| `auditor_key_packages[].auditor_card` | `card-pointer` | Yes (per package) | Identifies the auditor |
-| `auditor_key_packages[].kem_ciphertext` | `bytes` | Yes (per package) | ML-KEM.Encaps output; auditor decapsulates with their private key to recover `kem_shared_secret` |
-| `auditor_key_packages[].wrapped_aek` | `bytes` | Yes (per package) | AEK wrapped under `HKDF-SHA3-256(kem_shared_secret, "audit-epoch-aek-v1")`; 32-byte AEK + 12-byte nonce + 16-byte GCM tag |
-| `commitment_cid` | `cid` | On close | Points to the `AuditEpochCommitment` IPFS document |
-| `close_reason` | `text` | On close | Why the epoch closed; informational |
-| `press_signature` | `SignatureEntry` | Yes | Binds all fields; signed with the press sub-card key |
-
-The press must not generate issuance entries for an epoch after posting a `status: "closed"` entry for it.
+**Removed.** Audit epoch key distribution via ML-KEM is replaced by direct auditor messaging. See press spec §5.6 for the current auditor notification model.
 
 ---
 
 ## 13. AuditEpochCommitment
 
-**Stored on:** IPFS (standalone document, not part of the policy log directly)  
-**Written by:** Auditor  
-**Signed by:** Auditor card key  
-**Referenced by:** The `AuditEpochEntry` with `status: "closed"` in the policy log
-
-The permanent audit record for a closed epoch. The auditor produces this document after decrypting all entries in the epoch, then destroys the epoch AEK. The commitment is the only remaining evidence of what the epoch contained; it is signed by the auditor and publicly verifiable.
-
-```json
-{
-  "type":             "audit_epoch_commitment",
-  "epoch_id":         "<string — matches the epoch_id in the corresponding AuditEpochEntry>",
-  "policy_card":     "<base64url — mutable pointer of the policy card>",
-  "auditor_card":    "<base64url — mutable pointer of this auditor's card>",
-  "period_start":     "<ISO 8601 timestamp>",
-  "period_end":       "<ISO 8601 timestamp>",
-  "entry_count":      <integer>,
-  "entries_hash":     "<base64url — SHA3-256 of the concatenated CIDs of all decrypted entries in log order>",
-  "findings":         "<free text — summary of audit findings; 'no issues found' if clean>",
-  "auditor_signature": "<ML-DSA-44 signature over canonical RFC 8785 JSON of all above fields>"
-}
-```
-
-| Field | Type | Required | Notes |
-|---|---|---|---|
-| `type` | `text` | Yes | Always `"audit_epoch_commitment"` |
-| `epoch_id` | `text` | Yes | Must match the epoch being committed |
-| `policy_card` | `card-pointer` | Yes | Identifies the policy this commitment covers |
-| `auditor_card` | `card-pointer` | Yes | Identifies the signing auditor |
-| `period_start` | `timestamp` | Yes | Must match the `epoch_start` from the opening `AuditEpochEntry` |
-| `period_end` | `timestamp` | Yes | Must match the `epoch_end` from the closing `AuditEpochEntry` |
-| `entry_count` | `integer` | Yes | Number of `PressIssuanceRecord` entries decrypted; enables detection of missing entries |
-| `entries_hash` | `bytes` | Yes | SHA3-256(concat of all entry CIDs in log order); a verifier with the raw entries can confirm the auditor processed all of them |
-| `findings` | `text` | Yes | Human-readable audit summary; required even if empty |
-| `auditor_signature` | `SignatureEntry` | Yes | Binds all fields; signed with the auditor's card key |
-
-The `entries_hash` is a completeness commitment: it proves the auditor saw all entries in sequence and did not skip any. A verifier who later obtains the decrypted entries (through any channel) can recompute the hash and confirm it matches the commitment. The commitment does not prove the auditor correctly classified each entry — it proves they processed them.
+**Removed.** Audit epoch key distribution via ML-KEM is replaced by direct auditor messaging. See press spec §5.6 for the current auditor notification model.
 
 ---
 
@@ -958,7 +864,7 @@ Objects marked **RFC 8785-signed** use canonical RFC 8785 JSON per Appendix A of
 | AuthenticationRequest | HTTPS | RFC 8785-signed (all except `request_signature`) |
 | AuthenticationResponse | In-transit | Not signed as a whole; contains a SignedMessageEnvelope |
 | SCIP | In-transit / IPFS | RFC 8785-signed (all except `press_signature`) |
-| PressIssuanceRecord | IPFS (encrypted) | Not signed; encrypted via ML-KEM |
+| PressIssuanceRecord | Delivered by message to auditor card addresses | Not signed separately; delivered E2E encrypted via normal message routing layer |
 | CardEntry | Arbitrum One | On-chain; write authorized by secp256r1 sig verified via RIP-7212 precompile against `PressAuthorizations` table |
 | SubCardRegistration | Arbitrum One | On-chain; stores `master_card_address`, `registration_log_head`, `sub_card_doc_cid` (CID of IPFS SubCardDocument). Write authorized by press secp256r1 sig (§6.1 write gate); master card holder ML-DSA-44 sig verified off-chain by press; app-certification chain walk also performed off-chain by press before submission. |
 | SubCardDocument | IPFS | RFC 8785-signed (`app_signature` over all fields except both signature fields; `holder_signature` over all fields including `app_signature`); `holder_primary_card_pubkey` and `app_card_pubkey` are present and covered by both signatures |
