@@ -1,10 +1,10 @@
 # Card Protocol — Registry Contract Spec
 
-**Version:** 0.2 (draft)  
-**Date:** 2026-06-14  
+**Version:** 0.3 (draft)  
+**Date:** 2026-06-19  
 **Status:** Draft  
 **Contract target:** Arbitrum One (Stylus / WASM-compiled Rust)  
-**Amends:** v0.1 — on-chain verification changed from ML-DSA-44 to secp256r1/RIP-7212 per ADR-012. Key sizes updated throughout. ML-DSA-44 key hashes retained in `PressAuthorizations` for upgrade path.
+**Amends:** v0.2 — three-contract architecture adopted (storage / logic / verifier). Logic contract is upgradeable via 7-day timelock `UpgradeLogic` (RootPolicyBody). Storage contract is immutable and enforces unconditional audit-trail invariants. §3.7, §4.14, §6.3 added/rewritten; events, error codes, and read operations updated. See also v0.1→v0.2: on-chain verification changed from ML-DSA-44 to secp256r1/RIP-7212 per ADR-012.
 
 ---
 
@@ -19,6 +19,7 @@
    - 3.4 [SubCardRegistrations](#34-subcardregistrations)
    - 3.5 [OpenOfferUseCounts](#35-openofferusecounts)
    - 3.6 [GovernanceKeysets](#36-governancekeysets)
+   - 3.7 [Logic Contract Address and Storage Access Control](#37-logic-contract-address-and-storage-access-control)
 4. [Write Operations](#4-write-operations)
    - 4.1 [RegisterCard](#41-registercard)
    - 4.2 [UpdateCardHead](#42-updatecardhead)
@@ -33,10 +34,13 @@
    - 4.11 [RotateOnChainKeyScheme](#411-rotateonchainKeyscheme)
    - 4.12 [Gas Payment and Rate Limiting](#412-gas-payment-and-rate-limiting)
    - 4.13 [RegisterAddressForward](#413-registeraddressforward)
+   - 4.14 [UpgradeLogic](#414-upgradelogic)
+   - 4.15 [BatchUpdateCardHeads](#415-batchupdatecardheads)
 5. [Read Operations](#5-read-operations)
 6. [Authorization Model](#6-authorization-model)
    - 6.1 [Card Write Gate](#61-card-write-gate)
    - 6.2 [Governance Quorum Verification](#62-governance-quorum-verification)
+   - 6.3 [Upgradeability — Three-Contract Model](#63-upgradeability--three-contract-model)
 7. [Events](#7-events)
 8. [Error Codes](#8-error-codes)
 9. [Open Questions](#9-open-questions)
@@ -57,7 +61,11 @@ The contract is the protocol's **write gatekeeper** — it enforces press author
 
 The contract verifies press and governance signatures on-chain using the **RIP-7212 secp256r1 precompile** (P-256, ~3,450 gas per verification). This is the mechanism by which the contract confirms that a write is signed by a key registered to an authorized press. Without on-chain signature verification, the contract would be a passive log; with it, it is an enforced authorization boundary.
 
-The contract is implemented in **Stylus** (WASM-compiled Rust) to retain the upgrade path to ML-DSA-44 on-chain verification when quantum computing makes secp256r1 vulnerable. The Stylus runtime supports WASM-compiled ML-DSA-44 verification; it is not used for Phase 1 writes but is available via a `UpgradeVerifier` governance operation (§6.3). See ADR-012 for the full upgrade path.
+The registry is deployed as **three separate contracts** (see §6.3 for full detail):
+
+- **Storage contract (immutable address)** — holds all state mappings. Exposes permissioned setters callable only by the current logic contract address. Enforces a set of unconditional storage invariants (write-once existence flags, immutable forwards, append-only timestamps) that no logic upgrade can override. Its address is the stable protocol identifier.
+- **Logic contract (upgradeable)** — implements all write operations (§4), authorization checks (§6.1–6.2), and event emission. Calls into the storage contract for reads and writes, and calls the verifier module for signature checks. Replaced via `UpgradeLogic` (7-day timelock, RootPolicyBody quorum, §4.14).
+- **Verifier module (upgradeable)** — implements signature verification logic. In Phase 1, delegates to the RIP-7212 secp256r1 precompile. Replaced via `UpgradeVerifier` (48-hour timelock, RootPolicyBody quorum, §6.3). Implemented in **Stylus** (WASM-compiled Rust) to retain the upgrade path to ML-DSA-44 on-chain verification when warranted (ADR-012).
 
 ---
 
@@ -277,7 +285,56 @@ Both bodies govern with the same quorum verification logic; they differ only in 
 
 ---
 
+### 3.7 Logic Contract Address and Storage Access Control
+
+The storage contract holds the address of the currently authorized logic contract and enforces that all setter functions are called exclusively by that address.
+
+```
+LogicContract: address   — Address of the current logic contract.
+                           Set at deploy to the initial logic contract address.
+                           Updated only via UpgradeLogic (§4.14, 7-day timelock,
+                           RootPolicyBody quorum).
+                           All storage setter functions revert if
+                           msg.sender != LogicContract.
+
+PendingLogicUpgrade: PendingUpgrade   — Proposal state for a pending UpgradeLogic.
+                                         Zero-value if no upgrade is pending.
+
+PendingUpgrade {
+    proposed_address   address    — New logic contract address proposed.
+    proposed_at        uint64     — Block timestamp when proposal was submitted.
+    governance_version uint32     — GovernanceKeysets[RootPolicyBody].version at
+                                    proposal time; used to detect keyset rotation
+                                    between proposal and confirmation.
+    nonce              bytes32    — Replay-prevention nonce from proposal payload.
+}
+```
+
+**Storage setter interface.** The storage contract exposes one setter per logical write operation (e.g., `setCardEntry`, `setPressAuthEntry`, `setSubCardEntry`). Each setter:
+
+1. Reverts with `CALLER_NOT_LOGIC_CONTRACT` (E-29) if `msg.sender != LogicContract`.
+2. Applies the relevant unconditional invariant checks (see below) before writing.
+3. Writes the new value.
+
+The setters are not user-facing functions. They are called exclusively by the logic contract as part of implementing the write operations in §4. They are not directly accessible to presses, governance bodies, or any other external caller.
+
+**Unconditional storage invariants.** The following invariants are enforced by the storage contract setters and cannot be overridden by any logic contract, regardless of the logic upgrade history:
+
+| Invariant | Enforcement point |
+|---|---|
+| `CardEntries[addr].exists` is write-once: once `true`, no setter may set it back to `false`. | `setCardEntry` setter |
+| `CardEntries[addr].forward_to` is immutable once non-zero: if the stored value is non-zero, the setter reverts. | `setForwardTo` setter |
+| `PolicyAuthorizerKeys` has no delete setter: the only operation is key rotation (overwrite). No setter removes an entry. | Storage contract has no `deletePolicy` setter |
+| `PressAuthorizations[p][a].revoked_at` is write-once-non-zero: once set to a non-zero timestamp, no setter may overwrite or zero it. | `setPressAuthEntry` setter |
+| `SubCardRegistrations[addr].deregistered_at` is write-once-non-zero: once set to a non-zero timestamp, no setter may overwrite or zero it. | `setSubCardEntry` setter |
+
+These invariants preserve the audit trail and ensure that the core record of what has existed on-chain is permanent, independent of future protocol logic changes.
+
+---
+
 ## 4. Write Operations
+
+All write operations are implemented in the **logic contract** (§6.3). From a caller's perspective the function signatures are identical regardless of which logic contract version is active; the storage contract address — the stable protocol identifier — never changes. The logic contract calls the storage contract's setter interface for all state changes and the verifier module for all signature checks.
 
 All write operations emit a corresponding event (§7) on success.
 
@@ -823,6 +880,229 @@ RegisterAddressForward(
 
 ---
 
+### 4.14 UpgradeLogic
+
+Upgrading the logic contract is a two-step operation with a mandatory 7-day timelock between proposal and confirmation. Both steps require a valid quorum signature from the **Root Policy Governance Body**. The logic contract address stored in the storage contract (`LogicContract`) is only updated on successful confirmation after the timelock has elapsed.
+
+The 7-day window gives press operators, card holders, monitoring agents, and protocol observers time to detect a malicious or erroneous proposal and take action (emergency governance rotation, public alerting) before the new logic takes effect.
+
+---
+
+#### Step 1 — ProposeLogicUpgrade
+
+**Called by:** Root Policy Governance Body (quorum required)  
+**Purpose:** Record a proposed new logic contract address on-chain and start the 7-day timelock.
+
+```
+ProposeLogicUpgrade(
+    new_logic_address   address,    — Address of the proposed new logic contract.
+                                      Must be a deployed contract; the storage contract
+                                      does not verify bytecode — that is the governance
+                                      body's responsibility before signing.
+    governance_payload  bytes,      — Canonical RFC 8785 JSON of ProposeLogicUpgradePayload
+    governance_sigs     bytes[]     — secp256r1 signatures (r||s, 64 bytes each) from
+                                      RootPolicyBody key holders
+) → void
+```
+
+**`ProposeLogicUpgradePayload`:**
+
+```json
+{
+  "op":                 "propose_logic_upgrade",
+  "new_logic_address":  "<base64url — 20 bytes, EVM address>",
+  "governance_version": <uint32 — current GovernanceKeysets[RootPolicyBody].version>,
+  "nonce":              "<base64url>",
+  "timestamp":          "<ISO 8601>"
+}
+```
+
+**Preconditions:**
+
+1. No upgrade is already pending (`PendingLogicUpgrade.proposed_address == address(0)`). A new proposal cannot be submitted until the pending one is either confirmed or cancelled.
+2. `new_logic_address != address(0)` and `new_logic_address != LogicContract` (no no-op upgrades).
+3. Quorum signature check (§6.2, `RootPolicyBody` keyset).
+
+**State changes:**
+
+- Sets `PendingLogicUpgrade = { proposed_address: new_logic_address, proposed_at: block.timestamp, governance_version: GovernanceKeysets[RootPolicyBody].version, nonce: <nonce from payload> }`.
+- Emits `LogicUpgradeProposed(new_logic_address, block.timestamp, timelock_expires_at)` where `timelock_expires_at = block.timestamp + 7 days`.
+
+---
+
+#### Step 2 — ConfirmLogicUpgrade
+
+**Called by:** Root Policy Governance Body (quorum required)  
+**Purpose:** Execute the upgrade by updating `LogicContract` to the proposed address, after the 7-day timelock has elapsed.
+
+```
+ConfirmLogicUpgrade(
+    proposed_logic_address  address,    — Must match PendingLogicUpgrade.proposed_address exactly.
+                                          Provided explicitly to prevent ambiguity if a new proposal
+                                          was somehow queued between steps.
+    governance_payload      bytes,      — Canonical RFC 8785 JSON of ConfirmLogicUpgradePayload
+    governance_sigs         bytes[]     — secp256r1 signatures (r||s, 64 bytes each) from
+                                          RootPolicyBody key holders; a fresh quorum signature
+                                          is required (not the same signatures as the proposal)
+) → void
+```
+
+**`ConfirmLogicUpgradePayload`:**
+
+```json
+{
+  "op":                    "confirm_logic_upgrade",
+  "proposed_logic_address": "<base64url — 20 bytes, EVM address>",
+  "governance_version":    <uint32 — current GovernanceKeysets[RootPolicyBody].version>,
+  "nonce":                 "<base64url>",
+  "timestamp":             "<ISO 8601>"
+}
+```
+
+**Preconditions:**
+
+1. `PendingLogicUpgrade.proposed_address != address(0)` (a proposal exists).
+2. `proposed_logic_address == PendingLogicUpgrade.proposed_address` (addresses match).
+3. `block.timestamp >= PendingLogicUpgrade.proposed_at + 7 days` (timelock has elapsed).
+4. `GovernanceKeysets[RootPolicyBody].version == PendingLogicUpgrade.governance_version`. If the governance keyset was rotated between proposal and confirmation, the proposal is stale and must be re-submitted under the new keyset. This prevents a scenario where a proposal is made under a compromised keyset that has since been rotated out.
+5. Fresh quorum signature check (§6.2, `RootPolicyBody` keyset) over `ConfirmLogicUpgradePayload`. The confirmation nonce must differ from the proposal nonce.
+
+**State changes:**
+
+- Updates `LogicContract = proposed_logic_address`.
+- Clears `PendingLogicUpgrade` to zero value.
+- Emits `LogicUpgradeConfirmed(proposed_logic_address, block.timestamp)`.
+
+---
+
+#### CancelLogicUpgrade
+
+**Called by:** Root Policy Governance Body (quorum required)  
+**Purpose:** Withdraw a pending proposal without executing it. Used when a proposal is found to be erroneous or when a governance keyset rotation makes the proposal stale and re-submission is preferred over waiting for the timelock to elapse.
+
+```
+CancelLogicUpgrade(
+    governance_payload  bytes,
+    governance_sigs     bytes[]
+) → void
+```
+
+**Preconditions:**
+
+1. `PendingLogicUpgrade.proposed_address != address(0)` (a proposal exists).
+2. Quorum signature check (`RootPolicyBody` keyset).
+
+**State changes:**
+
+- Clears `PendingLogicUpgrade` to zero value.
+- Emits `LogicUpgradeCancelled(PendingLogicUpgrade.proposed_address, block.timestamp)`.
+
+---
+
+**Acceptance criteria:**
+
+- [ ] `ProposeLogicUpgrade` succeeds with valid quorum signatures and no pending proposal; creates `PendingLogicUpgrade` and emits `LogicUpgradeProposed`.
+- [ ] `ProposeLogicUpgrade` reverts with E-30 if a proposal is already pending.
+- [ ] `ConfirmLogicUpgrade` reverts with E-31 if called before 7 days have elapsed since `proposed_at`.
+- [ ] `ConfirmLogicUpgrade` reverts with E-15 if `governance_version` in the payload does not match the current keyset version.
+- [ ] `ConfirmLogicUpgrade` reverts with E-32 if `proposed_logic_address` does not match `PendingLogicUpgrade.proposed_address`.
+- [ ] On successful `ConfirmLogicUpgrade`, `LogicContract` is updated and `PendingLogicUpgrade` is cleared.
+- [ ] After a logic upgrade, the storage contract's setter access control rejects calls from the old logic contract address.
+- [ ] `CancelLogicUpgrade` clears `PendingLogicUpgrade` and emits `LogicUpgradeCancelled`.
+- [ ] All storage invariants (§3.7) are enforced after a logic upgrade — the new logic contract cannot bypass them.
+
+---
+
+### 4.15 BatchUpdateCardHeads
+
+**Called by:** Press (authorized for the target policy)  
+**Purpose:** Advance the log heads of multiple cards in a single Arbitrum One transaction, amortizing the base transaction gas cost across all updates. Intended for high-volume presses performing bulk updates (e.g., credential refresh cycles, mass revocations) under a single policy. All updates are atomic — the transaction reverts entirely if any individual precondition fails.
+
+```
+BatchUpdateCardHeads(
+    policy_address     bytes32,      — Policy shared by all cards in this batch.
+                                       All cards must belong to this policy; the contract
+                                       verifies CardEntries[card_address].policy_address
+                                       == policy_address for each item.
+    updates            UpdateItem[], — Ordered array of card updates; 1–100 items
+                                       (MAX_BATCH_SIZE = 100, implementation-defined).
+    press_sig_payload  bytes,        — Canonical RFC 8785 JSON of BatchUpdateCardHeadsPayload
+    press_signature    bytes[64]     — secp256r1 signature (r||s) over keccak256(press_sig_payload),
+                                       verified via RIP-7212 against PressAuthorizations.press_public_key
+) → void
+
+UpdateItem {
+    card_address   bytes32   — Existing card to update
+    prev_log_cid   bytes     — Current log_head_cid; must match stored value (lost-update guard)
+    new_log_cid    bytes     — CID of the new log head
+}
+```
+
+**`BatchUpdateCardHeadsPayload` (signed by press):**
+
+```json
+{
+  "op":           "batch_update_card_heads",
+  "policy_address": "<base64url — bytes32>",
+  "press_address": "<base64url — bytes32>",
+  "updates": [
+    {
+      "card_address": "<base64url — bytes32>",
+      "prev_log_cid": "<base64url — CID bytes>",
+      "new_log_cid":  "<base64url — CID bytes>"
+    }
+  ],
+  "sequence":     <uint64 — must equal PressAuthorizations[policy][press].next_sequence>,
+  "timestamp":    "<ISO 8601>"
+}
+```
+
+The `updates` array in the signed payload must match the calldata `updates` array exactly (same order, same values). The contract verifies the signature over the payload before processing any individual item.
+
+**Preconditions checked by contract (all verified before any state change):**
+
+1. `len(updates) >= 1` and `len(updates) <= MAX_BATCH_SIZE` (100).
+2. No duplicate `card_address` values within `updates`.
+3. `policy_address` exists in `PolicyAuthorizerKeys` (recognized policy).
+4. `PressAuthorizations[policy_address][press_address]` exists and `active == true`.
+5. `press_signature` verifies against `PressAuthorizations[policy_address][press_address].press_public_key` over `press_sig_payload` via RIP-7212.
+6. `sequence` in `press_sig_payload` equals `PressAuthorizations[policy_address][press_address].next_sequence`. On success, `next_sequence` is incremented by **1** (not by the number of items — the entire batch counts as one write for replay prevention).
+7. For each `UpdateItem`:
+   a. `card_address` exists in `CardEntries`.
+   b. `CardEntries[card_address].policy_address == policy_address` (cross-policy writes in a single batch are not permitted).
+   c. `prev_log_cid` matches `CardEntries[card_address].log_head_cid` (optimistic concurrency check).
+   d. `len(new_log_cid) <= 64` (CID size limit).
+
+All items are validated before any storage write begins. A failure on item N reverts the entire transaction; no partial state changes occur.
+
+**State changes (all atomic):**
+
+For each `UpdateItem`, in order:
+- Updates `CardEntries[card_address].log_head_cid = new_log_cid`.
+- Updates `CardEntries[card_address].last_press_address = press_address`.
+
+Increments `PressAuthorizations[policy_address][press_address].next_sequence` by 1.
+
+**Events:**
+
+Emits one `CardHeadUpdated` event per item (same event as `UpdateCardHead`), in the same order as the `updates` array. Off-chain indexers need no special handling for batched updates.
+
+**Gas note.** The primary saving is the ~21,000 gas base transaction cost, amortized across all items. Each item still incurs the per-card storage write and RIP-7212 verification costs. At 100 items the base-cost saving is ~210 gas per item. For presses with frequent bulk operations this compounds materially over time.
+
+**Acceptance criteria:**
+
+- [ ] `BatchUpdateCardHeads` succeeds and updates all cards when all preconditions pass; emits one `CardHeadUpdated` per item.
+- [ ] `BatchUpdateCardHeads` reverts with E-33 if `updates` is empty or exceeds MAX_BATCH_SIZE.
+- [ ] `BatchUpdateCardHeads` reverts with E-34 if any two items share the same `card_address`.
+- [ ] `BatchUpdateCardHeads` reverts with E-34 if any item's `card_address` belongs to a policy other than `policy_address`.
+- [ ] `BatchUpdateCardHeads` reverts (E-08) if any item's `prev_log_cid` does not match the stored head; no items are updated.
+- [ ] `BatchUpdateCardHeads` reverts (E-02) if any item's `card_address` does not exist; no items are updated.
+- [ ] `BatchUpdateCardHeads` reverts (E-07) on sequence mismatch; no items are updated.
+- [ ] `next_sequence` is incremented by exactly 1 regardless of the number of items in `updates`.
+- [ ] A subsequent single `UpdateCardHead` or `BatchUpdateCardHeads` using `sequence + 1` succeeds after a successful batch.
+
+---
+
 ## 5. Read Operations
 
 These are view functions — no state change, no fee beyond RPC costs.
@@ -837,6 +1117,9 @@ These are view functions — no state change, no fee beyond RPC costs.
 | `GetGovernanceKeyset(body_id GovernanceBodyId)` | `GovernanceKeyset` | Active keys, quorum, version |
 | `IsPressActive(policy_address, press_address bytes32)` | `bool` | Quick check for verifiers |
 | `CardExists(card_address bytes32)` | `bool` | Check without fetching full entry |
+| `GetLogicContract()` | `address` | Address of the current logic contract |
+| `GetPendingLogicUpgrade()` | `PendingUpgrade` | Pending upgrade proposal, or zero-value if none |
+| `GetVerifierModule()` | `address` | Address of the current verifier module (stored in logic contract, not storage contract) |
 
 ---
 
@@ -899,26 +1182,72 @@ Applied on every governance operation (§4.6–4.10). The signed `governance_pay
 
 ---
 
-## 6.3 Upgradeability — Modular Verifier (OQ-18, resolved 2026-06-14)
+## 6.3 Upgradeability — Three-Contract Model (OQ-18, resolved 2026-06-14; extended 2026-06-19)
 
-The registry contract is split into two deployed contracts:
+The registry is deployed as three contracts with distinct upgradeability properties:
 
-**Registry storage contract (immutable).** Holds all state: `CardEntries`, `PolicyAuthorizerKeys`, `PressAuthorizations`, `SubCardRegistrations`, `OpenOfferUseCounts`, `GovernanceKeysets`. This contract is never upgraded. Its address is the stable protocol identifier.
+---
 
-**Verifier module (upgradeable).** Contains the signature verification logic. In Phase 1, this delegates secp256r1 verification to the RIP-7212 precompile at `0x100` and requires no Stylus computation. In Phase 3, the verifier module is upgraded (via `UpgradeVerifier`) to a Stylus WASM contract that performs ML-DSA-44 verification. The storage contract holds the verifier module address and delegates all signature checks to it via a cross-contract call. The verifier module has no state; it is a pure computation contract.
+### Storage contract (immutable address, no business logic)
 
-The verifier module address is stored in the registry as:
+Holds all protocol state: `CardEntries`, `PolicyAuthorizerKeys`, `PressAuthorizations`, `SubCardRegistrations`, `OpenOfferUseCounts`, `GovernanceKeysets`, `LogicContract`, `PendingLogicUpgrade`. This contract is **never redeployed**. Its address is the stable protocol identifier — the address presses write to, verifiers read from, and monitoring infrastructure watches.
+
+The storage contract exposes only:
+- Getter functions (publicly readable).
+- Setter functions callable exclusively by `LogicContract` (see §3.7).
+- The unconditional storage invariants enforced in setters (see §3.7).
+
+The storage contract has no business logic, no authorization checks beyond `msg.sender == LogicContract`, and emits no events. It cannot be upgraded.
+
+---
+
+### Logic contract (upgradeable, 7-day timelock)
+
+Implements all write operations (§4.1–4.13), authorization checks (§6.1–6.2), and event emission. Reads from and writes to the storage contract via the setter interface. Delegates all signature verification to the verifier module via cross-contract call.
+
+The logic contract also implements `ProposeLogicUpgrade`, `ConfirmLogicUpgrade`, and `CancelLogicUpgrade` (§4.14). These are the only operations that modify `LogicContract` in the storage contract.
+
+**UpgradeLogic** (§4.14) governance:
+- Governed by `RootPolicyBody` quorum.
+- Mandatory 7-day timelock between `ProposeLogicUpgrade` and `ConfirmLogicUpgrade`.
+- Second quorum signature required at confirmation (fresh signatures, not a replay of the proposal).
+- Governance keyset version must match between proposal and confirmation; a keyset rotation invalidates pending proposals.
+- A `CancelLogicUpgrade` operation allows the governance body to withdraw a proposal before the timelock elapses.
+
+**Blast-radius limit of a logic upgrade.** A malicious logic contract (whether from a compromised governance key or a bug in the proposed implementation) can misuse write authority to the storage contract's setters. However, the unconditional storage invariants (§3.7) are enforced by the storage contract itself and cannot be overridden: existing card entries cannot be deleted, forwards cannot be overwritten, revocation timestamps cannot be zeroed. The core audit trail is permanent regardless of logic upgrade history.
+
+The 7-day timelock exists specifically to bound the blast radius: any malicious proposal is visible on-chain for 7 days before it can take effect, giving the broader community, monitoring infrastructure, and remaining governance key holders time to detect, alert, and respond.
+
+**Gas cost of logic separation.** Each write operation incurs one additional cross-contract call from the logic contract into the storage contract per setter invocation (~2,100 gas base per call). For typical operations (`RegisterCard`: ~2–3 setter calls, `UpdateCardHead`: ~1–2), this adds ~4,000–6,000 gas per write — approximately $0.001–0.003 at current Arbitrum One gas prices. This is not a blocking cost.
+
+---
+
+### Verifier module (upgradeable, 48-hour timelock)
+
+Contains signature verification logic only. In Phase 1, delegates secp256r1 verification to the RIP-7212 precompile at `0x100`. In Phase 3, upgraded to a Stylus WASM contract performing ML-DSA-44 verification (ADR-012). The verifier module has no state; it is a pure computation contract. Its address is stored in the logic contract (not the storage contract), and it is called by the logic contract on every signature check.
 
 ```
-VerifierModule: address   — Address of the current verifier module.
+VerifierModule: address   — Stored in the logic contract.
                             Phase 1: thin wrapper delegating to RIP-7212 precompile.
                             Phase 3: Stylus WASM contract for ML-DSA-44 verification.
-                            Set at deploy; updated only via UpgradeVerifier governance operation.
+                            Updated only via UpgradeVerifier governance operation.
 ```
 
-**UpgradeVerifier** is a governance operation (governed by `RootPolicyBody` quorum) with a mandatory 48-hour timelock. The proposed new verifier address is recorded on-chain at proposal time; the upgrade takes effect only after the timelock expires and a second confirmation transaction is submitted. This gives protocol observers a window to detect and respond to a compromised governance key before a malicious verifier takes effect.
+**UpgradeVerifier** is a governance operation (governed by `RootPolicyBody` quorum) with a mandatory **48-hour timelock**. The proposed new verifier address is recorded in the logic contract at proposal time; the upgrade takes effect only after the timelock expires and a second confirmation transaction is submitted. Because the verifier module is stored in the logic contract rather than the storage contract, a verifier upgrade takes effect immediately on confirmation — there is no separate logic upgrade required to change the verifier address.
 
-The upgrade path intentionally cannot touch storage layout, authorization tables, or card entries. A governance key compromise can replace the signature verifier (potentially accepting invalid signatures going forward) but cannot rewrite existing registry state.
+**Blast-radius limit of a verifier upgrade.** A malicious verifier module can accept invalid signatures for new writes, but cannot modify existing storage state (it has no storage access). This is the narrower blast radius of the two upgradeable components.
+
+---
+
+### Upgrade governance summary
+
+| Operation | Timelock | Governing body | What changes |
+|---|---|---|---|
+| `UpgradeLogic` | 7 days | `RootPolicyBody` | All write operation logic, authorization checks |
+| `UpgradeVerifier` | 48 hours | `RootPolicyBody` | Signature verification only |
+| `RotateGovernanceKeys` | None (quorum required) | The body being rotated | Governance key set |
+
+The storage contract itself is never upgraded. Its address is permanent.
 
 ---
 
@@ -1002,11 +1331,30 @@ AddressTransition(
                                    (keccak256 of the new public key)
     timestamp          uint64
 )
+
+LogicUpgradeProposed(
+    proposed_address   address,  — Address of the proposed new logic contract
+    proposed_at        uint64,   — Block timestamp of the proposal
+    timelock_expires   uint64    — Block timestamp after which confirmation is permitted
+                                   (proposed_at + 7 days)
+)
+
+LogicUpgradeConfirmed(
+    new_logic_address  address,  — Address of the new logic contract now active
+    confirmed_at       uint64
+)
+
+LogicUpgradeCancelled(
+    cancelled_address  address,  — Address of the proposal that was cancelled
+    cancelled_at       uint64
+)
 ```
 
 **`AddressTransition` purpose.** This event is the on-chain archive of address changes resulting from master key rotations. Off-chain indexers can build an `old_address → new_address` lookup table from these events, enabling resolution of old addresses even when the old card's IPFS content is no longer pinned and the IPFS-level `successor` field is unreachable. See `key_rotation.md §2.3`.
 
 **Note:** Events do not include the new governance keys or press public keys in plaintext — these are available from the call data on the same transaction. Emitting 1,312-byte public keys in events would significantly increase log storage costs.
+
+**Note on event emission location:** All events are emitted by the **logic contract**, not the storage contract. The storage contract emits no events. Monitoring infrastructure that subscribes to protocol events must target the logic contract address, and must update its subscription when a logic upgrade takes effect (i.e., listen for `LogicUpgradeConfirmed` to know when to re-point subscriptions). The storage contract address — used for direct state reads — is permanent and never changes.
 
 ---
 
@@ -1043,6 +1391,12 @@ AddressTransition(
 | E-26 | `MLDSA44_KEY_HASH_MISMATCH` | `new_mldsa44_pubkey` in `RotateOnChainKeyScheme` does not hash to the stored `mldsa44_key_hash` |
 | E-27 | `FORWARD_ALREADY_SET` | `RegisterAddressForward` called for an `old_address` that already has a non-zero `forward_to` |
 | E-28 | `FORWARD_ON_REVOKED_CARD` | **Press-side rejection** — press detected that the old card already has an 8xx or 9xx revocation entry before the forward was registered. Not an on-chain revert; the press refuses to submit. |
+| E-29 | `CALLER_NOT_LOGIC_CONTRACT` | A call to a storage contract setter was made by an address other than `LogicContract`. Reverted by the storage contract. |
+| E-30 | `UPGRADE_ALREADY_PENDING` | `ProposeLogicUpgrade` called while a prior proposal is still pending (not yet confirmed or cancelled). |
+| E-31 | `UPGRADE_TIMELOCK_NOT_ELAPSED` | `ConfirmLogicUpgrade` called before 7 days have elapsed since `PendingLogicUpgrade.proposed_at`. |
+| E-32 | `UPGRADE_ADDRESS_MISMATCH` | `proposed_logic_address` in `ConfirmLogicUpgrade` does not match `PendingLogicUpgrade.proposed_address`. |
+| E-33 | `BATCH_SIZE_INVALID` | `BatchUpdateCardHeads` called with an empty `updates` array or with more than MAX_BATCH_SIZE (100) items. |
+| E-34 | `BATCH_ITEM_INVALID` | `BatchUpdateCardHeads` item failed validation: duplicate `card_address` within the batch, or `card_address` belongs to a policy other than `policy_address`. |
 
 ---
 
@@ -1059,8 +1413,9 @@ The following questions must be resolved before the contract is deployed or befo
 | ~~**OQ-17**~~ | Engineering | ~~**Nonce storage and pruning.**~~ **Resolved 2026-06-14.** Per-press sequence numbers: `PressAuthEntry` has `next_sequence: uint64`; press-signed payloads include `"sequence": <uint64>`; contract checks `sequence == next_sequence` and increments on success. No nonce table or pruning required. Governance payloads retain timestamp-scoped random nonces. Implemented in §3.3. | ~~High~~ |
 | ~~**OQ-18**~~ | Engineering | ~~**Contract upgradeability.**~~ **Resolved 2026-06-14.** Modular verifier architecture adopted (option c): immutable storage contract + upgradeable verifier module (§6.3). The verifier module starts as a thin RIP-7212 wrapper (Phase 1) and is upgraded to a ML-DSA-44 Stylus WASM verifier via `UpgradeVerifier` governance operation with 48-hour timelock when the key scheme upgrade occurs. | ~~High~~ |
 | **OQ-3** | Engineering | **Minimum IPFS replication before on-chain write.** When a press calls `RegisterCard` or `UpdateCardHead`, it includes an IPFS CID. If the content is not yet replicated (the CID is not resolvable), verifiers will be unable to fetch the log entry. Should the protocol require presses to confirm a minimum replication count before submitting the on-chain transaction? How is this enforced? | **Medium** |
-| **OQ-19** | Engineering | **Batch write operation.** High-volume presses may want to register or update multiple cards in a single Arbitrum One transaction to reduce per-card gas overhead. A `BatchUpdateCardHeads(updates[])` function could amortize the base transaction cost. This adds implementation complexity but may be necessary for press economics at scale. | **Medium** |
-| **OQ-20** | Governance | **Policy deregistration.** Once a policy is registered via `RegisterPolicy`, can it be deregistered? The current design has no delete operation for `PolicyAuthorizerKeys`. Removing a policy address would cause all presses authorized under it to lose write authority and all cards under it to become non-writable. This may be a desired kill-switch capability for compromised or abandoned policies, but it must be governed carefully. | **Medium** |
+| ~~**OQ-19**~~ | Engineering | ~~**Batch write operation.**~~ **Resolved 2026-06-19.** `BatchUpdateCardHeads` added as §4.15. Restricted to a single policy per batch (preserves per-(policy, press) sequence semantics). Atomic execution (all-or-nothing). Single sequence increment for the entire batch. MAX_BATCH_SIZE = 100. Emits individual `CardHeadUpdated` events per item for indexer compatibility. `RegisterCard` batching deferred — open-offer and policy-address permutations make batch registration substantially more complex; revisit if press economics require it. | ~~Medium~~ |
+| **OQ-20** | Governance | **Policy deregistration.** Once a policy is registered via `RegisterPolicy`, can it be deregistered? The current design has no delete operation for `PolicyAuthorizerKeys`. Removing a policy address would cause all presses authorized under it to lose write authority and all cards under it to become non-writable. This may be a desired kill-switch capability for compromised or abandoned policies, but it must be governed carefully. **Note (2026-06-19):** The three-contract model (§6.3) makes `DeregisterPolicy` straightforwardly addable via a future logic upgrade, without a storage migration. The storage invariant that `PolicyAuthorizerKeys` has no delete setter would need to be revisited if a deregistration path is adopted. | **Medium** |
+| **OQ-22** | Engineering | **Storage invariant scope.** The five unconditional invariants in §3.7 were chosen to preserve the audit trail (existence, forwards, timestamps). Are there additional invariants worth enforcing in the storage contract now, before the first logic upgrade path is exercised? Candidates: minimum quorum enforcement in `GovernanceKeysets` (currently checked by logic), monotonic `next_sequence` increments (currently checked by logic). Adding more invariants to the storage contract increases blast-radius protection but reduces flexibility of future logic upgrades. | **Low** |
 | **OQ-14** | Governance | **Coercion resistance / governance key holder identity.** Should governance body key holders be pseudonymous (organizations or anonymous participants, harder to coerce) or identifiable (named individuals/organizations with public accountability, easier to hold accountable but more coercible)? Deferred pending governance charter design. Carried forward from `ARCHITECTURE.md` ADR-011. | **Medium** |
 | **OQ-21** | Engineering | **Event indexing and the `approved_presses` sync problem.** ADR-011 notes that the `approved_presses` array in the policy card's IPFS content should be kept in sync with on-chain `PressAuthorizations` by tooling. The contract's `PressAuthorized` and `PressRevoked` events are the trigger. Should the protocol specify a canonical indexer interface (e.g., a subgraph schema) to make this sync reliable across implementations? | **Low** |
 | **OQ-6** | Engineering | **Efficient log head change detection.** How does a client or verifier efficiently learn that a card's log head has changed since their last check — polling the registry via RPC on each verification, or subscribing to `CardHeadUpdated` events? The event-subscription path requires an indexer; the polling path is simpler but wastes RPC calls. Relevant for mobile clients with limited connectivity. | **Low** |
