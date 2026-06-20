@@ -289,6 +289,7 @@ The object the updater signs before submitting to a press. The press validates p
   },
   "notify_holder":   true,
   "updater_message": "<optional>",
+  "note":            "<optional human-readable note>",
   "timestamp":       "<ISO 8601 timestamp — replay prevention>"
 }
 ```
@@ -302,6 +303,7 @@ The object the updater signs before submitting to a press. The press validates p
 | `revocation` | object | Conditional | Present for codes 8xx–9xx; null or absent for 1xx–7xx |
 | `notify_holder` | `boolean` | Yes | Copied verbatim into the LogEntry |
 | `updater_message` | `text` | No | Copied verbatim into the LogEntry |
+| `note` | `string?` | No | Optional human-readable note attached to this update intent |
 | `timestamp` | `timestamp` | Yes | Prevents replay; press rejects intents with stale timestamps |
 
 The intent does **not** include `version` or `prev_log_root` — those are added by the press when assembling the LogEntry.

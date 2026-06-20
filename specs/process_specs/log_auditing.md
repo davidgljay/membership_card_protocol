@@ -62,7 +62,7 @@ An epoch must be opened before the first issuance record can be posted. A new ep
 
 4. The press posts the `AuditEpochEntry` to the policy card's IPFS append-only log and updates the policy card's Arbitrum One registry pointer to the new log head.
 
-5. The press discards the raw AEK from memory immediately after distributing the wrapped copies. The press retains only the encrypted per-entry records; it cannot read the AEK in plaintext at any future point.
+5. The press retains the AEK in process memory throughout the open epoch — it is needed to encrypt each subsequent `PressIssuanceRecord`. The AEK is never persisted to disk or database; it exists only in the press's runtime memory. At epoch close, the press zeroes the in-memory AEK (see Process 2, Press side, step 6 in `press.md §5.7`). After that point the press cannot read the AEK in plaintext.
 
 6. The epoch is now open. The press encrypts each subsequent `PressIssuanceRecord` under this AEK:
    ```
@@ -158,7 +158,7 @@ When an auditor rotates their ML-KEM public key:
 
 ### Auditor added
 
-When a new auditor is added to `approved_presses` via a policy field update:
+When a new auditor is added to `auditors` via a policy field update:
 
 1. The current epoch closes. All existing auditors produce commitments; AEKs are destroyed.
 2. The press opens a new epoch with key packages for all active auditors, including the new one.
