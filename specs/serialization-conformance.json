@@ -137,13 +137,13 @@
     },
     {
       "id": "TC-16",
-      "description": "Optional field omission — null value is stripped; result is identical to TC-01",
+      "description": "Null field — null value serializes as the JSON literal `null` (pure RFC 8785; no null stripping)",
       "input": {
         "content": "hello",
         "in_reply_to": null
       },
-      "expected_json": "{\"content\":\"hello\"}",
-      "notes": "in_reply_to is null → omitted from output"
+      "expected_json": "{\"content\":\"hello\",\"in_reply_to\":null}",
+      "notes": "RFC 8785 does not strip null values; null serializes as the two-char token `null`. Key order: content < in_reply_to (c < i)."
     },
     {
       "id": "TC-17",

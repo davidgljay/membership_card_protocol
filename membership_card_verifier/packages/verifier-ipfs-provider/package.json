@@ -1,0 +1,36 @@
+{
+  "name": "@membership-card-protocol/verifier-ipfs-provider",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "web3.storage-compatible IpfsProvider implementation for @membership-card-protocol/verifier",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@web3-storage/w3up-client": ">=16.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@web3-storage/w3up-client": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@membership-card-protocol/verifier": "workspace:*",
+    "@types/node": "^26.0.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "name": "@membership-card-protocol/verifier",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Verifies SignedMessageEnvelope objects produced by the Card Protocol",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "test": "NODE_OPTIONS=--experimental-global-webcrypto vitest run",
+    "test:watch": "NODE_OPTIONS=--experimental-global-webcrypto vitest"
+  },
+  "dependencies": {
+    "@noble/hashes": "^1.7.2",
+    "@noble/post-quantum": "^0.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}

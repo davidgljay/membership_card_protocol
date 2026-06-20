@@ -1,4 +1,4 @@
-# Card Protocol — `@card-protocol/verifier` npm Package Spec
+# Card Protocol — `@membership-card-protocol/verifier` npm Package Spec
 
 **Version:** 0.1 (draft)  
 **Date:** 2026-06-20  
@@ -24,18 +24,20 @@
    - 7.3 [Stage 3 — Chain Walk](#73-stage-3--chain-walk)
    - 7.4 [Stage 4 — Revocation Check](#74-stage-4--revocation-check)
    - 7.5 [Stage 5 — Policy Compliance](#75-stage-5--policy-compliance)
+   - 7.6 [Stage 6 — EAS Annotation Lookup](#76-stage-6--eas-annotation-lookup)
+   - 7.7 [Non-Compliance Reporting](#77-non-compliance-reporting)
 8. [Result Types](#8-result-types)
 9. [Error Handling](#9-error-handling)
 10. [Serialization](#10-serialization)
 11. [Cryptographic Primitives](#11-cryptographic-primitives)
 12. [Dependencies](#12-dependencies)
-13. [Open Questions](#13-open-questions)
+13. [Decisions](#13-decisions)
 
 ---
 
 ## 1. Overview
 
-`@card-protocol/verifier` is a Node.js library that verifies `SignedMessageEnvelope` objects produced by the Card Protocol. A verifier answers four questions per signature:
+`@membership-card-protocol/verifier` is a Node.js library that verifies `SignedMessageEnvelope` objects produced by the Card Protocol. A verifier answers four questions per signature:
 
 1. Is the signature cryptographically valid?
 2. Was the signing card valid at the time of signing?
@@ -44,13 +46,13 @@
 
 Verification is fully independent — no contact with the signer, issuer, or press is required. Any party with access to IPFS and the Arbitrum One registry can verify a card.
 
-The package is **thin and I/O-agnostic**. All network access (Arbitrum One RPC and IPFS fetches) is performed through caller-supplied provider interfaces. The package supplies the protocol logic; the caller supplies the transport.
+The package is **thin**, with two categories of network access. **Provider-mediated I/O** — all Arbitrum One RPC reads and IPFS fetches — is performed through caller-supplied provider interfaces; the package supplies the protocol logic and the caller supplies the transport. **Package-internal HTTP calls** are the deliberate exceptions: the non-compliance POST to the Press Registry Body (§7.7) and the recommended annotators GET (§7.6) are made directly by the package and cannot be intercepted or skipped by the caller. This is intentional — both calls enforce governing-body requirements that must not be delegatable to the implementer.
 
 ---
 
 ## 2. Design Principles
 
-**Injected providers.** The package accepts an `RpcProvider` and an `IpfsProvider` at construction time. It makes no HTTP calls itself and has no opinion on which ethers/viem version the caller uses, which IPFS gateway they prefer, or how they handle caching.
+**Injected providers.** The package accepts an `RpcProvider` and an `IpfsProvider` at construction time. It has no opinion on which ethers/viem version the caller uses, which IPFS gateway they prefer, or how they handle caching.
 
 **All stages run.** Verification does not short-circuit on a failed stage (except within a stage where a hard rejection is defined — see §7). All five stages run, and the structured result reflects the outcome of each independently. Callers decide how to interpret the combined result.
 
@@ -66,7 +68,7 @@ The package is **thin and I/O-agnostic**. All network access (Arbitrum One RPC a
 
 **Runtime:** Node.js ≥ 22.  
 **Module system:** ESM only (`.mjs` / `"type": "module"`).  
-**Package name:** `@card-protocol/verifier`
+**Package name:** `@membership-card-protocol/verifier`
 
 No bundled RPC client or IPFS client is included. Callers install and configure their own.
 
@@ -111,6 +113,25 @@ interface RpcProvider {
    * Used for revocation checks (8xx/9xx codes).
    */
   getLogEntries(cardAddress: string): Promise<LogEntry[]>;
+
+  /**
+   * Returns all EAS attestations targeting the given card address
+   * where the attester is one of the provided annotator card addresses.
+   * Returns an empty array if no matching attestations exist.
+   * Used for Stage 6 annotation lookup.
+   */
+  getEasAnnotations(
+    cardAddress: string,
+    annotatorAddresses: string[]
+  ): Promise<EasAttestation[]>;
+}
+
+interface EasAttestation {
+  uid: string;              // EAS attestation UID (bytes32 hex)
+  attester: string;         // annotator card address (bytes32 hex)
+  cid: string;              // IPFS CID of the annotation content document
+  update_code: number;      // 2xx | 4xx | 6xx — annotation valence
+  effective_date: string;   // ISO 8601
 }
 
 interface CardEntry {
@@ -200,6 +221,28 @@ interface VerifierConfig {
    * Default: 64.
    */
   maxChainDepth?: number;
+
+  /**
+   * Endpoint for submitting non-compliance reports to the Press Registry Body.
+   * Hardcoded to the governing body's production URL before release.
+   * Default: PRESS_REGISTRY_BODY_ENDPOINT_PLACEHOLDER
+   */
+  registryEndpoint?: string;
+
+  /**
+   * Whether to fetch EAS annotations during Stage 6.
+   * When false, annotations is always [] in the result.
+   * Default: false.
+   */
+  fetchAnnotations?: boolean;
+
+  /**
+   * Additional EAS annotator card addresses (bytes32 hex) to include
+   * when filtering Stage 6 results, beyond the governing body's recommended
+   * list fetched from RECOMMENDED_ANNOTATORS_ENDPOINT_PLACEHOLDER.
+   * Default: [].
+   */
+  additionalAnnotators?: string[];
 }
 ```
 
@@ -351,9 +394,27 @@ A `signature_valid: false` result does not abort subsequent stages. The chain wa
    - If no entry exists, record `policy_compliant: false`. (No entry means the press was never authorized; the card could not have been validly registered.)
    - If an entry exists, on-chain registration is proof of write-time authorization. A press that is currently `active == false` (subsequently revoked) does **not** retroactively invalidate the card. Record `policy_compliant: true` if field values also passed; surface the subsequent revocation as informational context (`press_subsequently_revoked: true`) in the result.
 4. If any relying-party-specific `requiredPredicate` or `requiredPolicy` is configured (passed in as a call-site option — not part of `VerifierConfig`), evaluate it against the signer's chain. Predicate failure sets `policy_match: false` but does not affect `policy_compliant`.
-5. **Non-compliance reporting:** If `policy_compliant: false`, the package automatically POSTs a non-compliance report to the Press Registry Body endpoint (see §7.6). This is not optional and requires no caller action. The result field `non_compliance_reported` reflects whether the POST succeeded.
+5. **Non-compliance reporting:** If `policy_compliant: false`, the package automatically POSTs a non-compliance report to the Press Registry Body endpoint (see §7.7). This is not optional and requires no caller action. The result field `non_compliance_reported` reflects whether the POST succeeded.
 
-### 7.6 Non-Compliance Reporting
+### 7.6 Stage 6 — EAS Annotation Lookup
+
+**Input:** All card addresses resolved during Stage 3.  
+**Network:** Arbitrum One (`getEasAnnotations`), IPFS (annotation content documents), HTTP (`RECOMMENDED_ANNOTATORS_ENDPOINT_PLACEHOLDER`).
+
+Stage 6 is opt-in. If `config.fetchAnnotations` is `false` (the default), this stage is skipped and `annotations` is `[]` in the result.
+
+1. Fetch the governing body's recommended annotator list from `RECOMMENDED_ANNOTATORS_ENDPOINT_PLACEHOLDER`. This is a GET request returning a JSON array of annotator card addresses (bytes32 hex strings). If the fetch fails, record the error and proceed with an empty recommended list.
+2. Merge the recommended list with `config.additionalAnnotators` (deduplicating by address). This is the **active annotator set** for this verification.
+3. For each card address in the chain, call `rpc.getEasAnnotations(cardAddress, activeAnnotatorSet)` in parallel.
+4. For each returned `EasAttestation`:
+   a. Fetch and decode the annotation content document from IPFS using the `cid`.
+   b. Walk the annotator's chain using the same logic as Stage 3 (derive address from `attester`, fetch and decrypt annotator's card doc, check `ancestry_pubkeys`). Record `annotator_chain_trusted: true` if the walk reaches a trusted root.
+   c. Record `is_recommended_annotator: true` if the attester address appears in the governing body's recommended list (not just `config.additionalAnnotators`).
+5. Assemble one `EasAnnotation` per attestation and collect into `annotations`.
+
+A failure to fetch or decrypt any individual annotation document is recorded as a non-fatal error in `errors` (stage 6); that annotation is omitted from the result. Stage 6 failures do not affect any other stage outcome.
+
+### 7.7 Non-Compliance Reporting
 
 **Endpoint:** `https://PRESS_REGISTRY_BODY_ENDPOINT_PLACEHOLDER/non-compliance` *(placeholder — to be replaced before production)*
 
@@ -456,9 +517,28 @@ interface LogUpdate {
 }
 
 interface VerificationError {
-  stage: 1 | 2 | 3 | 4 | 5;
+  stage: 1 | 2 | 3 | 4 | 5 | 6;
   code: string;                                 // e.g. "HARD_REJECT_ADDRESS_MISMATCH"
   message: string;
+}
+
+interface EasAnnotation {
+  /** EAS attestation UID (bytes32 hex) */
+  eas_uid: string;
+  /** On-chain address of the annotating card (bytes32 hex) */
+  annotator_card: string;
+  /** Whether the annotator's chain walks to a trusted root */
+  annotator_chain_trusted: boolean;
+  /** Whether this annotator appears on the governing body's recommended T&S list */
+  is_recommended_annotator: boolean;
+  /** 2xx (positive) | 4xx (neutral) | 6xx (negative) */
+  update_code: number;
+  /** IPFS CID of the annotation content document */
+  cid: string;
+  /** Decoded annotation content document */
+  content: Record<string, unknown>;
+  /** ISO 8601 */
+  effective_date: string;
 }
 ```
 
@@ -541,12 +621,14 @@ No direct dependency on any specific Arbitrum One ABI is included. The `RpcProvi
 
 ## 13. Decisions
 
-1. **Reference provider packages.** Yes — ship `@card-protocol/verifier-rpc-provider` (ethers.js wrapper) and `@card-protocol/verifier-ipfs-provider` (web3.storage wrapper) as optional companion packages in the same repo. They are not dependencies of the core package and are independently versioned. Integrators who bring their own transport ignore them entirely.
+1. **Reference provider packages.** Yes — ship `@membership-card-protocol/verifier-rpc-provider` (ethers.js wrapper) and `@membership-card-protocol/verifier-ipfs-provider` (web3.storage wrapper) as optional companion packages in the same repo. They are not dependencies of the core package and are independently versioned. Integrators who bring their own transport ignore them entirely.
 
 2. **FIPS 204 library.** Use [`@noble/post-quantum`](https://github.com/paulmillr/noble-post-quantum). It provides explicit `ml_dsa44` support from FIPS-204, is actively maintained (v0.5.4, Dec 2025), has only two runtime dependencies (both also `noble` packages), and ships PGP-signed releases with npm provenance attestations. Two known limitations to track: (a) **no independent security audit at time of writing** — monitor for a future audit before production launch; (b) **no side-channel protection** — this is a documented limitation of all JS post-quantum implementations and is lower risk for verification-only use (no private key material is handled by this package). Do not vendor a WASM fallback; if `@noble/post-quantum` becomes unmaintained, re-evaluate at that time.
 
-3. **Stage 6 — EAS annotation lookup.** Include as an opt-in in the core package via `VerifierConfig.fetchAnnotations: boolean` (default `false`). When disabled, `annotations` is always `[]`. This avoids a separate package boundary for a feature closely coupled to the verification result.
+3. **Stage 6 — EAS annotation lookup.** Included as an opt-in in the core package via `VerifierConfig.fetchAnnotations` (default `false`). When disabled, `annotations` is always `[]`. The package fetches a governing-body-maintained list of recommended T&S annotators from `RECOMMENDED_ANNOTATORS_ENDPOINT_PLACEHOLDER` at verification time and merges it with `VerifierConfig.additionalAnnotators` supplied by the caller. Annotations are filtered to this merged set before chain-walking the annotators. This avoids a separate package boundary for a feature closely coupled to the verification result.
 
 4. **Caching.** Leave entirely to the caller's `IpfsProvider` and `RpcProvider` implementations. The core package makes no assumptions about caching. Callers who need it wrap their providers with a caching layer. The reference provider companion packages (decision 1) may include optional caching as a configuration option.
 
 5. **Non-compliance report authentication.** Unauthenticated for v1. The Registry Body validates reports by cross-checking `card_address` and `ipfs_card_document` against on-chain state independently. Signed reports (using the verifier's ML-DSA-44 key) are deferred to v2, pending definition of the verifier card registration flow.
+
+6. **Hardcoded endpoints.** Two endpoints are compiled into the package and replaced with production URLs before release: `PRESS_REGISTRY_BODY_ENDPOINT_PLACEHOLDER` (non-compliance reporting, §7.7) and `RECOMMENDED_ANNOTATORS_ENDPOINT_PLACEHOLDER` (Stage 6 annotator list, §7.6). Both can be overridden at construction time: `registryEndpoint` in `VerifierConfig` overrides the non-compliance endpoint; no override is provided for the recommended annotators endpoint (callers may supplement but not replace it via `additionalAnnotators`).
