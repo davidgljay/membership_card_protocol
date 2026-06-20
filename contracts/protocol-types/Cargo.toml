@@ -1,0 +1,11 @@
+[package]
+name = "protocol-types"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# No Stylus dependency — this is a pure Rust no_std library.
+# Contract crates import this and add their own Stylus/alloy dependencies.
+
+[features]
+default = []

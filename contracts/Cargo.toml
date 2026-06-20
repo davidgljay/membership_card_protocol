@@ -1,0 +1,24 @@
+[workspace]
+members = [
+    "protocol-types",
+    "storage-contract",
+    "logic-contract",
+    "verifier-module",
+]
+resolver = "2"
+
+[workspace.dependencies]
+stylus-sdk = { version = "0.8", features = ["export-abi"] }
+# alloy-primitives and alloy-sol-types must match stylus-sdk 0.8's pinned versions exactly.
+# stylus-sdk 0.8.x pins alloy-primitives =0.8.20 and alloy-sol-types =0.8.20.
+# We declare the same versions here so the workspace resolver chooses compatible versions.
+alloy-primitives = { version = "=0.8.20", default-features = false }
+alloy-sol-types = { version = "=0.8.20", default-features = false }
+protocol-types = { path = "./protocol-types" }
+
+[profile.release]
+opt-level = "z"
+strip = true
+lto = true
+panic = "abort"
+codegen-units = 1
