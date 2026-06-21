@@ -1402,11 +1402,11 @@ All field values — including binary fields (base64url strings) and timestamp f
 | `card-pointer` | base64url string | JSON string as-is |
 | `card-pointer-array` | Array of base64url strings | JSON array of JSON strings |
 | `append-only-array` | Array | JSON array, items per their own type |
-| Absent optional field | `null` / omitted | Omitted from object entirely |
+| Absent optional field | omitted | Omitted from object entirely |
 
 ### A.3 Optional Field Omission
 
-Optional fields that are absent MUST be omitted from the serialized object entirely. A field present with a `null` or `undefined` value MUST be stripped before encoding. Including `null` would produce different bytes than omission and would break signature verification across implementations.
+Optional fields that are absent MUST be omitted from the serialized object entirely. Protocol implementations MUST NOT include a field with a `null` or `undefined` value — the field must be absent from the object before it is passed to the canonicalizer. This is a **document authoring rule**, not a serialization rule: the RFC 8785 canonicalizer does not strip `null` values and will include them as the literal `null` if they are present. Implementations that set absent optional fields to `null` rather than omitting them will produce different bytes and will break signature verification across implementations.
 
 ### A.4 Conformance Test Corpus
 

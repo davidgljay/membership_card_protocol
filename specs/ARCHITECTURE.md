@@ -728,7 +728,7 @@ All field values — including binary fields (base64url strings) and timestamp f
 
 - **Integer values** must be within the IEEE 754 safe integer range (−2⁵³+1 to 2⁵³−1); validated at field creation.
 - **Binary data** (keys, signatures, CIDs) must use unpadded base64url (RFC 4648 §5). Standard `btoa()` produces padded standard base64 — incorrect.
-- **Absent optional fields** must be omitted from the serialized object entirely; `null` produces different bytes than omission.
+- **Absent optional fields** must be omitted from the serialized object entirely. Protocol implementations must not set absent optional fields to `null` — the field must be absent from the object before canonicalization. The RFC 8785 canonicalizer does not strip `null` values; a `null`-valued field produces different bytes than omission and will break signature verification.
 - **Key ordering applies at all nesting levels.** Implementations that assemble JSON strings manually will get nested objects wrong.
 
 ### Action Items
