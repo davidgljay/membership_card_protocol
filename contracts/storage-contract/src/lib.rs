@@ -11,13 +11,14 @@
 //!   and monitoring infrastructure watches.
 //! - **No business logic.** All authorization decisions are in the logic contract.
 //!   This contract checks only: is the caller the current logic contract?
-//! - **Unconditional invariants (§3.7).** Five invariants are enforced here and
+//! - **Unconditional invariants (§3.7).** Six invariants are enforced here and
 //!   cannot be overridden by any logic upgrade:
 //!   1. `CardEntries[addr].exists` is write-once-true.
 //!   2. `CardEntries[addr].forward_to` is immutable once non-zero.
-//!   3. `PolicyAuthorizerKeys` has no unconditional delete (governed by DeregisterPolicy only).
-//!   4. `PressAuthorizations[p][a].revoked_at` is write-once-non-zero.
-//!   5. `SubCardRegistrations[addr].deregistered_at` is write-once-non-zero.
+//!   3. `delete_policy_authorizer_key` reverts unconditionally when `policy_delete_disabled` is true.
+//!   4. `policy_delete_disabled` is write-once-true.
+//!   5. `PressAuthorizations[p][a].revoked_at` is write-once-non-zero.
+//!   6. `SubCardRegistrations[addr].deregistered_at` is write-once-non-zero.
 //!
 //! ## Access control
 //!
@@ -69,6 +70,14 @@ const E_DEREGISTERED_AT_IMMUTABLE: &[u8; 4] = b"\x7a\x1f\x2c\x99";
 
 /// Selector for InvalidAddress.
 const E_INVALID_ADDRESS: &[u8; 4] = b"\xa2\x3f\x91\x7c";
+
+/// Selector for PolicyDeleteDisabled (E-35).
+/// TODO: Replace with keccak256("PolicyDeleteDisabled()")[0..4] before deployment.
+const E_POLICY_DELETE_DISABLED: &[u8; 4] = b"\x00\x00\x00\x01";
+
+/// Selector for PolicyDeleteAlreadyDisabled (E-36).
+/// TODO: Replace with keccak256("PolicyDeleteAlreadyDisabled()")[0..4] before deployment.
+const E_POLICY_DELETE_ALREADY_DISABLED: &[u8; 4] = b"\x00\x00\x00\x02";
 
 // ─── Storage structs ──────────────────────────────────────────────────────────
 
@@ -252,6 +261,10 @@ pub struct StorageContract {
 
     /// §4.11 Key scheme phase: 0 = Phase 1 (secp256r1 only), 1+ = Phase 2/3.
     key_scheme_phase: StorageU8,
+
+    /// §3.7 Write-once-true: once true, delete_policy_authorizer_key reverts unconditionally.
+    /// Set by disable_policy_delete_permanently (governance-gated via logic contract).
+    policy_delete_disabled: StorageBool,
 }
 
 // ─── Access control helper ────────────────────────────────────────────────────
@@ -748,12 +761,10 @@ impl StorageContract {
 
     /// Delete the policy authorizer key (DeregisterPolicy stub).
     ///
-    /// Security note: Unlike the other setters, this operation is NOT protected
-    /// by an unconditional invariant (§3.7 specifies no delete protection for
-    /// PolicyAuthorizerKeys per OQ-E decision). Deleting a policy makes all presses
-    /// and cards under it permanently non-writable. This operation should only
-    /// be called after careful governance review. The logic contract gates this
-    /// behind RootPolicyBody quorum.
+    /// Unconditional invariant: if policy_delete_disabled is true, this setter
+    /// reverts unconditionally regardless of caller (E-35). Once disabled via
+    /// disable_policy_delete_permanently, no future logic contract can ever
+    /// delete a policy authorizer key.
     ///
     /// Called by: DeregisterPolicy (governance-gated).
     pub fn delete_policy_authorizer_key(
@@ -761,6 +772,9 @@ impl StorageContract {
         policy_address: B256,
     ) -> Result<(), Vec<u8>> {
         self.require_logic_contract()?;
+        if self.policy_delete_disabled.get() {
+            return Err(E_POLICY_DELETE_DISABLED.to_vec());
+        }
         // Clear by setting empty bytes.
         self.policy_authorizer_keys
             .setter(policy_address)
@@ -897,6 +911,27 @@ impl StorageContract {
         self.require_logic_contract()?;
         self.key_scheme_phase.set(U8::from(phase));
         Ok(())
+    }
+
+    /// Permanently disable delete_policy_authorizer_key.
+    ///
+    /// Unconditional invariant: policy_delete_disabled is write-once-true.
+    /// Once set, this contract will never allow delete_policy_authorizer_key
+    /// to execute, regardless of which logic contract calls it.
+    ///
+    /// Called by: DisablePolicyDeletePermanently in the logic contract (RootPolicyBody quorum).
+    pub fn disable_policy_delete_permanently(&mut self) -> Result<(), Vec<u8>> {
+        self.require_logic_contract()?;
+        if self.policy_delete_disabled.get() {
+            return Err(E_POLICY_DELETE_ALREADY_DISABLED.to_vec());
+        }
+        self.policy_delete_disabled.set(true);
+        Ok(())
+    }
+
+    /// Get the current value of policy_delete_disabled.
+    pub fn get_policy_delete_disabled(&self) -> Result<bool, Vec<u8>> {
+        Ok(self.policy_delete_disabled.get())
     }
 }
 

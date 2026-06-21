@@ -36,6 +36,7 @@
    - 4.13 [RegisterAddressForward](#413-registeraddressforward)
    - 4.14 [UpgradeLogic](#414-upgradelogic)
    - 4.15 [BatchUpdateCardHeads](#415-batchupdatecardheads)
+   - 4.16 [DisablePolicyDeletePermanently](#416-disablepolicydeletepermanently)
 5. [Read Operations](#5-read-operations)
 6. [Authorization Model](#6-authorization-model)
    - 6.1 [Card Write Gate](#61-card-write-gate)
@@ -308,6 +309,13 @@ PendingUpgrade {
                                     between proposal and confirmation.
     nonce              bytes32    — Replay-prevention nonce from proposal payload.
 }
+
+PolicyDeleteDisabled: bool   — Write-once-true flag. Once set to true by
+                               DisablePolicyDeletePermanently, the
+                               delete_policy_authorizer_key storage setter
+                               reverts unconditionally, regardless of caller.
+                               Initialized to false at deploy. Can never be
+                               unset once true.
 ```
 
 **Storage setter interface.** The storage contract exposes one setter per logical write operation (e.g., `setCardEntry`, `setPressAuthEntry`, `setSubCardEntry`). Each setter:
@@ -324,7 +332,8 @@ The setters are not user-facing functions. They are called exclusively by the lo
 |---|---|
 | `CardEntries[addr].exists` is write-once: once `true`, no setter may set it back to `false`. | `setCardEntry` setter |
 | `CardEntries[addr].forward_to` is immutable once non-zero: if the stored value is non-zero, the setter reverts. | `setForwardTo` setter |
-| `PolicyAuthorizerKeys` has no delete setter: the only operation is key rotation (overwrite). No setter removes an entry. | Storage contract has no `deletePolicy` setter |
+| `PolicyAuthorizerKeys` has no unconditional delete: the delete setter (`delete_policy_authorizer_key`) exists but is permanently brickable via `PolicyDeleteDisabled`. | `delete_policy_authorizer_key` setter (checks `PolicyDeleteDisabled` before executing) |
+| `PolicyDeleteDisabled` is write-once-true: once set to `true`, no setter may set it back to `false`. | `disable_policy_delete_permanently` setter |
 | `PressAuthorizations[p][a].revoked_at` is write-once-non-zero: once set to a non-zero timestamp, no setter may overwrite or zero it. | `setPressAuthEntry` setter |
 | `SubCardRegistrations[addr].deregistered_at` is write-once-non-zero: once set to a non-zero timestamp, no setter may overwrite or zero it. | `setSubCardEntry` setter |
 
@@ -1103,6 +1112,32 @@ Emits one `CardHeadUpdated` event per item (same event as `UpdateCardHead`), in 
 
 ---
 
+### 4.16 DisablePolicyDeletePermanently
+
+**Called by:** Root Policy Governance Body (quorum required)  
+**Purpose:** Permanently and irrevocably disable the `DeregisterPolicy` operation at the storage contract level. Once this operation confirms, no future logic contract (regardless of upgrade history) can ever delete a policy authorizer key. This operation exists to give governance the ability to resolve OQ-20 in the "no deregistration" direction without requiring a storage contract redeployment.
+
+```
+DisablePolicyDeletePermanently(
+    governance_payload  bytes,
+    governance_sigs     bytes[]   — RootPolicyBody quorum
+) → void
+```
+
+**Preconditions:**
+
+1. `PolicyDeleteDisabled == false` (already permanently disabled → revert with E-36).
+2. Quorum signature check (§6.2, RootPolicyBody keyset).
+
+**State changes:**
+
+- Sets `PolicyDeleteDisabled = true` in the storage contract (write-once-true; unconditional invariant enforced by storage contract).
+- Emits `PolicyDeletePermanentlyDisabled(uint64 timestamp)`.
+
+**Note:** This operation has no inverse. Governance should treat it as a one-way protocol commitment.
+
+---
+
 ## 5. Read Operations
 
 These are view functions — no state change, no fee beyond RPC costs.
@@ -1348,6 +1383,10 @@ LogicUpgradeCancelled(
     cancelled_address  address,  — Address of the proposal that was cancelled
     cancelled_at       uint64
 )
+
+PolicyDeletePermanentlyDisabled(
+    timestamp   uint64
+)
 ```
 
 **`AddressTransition` purpose.** This event is the on-chain archive of address changes resulting from master key rotations. Off-chain indexers can build an `old_address → new_address` lookup table from these events, enabling resolution of old addresses even when the old card's IPFS content is no longer pinned and the IPFS-level `successor` field is unreachable. See `key_rotation.md §2.3`.
@@ -1397,6 +1436,8 @@ LogicUpgradeCancelled(
 | E-32 | `UPGRADE_ADDRESS_MISMATCH` | `proposed_logic_address` in `ConfirmLogicUpgrade` does not match `PendingLogicUpgrade.proposed_address`. |
 | E-33 | `BATCH_SIZE_INVALID` | `BatchUpdateCardHeads` called with an empty `updates` array or with more than MAX_BATCH_SIZE (100) items. |
 | E-34 | `BATCH_ITEM_INVALID` | `BatchUpdateCardHeads` item failed validation: duplicate `card_address` within the batch, or `card_address` belongs to a policy other than `policy_address`. |
+| E-35 | `POLICY_DELETE_DISABLED` | `delete_policy_authorizer_key` called after `PolicyDeleteDisabled == true`. |
+| E-36 | `POLICY_DELETE_ALREADY_DISABLED` | `DisablePolicyDeletePermanently` called when `PolicyDeleteDisabled` is already `true`. |
 
 ---
 
@@ -1414,7 +1455,7 @@ The following questions must be resolved before the contract is deployed or befo
 | ~~**OQ-18**~~ | Engineering | ~~**Contract upgradeability.**~~ **Resolved 2026-06-14.** Modular verifier architecture adopted (option c): immutable storage contract + upgradeable verifier module (§6.3). The verifier module starts as a thin RIP-7212 wrapper (Phase 1) and is upgraded to a ML-DSA-44 Stylus WASM verifier via `UpgradeVerifier` governance operation with 48-hour timelock when the key scheme upgrade occurs. | ~~High~~ |
 | **OQ-3** | Engineering | **Minimum IPFS replication before on-chain write.** When a press calls `RegisterCard` or `UpdateCardHead`, it includes an IPFS CID. If the content is not yet replicated (the CID is not resolvable), verifiers will be unable to fetch the log entry. Should the protocol require presses to confirm a minimum replication count before submitting the on-chain transaction? How is this enforced? | **Medium** |
 | ~~**OQ-19**~~ | Engineering | ~~**Batch write operation.**~~ **Resolved 2026-06-19.** `BatchUpdateCardHeads` added as §4.15. Restricted to a single policy per batch (preserves per-(policy, press) sequence semantics). Atomic execution (all-or-nothing). Single sequence increment for the entire batch. MAX_BATCH_SIZE = 100. Emits individual `CardHeadUpdated` events per item for indexer compatibility. `RegisterCard` batching deferred — open-offer and policy-address permutations make batch registration substantially more complex; revisit if press economics require it. | ~~Medium~~ |
-| **OQ-20** | Governance | **Policy deregistration.** Once a policy is registered via `RegisterPolicy`, can it be deregistered? The current design has no delete operation for `PolicyAuthorizerKeys`. Removing a policy address would cause all presses authorized under it to lose write authority and all cards under it to become non-writable. This may be a desired kill-switch capability for compromised or abandoned policies, but it must be governed carefully. **Note (2026-06-19):** The three-contract model (§6.3) makes `DeregisterPolicy` straightforwardly addable via a future logic upgrade, without a storage migration. The storage invariant that `PolicyAuthorizerKeys` has no delete setter would need to be revisited if a deregistration path is adopted. | **Medium** |
+| **OQ-20** | Governance | **Policy deregistration.** Once a policy is registered via `RegisterPolicy`, can it be deregistered? The current design has no delete operation for `PolicyAuthorizerKeys`. Removing a policy address would cause all presses authorized under it to lose write authority and all cards under it to become non-writable. This may be a desired kill-switch capability for compromised or abandoned policies, but it must be governed carefully. **Note (2026-06-19):** The three-contract model (§6.3) makes `DeregisterPolicy` straightforwardly addable via a future logic upgrade, without a storage migration. The storage invariant that `PolicyAuthorizerKeys` has no delete setter would need to be revisited if a deregistration path is adopted. **Note (resolution path):** `DisablePolicyDeletePermanently` (§4.16) allows governance to resolve OQ-20 in the "no deregistration" direction without a storage contract redeployment. The capability is present at deploy time; governance may permanently disable it once the governance charter decision is made. | **Medium** |
 | **OQ-22** | Engineering | **Storage invariant scope.** The five unconditional invariants in §3.7 were chosen to preserve the audit trail (existence, forwards, timestamps). Are there additional invariants worth enforcing in the storage contract now, before the first logic upgrade path is exercised? Candidates: minimum quorum enforcement in `GovernanceKeysets` (currently checked by logic), monotonic `next_sequence` increments (currently checked by logic). Adding more invariants to the storage contract increases blast-radius protection but reduces flexibility of future logic upgrades. | **Low** |
 | **OQ-14** | Governance | **Coercion resistance / governance key holder identity.** Should governance body key holders be pseudonymous (organizations or anonymous participants, harder to coerce) or identifiable (named individuals/organizations with public accountability, easier to hold accountable but more coercible)? Deferred pending governance charter design. Carried forward from `ARCHITECTURE.md` ADR-011. | **Medium** |
 | **OQ-21** | Engineering | **Event indexing and the `approved_presses` sync problem.** ADR-011 notes that the `approved_presses` array in the policy card's IPFS content should be kept in sync with on-chain `PressAuthorizations` by tooling. The contract's `PressAuthorized` and `PressRevoked` events are the trigger. Should the protocol specify a canonical indexer interface (e.g., a subgraph schema) to make this sync reliable across implementations? | **Low** |

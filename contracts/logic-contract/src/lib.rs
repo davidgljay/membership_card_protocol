@@ -96,6 +96,8 @@ stylus_sdk::sol_interface! {
             external view returns (address, uint64, uint32, bytes32);
         function get_key_scheme_phase()
             external view returns (uint8);
+        function get_policy_delete_disabled()
+            external view returns (bool);
 
         // ── Setters ──────────────────────────────────────────────────────────
         function set_card_entry(
@@ -156,6 +158,7 @@ stylus_sdk::sol_interface! {
         ) external;
         function clear_pending_verifier_upgrade() external;
         function set_key_scheme_phase(uint8 phase) external;
+        function disable_policy_delete_permanently() external;
     }
 
     /// Interface to the verifier module.
@@ -284,6 +287,10 @@ stylus_sdk::sol! {
         bytes32 indexed press_address,
         bytes new_mldsa44_pubkey
     );
+
+    event PolicyDeletePermanentlyDisabled(
+        uint64 timestamp
+    );
 }
 
 // ─── Error selectors ─────────────────────────────────────────────────────────
@@ -323,6 +330,8 @@ pub mod errors {
     pub const UPGRADE_ADDRESS_MISMATCH: &[u8] = b"UpgradeAddressMismatch()";
     pub const BATCH_SIZE_INVALID: &[u8] = b"BatchSizeInvalid()";
     pub const BATCH_ITEM_INVALID: &[u8] = b"BatchItemInvalid()";
+    pub const POLICY_DELETE_DISABLED: &[u8] = b"PolicyDeleteDisabled()";
+    pub const POLICY_DELETE_ALREADY_DISABLED: &[u8] = b"PolicyDeleteAlreadyDisabled()";
     pub const INVALID_PAYLOAD: &[u8] = b"InvalidPayload()";
     pub const NO_UPGRADE_PENDING: &[u8] = b"NoUpgradePending()";
     pub const STALE_REGISTRATION_LOG_HEAD: &[u8] = b"StaleRegistrationLogHead()";
@@ -572,6 +581,16 @@ impl LogicContract {
         governance_sigs: Vec<Vec<u8>>,
     ) -> Result<(), Vec<u8>> {
         governance_ops::deregister_policy(self, policy_address, governance_payload, governance_sigs)
+    }
+
+    /// §4.16 DisablePolicyDeletePermanently — permanently brick delete_policy_authorizer_key
+    /// at the storage contract level (RootPolicyBody quorum).
+    pub fn disable_policy_delete_permanently(
+        &mut self,
+        governance_payload: Vec<u8>,
+        governance_sigs: Vec<Vec<u8>>,
+    ) -> Result<(), Vec<u8>> {
+        governance_ops::disable_policy_delete_permanently(self, governance_payload, governance_sigs)
     }
 
     /// §4.7 AuthorizePress — Authorize a press to write under a policy (PressRegistryBody quorum).

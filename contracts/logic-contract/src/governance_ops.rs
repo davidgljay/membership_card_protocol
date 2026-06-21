@@ -419,3 +419,45 @@ pub fn rotate_governance_keys(
 
     Ok(())
 }
+
+// ─── §4.16 DisablePolicyDeletePermanently ────────────────────────────────────
+
+/// Permanently disable DeregisterPolicy (RootPolicyBody quorum required).
+///
+/// Preconditions (§4.16):
+/// 1. PolicyDeleteDisabled == false (E-36).
+/// 2. Quorum signature check (§6.2, RootPolicyBody).
+///
+/// This is irreversible. Once called, no future logic contract can ever
+/// delete a policy authorizer key.
+pub fn disable_policy_delete_permanently(
+    contract: &mut LogicContract,
+    governance_payload: Vec<u8>,
+    governance_sigs: Vec<Vec<u8>>,
+) -> Result<(), Vec<u8>> {
+    let storage_addr = contract.storage_contract.get();
+    let storage = IStorage::new(storage_addr);
+
+    // Pre-check: not already disabled (E-36).
+    let already_disabled = storage
+        .get_policy_delete_disabled(static_call_ctx())
+        .map_err(|e| e.encode())?;
+    if already_disabled {
+        return Err(errors::make_error(errors::POLICY_DELETE_ALREADY_DISABLED));
+    }
+
+    // Quorum verification (marks nonce as used).
+    verify_governance_quorum(contract, ROOT_POLICY_BODY, &governance_payload, &governance_sigs)?;
+
+    // Set the permanent disable flag in the storage contract.
+    let mut storage_mut = IStorage::new(storage_addr);
+    storage_mut
+        .disable_policy_delete_permanently(mut_call_ctx())
+        .map_err(|e| e.encode())?;
+
+    // Emit event.
+    let ts = current_timestamp();
+    evm::log(crate::PolicyDeletePermanentlyDisabled { timestamp: ts });
+
+    Ok(())
+}
