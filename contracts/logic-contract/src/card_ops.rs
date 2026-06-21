@@ -5,8 +5,10 @@
 //! ## Security notes for auditors
 //!
 //! - Every card write goes through the write gate (§6.1). The only exception is
-//!   RegisterAddressForward, which uses a separate signature from the press's key
-//!   registered at the time of the last write to the old card.
+//!   RegisterAddressForward, which uses a two-signature model: the holder's ML-DSA-44
+//!   signature (verified off-chain by the press) and the press's secp256r1 signature
+//!   over keccak256(holder_sig_payload). Any currently-authorized press under the old
+//!   card's policy may submit — there is no restriction to the last writer.
 //! - BatchUpdateCardHeads is atomic: ALL items are validated before ANY state change.
 //!   A single failure reverts the entire batch.
 //! - The `op` field check in the write gate prevents cross-operation replay attacks.
@@ -290,21 +292,31 @@ pub fn claim_open_offer(
 
 /// Set a forward pointer from an old card to a new card.
 ///
-/// Authorization: The press's secp256r1 key registered in PressAuthorizations
-/// for the old card's last write (not the standard write gate).
+/// Authorization: two-signature model (§4.13).
+///
+/// - `holder_sig_payload`: canonical RFC 8785 JSON of the RegisterAddressForwardPayload,
+///   signed off-chain by the holder using their old ML-DSA-44 key. The press verifies
+///   this before submitting; the contract accepts it for auditability only and does NOT
+///   re-verify the ML-DSA-44 signature on-chain. A press submitting without a valid
+///   holder signature is detectable by observers and constitutes a press policy violation
+///   (press-side error E-22).
+/// - `secp256r1_sig`: press co-signature over keccak256(holder_sig_payload), verified
+///   on-chain against PressAuthorizations for the old card's policy. Any currently-
+///   authorized press under the old card's policy may submit on the holder's behalf —
+///   there is no restriction to the last writer.
 ///
 /// Preconditions (§4.13):
 /// 1. old_address must exist in CardEntries.
 /// 2. new_address must exist in CardEntries.
 /// 3. old_address.forward_to must be zero (E-27).
-/// 4. secp256r1_sig must verify against the press's key for old_address.
+/// 4. secp256r1_sig must verify against the press's key for old_address's policy.
 /// (E-28 is press-side only — the press checks for revocation before submitting.)
 pub fn register_address_forward(
     contract: &mut LogicContract,
     old_address: B256,
     new_address: B256,
     press_address: B256,
-    forward_payload: Vec<u8>,
+    holder_sig_payload: Vec<u8>, // The press's secp256r1_sig signs over keccak256 of this
     secp256r1_sig: Vec<u8>,
 ) -> Result<(), Vec<u8>> {
     let storage_addr = contract.storage_contract.get();
@@ -335,7 +347,7 @@ pub fn register_address_forward(
 
     // Pre-check 4: Verify the secp256r1 signature against the press's registered key.
     // The press key is looked up from PressAuthorizations for the old card's policy.
-    // Per spec §4.13 step 5: "the press that last wrote to old_address".
+    // Any currently-authorized press under the old card's policy may submit (§4.13 step 6).
     let (press_key_bytes, _mldsa_hash, _scheme, press_active, _seq, _auth_at, _rev_at) = storage
         .get_press_authorization(static_call_ctx(), old_policy, press_address)
         .map_err(|e| e.encode())?;
@@ -347,16 +359,16 @@ pub fn register_address_forward(
         return Err(errors::make_error(errors::PRESS_REVOKED));
     }
 
-    // Verify the signature.
-    let msg_hash_b256 = keccak256(&forward_payload);
-    let sig_valid = verify_single_sig(contract, msg_hash_b256, &secp256r1_sig, &press_key_bytes)?;
-    if !sig_valid {
-        return Err(errors::make_error(errors::UNRECOGNIZED_POLICY)); // E-03 per §4.13 step 5
+    // Verify op field in the holder_sig_payload before computing the message hash.
+    if !protocol_types::payload_parser::verify_op(&holder_sig_payload, b"register_address_forward") {
+        return Err(errors::make_error(errors::INVALID_PRESS_SIGNATURE));
     }
 
-    // Also verify op field in the forward payload.
-    if !protocol_types::payload_parser::verify_op(&forward_payload, b"register_address_forward") {
-        return Err(errors::make_error(errors::INVALID_PRESS_SIGNATURE));
+    // The press signs over keccak256(holder_sig_payload) — the same document the holder signed.
+    let msg_hash_b256 = keccak256(&holder_sig_payload);
+    let sig_valid = verify_single_sig(contract, msg_hash_b256, &secp256r1_sig, &press_key_bytes)?;
+    if !sig_valid {
+        return Err(errors::make_error(errors::UNRECOGNIZED_POLICY)); // E-03 per §4.13 step 6
     }
 
     // Write the forward.

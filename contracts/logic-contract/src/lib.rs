@@ -495,15 +495,23 @@ impl LogicContract {
     }
 
     /// §4.13 RegisterAddressForward — Set a forward pointer from an old card to a new card.
+    ///
+    /// The press verifies `holder_signature` (ML-DSA-44) off-chain against the holder's old card
+    /// pubkey before submitting. The contract accepts `holder_signature` in calldata for auditability
+    /// but does not re-verify it on-chain — same pattern as ML-DSA-44 params in deregister_sub_card.
+    /// `secp256r1_sig` signs over keccak256(holder_sig_payload), so the press co-signs the exact
+    /// payload the holder authorized. Any currently-authorized press under the old card's policy
+    /// may submit on the holder's behalf.
     pub fn register_address_forward(
         &mut self,
         old_address: B256,
         new_address: B256,
         press_address: B256,
-        forward_payload: Vec<u8>,
+        holder_sig_payload: Vec<u8>, // ML-DSA-44 payload (auditable; not verified on-chain)
+        holder_signature: Vec<u8>,   // ML-DSA-44 signature (auditable; not verified on-chain)
         secp256r1_sig: Vec<u8>,
     ) -> Result<(), Vec<u8>> {
-        card_ops::register_address_forward(self, old_address, new_address, press_address, forward_payload, secp256r1_sig)
+        card_ops::register_address_forward(self, old_address, new_address, press_address, holder_sig_payload, secp256r1_sig)
     }
 
     /// §4.15 BatchUpdateCardHeads — Update multiple card heads atomically.
