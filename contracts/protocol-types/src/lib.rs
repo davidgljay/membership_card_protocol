@@ -263,7 +263,7 @@ pub trait IVerifier {
 
 /// Off-chain representation of a CardEntry (§3.1).
 /// Used in tests and scripts. On-chain storage uses Stylus storage types.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct CardEntry {
     /// Current IPFS log head CID. Max 64 bytes.
     pub log_head_cid: [u8; MAX_CID_LEN],
@@ -279,7 +279,7 @@ pub struct CardEntry {
 }
 
 /// Off-chain representation of a PressAuthEntry (§3.3).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct PressAuthEntry {
     /// secp256r1 public key (x||y, 64 bytes). Verified via RIP-7212 on writes.
     pub press_public_key: [u8; 64],
@@ -298,7 +298,7 @@ pub struct PressAuthEntry {
 }
 
 /// Off-chain representation of a SubCardEntry (§3.4).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct SubCardEntry {
     /// Registry address of the master card.
     pub master_card_address: [u8; 32],
@@ -322,7 +322,7 @@ pub struct SubCardEntry {
 /// This is enforced by RotateGovernanceKeys but NOT by the storage contract.
 /// The storage contract stores whatever the logic contract writes.
 /// After a logic upgrade, the new logic must continue to enforce this.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct GovernanceKeyset {
     /// Active secp256r1 public keys (64 bytes each). Minimum 3 after first rotation.
     pub keys: [[u8; 64]; MAX_GOVERNANCE_KEYS], // Fixed-size array for no_std; actual on-chain uses dynamic storage
@@ -333,6 +333,61 @@ pub struct GovernanceKeyset {
     pub version: u32,
     /// 0 = secp256r1, 1 = ML-DSA-44.
     pub key_scheme: u8,
+}
+
+// Manual Default impls required because derive(Default) only covers arrays up to [T; 32].
+impl Default for CardEntry {
+    fn default() -> Self {
+        Self {
+            log_head_cid: [0u8; MAX_CID_LEN],
+            log_head_cid_len: 0,
+            policy_address: [0u8; 32],
+            last_press_address: [0u8; 32],
+            forward_to: [0u8; 32],
+            exists: false,
+        }
+    }
+}
+
+impl Default for PressAuthEntry {
+    fn default() -> Self {
+        Self {
+            press_public_key: [0u8; 64],
+            mldsa44_key_hash: [0u8; 32],
+            key_scheme: 0,
+            active: false,
+            next_sequence: 0,
+            authorized_at: 0,
+            revoked_at: 0,
+        }
+    }
+}
+
+impl Default for SubCardEntry {
+    fn default() -> Self {
+        Self {
+            master_card_address: [0u8; 32],
+            registration_log_head: [0u8; MAX_CID_LEN],
+            registration_log_head_len: 0,
+            sub_card_doc_cid: [0u8; MAX_CID_LEN],
+            sub_card_doc_cid_len: 0,
+            active: false,
+            registered_at: 0,
+            deregistered_at: 0,
+        }
+    }
+}
+
+impl Default for GovernanceKeyset {
+    fn default() -> Self {
+        Self {
+            keys: [[0u8; 64]; MAX_GOVERNANCE_KEYS],
+            key_count: 0,
+            quorum: 0,
+            version: 0,
+            key_scheme: 0,
+        }
+    }
 }
 
 /// Off-chain representation of a PendingUpgrade (§3.7).

@@ -34,7 +34,8 @@
 //!   After calling `set_logic_contract(new_addr)`, the current logic contract can NO longer
 //!   call any storage setter (they will all revert with E-29).
 
-#![no_std]
+#![cfg_attr(not(feature = "export-abi"), no_std)]
+#[macro_use]
 extern crate alloc;
 
 use alloc::vec::Vec;
@@ -389,9 +390,10 @@ impl StorageContract {
         policy_address: B256,
         press_address: B256,
     ) -> Result<(Vec<u8>, B256, u8, bool, u64, u64, u64), Vec<u8>> {
-        let entry = self
+        let binding = self
             .press_authorizations
-            .getter(policy_address)
+            .getter(policy_address);
+        let entry = binding
             .getter(press_address);
         let key = entry.press_public_key.get_bytes();
         let mldsa_hash = entry.mldsa44_key_hash.get();
@@ -405,9 +407,10 @@ impl StorageContract {
 
     /// Quick check: is a press active for a given policy? Used by verifiers.
     pub fn is_press_active(&self, policy_address: B256, press_address: B256) -> Result<bool, Vec<u8>> {
-        let entry = self
+        let binding = self
             .press_authorizations
-            .getter(policy_address)
+            .getter(policy_address);
+        let entry = binding
             .getter(press_address);
         // Must have a key AND be active.
         let key = entry.press_public_key.get_bytes();
@@ -603,9 +606,10 @@ impl StorageContract {
         self.require_logic_contract()?;
 
         let key_bytes = press_public_key.as_slice();
-        let mut entry = self
+        let mut binding = self
             .press_authorizations
-            .setter(policy_address)
+            .setter(policy_address);
+        let mut entry = binding
             .setter(press_address);
         entry.press_public_key.set_bytes(key_bytes);
         entry.mldsa44_key_hash.set(mldsa44_key_hash);
