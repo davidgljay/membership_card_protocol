@@ -12,7 +12,8 @@
       "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(list\\(d.get\\('exports',{}\\).keys\\(\\)\\)[:20]\\)\")",
       "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d.get\\('exports',{}\\), indent=2\\)\\)\")",
       "Bash(pnpm add *)",
-      "Bash(pnpm -r test)"
+      "Bash(pnpm -r test)",
+      "Bash(npm run *)"
     ]
   }
 }
