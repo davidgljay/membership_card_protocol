@@ -7,3 +7,6 @@ membership_card_verifier/packages/*/dist
 .env
 .env.local
 .env.*.local
+
+# Local keypairs (not committed)
+contracts/.keys/
