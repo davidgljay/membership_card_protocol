@@ -841,17 +841,23 @@ Records an address-level forward on the old card's `CardEntry` when a holder rot
 
 ```
 RegisterAddressForward(
-    old_address    bytes32,      — Registry address of the card being superseded
-                                   (keccak256 of the old public key).
-    new_address    bytes32,      — Registry address of the successor card
-                                   (keccak256 of the new public key).
-    secp256r1_sig  bytes[64]     — secp256r1 signature over the canonical payload
-                                   (see below), signed by the old card's currently
-                                   registered secp256r1 key.
+    old_address         bytes32,      — Registry address of the card being superseded
+                                        (keccak256 of the old public key).
+    new_address         bytes32,      — Registry address of the successor card
+                                        (keccak256 of the new public key).
+    holder_sig_payload  bytes,        — Canonical RFC 8785 JSON of the RegisterAddressForwardPayload
+                                        (see below), signed by the holder using their old ML-DSA-44 key.
+    holder_signature    bytes[2420]   — ML-DSA-44 signature over holder_sig_payload,
+                                        using the old card holder's primary key.
+                                        The press verifies this off-chain against the holder's
+                                        CardDocument pubkey before submitting. The contract does not
+                                        re-verify the ML-DSA-44 signature on-chain.
+    secp256r1_sig       bytes[64]     — secp256r1 signature over keccak256(holder_sig_payload),
+                                        signed by the press's registered on-chain key.
 )
 ```
 
-**Payload signed by `secp256r1_sig`:**
+**`RegisterAddressForwardPayload` (holder-signed, also co-signed by press via `secp256r1_sig`):**
 
 ```json
 {
@@ -863,20 +869,23 @@ RegisterAddressForward(
 }
 ```
 
+Note: `secp256r1_sig` signs over `keccak256(holder_sig_payload)`. There is only one payload document (the holder-signed one); the press co-signs the same payload. This ensures the press attests to the exact forward the holder authorized.
+
 **Authorization checks:**
 
 1. `old_address` must exist in `CardEntries` (`exists == true`).
 2. `new_address` must exist in `CardEntries` (`exists == true`). The successor card must be registered before the forward is set.
 3. `old_address.forward_to` must be zero — a forward may only be registered once. Attempting to overwrite returns error E-27.
 4. The old card's log must contain no 8xx or 9xx revocation entries. Because the contract is revocation-agnostic and cannot read IPFS content, this check is performed by the press before submitting. If the press finds that a revocation has already been written to the old card's log, it must reject the `RegisterAddressForward` request and return error E-28 to the caller. The contract does not enforce this constraint on-chain; E-28 is a press-side rejection. (The `last_press_address` field does not encode revocation status; full revocation detection requires reading the IPFS log.)
-5. `secp256r1_sig` must verify against the key registered in `PressAuthorizations` for the old card — specifically, the press that last wrote to `old_address`.
+5. The press verifies `holder_signature` (ML-DSA-44) off-chain against the holder's old card pubkey (resolved from the old card's `CardDocument` on IPFS) before submitting. The contract does not re-verify the ML-DSA-44 signature. A press submitting without a valid holder signature is detectable by observers and constitutes a press policy violation (press-side error E-22).
+6. `secp256r1_sig` must verify against the key registered in `PressAuthorizations` for the old card's policy (`old_card.policy_address`). The press need not be the last writer to the old card — any currently-authorized press under the old card's policy may submit on the holder's behalf.
 
 **On success:**
 
 - Sets `CardEntries[old_address].forward_to = new_address`.
 - Emits `AddressTransition(old_address, new_address, timestamp)`.
 
-**Called by:** The press on behalf of the card holder, as part of the master key rotation flow (see `key_rotation.md §2.4` step 4a). Gas is paid by the issuing organization's press.
+**Called by:** Any currently-authorized press under the old card's policy, on behalf of the card holder, as part of the master key rotation flow (see `key_rotation.md §2.4` step 4a). Gas is paid by the issuing organization's press.
 
 **Acceptance criteria:**
 
@@ -886,6 +895,8 @@ RegisterAddressForward(
 - [ ] `RegisterAddressForward` returns E-03 if `secp256r1_sig` does not verify against the registered key.
 - [ ] After a successful call, `GetCardEntry(old_address).forward_to == new_address`.
 - [ ] The `AddressTransition` event is emitted with correct `old_address`, `new_address`, and `timestamp`.
+- [ ] `RegisterAddressForward` may be submitted by any currently-authorized press under the old card's policy, not only the press that last wrote to the card.
+- [ ] The `holder_signature` parameter is required in calldata for auditability; a press that submits without obtaining a valid holder ML-DSA-44 signature is in violation of press policy (E-22).
 
 ---
 
