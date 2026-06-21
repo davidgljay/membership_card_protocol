@@ -2,3 +2,8 @@
 membership_card_verifier/node_modules
 membership_card_verifier/packages/*/node_modules
 membership_card_verifier/packages/*/dist
+
+# Environment variables (contains private keys)
+.env
+.env.local
+.env.*.local
