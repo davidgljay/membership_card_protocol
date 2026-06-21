@@ -178,9 +178,12 @@ PressAuthEntry {
     authorized_at     uint64         — Unix timestamp of the most recent AuthorizePress call
                                       for this (policy, press) pair. Retained for audit purposes.
 
-    revoked_at        uint64         — Unix timestamp of RevokePress, if called; 0 if never revoked.
-                                      Entry is retained with active=false rather than deleted,
-                                      preserving the on-chain audit trail.
+    revoked_at        uint64         — Unix timestamp of the most recent RevokePress call; 0 if
+                                      never revoked or if subsequently re-authorized. A previously-
+                                      revoked press may be re-authorized via AuthorizePress, which
+                                      resets this field to 0. Full revocation/re-authorization
+                                      history is preserved in the PressRevoked and PressAuthorized
+                                      event log.
 }
 ```
 
@@ -334,10 +337,11 @@ The setters are not user-facing functions. They are called exclusively by the lo
 | `CardEntries[addr].forward_to` is immutable once non-zero: if the stored value is non-zero, the setter reverts. | `setForwardTo` setter |
 | `PolicyAuthorizerKeys` has no unconditional delete: the delete setter (`delete_policy_authorizer_key`) exists but is permanently brickable via `PolicyDeleteDisabled`. | `delete_policy_authorizer_key` setter (checks `PolicyDeleteDisabled` before executing) |
 | `PolicyDeleteDisabled` is write-once-true: once set to `true`, no setter may set it back to `false`. | `disable_policy_delete_permanently` setter |
-| `PressAuthorizations[p][a].revoked_at` is write-once-non-zero: once set to a non-zero timestamp, no setter may overwrite or zero it. | `setPressAuthEntry` setter |
 | `SubCardRegistrations[addr].deregistered_at` is write-once-non-zero: once set to a non-zero timestamp, no setter may overwrite or zero it. | `setSubCardEntry` setter |
 
 These invariants preserve the audit trail and ensure that the core record of what has existed on-chain is permanent, independent of future protocol logic changes.
+
+**Re-authorization after revocation.** A previously-revoked press may be re-authorized by the Press Registry Governance Body calling `AuthorizePress` again with the same `press_address`. On re-authorization, `revoked_at` is reset to `0` and `active` is set to `true`. The complete authorization history — including the original revocation timestamp — is preserved permanently in the `PressRevoked` and `PressAuthorized` on-chain event log and does not need to be retained in storage state.
 
 ---
 
@@ -739,6 +743,8 @@ RotateGovernanceKeys(
 - Sets `GovernanceKeysets[body_id].quorum = new_quorum`.
 - Increments `GovernanceKeysets[body_id].version`.
 
+**Phase 1 implementation note:** The current logic contract hardcodes `key_scheme = 0` (secp256r1) when writing the updated keyset, regardless of the `key_scheme` value in the governance payload or the new keys supplied. The spec §4.10 note states that governance bodies upgrade to ML-DSA-44 keys via `RotateGovernanceKeys` during Phase 2, but this requires a logic upgrade first — the Phase 2 logic contract must be modified to read `key_scheme` from the call parameters rather than hardcoding `0`. This discrepancy is intentional for Phase 1 and must be addressed in the Phase 2 logic upgrade spec.
+
 ---
 
 ### 4.11 RotateOnChainKeyScheme
@@ -892,7 +898,7 @@ Note: `secp256r1_sig` signs over `keccak256(holder_sig_payload)`. There is only 
 - [ ] `RegisterAddressForward` succeeds when `old_address` and `new_address` both exist and `old_address.forward_to` is zero.
 - [ ] `RegisterAddressForward` returns E-27 if `old_address.forward_to` is already set.
 - [ ] `RegisterAddressForward` returns E-28 if the press determines the old card has been revoked.
-- [ ] `RegisterAddressForward` returns E-03 if `secp256r1_sig` does not verify against the registered key.
+- [ ] `RegisterAddressForward` returns E-06 if `secp256r1_sig` does not verify against the registered key.
 - [ ] After a successful call, `GetCardEntry(old_address).forward_to == new_address`.
 - [ ] The `AddressTransition` event is emitted with correct `old_address`, `new_address`, and `timestamp`.
 - [ ] `RegisterAddressForward` may be submitted by any currently-authorized press under the old card's policy, not only the press that last wrote to the card.
@@ -1341,6 +1347,11 @@ OpenOfferClaimed(
 )
 
 PolicyRegistered(
+    policy_address     bytes32,
+    timestamp          uint64
+)
+
+PolicyDeregistered(
     policy_address     bytes32,
     timestamp          uint64
 )

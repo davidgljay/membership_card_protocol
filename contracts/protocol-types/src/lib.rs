@@ -66,6 +66,12 @@ pub const VERIFIER_UPGRADE_TIMELOCK_SECS: u64 = 48 * 60 * 60;
 /// Minimum number of keys required in a GovernanceKeyset after rotation (§4.10).
 pub const MIN_GOVERNANCE_KEYS: usize = 3;
 
+/// Maximum number of keys in a GovernanceKeyset (on-chain and off-chain representations).
+/// The storage contract stores keys as a flat byte array (key_count * 64 bytes) with
+/// this as the practical upper bound. The off-chain GovernanceKeyset struct uses a
+/// fixed-size array of this length for no_std compatibility.
+pub const MAX_GOVERNANCE_KEYS: usize = 50;
+
 /// Governance body identifiers (§3.6).
 ///
 /// Security note: These are stored as u8 values in storage. The discriminant
@@ -319,7 +325,7 @@ pub struct SubCardEntry {
 #[derive(Clone, Debug, Default)]
 pub struct GovernanceKeyset {
     /// Active secp256r1 public keys (64 bytes each). Minimum 3 after first rotation.
-    pub keys: [[u8; 64]; 10], // Fixed-size array for no_std; actual on-chain uses dynamic storage
+    pub keys: [[u8; 64]; MAX_GOVERNANCE_KEYS], // Fixed-size array for no_std; actual on-chain uses dynamic storage
     pub key_count: usize,
     /// Minimum number of signatures required from keys[].
     pub quorum: u8,

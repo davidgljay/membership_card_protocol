@@ -11,14 +11,13 @@
 //!   and monitoring infrastructure watches.
 //! - **No business logic.** All authorization decisions are in the logic contract.
 //!   This contract checks only: is the caller the current logic contract?
-//! - **Unconditional invariants (§3.7).** Six invariants are enforced here and
+//! - **Unconditional invariants (§3.7).** Five invariants are enforced here and
 //!   cannot be overridden by any logic upgrade:
 //!   1. `CardEntries[addr].exists` is write-once-true.
 //!   2. `CardEntries[addr].forward_to` is immutable once non-zero.
 //!   3. `delete_policy_authorizer_key` reverts unconditionally when `policy_delete_disabled` is true.
 //!   4. `policy_delete_disabled` is write-once-true.
-//!   5. `PressAuthorizations[p][a].revoked_at` is write-once-non-zero.
-//!   6. `SubCardRegistrations[addr].deregistered_at` is write-once-non-zero.
+//!   5. `SubCardRegistrations[addr].deregistered_at` is write-once-non-zero.
 //!
 //! ## Access control
 //!
@@ -45,7 +44,7 @@ use stylus_sdk::{
     prelude::*,
     storage::{StorageAddress, StorageBool, StorageBytes, StorageMap, StorageU64, StorageU8, StorageU32},
 };
-use protocol_types::{MAX_CID_LEN, MIN_GOVERNANCE_KEYS};
+use protocol_types::{MAX_CID_LEN, MAX_GOVERNANCE_KEYS, MIN_GOVERNANCE_KEYS};
 
 // ─── Error selector constants ────────────────────────────────────────────────
 // ABI-encoded custom error selectors for each error code.
@@ -61,9 +60,6 @@ const E_CARD_ALREADY_EXISTS: &[u8; 4] = b"\x23\x69\x8a\x5c";
 
 /// Selector for ForwardAlreadySet (E-27).
 const E_FORWARD_ALREADY_SET: &[u8; 4] = b"\x5d\x8e\x1e\xab";
-
-/// Selector for RevokedAtAlreadySet (storage invariant for E-05 enforcement).
-const E_REVOKED_AT_IMMUTABLE: &[u8; 4] = b"\xd3\x4b\x61\x23";
 
 /// Selector for DeregisteredAtAlreadySet (storage invariant for SubCard).
 const E_DEREGISTERED_AT_IMMUTABLE: &[u8; 4] = b"\x7a\x1f\x2c\x99";
@@ -101,7 +97,8 @@ pub struct StorageCardEntry {
 
 /// Press authorization entry (§3.3).
 ///
-/// Security: `revoked_at` is write-once-non-zero (enforced by set_press_auth_entry).
+/// Note: `revoked_at` reflects the most recent revocation timestamp; it is reset to 0
+/// on re-authorization. Full authorization history is preserved in on-chain events.
 /// `next_sequence` must only increase; this is enforced by the logic contract write gate.
 #[storage]
 pub struct StoragePressAuthEntry {
@@ -117,7 +114,7 @@ pub struct StoragePressAuthEntry {
     pub next_sequence: StorageU64,
     /// Unix timestamp of most recent AuthorizePress.
     pub authorized_at: StorageU64,
-    /// Unix timestamp of RevokePress; 0 if not revoked. Write-once-non-zero.
+    /// Unix timestamp of the most recent RevokePress; 0 if not revoked or if re-authorized.
     pub revoked_at: StorageU64,
 }
 
@@ -143,8 +140,8 @@ pub struct StorageSubCardEntry {
 /// Governance keyset entry (§3.6).
 ///
 /// Keys are stored as a flat bytes array (concatenated 64-byte pubkeys).
-/// `key_count` tracks the logical count. Maximum 50 keys in this implementation
-/// (enough for any realistic governance structure).
+/// `key_count` tracks the logical count. Maximum `MAX_GOVERNANCE_KEYS` (50) keys
+/// in this implementation (enough for any realistic governance structure).
 #[storage]
 pub struct StorageGovernanceKeyset {
     /// Concatenated secp256r1 public keys, 64 bytes each.
@@ -164,19 +161,6 @@ pub struct StorageGovernanceKeyset {
 #[storage]
 pub struct StoragePendingLogicUpgrade {
     /// Proposed new logic address. Zero if no proposal is pending.
-    pub proposed_address: StorageAddress,
-    /// Block timestamp of the proposal.
-    pub proposed_at: StorageU64,
-    /// GovernanceKeysets[RootPolicyBody].version at proposal time.
-    pub governance_version: StorageU32,
-    /// Replay-prevention nonce from the proposal payload.
-    pub nonce: StorageB256,
-}
-
-/// Pending verifier upgrade proposal (§6.3).
-#[storage]
-pub struct StoragePendingVerifierUpgrade {
-    /// Proposed new verifier address. Zero if no proposal is pending.
     pub proposed_address: StorageAddress,
     /// Block timestamp of the proposal.
     pub proposed_at: StorageU64,
@@ -255,9 +239,6 @@ pub struct StorageContract {
 
     /// §3.7 Pending logic upgrade proposal.
     pending_logic_upgrade: StoragePendingLogicUpgrade,
-
-    /// §6.3 Pending verifier upgrade proposal.
-    pending_verifier_upgrade: StoragePendingVerifierUpgrade,
 
     /// §4.11 Key scheme phase: 0 = Phase 1 (secp256r1 only), 1+ = Phase 2/3.
     key_scheme_phase: StorageU8,
@@ -503,16 +484,6 @@ impl StorageContract {
         Ok((addr, at, ver, nonce))
     }
 
-    /// Get the pending verifier upgrade proposal.
-    pub fn get_pending_verifier_upgrade(&self) -> Result<(Address, u64, u32, B256), Vec<u8>> {
-        let p = &self.pending_verifier_upgrade;
-        let addr = p.proposed_address.get();
-        let at = p.proposed_at.get().to::<u64>();
-        let ver = p.governance_version.get().to::<u32>();
-        let nonce = p.nonce.get();
-        Ok((addr, at, ver, nonce))
-    }
-
     /// Get the current key scheme phase.
     /// 0 = Phase 1 (secp256r1 only), 1+ = Phase 2/3.
     pub fn get_key_scheme_phase(&self) -> Result<u8, Vec<u8>> {
@@ -610,8 +581,11 @@ impl StorageContract {
 
     /// Create or update a press authorization entry.
     ///
-    /// Unconditional invariant: If `revoked_at` is currently non-zero,
-    /// no update may zero it out. (§3.7 — write-once-non-zero)
+    /// All fields are written as supplied. A previously-revoked press may be re-authorized
+    /// by the Press Registry Governance Body calling AuthorizePress again; on re-authorization
+    /// `revoked_at` is reset to 0 and `active` is set to true. Full revocation and
+    /// re-authorization history is preserved in the `PressRevoked` and `PressAuthorized`
+    /// on-chain event log and does not need to be retained in storage state.
     ///
     /// Called by: AuthorizePress, RevokePress.
     pub fn set_press_auth_entry(
@@ -627,19 +601,6 @@ impl StorageContract {
         revoked_at: u64,
     ) -> Result<(), Vec<u8>> {
         self.require_logic_contract()?;
-
-        // Enforce revoked_at write-once-non-zero invariant.
-        let current_revoked_at = self
-            .press_authorizations
-            .getter(policy_address)
-            .getter(press_address)
-            .revoked_at
-            .get()
-            .to::<u64>();
-        if current_revoked_at != 0 && revoked_at == 0 {
-            // Cannot zero out revoked_at once set.
-            return Err(E_REVOKED_AT_IMMUTABLE.to_vec());
-        }
 
         let key_bytes = press_public_key.as_slice();
         let mut entry = self
@@ -865,38 +826,6 @@ impl StorageContract {
         self.require_logic_contract()?;
 
         let mut p = &mut self.pending_logic_upgrade;
-        p.proposed_address.set(Address::ZERO);
-        p.proposed_at.set(U64::from(0u64));
-        p.governance_version.set(U32::from(0u32));
-        p.nonce.set(B256::ZERO);
-        Ok(())
-    }
-
-    /// Set the pending verifier upgrade proposal.
-    ///
-    /// Called by: ProposeVerifierUpgrade in the logic contract.
-    pub fn set_pending_verifier_upgrade(
-        &mut self,
-        proposed_address: Address,
-        proposed_at: u64,
-        governance_version: u32,
-        nonce: B256,
-    ) -> Result<(), Vec<u8>> {
-        self.require_logic_contract()?;
-
-        let mut p = &mut self.pending_verifier_upgrade;
-        p.proposed_address.set(proposed_address);
-        p.proposed_at.set(U64::from(proposed_at));
-        p.governance_version.set(U32::from(governance_version));
-        p.nonce.set(nonce);
-        Ok(())
-    }
-
-    /// Clear the pending verifier upgrade proposal.
-    pub fn clear_pending_verifier_upgrade(&mut self) -> Result<(), Vec<u8>> {
-        self.require_logic_contract()?;
-
-        let mut p = &mut self.pending_verifier_upgrade;
         p.proposed_address.set(Address::ZERO);
         p.proposed_at.set(U64::from(0u64));
         p.governance_version.set(U32::from(0u32));

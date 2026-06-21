@@ -18,7 +18,8 @@
 //! The logic contract stores two things:
 //! 1. `storage_contract`: address of the storage contract (immutable after construction).
 //! 2. `verifier_module`: address of the current verifier module (updated via UpgradeVerifier).
-//! 3. `pending_verifier_upgrade`: verifier upgrade proposal state.
+//! 3. `pending_verifier_proposed_address` / `pending_verifier_proposed_at` / etc.:
+//!    verifier upgrade proposal state (stored locally here, not in the storage contract).
 //!
 //! ## Module layout
 //!
@@ -92,8 +93,6 @@ stylus_sdk::sol_interface! {
             external view returns (address);
         function get_pending_logic_upgrade()
             external view returns (address, uint64, uint32, bytes32);
-        function get_pending_verifier_upgrade()
-            external view returns (address, uint64, uint32, bytes32);
         function get_key_scheme_phase()
             external view returns (uint8);
         function get_policy_delete_disabled()
@@ -150,13 +149,6 @@ stylus_sdk::sol_interface! {
             bytes32 nonce
         ) external;
         function clear_pending_logic_upgrade() external;
-        function set_pending_verifier_upgrade(
-            address proposed_address,
-            uint64 proposed_at,
-            uint32 governance_version,
-            bytes32 nonce
-        ) external;
-        function clear_pending_verifier_upgrade() external;
         function set_key_scheme_phase(uint8 phase) external;
         function disable_policy_delete_permanently() external;
     }
@@ -215,6 +207,11 @@ stylus_sdk::sol! {
     );
 
     event PolicyRegistered(
+        bytes32 indexed policy_address,
+        uint64 timestamp
+    );
+
+    event PolicyDeregistered(
         bytes32 indexed policy_address,
         uint64 timestamp
     );
@@ -549,6 +546,12 @@ impl LogicContract {
     }
 
     /// §4.4 DeregisterSubCard — Mark a sub-card as inactive.
+    ///
+    /// `sig_payload` and `signature` are the holder's ML-DSA-44 deregistration
+    /// authorization. The press verifies the holder's signature off-chain before
+    /// submitting. They are included in calldata for auditability but are not
+    /// verified on-chain — consistent with the `master_sig_payload` / `master_signature`
+    /// pattern in `register_sub_card` (§4.3).
     pub fn deregister_sub_card(
         &mut self,
         sub_card_address: B256,
@@ -558,7 +561,7 @@ impl LogicContract {
         sig_payload: Vec<u8>,   // ML-DSA-44 payload (auditable; not verified on-chain)
         signature: Vec<u8>,     // ML-DSA-44 signature (auditable; not verified on-chain)
     ) -> Result<(), Vec<u8>> {
-        subcard_ops::deregister_sub_card(self, sub_card_address, press_address, press_sig_payload, press_signature)
+        subcard_ops::deregister_sub_card(self, sub_card_address, press_address, press_sig_payload, press_signature, sig_payload, signature)
     }
 
     // ════════════════════════════════════════════════════════════════════════

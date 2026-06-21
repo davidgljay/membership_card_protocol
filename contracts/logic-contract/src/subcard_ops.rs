@@ -17,6 +17,10 @@
 //! Deregistered entries are NEVER deleted. `deregistered_at` is set to block.timestamp
 //! and `active` is set to false. The unconditional storage invariant ensures that
 //! `deregistered_at` cannot be zeroed out by any future logic upgrade (§3.7).
+//!
+//! Both `register_sub_card` and `deregister_sub_card` include the holder's ML-DSA-44
+//! signature in calldata for auditability. The press verifies the holder's signature
+//! off-chain before submitting; neither signature is verified on-chain.
 
 use alloc::vec::Vec;
 use stylus_sdk::{
@@ -138,7 +142,7 @@ pub fn register_sub_card(
 /// 1. sub_card_address must exist in SubCardRegistrations with active == true (E-10).
 /// 2. Press authorization via write gate, using the master card's policy.
 ///
-/// The ML-DSA-44 master signature is NOT verified on-chain (press-side only).
+/// The ML-DSA-44 holder signature is NOT verified on-chain (press-side only).
 ///
 /// State changes:
 /// - Sets active = false.
@@ -154,7 +158,12 @@ pub fn deregister_sub_card(
     press_address: B256,
     press_sig_payload: Vec<u8>,
     press_signature: Vec<u8>,
+    holder_sig_payload: Vec<u8>,  // ML-DSA-44 payload (auditable; not verified on-chain)
+    holder_signature: Vec<u8>,    // ML-DSA-44 signature (auditable; not verified on-chain)
 ) -> Result<(), Vec<u8>> {
+    // holder_sig_payload and holder_signature are accepted for calldata auditability.
+    // The press verifies the holder's ML-DSA-44 signature off-chain before submitting.
+    // Not verified on-chain; see §4.4.
     let storage_addr = contract.storage_contract.get();
     let storage = IStorage::new(storage_addr);
 

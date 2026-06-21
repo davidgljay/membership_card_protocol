@@ -153,7 +153,9 @@ pub fn update_card_head(
     )?;
 
     // Step 7 (UpdateCardHead-specific): prev_log_cid must match stored head (E-08).
-    // This check is AFTER the write gate because the sequence has already been incremented.
+    // Although the write gate incremented next_sequence via a cross-contract call before
+    // this check runs, a revert here rolls back ALL state changes in the call stack —
+    // including that increment. No sequence number is consumed on E-08 failure.
     // The optimistic concurrency check is done here to prevent a press from writing
     // on top of a stale view of the card.
     if stored_cid != prev_log_cid.as_slice() {
@@ -368,7 +370,7 @@ pub fn register_address_forward(
     let msg_hash_b256 = keccak256(&holder_sig_payload);
     let sig_valid = verify_single_sig(contract, msg_hash_b256, &secp256r1_sig, &press_key_bytes)?;
     if !sig_valid {
-        return Err(errors::make_error(errors::UNRECOGNIZED_POLICY)); // E-03 per §4.13 step 6
+        return Err(errors::make_error(errors::INVALID_PRESS_SIGNATURE));
     }
 
     // Write the forward.

@@ -40,7 +40,7 @@ use crate::{
     mut_call_ctx,
     static_call_ctx,
 };
-use protocol_types::payload_parser;
+use protocol_types::{payload_parser, MAX_GOVERNANCE_KEYS};
 
 /// Result of running the card write gate.
 /// On success, returns the press's current next_sequence (before increment).
@@ -276,8 +276,8 @@ pub fn verify_governance_quorum(
     let msg_hash = keccak256(governance_payload);
 
     // Track which key indices have already been used (to detect duplicates).
-    // Using a bitmap for O(1) lookup; max 50 keys.
-    let mut used_key_indices = [false; 50];
+    // Using a bitmap for O(1) lookup; max MAX_GOVERNANCE_KEYS keys.
+    let mut used_key_indices = [false; MAX_GOVERNANCE_KEYS];
     let mut valid_sig_count: usize = 0;
 
     for sig_bytes in governance_sigs {

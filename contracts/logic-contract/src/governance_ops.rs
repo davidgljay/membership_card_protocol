@@ -144,9 +144,11 @@ pub fn deregister_policy(
         .delete_policy_authorizer_key(mut_call_ctx(), policy_address)
         .map_err(|e| e.encode())?;
 
-    // No event defined in spec for DeregisterPolicy (OQ-20 unresolved).
-    // We emit PolicyRegistered is wrong; no event to emit here.
-    // TODO: Add PolicyDeregistered event once OQ-20 is resolved.
+    let ts = current_timestamp();
+    evm::log(crate::PolicyDeregistered {
+        policy_address,
+        timestamp: ts,
+    });
 
     Ok(())
 }
