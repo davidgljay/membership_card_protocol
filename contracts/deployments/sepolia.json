@@ -1,0 +1,21 @@
+{
+  "network": "arbitrum-sepolia",
+  "deployed_at": "2026-06-21T19:30:01Z",
+  "rpc_url": "https://sepolia-rollup.arbitrum.io/rpc",
+  "contracts": {
+    "verifier_module": "0x21a03a0c173815796b7d2eebe24387d54b5853e7",
+    "storage_contract": "0x9a64b7d9e504e6a49925014075cefdf3c35a5906",
+    "logic_contract": "0xd50215b035b5fa20269a5974bc94dffac8e23001"
+  },
+  "deployment_txs": {
+    "verifier_module": "0xec31ffba6dec6c8e917cf271fde0c16fb1715831772df14d60d6fe1a5aa44b13",
+    "storage_contract": "0xe1aeae8b7f74cb9892c664c653a08de14d7f6f21bb222cb1f37acea7cd32b61f",
+    "logic_contract": "0xb8e6d864e581e6c7aa039264c854a1f6ef13119718fdf494dc5024f650b348d2"
+  },
+  "activation_txs": {
+    "verifier_module": "0xc80d404ce563e3cf7ce9698d59d861db865a22486c45cc80b3f85c0dd0c1b639",
+    "storage_contract": "0x4bca3d4fedcd81a2476c0063a4c7c8250132791e3f0c8262a71e20eb1809b569",
+    "logic_contract": "0xf566afb1ac059fac42303d3c5d616bad1c6d30603a465c1321e501b6ae797f60"
+  },
+  "notes": "storage_contract is the stable protocol identifier — never redeployed."
+}

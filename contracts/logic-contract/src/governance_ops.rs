@@ -24,6 +24,7 @@
 use alloc::vec::Vec;
 use stylus_sdk::{
     alloy_primitives::B256,
+    call::MethodError,
     evm,
 };
 

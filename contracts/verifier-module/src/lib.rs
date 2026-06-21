@@ -32,7 +32,8 @@
 //! - Gas cost is approximately 3,450 gas per call (§1 of spec). This is the dominant
 //!   cost factor for write operations.
 
-#![no_std]
+#![cfg_attr(not(feature = "export-abi"), no_std)]
+#[macro_use]
 extern crate alloc;
 
 use alloc::vec::Vec;
@@ -122,8 +123,10 @@ pub fn call_rip7212(hash: [u8; 32], signature: &[u8], public_key: &[u8]) -> bool
     // Call the precompile via staticcall.
     // Returns Err if the call fails (precompile reverts, out of gas, etc.).
     // We treat any call failure as an invalid signature to fail safe.
-    let result = RawCall::new_static()
-        .call(RIP7212_PRECOMPILE, &input);
+    let result = unsafe {
+        RawCall::new_static()
+            .call(RIP7212_PRECOMPILE, &input)
+    };
 
     match result {
         Ok(output) => {

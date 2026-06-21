@@ -1,0 +1,1 @@
+/Users/davidjay/Projects/Claude/card_protocol/contracts/target/debug/libverifier_module.rlib: /Users/davidjay/Projects/Claude/card_protocol/contracts/protocol-types/src/lib.rs /Users/davidjay/Projects/Claude/card_protocol/contracts/verifier-module/src/lib.rs

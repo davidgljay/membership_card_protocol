@@ -34,13 +34,15 @@
 //! - `key_scheme_ops.rs`  — RotateOnChainKeyScheme.
 //! - `write_gate.rs`      — Card write gate (§6.1) and governance quorum verification (§6.2).
 
-#![no_std]
+#![cfg_attr(not(feature = "export-abi"), no_std)]
+#[macro_use]
 extern crate alloc;
 
 use alloc::vec::Vec;
 use stylus_sdk::{
     alloy_primitives::{Address, B256},
     block,
+    call::{Call, MethodError},
     evm,
     msg,
     prelude::*,
@@ -62,7 +64,7 @@ use write_gate::WriteGate;
 // storage contract and verifier module. The storage contract's ABI is expressed
 // here; calls to it go via DELEGATECALL-equivalent cross-contract invocations.
 
-stylus_sdk::sol_interface! {
+sol_interface! {
     /// Interface to the storage contract.
     /// Only the functions the logic contract actually calls are listed here.
     interface IStorage {
@@ -169,7 +171,7 @@ stylus_sdk::sol_interface! {
 // Monitoring infrastructure that subscribes to events MUST update its subscription
 // when a logic upgrade takes effect (listen for LogicUpgradeConfirmed).
 
-stylus_sdk::sol! {
+stylus_sdk::alloy_sol_types::sol! {
     event CardRegistered(
         bytes32 indexed card_address,
         bytes32 indexed policy_address,
@@ -399,13 +401,13 @@ pub fn current_block_number() -> u64 {
 }
 
 /// Build a Stylus-compatible call context for read-only calls.
-pub fn static_call_ctx() -> stylus_sdk::call::Call {
-    stylus_sdk::call::Call::new()
+pub fn static_call_ctx() -> Call<(), false> {
+    Call::new()
 }
 
 /// Build a Stylus-compatible call context for state-modifying calls.
-pub fn mut_call_ctx() -> stylus_sdk::call::Call {
-    stylus_sdk::call::Call::new()
+pub fn mut_call_ctx() -> Call<(), false> {
+    Call::new()
 }
 
 #[public]

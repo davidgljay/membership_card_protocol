@@ -27,6 +27,7 @@ use alloc::vec::Vec;
 use stylus_sdk::{
     alloy_primitives::{keccak256, B256},
     block,
+    call::MethodError,
     evm,
 };
 
@@ -108,7 +109,7 @@ pub fn rotate_on_chain_key_scheme(
     let msg_hash_b256 = keccak256(&rotation_payload);
     let verifier = IVerifierModule::new(contract.verifier_module.get());
     let secp_valid = verifier
-        .verify_secp256r1(
+        .verify_secp_256_r_1(
             static_call_ctx(),
             msg_hash_b256,
             secp256r1_sig.clone().into(),

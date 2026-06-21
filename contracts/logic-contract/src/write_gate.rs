@@ -29,6 +29,7 @@
 use alloc::vec::Vec;
 use stylus_sdk::{
     alloy_primitives::{keccak256, B256},
+    call::MethodError,
 };
 
 use crate::{
@@ -105,7 +106,7 @@ pub fn run_write_gate(
     // ── Step 4: Verify press signature via RIP-7212 (E-06) ───────────────────
     let msg_hash = keccak256(press_sig_payload);
     let sig_valid = verifier
-        .verify_secp256r1(
+        .verify_secp_256_r_1(
             static_call_ctx(),
             msg_hash,
             press_signature.to_vec().into(),
@@ -190,7 +191,7 @@ pub fn validate_write_gate_only(
     // Step 4: Signature.
     let msg_hash = keccak256(press_sig_payload);
     let sig_valid = verifier
-        .verify_secp256r1(
+        .verify_secp_256_r_1(
             static_call_ctx(),
             msg_hash,
             press_signature.to_vec().into(),
@@ -271,7 +272,7 @@ pub fn verify_governance_quorum(
 
     // ── Step 3: Verify each signature against a distinct key in the keyset ───
     // keys_flat is key_count * 64 bytes of concatenated secp256r1 pubkeys.
-    let keys_bytes = keys_flat.as_slice();
+    let keys_bytes: &[u8] = keys_flat.as_ref();
     let key_count_usize = key_count as usize;
     let msg_hash = keccak256(governance_payload);
 
@@ -296,7 +297,7 @@ pub fn verify_governance_quorum(
             let pubkey_slice = &keys_bytes[start..end];
 
             let sig_valid = verifier
-                .verify_secp256r1(
+                .verify_secp_256_r_1(
                     static_call_ctx(),
                     msg_hash,
                     sig_bytes.clone().into(),
@@ -354,7 +355,7 @@ pub fn verify_single_sig(
 
     let verifier = IVerifierModule::new(contract.verifier_module.get());
     verifier
-        .verify_secp256r1(
+        .verify_secp_256_r_1(
             static_call_ctx(),
             message_hash,
             signature.to_vec().into(),
