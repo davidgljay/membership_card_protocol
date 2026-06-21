@@ -1,1 +1,4 @@
 ./chitt-validator/node_modules
+membership_card_verifier/node_modules
+membership_card_verifier/packages/*/node_modules
+membership_card_verifier/packages/*/dist
