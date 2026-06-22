@@ -39,10 +39,11 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
+#[allow(deprecated)]
+pub use stylus_sdk::call::MethodError;
 use stylus_sdk::{
     alloy_primitives::{Address, B256},
     block,
-    call::{Call, MethodError},
     evm,
     msg,
     prelude::*,
@@ -391,23 +392,25 @@ impl StorageB256 {
 // ─── Helper macros / functions ────────────────────────────────────────────────
 
 /// Get the current block timestamp as u64.
+#[allow(deprecated)]
 pub fn current_timestamp() -> u64 {
     block::timestamp()
 }
 
 /// Get the current block number as u64.
+#[allow(deprecated)]
 pub fn current_block_number() -> u64 {
     block::number()
 }
 
-/// Build a Stylus-compatible call context for read-only calls.
-pub fn static_call_ctx() -> Call<(), false> {
-    Call::new()
-}
-
-/// Build a Stylus-compatible call context for state-modifying calls.
-pub fn mut_call_ctx() -> Call<(), false> {
-    Call::new()
+/// Build a Stylus-compatible call context for cross-contract calls.
+///
+/// Note: `sol_interface!` view functions issue static calls regardless of the
+/// context object passed; this single function covers both read-only and
+/// state-modifying call sites.
+#[allow(deprecated)]
+pub fn static_call_ctx() -> stylus_sdk::call::Call<(), false> {
+    stylus_sdk::call::Call::new()
 }
 
 #[public]

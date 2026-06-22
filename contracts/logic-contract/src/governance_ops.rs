@@ -21,10 +21,11 @@
 //! - DeregisterPolicy is a DESTRUCTIVE operation. See the WARNING comment in that
 //!   function. It is governed by RootPolicyBody quorum.
 
+#![allow(deprecated)]
+
 use alloc::vec::Vec;
 use stylus_sdk::{
     alloy_primitives::B256,
-    call::MethodError,
     evm,
 };
 
@@ -32,7 +33,7 @@ use crate::{
     errors,
     IStorage,
     LogicContract,
-    mut_call_ctx,
+    MethodError,
     static_call_ctx,
     current_timestamp,
     write_gate::verify_governance_quorum,
@@ -80,7 +81,7 @@ pub fn register_policy(
     let mut storage_mut = IStorage::new(storage_addr);
     storage_mut
         .set_policy_authorizer_key(
-            mut_call_ctx(),
+            static_call_ctx(),
             policy_address,
             authorizer_pubkey.into(),
         )
@@ -142,7 +143,7 @@ pub fn deregister_policy(
     // This is the only setter without unconditional invariant protection.
     let mut storage_mut = IStorage::new(storage_addr);
     storage_mut
-        .delete_policy_authorizer_key(mut_call_ctx(), policy_address)
+        .delete_policy_authorizer_key(static_call_ctx(), policy_address)
         .map_err(|e| e.encode())?;
 
     let ts = current_timestamp();
@@ -200,7 +201,7 @@ pub fn authorize_press(
     let mut storage_mut = IStorage::new(storage_addr);
     storage_mut
         .set_press_auth_entry(
-            mut_call_ctx(),
+            static_call_ctx(),
             policy_address,
             press_address,
             press_pubkey.into(),
@@ -263,7 +264,7 @@ pub fn revoke_press(
     let mut storage_mut = IStorage::new(storage_addr);
     storage_mut
         .set_press_auth_entry(
-            mut_call_ctx(),
+            static_call_ctx(),
             policy_address,
             press_address,
             key_bytes.into(),
@@ -323,7 +324,7 @@ pub fn rotate_authorizer_key(
     let mut storage_mut = IStorage::new(storage_addr);
     storage_mut
         .set_policy_authorizer_key(
-            mut_call_ctx(),
+            static_call_ctx(),
             policy_address,
             new_authorizer_key.into(),
         )
@@ -400,7 +401,7 @@ pub fn rotate_governance_keys(
     let mut storage_mut = IStorage::new(storage_addr);
     storage_mut
         .set_governance_keyset(
-            mut_call_ctx(),
+            static_call_ctx(),
             body_id,
             new_keys_flat.into(),
             new_key_count,
@@ -455,7 +456,7 @@ pub fn disable_policy_delete_permanently(
     // Set the permanent disable flag in the storage contract.
     let mut storage_mut = IStorage::new(storage_addr);
     storage_mut
-        .disable_policy_delete_permanently(mut_call_ctx())
+        .disable_policy_delete_permanently(static_call_ctx())
         .map_err(|e| e.encode())?;
 
     // Emit event.

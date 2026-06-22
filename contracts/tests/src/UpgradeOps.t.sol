@@ -71,10 +71,11 @@ contract UpgradeOpsTest is Test {
         );
 
         MockLogic anotherLogic = new MockLogic(address(storage_), verifierTrue);
+        uint32 govVer = _govVersion();
         vm.expectRevert(MockLogic.UpgradeAlreadyPending.selector);
         logic.propose_logic_upgrade(
             address(anotherLogic),
-            bytes32(0), keccak256("nonce2"), _govVersion(),
+            bytes32(0), keccak256("nonce2"), govVer,
             governanceSigs
         );
     }
@@ -91,10 +92,11 @@ contract UpgradeOpsTest is Test {
         // Only 6 days have elapsed.
         vm.warp(block.timestamp + 6 days);
 
+        uint32 govVer = _govVersion();
         vm.expectRevert(MockLogic.UpgradeTimelockNotElapsed.selector);
         logic.confirm_logic_upgrade(
             address(newLogic),
-            bytes32(0), keccak256("conf_n"), _govVersion(),
+            bytes32(0), keccak256("conf_n"), govVer,
             governanceSigs
         );
     }
@@ -147,10 +149,11 @@ contract UpgradeOpsTest is Test {
         vm.warp(block.timestamp + SEVEN_DAYS);
 
         address wrong_addr = address(0xDEAD);
+        uint32 govVer = _govVersion();
         vm.expectRevert(MockLogic.UpgradeAddressMismatch.selector);
         logic.confirm_logic_upgrade(
             wrong_addr,
-            bytes32(0), keccak256("conf_n4"), _govVersion(),
+            bytes32(0), keccak256("conf_n4"), govVer,
             governanceSigs
         );
     }
@@ -159,7 +162,7 @@ contract UpgradeOpsTest is Test {
         // Register a card before the upgrade.
         bytes32 POLICY = keccak256("policy_pre");
         bytes32 CARD = keccak256("card_pre");
-        bytes constant KEY = hex"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40";
+        bytes memory KEY = hex"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40";
 
         vm.prank(address(logic));
         storage_.set_policy_authorizer_key(POLICY, KEY);
@@ -185,7 +188,7 @@ contract UpgradeOpsTest is Test {
     function test_storage_state_preserved_after_upgrade() public {
         // Write some state before the upgrade.
         bytes32 POLICY = keccak256("policy_upgrade");
-        bytes constant KEY = hex"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40";
+        bytes memory KEY = hex"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40";
         bytes32 PRESS = keccak256("press_upg");
 
         vm.prank(address(logic));
@@ -204,7 +207,7 @@ contract UpgradeOpsTest is Test {
         // Write a card before the upgrade.
         bytes32 CARD = keccak256("inv_card");
         bytes32 POLICY = keccak256("inv_policy");
-        bytes constant KEY = hex"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40";
+        bytes memory KEY = hex"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40";
 
         vm.prank(address(logic));
         storage_.set_card_entry(CARD, hex"1234", POLICY, keccak256("press"), true);
@@ -239,8 +242,9 @@ contract UpgradeOpsTest is Test {
     }
 
     function test_cancel_logic_upgrade_no_pending_reverts() public {
+        uint32 govVer = _govVersion();
         vm.expectRevert(MockLogic.NoUpgradePending.selector);
-        logic.cancel_logic_upgrade(bytes32(0), keccak256("cancel_no_pending"), _govVersion(), governanceSigs);
+        logic.cancel_logic_upgrade(bytes32(0), keccak256("cancel_no_pending"), govVer, governanceSigs);
     }
 
     function test_governance_version_mismatch_invalidates_proposal() public {
@@ -265,10 +269,11 @@ contract UpgradeOpsTest is Test {
 
         // Now governance version has changed. ConfirmLogicUpgrade should fail.
         vm.warp(block.timestamp + SEVEN_DAYS);
+        uint32 govVer = _govVersion();
         vm.expectRevert(MockLogic.GovernanceVersionMismatch.selector);
         logic.confirm_logic_upgrade(
             address(newLogic),
-            bytes32(0), keccak256("conf_ver"), _govVersion(),
+            bytes32(0), keccak256("conf_ver"), govVer,
             governanceSigs
         );
     }

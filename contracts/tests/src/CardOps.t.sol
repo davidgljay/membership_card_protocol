@@ -167,6 +167,8 @@ contract CardOpsTest is Test {
     }
 
     function test_claim_open_offer_expired() public {
+        // Warp to a known timestamp so we can set a past expiry
+        vm.warp(1000);
         uint64 expires = uint64(block.timestamp) - 1; // already expired
         vm.expectRevert(MockLogic.OfferExpired.selector);
         logic.claim_open_offer(
@@ -262,7 +264,7 @@ contract CardOpsTest is Test {
     function _registerMultipleCards(uint256 count) internal {
         for (uint256 i = 0; i < count; i++) {
             bytes32 card = keccak256(abi.encode("batch_card", i));
-            logic.register_card(card, CID1, POLICY_ADDR, PRESS_ADDR, bytes32(0), new bytes(64), i);
+            logic.register_card(card, CID1, POLICY_ADDR, PRESS_ADDR, bytes32(0), new bytes(64), uint64(i));
         }
     }
 

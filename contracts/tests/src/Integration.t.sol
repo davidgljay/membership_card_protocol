@@ -40,7 +40,10 @@ contract IntegrationTest is Test {
     bytes[] governanceSigs;
 
     function setUp() public {
-        verifierModule = address(new MockVerifierAlwaysTrue());
+        // MockVerifierByKeyIndex: returns true when sig[0] == key[0].
+        // This lets multi-sig quorum tests use distinct sigs for distinct keys
+        // without triggering DuplicateSigner. DEPLOYER_KEY starts with 0x01.
+        verifierModule = address(new MockVerifierByKeyIndex());
         storageContract = new MockStorage();
         logicContract = new MockLogic(address(storageContract), verifierModule);
         newLogicContract = new MockLogic(address(storageContract), verifierModule);
@@ -48,13 +51,20 @@ contract IntegrationTest is Test {
         // Initialize: storage points to logic.
         storageContract.initialize(address(logicContract), DEPLOYER_KEY);
 
-        // Single governance sig (MockVerifierAlwaysTrue accepts it).
+        // Single governance sig — first byte 0x01 matches DEPLOYER_KEY[0].
         governanceSigs = new bytes[](1);
         governanceSigs[0] = new bytes(64);
+        governanceSigs[0][0] = 0x01;
     }
 
     function _govVersion(uint8 body_id) internal view returns (uint32 v) {
         (,,,v,) = storageContract.get_governance_keyset(body_id);
+    }
+
+    /// @dev Press signature for MockVerifierByKeyIndex: first byte must match PRESS_KEY[0] = 0x41.
+    function _pressSig() internal pure returns (bytes memory sig) {
+        sig = new bytes(64);
+        sig[0] = 0x41;
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -86,7 +96,7 @@ contract IntegrationTest is Test {
         bytes32 card1 = keccak256("s1_card1");
         logicContract.register_card(
             card1, CID_GENESIS, POLICY_ADDR, PRESS_ADDR,
-            bytes32(0), new bytes(64), 0
+            bytes32(0), _pressSig(), 0
         );
         assertTrue(storageContract.card_exists(card1), "Card 1 should exist");
         assertEq(storageContract.get_next_sequence(POLICY_ADDR, PRESS_ADDR), 1);
@@ -103,7 +113,7 @@ contract IntegrationTest is Test {
         // ── Step 4: UpdateCardHead ─────────────────────────────────────────────
         logicContract.update_card_head(
             card1, CID_V2, CID_GENESIS, PRESS_ADDR,
-            bytes32(0), new bytes(64), 1
+            bytes32(0), _pressSig(), 1
         );
         (bytes memory updated_cid,,,,) = storageContract.get_card_entry(card1);
         assertEq(keccak256(updated_cid), keccak256(CID_V2), "CID should be updated");
@@ -114,7 +124,7 @@ contract IntegrationTest is Test {
         bytes memory sub_doc = hex"1220deadbeef";
         logicContract.register_sub_card(
             sub_card, card1, CID_V2, sub_doc,
-            PRESS_ADDR, bytes32(0), new bytes(64), 2
+            PRESS_ADDR, bytes32(0), _pressSig(), 2
         );
         (bytes32 master,,,bool sub_active,,) = storageContract.get_sub_card_entry(sub_card);
         assertEq(master, card1, "Sub-card master should be card1");
@@ -122,7 +132,7 @@ contract IntegrationTest is Test {
         assertEq(storageContract.get_next_sequence(POLICY_ADDR, PRESS_ADDR), 3);
 
         // ── Step 6: DeregisterSubCard ──────────────────────────────────────────
-        logicContract.deregister_sub_card(sub_card, PRESS_ADDR, bytes32(0), new bytes(64), 3);
+        logicContract.deregister_sub_card(sub_card, PRESS_ADDR, bytes32(0), _pressSig(), 3);
         (,,,bool still_active,, uint64 dereg_at) = storageContract.get_sub_card_entry(sub_card);
         assertFalse(still_active, "Sub-card should be deregistered");
         assertGt(dereg_at, 0, "deregistered_at should be set");
@@ -146,7 +156,7 @@ contract IntegrationTest is Test {
         logicContract.batch_update_card_heads(
             POLICY_ADDR, PRESS_ADDR,
             batch_cards, prev_cids, new_cids,
-            bytes32(0), new bytes(64), seq_before_batch
+            bytes32(0), _pressSig(), seq_before_batch
         );
 
         // Sequence should increment by exactly 1.
@@ -163,7 +173,7 @@ contract IntegrationTest is Test {
         vm.prank(address(logicContract));
         storageContract.set_card_entry(new_card, CID_GENESIS, POLICY_ADDR, PRESS_ADDR, true);
 
-        logicContract.register_address_forward(card1, new_card, PRESS_ADDR, bytes32(0), new bytes(64));
+        logicContract.register_address_forward(card1, new_card, PRESS_ADDR, bytes32(0), _pressSig());
 
         (,,, bytes32 fwd_set,) = storageContract.get_card_entry(card1);
         assertEq(fwd_set, new_card, "forward_to should point to new_card");
@@ -209,27 +219,28 @@ contract IntegrationTest is Test {
         );
 
         // ── Step 2: Test that 1-of-3 quorum is rejected ──────────────────────
-        // Now quorum = 2, so a single signature should be insufficient.
-        // (MockVerifierAlwaysTrue returns true for each sig, so we need to
-        //  provide only 1 sig for the insufficient quorum test.)
+        // three_keys_flat: key[0][0]=0x01, key[1][0]=0x41, key[2][0]=0x81.
+        // single_sig[0]=0x01 matches key[0] → valid_count=1 < quorum=2 → InsufficientQuorum.
         bytes[] memory single_sig = new bytes[](1);
         single_sig[0] = new bytes(64);
+        single_sig[0][0] = 0x01; // matches key[0]
 
-        // With quorum=2 and only 1 sig, InsufficientQuorum should be thrown.
-        // BUT: MockVerifierAlwaysTrue will validate the 1 sig against the FIRST key only.
-        // The quorum check will fail since valid_count (1) < quorum (2).
+        uint32 govVer1 = _govVersion(1);
         vm.expectRevert(MockLogic.InsufficientQuorum.selector);
         logicContract.register_policy(
             keccak256("policy_1of3"),
             DEPLOYER_KEY,
-            bytes32(0), keccak256("s2_insuff_nonce"), _govVersion(1),
+            bytes32(0), keccak256("s2_insuff_nonce"), govVer1,
             single_sig
         );
 
         // ── Step 3: Test that 2-of-3 quorum is accepted ──────────────────────
+        // two_sigs[0]=0x01 matches key[0]; two_sigs[1]=0x41 matches key[1].
         bytes[] memory two_sigs = new bytes[](2);
         two_sigs[0] = new bytes(64);
+        two_sigs[0][0] = 0x01; // matches key[0]
         two_sigs[1] = new bytes(64);
+        two_sigs[1][0] = 0x41; // matches key[1]
 
         logicContract.register_policy(
             POLICY_ADDR,
@@ -242,14 +253,14 @@ contract IntegrationTest is Test {
         // ── Step 4: AuthorizePress, RevokePress, RotateAuthorizerKey ──────────
         logicContract.authorize_press(
             POLICY_ADDR, PRESS_ADDR, PRESS_KEY, bytes32(0),
-            bytes32(0), keccak256("s2_auth_press"), _govVersion(2),
+            bytes32(0), keccak256("s2_auth_press"), _govVersion(1),
             two_sigs
         );
         assertTrue(storageContract.is_press_active(POLICY_ADDR, PRESS_ADDR));
 
         logicContract.revoke_press(
             POLICY_ADDR, PRESS_ADDR,
-            bytes32(0), keccak256("s2_revoke"), _govVersion(2),
+            bytes32(0), keccak256("s2_revoke"), _govVersion(1),
             two_sigs
         );
         assertFalse(storageContract.is_press_active(POLICY_ADDR, PRESS_ADDR));
@@ -284,7 +295,7 @@ contract IntegrationTest is Test {
         bytes32 card1 = keccak256("s3_card1");
         logicContract.register_card(
             card1, CID_GENESIS, POLICY_ADDR, PRESS_ADDR,
-            bytes32(0), new bytes(64), 0
+            bytes32(0), _pressSig(), 0
         );
         assertTrue(storageContract.card_exists(card1), "Card should exist before upgrade");
 
@@ -300,10 +311,11 @@ contract IntegrationTest is Test {
 
         // ── Step 3: Attempt confirm at 6 days — should fail ──────────────────
         vm.warp(block.timestamp + 6 days);
+        uint32 govVer0 = _govVersion(0);
         vm.expectRevert(MockLogic.UpgradeTimelockNotElapsed.selector);
         logicContract.confirm_logic_upgrade(
             address(newLogicContract),
-            bytes32(0), keccak256("s3_confirm_early"), _govVersion(0),
+            bytes32(0), keccak256("s3_confirm_early"), govVer0,
             governanceSigs
         );
 

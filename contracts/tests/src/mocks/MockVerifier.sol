@@ -72,3 +72,20 @@ contract MockVerifierAlwaysFalse {
         return false;
     }
 }
+
+/// @title Mock Verifier By Key Index
+/// @notice Returns true only when signature[0] == public_key[0].
+/// @dev Used in multi-sig quorum tests so that distinct signatures map to
+///      distinct keys, preventing false DuplicateSigner errors.
+///      Callers set sig[0] to the first byte of the target key to route
+///      each signature to a specific signer.
+contract MockVerifierByKeyIndex {
+    function verify_secp256r1(
+        bytes32,
+        bytes calldata signature,
+        bytes calldata public_key
+    ) external pure returns (bool) {
+        if (signature.length == 0 || public_key.length == 0) return false;
+        return signature[0] == public_key[0];
+    }
+}

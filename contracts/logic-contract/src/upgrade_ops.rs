@@ -32,10 +32,11 @@
 //! - **No no-op upgrades.** The proposed address must differ from the current LogicContract
 //!   and must not be zero.
 
+#![allow(deprecated)]
+
 use alloc::vec::Vec;
 use stylus_sdk::{
     alloy_primitives::{Address, B256},
-    call::MethodError,
     evm,
 };
 
@@ -43,7 +44,7 @@ use crate::{
     errors,
     IStorage,
     LogicContract,
-    mut_call_ctx,
+    MethodError,
     static_call_ctx,
     current_timestamp,
     write_gate::verify_governance_quorum,
@@ -107,7 +108,7 @@ pub fn propose_logic_upgrade(
     let mut storage_mut = IStorage::new(storage_addr);
     storage_mut
         .set_pending_logic_upgrade(
-            mut_call_ctx(),
+            static_call_ctx(),
             new_logic_address,
             ts,
             governance_version,
@@ -188,14 +189,14 @@ pub fn confirm_logic_upgrade(
     // Order matters: if we update LogicContract first, this contract can no longer
     // call storage setters (including clear_pending_logic_upgrade).
     storage_mut
-        .clear_pending_logic_upgrade(mut_call_ctx())
+        .clear_pending_logic_upgrade(static_call_ctx())
         .map_err(|e| e.encode())?;
 
     // Update the LogicContract address.
     // After this call, this contract can NO longer call any storage setter.
     // The new logic contract is now in control.
     storage_mut
-        .set_logic_contract(mut_call_ctx(), proposed_logic_address)
+        .set_logic_contract(static_call_ctx(), proposed_logic_address)
         .map_err(|e| e.encode())?;
 
     // Emit LogicUpgradeConfirmed event (§7).
@@ -236,7 +237,7 @@ pub fn cancel_logic_upgrade(
     // Clear the pending upgrade.
     let mut storage_mut = IStorage::new(storage_addr);
     storage_mut
-        .clear_pending_logic_upgrade(mut_call_ctx())
+        .clear_pending_logic_upgrade(static_call_ctx())
         .map_err(|e| e.encode())?;
 
     // Emit LogicUpgradeCancelled event (§7).
