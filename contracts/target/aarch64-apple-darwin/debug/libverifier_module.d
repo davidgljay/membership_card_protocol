@@ -1,1 +1,0 @@
-/Users/davidjay/Projects/Claude/card_protocol/contracts/target/aarch64-apple-darwin/debug/libverifier_module.dylib: /Users/davidjay/Projects/Claude/card_protocol/contracts/protocol-types/src/lib.rs /Users/davidjay/Projects/Claude/card_protocol/contracts/verifier-module/src/lib.rs
