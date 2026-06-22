@@ -17,5 +17,30 @@
     "storage_contract": "0x4bca3d4fedcd81a2476c0063a4c7c8250132791e3f0c8262a71e20eb1809b569",
     "logic_contract": "0xf566afb1ac059fac42303d3c5d616bad1c6d30603a465c1321e501b6ae797f60"
   },
+  "gas_costs": {
+    "note": "gasUsed × effectiveGasPrice for each tx. 1 ETH = 1e18 wei.",
+    "verifier_module": {
+      "deploy_gas": 2036449,
+      "deploy_cost_eth": "0.0000407",
+      "activate_gas": 3402140,
+      "activate_cost_eth": "0.0000683",
+      "total_cost_eth": "0.000109"
+    },
+    "storage_contract": {
+      "deploy_gas": 5506680,
+      "deploy_cost_eth": "0.000110",
+      "activate_gas": 4826254,
+      "activate_cost_eth": "0.0000967",
+      "total_cost_eth": "0.000207"
+    },
+    "logic_contract": {
+      "deploy_gas": 67803,
+      "deploy_cost_eth": "0.00000136",
+      "activate_gas": 6809065,
+      "activate_cost_eth": "0.000136",
+      "total_cost_eth": "0.000138"
+    },
+    "grand_total_eth": "0.000454"
+  },
   "notes": "storage_contract is the stable protocol identifier — never redeployed."
 }
