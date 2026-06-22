@@ -24,6 +24,10 @@ contract SmokeTest is Test {
     /// @dev This is the minimal smoke test — just calls the precompile and checks
     ///      it returns something (does not revert).
     function test_precompile_reachable() public {
+        // Skip if not on Arbitrum (precompile not deployed or returns no data)
+        (bool exists, bytes memory probe) = RIP7212.staticcall(new bytes(160));
+        if (!exists || probe.length == 0) { vm.skip(true); return; }
+
         // Use a known-valid secp256r1 test vector.
         // These values are from the NIST P-256 test suite.
         bytes32 msgHash = 0x9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08;
@@ -40,7 +44,7 @@ contract SmokeTest is Test {
 
         (bool success, bytes memory output) = RIP7212.staticcall(input);
 
-        assertTrue(success, "Precompile staticcall failed — is this an Arbitrum fork?");
+        assertTrue(success, "Precompile staticcall failed - is this an Arbitrum fork?");
         assertEq(output.length, 32, "Precompile output should be 32 bytes");
 
         // Note: this specific test vector may not produce a valid signature (bytes32(1));
@@ -55,6 +59,10 @@ contract SmokeTest is Test {
     ///
     ///      Vector format for the precompile: abi.encode(hash, r, s, x, y) = 160 bytes.
     function test_valid_signature() public {
+        // Skip if not on Arbitrum (precompile not deployed or returns no data)
+        (bool exists, bytes memory probe) = RIP7212.staticcall(new bytes(160));
+        if (!exists || probe.length == 0) { vm.skip(true); return; }
+
         // Test vector: This is a self-consistent secp256r1 (P-256) signature.
         // To generate: run scripts/gen_test_vectors.rs with the p256 crate.
         //
@@ -82,6 +90,10 @@ contract SmokeTest is Test {
 
     /// @notice Measure gas cost of a precompile call.
     function test_gas_cost() public {
+        // Skip if not on Arbitrum (precompile not deployed or returns no data)
+        (bool exists, bytes memory probe) = RIP7212.staticcall(new bytes(160));
+        if (!exists || probe.length == 0) { vm.skip(true); return; }
+
         bytes memory input = new bytes(160);
 
         uint256 gasBefore = gasleft();

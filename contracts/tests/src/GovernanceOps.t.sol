@@ -56,8 +56,9 @@ contract GovernanceOpsTest is Test {
     function test_register_policy_duplicate_reverts() public {
         logic.register_policy(POLICY_ADDR, DEPLOYER_KEY, bytes32(0), keccak256("nonce1"), _govVersion(0), governanceSigsTrue);
 
+        uint32 govVer = _govVersion(0);
         vm.expectRevert(MockLogic.PolicyAlreadyRegistered.selector);
-        logic.register_policy(POLICY_ADDR, DEPLOYER_KEY, bytes32(0), keccak256("nonce2"), _govVersion(0), governanceSigsTrue);
+        logic.register_policy(POLICY_ADDR, DEPLOYER_KEY, bytes32(0), keccak256("nonce2"), govVer, governanceSigsTrue);
     }
 
     function test_register_policy_nonce_reuse_reverts() public {
@@ -65,8 +66,9 @@ contract GovernanceOpsTest is Test {
         logic.register_policy(POLICY_ADDR, DEPLOYER_KEY, bytes32(0), nonce1, _govVersion(0), governanceSigsTrue);
 
         bytes32 policy2 = keccak256("policy2");
+        uint32 govVer = _govVersion(0);
         vm.expectRevert(MockLogic.NonceReused.selector);
-        logic.register_policy(policy2, DEPLOYER_KEY, bytes32(0), nonce1, _govVersion(0), governanceSigsTrue); // reusing same nonce
+        logic.register_policy(policy2, DEPLOYER_KEY, bytes32(0), nonce1, govVer, governanceSigsTrue); // reusing same nonce
     }
 
     function test_register_policy_wrong_version_reverts() public {
@@ -107,10 +109,11 @@ contract GovernanceOpsTest is Test {
 
     function test_authorize_press_unknown_policy_reverts() public {
         bytes32 bad_policy = keccak256("nonexistent");
+        uint32 govVer = _govVersion(0);
         vm.expectRevert(MockLogic.UnrecognizedPolicy.selector);
         logic.authorize_press(
             bad_policy, PRESS_ADDR, DEPLOYER_KEY, bytes32(0),
-            bytes32(0), keccak256("nonce"), _govVersion(0), governanceSigsTrue
+            bytes32(0), keccak256("nonce"), govVer, governanceSigsTrue
         );
     }
 
@@ -162,10 +165,11 @@ contract GovernanceOpsTest is Test {
             bytes32(0), keccak256("rev_n3"), _govVersion(1), governanceSigsTrue
         );
 
+        uint32 govVer = _govVersion(1);
         vm.expectRevert(MockLogic.PressRevoked_.selector);
         logic.revoke_press(
             POLICY_ADDR, PRESS_ADDR,
-            bytes32(0), keccak256("rev_n3_again"), _govVersion(1), governanceSigsTrue
+            bytes32(0), keccak256("rev_n3_again"), govVer, governanceSigsTrue
         );
     }
 
@@ -186,10 +190,11 @@ contract GovernanceOpsTest is Test {
 
     function test_rotate_authorizer_key_unknown_policy_reverts() public {
         bytes32 bad_pol = keccak256("bad_policy");
+        uint32 govVer = _govVersion(0);
         vm.expectRevert(MockLogic.UnrecognizedPolicy.selector);
         logic.rotate_authorizer_key(
             bad_pol, KEY2,
-            bytes32(0), keccak256("rotate_nonce2"), _govVersion(0), governanceSigsTrue
+            bytes32(0), keccak256("rotate_nonce2"), govVer, governanceSigsTrue
         );
     }
 
@@ -234,15 +239,17 @@ contract GovernanceOpsTest is Test {
 
     function test_rotate_governance_keys_too_small_reverts() public {
         bytes memory two_keys = new bytes(128); // 2 keys
+        uint32 govVer = _govVersion(0);
         vm.expectRevert(MockLogic.KeysetTooSmall.selector);
-        logic.rotate_governance_keys(0, two_keys, 2, 2, bytes32(0), keccak256("n"), _govVersion(0), governanceSigsTrue);
+        logic.rotate_governance_keys(0, two_keys, 2, 2, bytes32(0), keccak256("n"), govVer, governanceSigsTrue);
     }
 
     function test_rotate_governance_keys_quorum_too_low_reverts() public {
         bytes memory three_keys = _make3KeyFlat();
         // quorum = 1 <= 3/2 = 1, so quorum must be > 1, meaning >= 2.
+        uint32 govVer = _govVersion(0);
         vm.expectRevert(MockLogic.QuorumTooLow.selector);
-        logic.rotate_governance_keys(0, three_keys, 3, 1, bytes32(0), keccak256("n"), _govVersion(0), governanceSigsTrue);
+        logic.rotate_governance_keys(0, three_keys, 3, 1, bytes32(0), keccak256("n"), govVer, governanceSigsTrue);
     }
 
     function test_rotate_governance_version_increments() public {

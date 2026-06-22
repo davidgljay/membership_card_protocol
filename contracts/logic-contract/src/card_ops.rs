@@ -16,11 +16,12 @@
 //! - The `prev_log_cid` check in UpdateCardHead is an optimistic concurrency control
 //!   mechanism that prevents lost-update races between two presses writing the same card.
 
+#![allow(deprecated)]
+
 use alloc::vec::Vec;
 use stylus_sdk::{
     alloy_primitives::{keccak256, B256},
     block,
-    call::MethodError,
     evm,
 };
 
@@ -28,7 +29,7 @@ use crate::{
     errors,
     IStorage,
     LogicContract,
-    mut_call_ctx,
+    MethodError,
     static_call_ctx,
     current_timestamp,
     write_gate::{run_write_gate, validate_write_gate_only, verify_single_sig},
@@ -89,7 +90,7 @@ pub fn register_card(
     let mut storage_mut = IStorage::new(storage_addr);
     storage_mut
         .set_card_entry(
-            mut_call_ctx(),
+            static_call_ctx(),
             card_address,
             initial_log_cid.clone().into(),
             policy_address,
@@ -167,7 +168,7 @@ pub fn update_card_head(
     let mut storage_mut = IStorage::new(storage_addr);
     storage_mut
         .update_card_head(
-            mut_call_ctx(),
+            static_call_ctx(),
             card_address,
             new_log_cid.clone().into(),
             press_address,
@@ -257,13 +258,13 @@ pub fn claim_open_offer(
 
     // Increment offer use count.
     storage_mut
-        .set_open_offer_count(mut_call_ctx(), offer_id, current_count + 1)
+        .set_open_offer_count(static_call_ctx(), offer_id, current_count + 1)
         .map_err(|e| e.encode())?;
 
     // Create card entry.
     storage_mut
         .set_card_entry(
-            mut_call_ctx(),
+            static_call_ctx(),
             card_address,
             initial_log_cid.clone().into(),
             policy_address,
@@ -377,7 +378,7 @@ pub fn register_address_forward(
     // Write the forward.
     let mut storage_mut = IStorage::new(storage_addr);
     storage_mut
-        .set_forward_to(mut_call_ctx(), old_address, new_address)
+        .set_forward_to(static_call_ctx(), old_address, new_address)
         .map_err(|e| e.encode())?;
 
     // Emit AddressTransition event (§7).
@@ -484,7 +485,7 @@ pub fn batch_update_card_heads(
     // Increment press sequence.
     let mut storage_mut = IStorage::new(storage_addr);
     storage_mut
-        .increment_press_sequence(mut_call_ctx(), policy_address, press_address)
+        .increment_press_sequence(static_call_ctx(), policy_address, press_address)
         .map_err(|e| e.encode())?;
 
     // ── Apply all state changes ───────────────────────────────────────────────
@@ -492,7 +493,7 @@ pub fn batch_update_card_heads(
     for i in 0..n {
         storage_mut
             .update_card_head(
-                mut_call_ctx(),
+                static_call_ctx(),
                 card_addresses[i],
                 new_log_cids[i].clone().into(),
                 press_address,

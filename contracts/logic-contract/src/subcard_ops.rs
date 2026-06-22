@@ -22,11 +22,12 @@
 //! signature in calldata for auditability. The press verifies the holder's signature
 //! off-chain before submitting; neither signature is verified on-chain.
 
+#![allow(deprecated)]
+
 use alloc::vec::Vec;
 use stylus_sdk::{
     alloy_primitives::B256,
     block,
-    call::MethodError,
     evm,
 };
 
@@ -34,7 +35,7 @@ use crate::{
     errors,
     IStorage,
     LogicContract,
-    mut_call_ctx,
+    MethodError,
     static_call_ctx,
     current_timestamp,
     write_gate::run_write_gate,
@@ -113,7 +114,7 @@ pub fn register_sub_card(
     let mut storage_mut = IStorage::new(storage_addr);
     storage_mut
         .set_sub_card_entry(
-            mut_call_ctx(),
+            static_call_ctx(),
             sub_card_address,
             master_card_address,
             registration_log_head.clone().into(),
@@ -205,7 +206,7 @@ pub fn deregister_sub_card(
     let mut storage_mut = IStorage::new(storage_addr);
     storage_mut
         .set_sub_card_entry(
-            mut_call_ctx(),
+            static_call_ctx(),
             sub_card_address,
             master_card_address,
             reg_head.into(),

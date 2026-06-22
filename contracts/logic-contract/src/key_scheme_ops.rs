@@ -23,11 +23,12 @@
 //! preconditions are fully coded and documented for the audit and for
 //! Phase 2 readiness.
 
+#![allow(deprecated)]
+
 use alloc::vec::Vec;
 use stylus_sdk::{
     alloy_primitives::{keccak256, B256},
     block,
-    call::MethodError,
     evm,
 };
 
@@ -36,7 +37,7 @@ use crate::{
     IStorage,
     IVerifierModule,
     LogicContract,
-    mut_call_ctx,
+    MethodError,
     static_call_ctx,
     current_block_number,
 };
@@ -156,7 +157,7 @@ pub fn rotate_on_chain_key_scheme(
     // Update key_scheme to ML-DSA-44.
     storage_mut
         .set_press_auth_entry(
-            mut_call_ctx(),
+            static_call_ctx(),
             policy_address,
             press_address,
             // The secp256r1 key slot is zeroed (superseded).

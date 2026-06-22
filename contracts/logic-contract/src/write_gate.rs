@@ -26,10 +26,11 @@
 //! 3. For each sig: verify secp256r1, confirm distinct keys → E-16, E-17
 //! 4. Confirm distinct valid sig count >= quorum → E-18
 
+#![allow(deprecated)]
+
 use alloc::vec::Vec;
 use stylus_sdk::{
     alloy_primitives::{keccak256, B256},
-    call::MethodError,
 };
 
 use crate::{
@@ -37,8 +38,8 @@ use crate::{
     IStorage,
     IVerifierModule,
     LogicContract,
+    MethodError,
     current_timestamp,
-    mut_call_ctx,
     static_call_ctx,
 };
 use protocol_types::{payload_parser, MAX_GOVERNANCE_KEYS};
@@ -136,7 +137,7 @@ pub fn run_write_gate(
     // caller is the logic contract (E-29).
     let mut storage_mut = IStorage::new(storage_addr);
     storage_mut
-        .increment_press_sequence(mut_call_ctx(), policy_address, press_address)
+        .increment_press_sequence(static_call_ctx(), policy_address, press_address)
         .map_err(|e| e.encode())?;
 
     Ok(WriteGateResult {
@@ -335,7 +336,7 @@ pub fn verify_governance_quorum(
     // ── Mark nonce as used ───────────────────────────────────────────────────
     let mut storage_mut = IStorage::new(storage_addr);
     storage_mut
-        .mark_nonce_used(mut_call_ctx(), nonce_b256)
+        .mark_nonce_used(static_call_ctx(), nonce_b256)
         .map_err(|e| e.encode())?;
 
     Ok(())
