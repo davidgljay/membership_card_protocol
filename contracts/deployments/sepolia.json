@@ -1,46 +1,43 @@
 {
-  "network": "arbitrum-sepolia",
-  "deployed_at": "2026-06-21T19:30:01Z",
+  "network": "sepolia",
+  "deployed_at": "2026-06-22T03:17:50Z",
   "rpc_url": "https://sepolia-rollup.arbitrum.io/rpc",
   "contracts": {
-    "verifier_module": "0x21a03a0c173815796b7d2eebe24387d54b5853e7",
-    "storage_contract": "0x9a64b7d9e504e6a49925014075cefdf3c35a5906",
-    "logic_contract": "0xd50215b035b5fa20269a5974bc94dffac8e23001"
+    "verifier_module": "0xdf4c20783a1c88f47363adbcf654a12f35d77d3e",
+    "storage_contract": "0x9272a5123a3a773d67d909f774fb88e4b260ce82",
+    "logic_contract": "0xc6bf998e1c8dd989b296405af9c5d07cc833f938"
   },
   "deployment_txs": {
-    "verifier_module": "0xec31ffba6dec6c8e917cf271fde0c16fb1715831772df14d60d6fe1a5aa44b13",
-    "storage_contract": "0xe1aeae8b7f74cb9892c664c653a08de14d7f6f21bb222cb1f37acea7cd32b61f",
-    "logic_contract": "0xb8e6d864e581e6c7aa039264c854a1f6ef13119718fdf494dc5024f650b348d2"
-  },
-  "activation_txs": {
-    "verifier_module": "0xc80d404ce563e3cf7ce9698d59d861db865a22486c45cc80b3f85c0dd0c1b639",
-    "storage_contract": "0x4bca3d4fedcd81a2476c0063a4c7c8250132791e3f0c8262a71e20eb1809b569",
-    "logic_contract": "0xf566afb1ac059fac42303d3c5d616bad1c6d30603a465c1321e501b6ae797f60"
+    "verifier_module_deploy": "0x955c83f96ae664798118eabc3fdf54f9ae16e28bdc3367c08e15305b4276e5c0",
+    "storage_contract_deploy": "0xc3c075dbe3938e6a1143addf329a56bfca74c974caf7261b22d74d257148f0e5",
+    "logic_contract_deploy": "0x5f6f75d480ddff8aefbc29af5ddc682c1ce01eb790efd52d42133ffafb0e64d1",
+    "logic_contract_activate": "0x5ebbb46204b13ee5b3ad4be4de6a8b98ee4170eb15282e295ef34216cb1d3121",
+    "storage_initialize": "0x68229d631277db75a77d785070efdd85a6fa1d2a82eb38ed3d57d03efb612262",
+    "logic_initialize": "0xc4fc9a4ddb2bfa18ebfbd62924caf3b733892095f4cfe966cbadc51f2927a2da"
   },
   "gas_costs": {
-    "note": "gasUsed × effectiveGasPrice for each tx. 1 ETH = 1e18 wei.",
+    "note": "gasUsed × effectiveGasPrice. verifier and storage were already activated from a prior deployment so no activation tx this run.",
     "verifier_module": {
-      "deploy_gas": 2036449,
-      "deploy_cost_eth": "0.0000407",
-      "activate_gas": 3402140,
-      "activate_cost_eth": "0.0000683",
-      "total_cost_eth": "0.000109"
+      "deploy_gas": 3929453,
+      "deploy_cost_eth": "0.00007874"
     },
     "storage_contract": {
-      "deploy_gas": 5506680,
-      "deploy_cost_eth": "0.000110",
-      "activate_gas": 4826254,
-      "activate_cost_eth": "0.0000967",
-      "total_cost_eth": "0.000207"
+      "deploy_gas": 10656351,
+      "deploy_cost_eth": "0.00021385"
     },
     "logic_contract": {
-      "deploy_gas": 67803,
-      "deploy_cost_eth": "0.00000136",
-      "activate_gas": 6809065,
-      "activate_cost_eth": "0.000136",
-      "total_cost_eth": "0.000138"
+      "deploy_gas": 109044,
+      "deploy_cost_eth": "0.00000220",
+      "activate_gas": 6843421,
+      "activate_cost_eth": "0.00013869"
     },
-    "grand_total_eth": "0.000454"
+    "wiring": {
+      "storage_initialize_gas": 381312,
+      "storage_initialize_cost_eth": "0.00000776",
+      "logic_initialize_gas": 175176,
+      "logic_initialize_cost_eth": "0.00000353"
+    },
+    "grand_total_eth": "0.00044476"
   },
   "notes": "storage_contract is the stable protocol identifier — never redeployed."
 }
