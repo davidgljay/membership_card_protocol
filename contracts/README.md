@@ -112,6 +112,9 @@ cargo stylus check -p verifier-module
 ```bash
 cd contracts/tests
 
+# First-time setup: install forge-std (gitignored, not committed)
+forge install foundry-rs/forge-std --no-git
+
 # Unit + mock tests (no RPC required)
 forge test -vvv
 

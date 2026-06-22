@@ -10,3 +10,11 @@ membership_card_verifier/packages/*/dist
 
 # Local keypairs (not committed)
 contracts/.keys/
+
+# Cargo build output
+contracts/target/
+
+# Foundry build artifacts and dependencies
+contracts/tests/out/
+contracts/tests/cache/
+contracts/tests/lib/
