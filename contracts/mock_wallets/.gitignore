@@ -1,0 +1,3 @@
+# Wallet files contain private keys — never commit these.
+*.json
+!.gitignore

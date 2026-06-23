@@ -14,6 +14,9 @@ membership_card_verifier/packages/*/dist
 # Local keypairs (not committed)
 contracts/.keys/
 
+# Test wallet files (contain generated private keys — never commit)
+contracts/mock_wallets/*.json
+
 # Cargo build output
 contracts/target/
 

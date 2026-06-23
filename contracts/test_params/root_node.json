@@ -1,0 +1,4 @@
+{
+  "network": "sepolia",
+  "note": "Uses the existing 1-of-1 deployer governance keyset (body_id=0, version=0). No rotation needed for testing — the deployer key from .env signs all governance ops."
+}

@@ -10,14 +10,18 @@ optimizer_runs = 200
 # ── Arbitrum Sepolia fork profile ──────────────────────────────────────────────
 # Used for verifying the RIP-7212 precompile is live and for integration tests
 # against deployed Stylus contracts.
-# Run with: forge test --profile arbitrum_sepolia --fork-url $ARBITRUM_SEPOLIA_RPC
+# Run with: FOUNDRY_PROFILE=arbitrum_sepolia forge test --fork-url $ARBITRUM_SEPOLIA_RPC
 [profile.arbitrum_sepolia]
 fork_url = "${ARBITRUM_SEPOLIA_RPC}"
-fork_block_number = 0  # latest
+# Fork block must be recent (within ~1000 blocks of chain tip) to avoid Arbitrum's
+# "metadata is not found" error. FIXED_LOGIC was deployed at block 279818340.
+# Update this when it drifts too far behind the chain tip.
+fork_block_number = 279824700
 src = "src"
 out = "out"
 libs = ["lib"]
 solc = "0.8.24"
+ffi = true  # Required for vm.ffi calls to sign_payload / build_governance_payload
 
 # ── Arbitrum One mainnet fork profile ─────────────────────────────────────────
 [profile.arbitrum_mainnet]

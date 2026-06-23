@@ -1,0 +1,5 @@
+{
+  "network": "sepolia",
+  "policy_id": "test_verifier_policy_v1",
+  "note": "Test policy for manually verifying the on-chain secp256r1 verification function."
+}

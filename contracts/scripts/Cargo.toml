@@ -3,9 +3,23 @@ name = "scripts"
 version = "0.1.0"
 edition = "2021"
 
+[workspace]
+
 [[bin]]
 name = "gen_test_vectors"
 path = "gen_test_vectors.rs"
+
+[[bin]]
+name = "sign_payload"
+path = "sign_payload.rs"
+
+[[bin]]
+name = "build_governance_payload"
+path = "build_governance_payload.rs"
+
+[[bin]]
+name = "gen_keypair"
+path = "gen_keypair.rs"
 
 [dependencies]
 # P-256 (secp256r1) key generation and signing.
@@ -14,9 +28,13 @@ p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
 ecdsa = "0.16"
 # SHA-256 for hashing (required by P-256 / ECDSA).
 sha2 = "0.10"
+# Keccak-256 for payload hashing (contracts use keccak256, not sha256).
+tiny-keccak = { version = "2.0", features = ["keccak"] }
+# Base64 decoding for PEM key files.
+base64 = "0.21"
 # Hex encoding/decoding for output.
 hex = "0.4"
-# JSON output for test vectors.
+# JSON output for test vectors and governance payloads.
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 # Randomness for key generation.
