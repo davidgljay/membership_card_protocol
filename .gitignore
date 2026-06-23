@@ -19,6 +19,7 @@ contracts/mock_wallets/*.json
 
 # Cargo build output
 contracts/target/
+contracts/scripts/target/
 
 # Foundry build artifacts and dependencies
 contracts/tests/out/
