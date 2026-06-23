@@ -67,54 +67,55 @@ use write_gate::WriteGate;
 
 sol_interface! {
     /// Interface to the storage contract.
-    /// Only the functions the logic contract actually calls are listed here.
+    /// Function names must be camelCase to match the storage contract's Stylus ABI dispatch.
+    /// Parameter types use uint8[] (not bytes) because Stylus SDK 0.8 maps Vec<u8> → uint8[].
     interface IStorage {
         // ── Getters ──────────────────────────────────────────────────────────
-        function get_card_entry(bytes32 card_address)
-            external view returns (bytes, bytes32, bytes32, bytes32, bool);
-        function card_exists(bytes32 card_address)
+        function getCardEntry(bytes32 card_address)
+            external view returns (uint8[], bytes32, bytes32, bytes32, bool);
+        function cardExists(bytes32 card_address)
             external view returns (bool);
-        function policy_exists(bytes32 policy_address)
+        function policyExists(bytes32 policy_address)
             external view returns (bool);
-        function get_policy_authorizer(bytes32 policy_address)
-            external view returns (bytes);
-        function get_press_authorization(bytes32 policy_address, bytes32 press_address)
-            external view returns (bytes, bytes32, uint8, bool, uint64, uint64, uint64);
-        function is_press_active(bytes32 policy_address, bytes32 press_address)
+        function getPolicyAuthorizer(bytes32 policy_address)
+            external view returns (uint8[]);
+        function getPressAuthorization(bytes32 policy_address, bytes32 press_address)
+            external view returns (uint8[], bytes32, uint8, bool, uint64, uint64, uint64);
+        function isPressActive(bytes32 policy_address, bytes32 press_address)
             external view returns (bool);
-        function get_next_sequence(bytes32 policy_address, bytes32 press_address)
+        function getNextSequence(bytes32 policy_address, bytes32 press_address)
             external view returns (uint64);
-        function get_sub_card_entry(bytes32 sub_card_address)
-            external view returns (bytes32, bytes, bytes, bool, uint64, uint64);
-        function get_open_offer_count(bytes32 offer_id)
+        function getSubCardEntry(bytes32 sub_card_address)
+            external view returns (bytes32, uint8[], uint8[], bool, uint64, uint64);
+        function getOpenOfferCount(bytes32 offer_id)
             external view returns (uint64);
-        function get_governance_keyset(uint8 body_id)
-            external view returns (bytes, uint8, uint8, uint32, uint8);
-        function is_nonce_used(bytes32 nonce)
+        function getGovernanceKeyset(uint8 body_id)
+            external view returns (uint8[], uint8, uint8, uint32, uint8);
+        function isNonceUsed(bytes32 nonce)
             external view returns (bool);
-        function get_logic_contract()
+        function getLogicContract()
             external view returns (address);
-        function get_pending_logic_upgrade()
+        function getPendingLogicUpgrade()
             external view returns (address, uint64, uint32, bytes32);
-        function get_key_scheme_phase()
+        function getKeySchemePhase()
             external view returns (uint8);
-        function get_policy_delete_disabled()
+        function getPolicyDeleteDisabled()
             external view returns (bool);
 
         // ── Setters ──────────────────────────────────────────────────────────
-        function set_card_entry(
+        function setCardEntry(
             bytes32 card_address,
-            bytes log_head_cid,
+            uint8[] log_head_cid,
             bytes32 policy_address,
             bytes32 last_press_address,
             bool exists
         ) external;
-        function set_forward_to(bytes32 card_address, bytes32 new_forward_to) external;
-        function update_card_head(bytes32 card_address, bytes new_log_cid, bytes32 last_press_address) external;
-        function set_press_auth_entry(
+        function setForwardTo(bytes32 card_address, bytes32 new_forward_to) external;
+        function updateCardHead(bytes32 card_address, uint8[] new_log_cid, bytes32 last_press_address) external;
+        function setPressAuthEntry(
             bytes32 policy_address,
             bytes32 press_address,
-            bytes press_public_key,
+            uint8[] press_public_key,
             bytes32 mldsa44_key_hash,
             uint8 key_scheme,
             bool active,
@@ -122,46 +123,47 @@ sol_interface! {
             uint64 authorized_at,
             uint64 revoked_at
         ) external;
-        function increment_press_sequence(bytes32 policy_address, bytes32 press_address) external;
-        function set_sub_card_entry(
+        function incrementPressSequence(bytes32 policy_address, bytes32 press_address) external;
+        function setSubCardEntry(
             bytes32 sub_card_address,
             bytes32 master_card_address,
-            bytes registration_log_head,
-            bytes sub_card_doc_cid,
+            uint8[] registration_log_head,
+            uint8[] sub_card_doc_cid,
             bool active,
             uint64 registered_at,
             uint64 deregistered_at
         ) external;
-        function set_open_offer_count(bytes32 offer_id, uint64 count) external;
-        function set_policy_authorizer_key(bytes32 policy_address, bytes authorizer_pubkey) external;
-        function delete_policy_authorizer_key(bytes32 policy_address) external;
-        function set_governance_keyset(
+        function setOpenOfferCount(bytes32 offer_id, uint64 count) external;
+        function setPolicyAuthorizerKey(bytes32 policy_address, uint8[] authorizer_pubkey) external;
+        function deletePolicyAuthorizerKey(bytes32 policy_address) external;
+        function setGovernanceKeyset(
             uint8 body_id,
-            bytes keys_flat,
+            uint8[] keys_flat,
             uint8 key_count,
             uint8 quorum,
             uint32 version,
             uint8 key_scheme
         ) external;
-        function mark_nonce_used(bytes32 nonce) external;
-        function set_logic_contract(address new_logic_address) external;
-        function set_pending_logic_upgrade(
+        function markNonceUsed(bytes32 nonce) external;
+        function setLogicContract(address new_logic_address) external;
+        function setPendingLogicUpgrade(
             address proposed_address,
             uint64 proposed_at,
             uint32 governance_version,
             bytes32 nonce
         ) external;
-        function clear_pending_logic_upgrade() external;
-        function set_key_scheme_phase(uint8 phase) external;
-        function disable_policy_delete_permanently() external;
+        function clearPendingLogicUpgrade() external;
+        function setKeySchemePhase(uint8 phase) external;
+        function disablePolicyDeletePermanently() external;
     }
 
     /// Interface to the verifier module.
+    /// verifySecp256R1 is the camelCase ABI name for the Rust fn verify_secp_256_r_1.
     interface IVerifierModule {
-        function verify_secp256r1(
+        function verifySecp256R1(
             bytes32 message_hash,
-            bytes signature,
-            bytes public_key
+            uint8[] signature,
+            uint8[] public_key
         ) external view returns (bool);
     }
 }

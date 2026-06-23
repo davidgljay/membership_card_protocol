@@ -160,7 +160,7 @@ pub fn update_card_head(
     // including that increment. No sequence number is consumed on E-08 failure.
     // The optimistic concurrency check is done here to prevent a press from writing
     // on top of a stale view of the card.
-    if stored_cid.as_ref() != prev_log_cid.as_slice() {
+    if stored_cid.as_slice() != prev_log_cid.as_slice() {
         return Err(errors::make_error(errors::STALE_PREV_CID));
     }
 
@@ -473,7 +473,7 @@ pub fn batch_update_card_heads(
         }
 
         // prev_log_cid must match current head (E-08).
-        if stored_cid.as_ref() != prev_log_cids[i].as_slice() {
+        if stored_cid.as_slice() != prev_log_cids[i].as_slice() {
             return Err(errors::make_error(errors::STALE_PREV_CID));
         }
     }

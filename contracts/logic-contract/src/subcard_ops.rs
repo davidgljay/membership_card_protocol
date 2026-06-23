@@ -86,7 +86,7 @@ pub fn register_sub_card(
     // ── Check 3: registration_log_head must match master's current head ───────
     // This ensures the sub-card snapshot is current and prevents a holder from
     // registering a sub-card claiming authority the master no longer holds.
-    if master_cid.as_ref() != registration_log_head.as_slice() {
+    if master_cid.as_slice() != registration_log_head.as_slice() {
         return Err(errors::make_error(errors::STALE_REGISTRATION_LOG_HEAD));
     }
 
