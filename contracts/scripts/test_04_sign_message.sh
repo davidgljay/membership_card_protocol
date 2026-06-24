@@ -31,9 +31,10 @@ export PATH="$HOME/.cargo/bin:$PATH"
 PARAMS_FILE="$CONTRACTS_DIR/test_params/card.json"
 WALLETS_DIR="$CONTRACTS_DIR/mock_wallets"
 
-LOGIC=0xc6bf998e1c8dd989b296405af9c5d07cc833f938
-STORAGE=0x9272a5123a3a773d67d909f774fb88e4b260ce82
-VERIFIER=0xdf4c20783a1c88f47363adbcf654a12f35d77d3e
+DEPLOYMENTS="$CONTRACTS_DIR/deployments/sepolia.json"
+LOGIC=$(python3   -c "import json; d=json.load(open('$DEPLOYMENTS')); print(d['contracts']['logic_contract'])")
+STORAGE=$(python3 -c "import json; d=json.load(open('$DEPLOYMENTS')); print(d['contracts']['storage_contract'])")
+VERIFIER=$(python3 -c "import json; d=json.load(open('$DEPLOYMENTS')); print(d['contracts']['verifier_module'])")
 
 # ── Flag parsing ──────────────────────────────────────────────────────────────
 
@@ -104,7 +105,7 @@ doc = {"type":"card_log_entry","op":"update_card_head","card_id":"$CARD_ID",
 print(json.dumps(doc, separators=(',',':')))
 PYEOF
     )
-    NEW_CID=$(ipfs_pin_json "$IPFS_DOC")
+    NEW_CID=$(ipfs_pin_encrypted "$IPFS_DOC" "$PRESS_PUBKEY")
     echo "  CID (hex): $NEW_CID"
 else
     NEW_CID="0x1220$(echo -n "test_signed_content_seq${SEQ}" | openssl dgst -sha256 -binary | xxd -p | tr -d '\n')"

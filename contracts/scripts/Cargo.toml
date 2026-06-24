@@ -21,21 +21,35 @@ path = "build_governance_payload.rs"
 name = "gen_keypair"
 path = "gen_keypair.rs"
 
+[[bin]]
+name = "sign_card_message"
+path = "sign_card_message.rs"
+
+[[bin]]
+name = "encrypt_card"
+path = "encrypt_card.rs"
+
 [dependencies]
-# P-256 (secp256r1) key generation and signing.
-p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
+# P-256 (secp256r1) key generation, signing, and ECDH key agreement.
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8", "ecdh"] }
 # RFC 6979 deterministic k generation (already included via p256 ecdsa feature).
 ecdsa = "0.16"
-# SHA-256 for hashing (required by P-256 / ECDSA).
+# SHA-256 for hashing.
 sha2 = "0.10"
 # Keccak-256 for payload hashing (contracts use keccak256, not sha256).
 tiny-keccak = { version = "2.0", features = ["keccak"] }
-# Base64 decoding for PEM key files.
+# Base64 decoding/encoding.
 base64 = "0.21"
-# Hex encoding/decoding for output.
+# Hex encoding/decoding.
 hex = "0.4"
-# JSON output for test vectors and governance payloads.
+# JSON.
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-# Randomness for key generation.
+# Randomness.
 rand_core = { version = "0.6", features = ["std"] }
+# AES-256-GCM for ADR-006 card content encryption.
+aes-gcm = "0.10"
+# HKDF key derivation (ADR-006 uses SHA3-256).
+hkdf = "0.12"
+# SHA3-256 for ADR-006 content key: HKDF-SHA3-256(recipient_pubkey, info="card-content-v1").
+sha3 = "0.10"

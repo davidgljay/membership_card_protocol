@@ -13,8 +13,32 @@
 #   stderr — status messages
 #   exit 1 — if neither backend is available
 
+# ipfs_pin_encrypted <json_string> <press_pubkey_hex>
+# Encrypts a JSON document for the press key, then pins it to IPFS.
+# Uses ECIES (ephemeral ECDH P-256 + HKDF-SHA256 + AES-256-GCM).
+# Only the holder of the press private key can decrypt the content.
+# Prints 0x<hex CID bytes> to stdout.
+ipfs_pin_encrypted() {
+    local json_content="$1"
+    local pubkey_hex="$2"
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local cargo_manifest="$script_dir/Cargo.toml"
+
+    local encrypted
+    encrypted=$(cargo run --manifest-path "$cargo_manifest" --bin encrypt_card --quiet -- \
+        --pubkey "$pubkey_hex" --plaintext "$json_content" 2>/dev/null)
+
+    if [[ -z "$encrypted" ]]; then
+        echo "  [IPFS] Encryption failed." >&2
+        return 1
+    fi
+    echo "  [IPFS] Content encrypted for press key." >&2
+    ipfs_pin_json "$encrypted"
+}
+
 # ipfs_pin_json <json_string>
-# Pins a JSON document to IPFS.
+# Pins a JSON document to IPFS (unencrypted).
 # Prints 0x<hex CID bytes> to stdout.
 ipfs_pin_json() {
     local json_content="$1"
@@ -30,7 +54,7 @@ ipfs_pin_json() {
             rm -f "$tmp"
             if [[ -n "$cid_b58" ]]; then
                 echo "  [IPFS] Pinned via local daemon: $cid_b58" >&2
-                _cid_b58_to_hex "$cid_b58"
+                _cid_to_hex "$cid_b58"
                 return 0
             fi
         else
@@ -40,28 +64,74 @@ ipfs_pin_json() {
 
     # ── Pinata ────────────────────────────────────────────────────────────────
     if [[ -n "${PINATA_JWT:-}" ]]; then
-        # Pinata's pinJSONToIPFS expects {"pinataContent": <obj>, "pinataMetadata": {...}}
+        # Build {"pinataContent": <obj>, "pinataMetadata": {...}} safely via argv.
         local pinata_body
-        pinata_body=$(python3 - <<PYEOF
+        pinata_body=$(python3 -c "
 import json, sys
-content = json.loads('''$json_content''')
-body = {"pinataContent": content, "pinataMetadata": {"name": "card-log-entry"}}
+content = json.loads(sys.argv[1])
+body = {'pinataContent': content, 'pinataMetadata': {'name': 'card-log-entry'}}
 print(json.dumps(body))
-PYEOF
-        )
-        local response
-        response=$(curl -sf -X POST "https://api.pinata.cloud/pinning/pinJSONToIPFS" \
-            -H "Authorization: Bearer $PINATA_JWT" \
-            -H "Content-Type: application/json" \
-            -d "$pinata_body" 2>/dev/null || true)
-        cid_b58=$(echo "$response" \
-            | python3 -c "import json,sys; print(json.load(sys.stdin)['IpfsHash'])" 2>/dev/null || true)
-        if [[ -n "$cid_b58" ]]; then
-            echo "  [IPFS] Pinned via Pinata: $cid_b58" >&2
-            _cid_b58_to_hex "$cid_b58"
-            return 0
+" "$json_content" 2>/dev/null)
+
+        if [[ -z "$pinata_body" ]]; then
+            echo "  [IPFS] Failed to build Pinata request body (JSON parse error?)" >&2
         else
-            echo "  [IPFS] Pinata request failed. Response: ${response:-<empty>}" >&2
+            local tmp_resp http_code response cid_str
+            tmp_resp=$(mktemp)
+
+            # ── Try legacy Pinning API (pins to public IPFS) ──────────────────
+            # Requires JWT with 'pinJSONToIPFS' scope enabled.
+            http_code=$(curl -s -o "$tmp_resp" -w '%{http_code}' \
+                -X POST "https://api.pinata.cloud/pinning/pinJSONToIPFS" \
+                -H "Authorization: Bearer $PINATA_JWT" \
+                -H "Content-Type: application/json" \
+                -d "$pinata_body" 2>/dev/null)
+            response=$(cat "$tmp_resp" 2>/dev/null); rm -f "$tmp_resp"
+
+            cid_str=$(echo "$response" \
+                | python3 -c "import json,sys; print(json.load(sys.stdin)['IpfsHash'])" 2>/dev/null || true)
+            if [[ -n "$cid_str" ]]; then
+                echo "  [IPFS] Pinned via Pinata (public IPFS): $cid_str" >&2
+                _cid_to_hex "$cid_str"
+                return 0
+            fi
+
+            if [[ "$http_code" == "403" ]]; then
+                echo "  [IPFS] HTTP 403 — JWT needs 'pinJSONToIPFS' scope." >&2
+                echo "  [IPFS] Pinata → API Keys → create key → enable pinFileToIPFS." >&2
+                echo "  [IPFS] Falling back to Files API (accessible via Pinata gateway only)..." >&2
+            else
+                echo "  [IPFS] Pinning API HTTP $http_code: ${response:-<empty>}" >&2
+            fi
+
+            # ── Fallback: Files API v3 (Pinata gateway only, not public IPFS) ──
+            local tmp_json
+            tmp_json=$(mktemp --suffix=.json 2>/dev/null || mktemp)
+            tmp_resp=$(mktemp)
+            python3 -c "
+import json, sys
+content = json.loads(sys.argv[1])
+print(json.dumps(content))
+" "$json_content" > "$tmp_json" 2>/dev/null
+
+            http_code=$(curl -s -o "$tmp_resp" -w '%{http_code}' \
+                -X POST "https://uploads.pinata.cloud/v3/files" \
+                -H "Authorization: Bearer $PINATA_JWT" \
+                -F "file=@${tmp_json};type=application/json" \
+                -F "name=card-log-entry" \
+                2>/dev/null)
+            response=$(cat "$tmp_resp" 2>/dev/null)
+            rm -f "$tmp_json" "$tmp_resp"
+
+            cid_str=$(echo "$response" \
+                | python3 -c "import json,sys; print(json.load(sys.stdin)['data']['cid'])" 2>/dev/null || true)
+            if [[ -n "$cid_str" ]]; then
+                echo "  [IPFS] Pinned via Pinata Files API (private gateway): $cid_str" >&2
+                _cid_to_hex "$cid_str"
+                return 0
+            else
+                echo "  [IPFS] Pinata Files API HTTP $http_code: ${response:-<empty>}" >&2
+            fi
         fi
     fi
 
@@ -75,12 +145,13 @@ PYEOF
     return 1
 }
 
-# _cid_b58_to_hex <base58_cidv0>
-# Decodes a CIDv0 (base58-encoded 34-byte multihash) to 0x-prefixed hex.
-# CIDv0 wire format: 0x12 (sha2-256 fn code) || 0x20 (32-byte digest length) || <32 bytes>
-_cid_b58_to_hex() {
+# _cid_to_hex <cid>
+# Decodes an IPFS CID to 0x-prefixed hex bytes.
+# Handles CIDv0 (base58, starts with "Qm") and CIDv1 (base32, starts with "b").
+# Both fit within MAX_CID_LEN=64: CIDv0 = 34 bytes, CIDv1 (sha2-256) = 36 bytes.
+_cid_to_hex() {
     python3 - "$1" <<'PYEOF'
-import sys
+import sys, base64
 
 def b58decode(s):
     ALPHA = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
@@ -94,10 +165,19 @@ def b58decode(s):
     out += [0] * (len(s) - len(s.lstrip('1')))
     return bytes(reversed(out))
 
-raw = b58decode(sys.argv[1])
-# Sanity check: CIDv0 is always 34 bytes (0x1220 prefix + 32-byte hash)
-if len(raw) != 34 or raw[0] != 0x12 or raw[1] != 0x20:
-    print(f"WARNING: unexpected CID bytes: {raw.hex()}", file=sys.stderr)
+def b32decode_cid(s):
+    # Multibase prefix 'b' = base32 lowercase (RFC 4648, no padding)
+    body = s[1:] if s.startswith('b') else s
+    body = body.upper()
+    pad = (8 - len(body) % 8) % 8
+    return base64.b32decode(body + '=' * pad)
+
+cid = sys.argv[1]
+if cid.startswith('Qm'):
+    raw = b58decode(cid)
+else:
+    raw = b32decode_cid(cid)
+
 print('0x' + raw.hex())
 PYEOF
 }

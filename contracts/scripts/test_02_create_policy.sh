@@ -30,8 +30,9 @@ ROOT_STATE="$CONTRACTS_DIR/mock_wallets/root_node.json"
 WALLETS_DIR="$CONTRACTS_DIR/mock_wallets"
 OUT_FILE="$WALLETS_DIR/policy.json"
 
-LOGIC=0xc6bf998e1c8dd989b296405af9c5d07cc833f938
-STORAGE=0x9272a5123a3a773d67d909f774fb88e4b260ce82
+DEPLOYMENTS="$CONTRACTS_DIR/deployments/sepolia.json"
+LOGIC=$(python3   -c "import json; d=json.load(open('$DEPLOYMENTS')); print(d['contracts']['logic_contract'])")
+STORAGE=$(python3 -c "import json; d=json.load(open('$DEPLOYMENTS')); print(d['contracts']['storage_contract'])")
 
 # ── Sepolia guard ─────────────────────────────────────────────────────────────
 
