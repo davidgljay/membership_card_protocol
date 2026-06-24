@@ -1,6 +1,6 @@
 {
   "network": "sepolia",
-  "card_id": "test_verifier_card_v1",
+  "card_id": "test_verifier_card_v5",
   "press_id": "test_verifier_press_v1",
   "initial_cid_label": "test_verifier_card_initial_content_v1",
   "note": "Test card for manually verifying the on-chain secp256r1 verification function. The press keypair is generated fresh by test_03 and stored in mock_wallets/."

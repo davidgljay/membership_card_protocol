@@ -1,22 +1,22 @@
 {
   "network": "sepolia",
-  "deployed_at": "2026-06-22T03:17:50Z",
+  "deployed_at": "2026-06-23T16:06:33Z",
   "rpc_url": "https://sepolia-rollup.arbitrum.io/rpc",
   "contracts": {
     "verifier_module": "0xdf4c20783a1c88f47363adbcf654a12f35d77d3e",
-    "storage_contract": "0x9272a5123a3a773d67d909f774fb88e4b260ce82",
-    "logic_contract": "0xc6bf998e1c8dd989b296405af9c5d07cc833f938"
+    "storage_contract": "0xe497b4ba27dacaf92354bd34da253a0a88aa57d4",
+    "logic_contract": "0xa1711fc101d4ad638857f89cb9bca920e1dff082"
   },
   "deployment_txs": {
-    "verifier_module_deploy": "0x955c83f96ae664798118eabc3fdf54f9ae16e28bdc3367c08e15305b4276e5c0",
-    "storage_contract_deploy": "0xc3c075dbe3938e6a1143addf329a56bfca74c974caf7261b22d74d257148f0e5",
-    "logic_contract_deploy": "0x5f6f75d480ddff8aefbc29af5ddc682c1ce01eb790efd52d42133ffafb0e64d1",
-    "logic_contract_activate": "0x5ebbb46204b13ee5b3ad4be4de6a8b98ee4170eb15282e295ef34216cb1d3121",
-    "storage_initialize": "0x68229d631277db75a77d785070efdd85a6fa1d2a82eb38ed3d57d03efb612262",
-    "logic_initialize": "0xc4fc9a4ddb2bfa18ebfbd62924caf3b733892095f4cfe966cbadc51f2927a2da"
+    "storage_contract_deploy": "0x3a7442ef948e5d646d34e577642d9695aea0dc3873e401268478b9e7348b45ca",
+    "storage_contract_activate": "",
+    "logic_contract_deploy": "0xa21425b9ddb36d515a9e261c6f9359ffa5500c929222b6df8fa9556747b5d162",
+    "logic_contract_activate": "",
+    "storage_initialize": "0xbcf4627596423d2a757211a75ece7266f5e3c074f0e6c08bd7defb565a6a0da3",
+    "logic_initialize": "0xe296ba8a01a09c805b57eb090bebaabceee5300afeb8c03a7a5c179c1b259c90"
   },
   "gas_costs": {
-    "note": "gasUsed × effectiveGasPrice. verifier and storage were already activated from a prior deployment so no activation tx this run.",
+    "note": "gasUsed \u00d7 effectiveGasPrice. verifier and storage were already activated from a prior deployment so no activation tx this run.",
     "verifier_module": {
       "deploy_gas": 3929453,
       "deploy_cost_eth": "0.00007874"
@@ -39,5 +39,5 @@
     },
     "grand_total_eth": "0.00044476"
   },
-  "notes": "storage_contract is the stable protocol identifier — never redeployed."
+  "notes": "storage_contract is the stable protocol identifier \u2014 never redeployed. (Sepolia exception: redeployed alongside logic contract fix.)"
 }

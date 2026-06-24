@@ -32,8 +32,9 @@ PARAMS_FILE="$CONTRACTS_DIR/test_params/card.json"
 POLICY_STATE="$CONTRACTS_DIR/mock_wallets/policy.json"
 WALLETS_DIR="$CONTRACTS_DIR/mock_wallets"
 
-LOGIC=0xc6bf998e1c8dd989b296405af9c5d07cc833f938
-STORAGE=0x9272a5123a3a773d67d909f774fb88e4b260ce82
+DEPLOYMENTS="$CONTRACTS_DIR/deployments/sepolia.json"
+LOGIC=$(python3   -c "import json; d=json.load(open('$DEPLOYMENTS')); print(d['contracts']['logic_contract'])")
+STORAGE=$(python3 -c "import json; d=json.load(open('$DEPLOYMENTS')); print(d['contracts']['storage_contract'])")
 
 # ── Flag parsing ──────────────────────────────────────────────────────────────
 
@@ -179,7 +180,7 @@ doc = {"type":"card_log_entry","op":"register_card","card_id":"$CARD_ID",
 print(json.dumps(doc, separators=(',',':')))
 PYEOF
         )
-        INITIAL_CID=$(ipfs_pin_json "$IPFS_DOC")
+        INITIAL_CID=$(ipfs_pin_encrypted "$IPFS_DOC" "$PRESS_PUBKEY")
         echo "  CID (hex): $INITIAL_CID"
     else
         INITIAL_CID="0x1220$(echo -n "$CID_LABEL" | openssl dgst -sha256 -binary | xxd -p | tr -d '\n')"
@@ -220,7 +221,7 @@ import json
 wallet = {"network":"sepolia","card_id":"$CARD_ID","card_address":"$CARD_ADDR",
           "policy_address":"$POLICY_ADDR","press_id":"$PRESS_ID",
           "press_address":"$PRESS_ADDR","current_cid":"$INITIAL_CID",
-          "ipfs_pinned":$([[ "$IPFS_PUBLISH" == "true" ]] && echo "true" || echo "false")}
+          "ipfs_pinned":$([[ "$IPFS_PUBLISH" == "true" ]] && echo "True" || echo "False")}
 with open("$CARD_WALLET","w") as f: json.dump(wallet, f, indent=2)
 PYEOF
 
