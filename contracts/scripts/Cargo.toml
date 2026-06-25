@@ -26,6 +26,10 @@ name = "sign_card_message"
 path = "sign_card_message.rs"
 
 [[bin]]
+name = "gen_mldsa_keypair"
+path = "gen_mldsa_keypair.rs"
+
+[[bin]]
 name = "encrypt_card"
 path = "encrypt_card.rs"
 
@@ -53,3 +57,6 @@ aes-gcm = "0.10"
 hkdf = "0.12"
 # SHA3-256 for ADR-006 content key: HKDF-SHA3-256(recipient_pubkey, info="card-content-v1").
 sha3 = "0.10"
+# ML-DSA-44 (FIPS 204) key generation for card holder identity keys.
+# getrandom feature enables Generate::generate() so we don't need to bridge rand_core versions.
+ml-dsa = { version = "0.1", features = ["getrandom"] }

@@ -61,7 +61,7 @@ fn main() {
     }
 
     // Resolve pubkey bytes (from either --pubkey or --privkey).
-    let pubkey_bytes: [u8; 64] = if let Some(hex) = pubkey_hex {
+    let pubkey_bytes: Vec<u8> = if let Some(hex) = pubkey_hex {
         parse_pubkey_hex(&hex)
     } else if let Some(hex) = privkey_hex.as_deref() {
         derive_pubkey_from_privkey(hex)
@@ -79,27 +79,33 @@ fn main() {
 
 // ── Key helpers ───────────────────────────────────────────────────────────────
 
-fn parse_pubkey_hex(hex_str: &str) -> [u8; 64] {
+fn parse_pubkey_hex(hex_str: &str) -> Vec<u8> {
     let hex_str = hex_str.trim().trim_start_matches("0x");
     let bytes = hex::decode(hex_str)
         .unwrap_or_else(|e| panic!("Invalid pubkey hex: {}", e));
-    assert_eq!(bytes.len(), 64, "Pubkey must be 64 bytes (uncompressed x||y, no 0x04 prefix)");
-    bytes.try_into().unwrap()
+    // Accept any size: 64 bytes (secp256r1, Phase 1 fallback) or 1312 bytes (ML-DSA-44, spec-correct).
+    assert!(
+        bytes.len() == 64 || bytes.len() == 1312,
+        "Pubkey must be 64 bytes (secp256r1) or 1312 bytes (ML-DSA-44), got {}",
+        bytes.len()
+    );
+    bytes
 }
 
-fn derive_pubkey_from_privkey(hex_str: &str) -> [u8; 64] {
+fn derive_pubkey_from_privkey(hex_str: &str) -> Vec<u8> {
     let hex_str = hex_str.trim().trim_start_matches("0x");
     let bytes = hex::decode(hex_str).unwrap_or_else(|e| panic!("Invalid privkey hex: {}", e));
     let signing_key = SigningKey::from_bytes(bytes.as_slice().into())
         .unwrap_or_else(|e| panic!("Invalid P-256 private key: {}", e));
     let point = signing_key.verifying_key().to_encoded_point(false); // 0x04 || x || y
     let coords = point.as_bytes();
-    coords[1..65].try_into().unwrap()
+    coords[1..65].to_vec()
 }
 
 /// ADR-006: content_key = HKDF-SHA3-256(ikm=recipient_pubkey, info="card-content-v1")
-fn derive_content_key(pubkey_bytes: &[u8; 64]) -> [u8; 32] {
-    let hkdf = Hkdf::<Sha3_256>::new(None, pubkey_bytes.as_slice());
+/// recipient_pubkey is ML-DSA-44 (1312 bytes) per spec; secp256r1 (64 bytes) for Phase 1 fallback.
+fn derive_content_key(pubkey_bytes: &[u8]) -> [u8; 32] {
+    let hkdf = Hkdf::<Sha3_256>::new(None, pubkey_bytes);
     let mut key = [0u8; 32];
     hkdf.expand(INFO, &mut key).expect("HKDF expand");
     key
@@ -107,7 +113,7 @@ fn derive_content_key(pubkey_bytes: &[u8; 64]) -> [u8; 32] {
 
 // ── Encrypt / Decrypt ─────────────────────────────────────────────────────────
 
-fn encrypt(plaintext: &str, pubkey_bytes: &[u8; 64]) -> String {
+fn encrypt(plaintext: &str, pubkey_bytes: &[u8]) -> String {
     let content_key = derive_content_key(pubkey_bytes);
 
     let mut nonce_bytes = [0u8; 12];
@@ -125,7 +131,7 @@ fn encrypt(plaintext: &str, pubkey_bytes: &[u8; 64]) -> String {
     }).to_string()
 }
 
-fn decrypt(enc_json: &str, pubkey_bytes: &[u8; 64]) -> String {
+fn decrypt(enc_json: &str, pubkey_bytes: &[u8]) -> String {
     let v: serde_json::Value = serde_json::from_str(enc_json)
         .unwrap_or_else(|e| panic!("Invalid encrypted JSON: {}", e));
 

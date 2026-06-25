@@ -71,6 +71,16 @@ PRESS_ADDR=$(python3 -c "import json; d=json.load(open('$PRESS_WALLET')); print(
 CARD_ADDR=$(python3 -c "import json; d=json.load(open('$CARD_WALLET')); print(d['card_address'])")
 POLICY_ADDR=$(python3 -c "import json; d=json.load(open('$CARD_WALLET')); print(d['policy_address'])")
 
+# Load the ML-DSA-44 card identity public key for ADR-006 IPFS encryption.
+MLDSA_WALLET_NAME=$(python3 -c "import json; d=json.load(open('$CARD_WALLET')); print(d.get('mldsa_wallet',''))" 2>/dev/null || true)
+MLDSA_WALLET="$WALLETS_DIR/${MLDSA_WALLET_NAME}"
+if [[ -n "$MLDSA_WALLET_NAME" && -f "$MLDSA_WALLET" ]]; then
+    MLDSA_PUBKEY=$(python3 -c "import json; d=json.load(open('$MLDSA_WALLET')); print(d['public_key'])")
+else
+    echo "WARNING: ML-DSA-44 wallet not found; falling back to secp256r1 pubkey for IPFS encryption." >&2
+    MLDSA_PUBKEY="$PRESS_PUBKEY"
+fi
+
 echo "=== Test Step 4: Sign Message and Verify (Sepolia) ==="
 echo "Card:         $CARD_ADDR"
 echo "Press:        $PRESS_ADDR"
@@ -105,7 +115,7 @@ doc = {"type":"card_log_entry","op":"update_card_head","card_id":"$CARD_ID",
 print(json.dumps(doc, separators=(',',':')))
 PYEOF
     )
-    NEW_CID=$(ipfs_pin_encrypted "$IPFS_DOC" "$PRESS_PUBKEY")
+    NEW_CID=$(ipfs_pin_encrypted "$IPFS_DOC" "$MLDSA_PUBKEY")
     echo "  CID (hex): $NEW_CID"
 else
     NEW_CID="0x1220$(echo -n "test_signed_content_seq${SEQ}" | openssl dgst -sha256 -binary | xxd -p | tr -d '\n')"
