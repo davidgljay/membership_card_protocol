@@ -10,6 +10,9 @@ importers:
 
   packages/verifier:
     dependencies:
+      '@noble/curves':
+        specifier: ^1.9.0
+        version: 1.9.7
       '@noble/hashes':
         specifier: ^1.7.2
         version: 1.8.0
@@ -47,10 +50,6 @@ importers:
         version: 3.2.6(@types/node@26.0.0)
 
   packages/verifier-rpc-provider:
-    dependencies:
-      ethers:
-        specifier: ^6.0.0
-        version: 6.17.0
     devDependencies:
       '@membership-card-protocol/verifier':
         specifier: workspace:*
@@ -58,6 +57,9 @@ importers:
       '@types/node':
         specifier: ^26.0.0
         version: 26.0.0
+      ethers:
+        specifier: ^6.0.0
+        version: 6.17.0
       typescript:
         specifier: ^5.8.3
         version: 5.9.3
