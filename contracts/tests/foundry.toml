@@ -10,13 +10,12 @@ optimizer_runs = 200
 # ── Arbitrum Sepolia fork profile ──────────────────────────────────────────────
 # Used for verifying the RIP-7212 precompile is live and for integration tests
 # against deployed Stylus contracts.
-# Run with: FOUNDRY_PROFILE=arbitrum_sepolia forge test --fork-url $ARBITRUM_SEPOLIA_RPC
+# Run with: FOUNDRY_PROFILE=arbitrum_sepolia forge test
+# No fork_block_number: always forks at latest to avoid Arbitrum's
+# "metadata is not found" error (nodes only retain ~1000 blocks of metadata).
+# Override the RPC with FOUNDRY_ETH_RPC_URL=<url> if you need a different endpoint.
 [profile.arbitrum_sepolia]
-fork_url = "${ARBITRUM_SEPOLIA_RPC}"
-# Fork block must be recent (within ~1000 blocks of chain tip) to avoid Arbitrum's
-# "metadata is not found" error. FIXED_LOGIC was deployed at block 279818340.
-# Update this when it drifts too far behind the chain tip.
-fork_block_number = 279824700
+eth_rpc_url = "https://sepolia-rollup.arbitrum.io/rpc"
 src = "src"
 out = "out"
 libs = ["lib"]
@@ -24,8 +23,9 @@ solc = "0.8.24"
 ffi = true  # Required for vm.ffi calls to sign_payload / build_governance_payload
 
 # ── Arbitrum One mainnet fork profile ─────────────────────────────────────────
+# Override with FOUNDRY_ETH_RPC_URL=<url> if needed.
 [profile.arbitrum_mainnet]
-fork_url = "${ARBITRUM_MAINNET_RPC}"
+eth_rpc_url = "${ARBITRUM_MAINNET_RPC}"
 src = "src"
 out = "out"
 libs = ["lib"]
