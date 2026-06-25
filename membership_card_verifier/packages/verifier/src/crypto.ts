@@ -1,7 +1,9 @@
 import { keccak_256 } from "@noble/hashes/sha3";
 import { hkdf } from "@noble/hashes/hkdf";
 import { sha3_256 } from "@noble/hashes/sha3";
+import { sha256 } from "@noble/hashes/sha256";
 import { ml_dsa44 } from "@noble/post-quantum/ml-dsa.js";
+import { p256 } from "@noble/curves/p256";
 import { createDecipheriv } from "node:crypto";
 import { CardProtocolError } from "./errors.js";
 
@@ -57,4 +59,34 @@ export function mlDsa44Verify(
 ): boolean {
   // @noble/post-quantum API: verify(sig, msg, publicKey)
   return ml_dsa44.verify(signature, message, publicKey);
+}
+
+/**
+ * Verifies a secp256r1 (P-256) signature using SHA-256 prehash.
+ *
+ * This is the Phase 1 signing scheme used before ML-DSA-44 is rolled out.
+ * Algorithm: SHA-256(canonical_message_bytes) → verify with P-256 ECDSA.
+ *
+ * publicKey: 64 bytes, x||y uncompressed (no 0x04 prefix), matching the on-chain
+ *   StoragePressAuthEntry.press_public_key layout.
+ * message: raw canonical payload bytes (prehash is applied here).
+ * signature: 64 bytes, r||s compact format.
+ */
+export function secp256r1Phase1Verify(
+  publicKey: Uint8Array,
+  message: Uint8Array,
+  signature: Uint8Array
+): boolean {
+  // Prepend the 0x04 uncompressed-point prefix expected by @noble/curves.
+  const uncompressed = new Uint8Array(65);
+  uncompressed[0] = 0x04;
+  uncompressed.set(publicKey, 1);
+
+  const msgHash = sha256(message);
+
+  try {
+    return p256.verify(signature, msgHash, uncompressed);
+  } catch {
+    return false;
+  }
 }

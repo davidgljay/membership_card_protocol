@@ -123,6 +123,7 @@ export interface SignedMessageEnvelope {
 }
 
 export interface SignatureEntry {
+  key_scheme?: "mldsa44" | "secp256r1_phase1";
   public_key: string;
   signature: string;
 }

@@ -95,3 +95,6 @@ export class EthersRpcProvider implements RpcProvider {
     return entries as EasAttestation[];
   }
 }
+
+export { getNetworkConfig } from "./networkConfig.js";
+export type { NetworkConfig, NetworkEnv } from "./networkConfig.js";
