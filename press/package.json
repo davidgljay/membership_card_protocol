@@ -17,6 +17,10 @@
   "//": "TODO: replace file: reference with versioned npm ref once @membership-card-protocol/verifier is published",
   "dependencies": {
     "@membership-card-protocol/verifier": "file:../membership_card_verifier/packages/verifier",
+    "@noble/curves": "^1.9.0",
+    "@noble/hashes": "^1.7.2",
+    "@noble/post-quantum": "^0.5.4",
+    "multiformats": "^13.0.0",
     "nitropack": "^2.11.0",
     "pinata": "^2.0.0",
     "viem": "^2.30.0"
