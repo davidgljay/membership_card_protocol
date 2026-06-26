@@ -1,8 +1,20 @@
 # Card Protocol — Press Spec
 
-**Version:** 0.2 (draft)
-**Date:** 2026-06-20
+**Version:** 0.3 (draft)
+**Date:** 2026-06-25
 **Status:** Draft
+
+**Changes from v0.2:**
+- §3 rewritten: Docker/SQLite container model replaced by Nitro serverless architecture with external persistent storage.
+- §3.4 rewritten: IPFS pinning provider changed from web3.storage (w3up) to Piñata.
+- §3.5 added: CID reconciliation — scheduled Nitro task that reads all card CIDs from the storage contract and ensures they are pinned.
+- §4 updated: `PINATA_JWT` replaces `W3UP_KEY` / `W3UP_SPACE`; `EXTERNAL_KV_URL` added for persistent state.
+- §5.0 added: Verifier integration — press instantiates a `CardVerifier` from `@membership-card-protocol/verifier` and delegates all chain walking and revocation checking to it.
+- §5.5 removed: `resolveCard`, `verifyCardChain`, `checkRevocationStatus`, `verifyAppCertificationChain` — these duplicated verifier package functionality and are replaced by `CardVerifier.verifyCard()`.
+- §5.1 `evaluatePredicates` updated: now calls `verifier.verifyCard()` rather than implementing chain walking internally.
+- §5.4 `processSubCardRegistration` updated: app certification chain check now uses `verifier.verifyCard()`.
+- `P-10` error description updated.
+- §9 open questions updated.
 
 ---
 
@@ -10,23 +22,24 @@
 
 1. [Overview](#1-overview)
 2. [Press Identity](#2-press-identity)
-3. [Container Architecture](#3-container-architecture)
-   - 3.1 [Dockerfile and Image](#31-dockerfile-and-image)
+3. [Deployment Architecture](#3-deployment-architecture)
+   - 3.1 [Nitro Serverless](#31-nitro-serverless)
    - 3.2 [Configuration](#32-configuration)
-   - 3.3 [Persistent State — SQLite](#33-persistent-state--sqlite)
-   - 3.4 [IPFS Pinning — web3.storage](#34-ipfs-pinning--web3storage)
+   - 3.3 [Persistent State — External KV Store](#33-persistent-state--external-kv-store)
+   - 3.4 [IPFS Pinning — Piñata](#34-ipfs-pinning--piata)
+   - 3.5 [CID Reconciliation](#35-cid-reconciliation)
 4. [HTTP Endpoints](#4-http-endpoints)
 5. [Functions](#5-functions)
+   - 5.0 [Verifier Integration](#50-verifier-integration)
    - 5.1 [Card Issuance](#51-card-issuance)
    - 5.2 [Open Offer Processing](#52-open-offer-processing)
    - 5.3 [Card Updates and Revocations](#53-card-updates-and-revocations)
    - 5.4 [Sub-Card Registration](#54-sub-card-registration)
-   - 5.5 [Chain Verification](#55-chain-verification)
-   - 5.6 [Log Management](#56-log-management)
-   - 5.7 [Audit Epoch Management](#57-audit-epoch-management)
-   - 5.8 [On-Chain Operations](#58-on-chain-operations)
-   - 5.9 [Rate Limiting](#59-rate-limiting)
-   - 5.10 [Gas Management](#510-gas-management)
+   - 5.5 [Log Management](#55-log-management)
+   - 5.6 [Audit Epoch Management](#56-audit-epoch-management)
+   - 5.7 [On-Chain Operations](#57-on-chain-operations)
+   - 5.8 [Rate Limiting](#58-rate-limiting)
+   - 5.9 [Gas Management](#59-gas-management)
 6. [Rate Limits](#6-rate-limits)
 7. [Error Codes](#7-error-codes)
 8. [Key Rotation](#8-key-rotation)
@@ -38,9 +51,13 @@
 
 A **press** is the service that validates, co-signs, publishes, and registers cards on behalf of a policy. Every card that enters the protocol passes through a press: the press applies the final signature (`press_signature` in the `CardDocument`), posts the card to IPFS, and registers or updates the card's on-chain registry entry.
 
-A press is authorized to act under one or more policies. Its authorization is recorded on-chain in the `PressAuthorizations` table of the registry contract (see `registry_contract.md §3.3`). The press's authority to write is enforced on-chain via secp256r1 signature verification on every write. Its IPFS-side identity — the key whose public key appears as `press_card` in issued `CardDocument`s — is an ML-DSA-44 keypair.
+A press is authorized to act under one or more policies. Its authorization is recorded on-chain in the `PressAuthorizations` table of the registry contract (see `registry_contract.md §3.3`). The press's authority to write is enforced on-chain via secp256r1 signature verification on every write (RIP-7212 precompile). Its IPFS-side identity — the key whose public key appears as `press_card` in issued `CardDocument`s — is an ML-DSA-44 keypair.
 
-Presses are self-contained deployable units. This spec describes a **Docker container deployment** targeting any container-capable host (DigitalOcean App Platform, Droplets, Fly.io, Render, etc.). Each deployed container is a single running press. Multiple presses may be deployed — under the same or different policies — as independent containers; they do not share state.
+Presses are deployed as **Nitro serverless applications**. Each deployment is a stateless Nitro server; all durable state is held in an external key-value store. Multiple press deployments may operate under the same or different policies; they do not share state beyond the on-chain registry.
+
+Chain validation (chain walking, revocation checking) is delegated to the `@membership-card-protocol/verifier` npm package. The press does not reimplement these verification algorithms.
+
+IPFS pinning is provided by **Piñata**. The press pins all content it publishes and runs a scheduled reconciliation task that reads all card CIDs from the on-chain storage contract and pins any that are not already pinned.
 
 ---
 
@@ -54,14 +71,14 @@ A press has two distinct key pairs, serving distinct roles:
 - The public key is the press's IPFS identity. Its keccak256 hash is the press's on-chain registry address.
 - Used to produce `press_signature` in every `CardDocument` and `LogEntry` the press signs.
 - Used to produce `press_signature` in `SCIP` objects.
-- The private key is held in the container's runtime memory (loaded from the environment at startup). It never leaves the press process.
+- The private key is loaded from the environment at startup and held in memory for the lifetime of the function invocation. It never leaves the press process.
 
 **secp256r1 keypair (on-chain authorization key)**
 
 - Used to sign payloads submitted to the registry contract (`RegisterCard`, `UpdateCardHead`, `ClaimOpenOffer`, `RegisterSubCard`, `DeregisterSubCard`, `BatchUpdateCardHeads`, `RegisterAddressForward`).
 - The public key is registered on-chain in `PressAuthorizations[policy_address][press_address]`.
 - Verified by the contract via the RIP-7212 precompile on every write.
-- The private key is held in the container's runtime memory (loaded from the environment at startup).
+- The private key is loaded from the environment at startup.
 
 **Press card (IPFS)**
 
@@ -71,39 +88,26 @@ The press card is issued externally (by the governance body that authorizes the 
 
 ---
 
-## 3. Container Architecture
+## 3. Deployment Architecture
 
-### 3.1 Dockerfile and Image
+### 3.1 Nitro Serverless
 
-The press is a single Docker image. All dependencies are bundled; the only external runtime dependencies are the configured RPC endpoint, IPFS pinning credentials, and the key material in the environment.
+The press is a **Nitro** application (https://nitro.unjs.io). Nitro produces a universal server build that deploys as serverless functions to any supported target (AWS Lambda, Cloudflare Workers, Vercel, self-hosted Node.js, etc.). HTTP routes are defined as Nitro API routes; the CID reconciliation job runs as a Nitro scheduled task.
 
-```dockerfile
-FROM node:22-alpine
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci --production
-COPY dist/ ./dist/
-EXPOSE 3000
-VOLUME ["/app/data"]
-HEALTHCHECK --interval=30s --timeout=5s \
-  CMD wget -qO- http://localhost:3000/health || exit 1
-CMD ["node", "dist/index.js"]
-```
+Each function invocation is stateless. The press loads key material from the environment on each invocation and reads/writes all durable state (rate limit counters, offer records, log heads, app gas balances) to an external key-value store configured via `EXTERNAL_KV_URL`.
 
-The `/app/data` volume contains the SQLite database file. This is the only stateful artifact. All other state is reconstructable from IPFS and Arbitrum One.
-
-**Operator deployment:**
+**Press operator deployment:**
 
 ```bash
-docker run -d \
-  --name press \
-  -p 3000:3000 \
-  -v ./press-data:/app/data \
-  --env-file press.env \
-  ghcr.io/card-protocol/press:latest
+# Build for target (e.g., AWS Lambda)
+NITRO_PRESET=aws-lambda nitro build
+
+# Or for self-hosted Node.js
+NITRO_PRESET=node-server nitro build
+node .output/server/index.mjs
 ```
 
-All secrets are passed via environment variables (the `press.env` file). The container does not write secrets to disk.
+All secrets are injected as environment variables. Key material is never written to disk or logged.
 
 ---
 
@@ -119,94 +123,87 @@ All configuration is via environment variables.
 | `PRESS_SECP256R1_PRIVATE_KEY` | Yes | Hex-encoded secp256r1 private key (on-chain write authorization) |
 | `ARBITRUM_RPC_URL` | Yes | Arbitrum One RPC endpoint (e.g. `https://arb1.arbitrum.io/rpc`) |
 | `REGISTRY_CONTRACT_ADDRESS` | Yes | Address of the registry storage contract on Arbitrum One |
-| `W3UP_KEY` | Yes | Base64url-encoded w3up agent private key |
-| `W3UP_SPACE` | Yes | `did:key:...` DID of the w3up space to upload content into |
-| `DATA_DIR` | No | Path to SQLite data directory. Default: `/app/data` |
-| `PORT` | No | HTTP port. Default: `3000` |
+| `PINATA_JWT` | Yes | Piñata API JWT for IPFS pinning and content upload |
+| `PINATA_GATEWAY_URL` | Yes | Piñata dedicated gateway URL for IPFS content fetches (e.g. `https://<name>.mypinata.cloud`) |
+| `EXTERNAL_KV_URL` | Yes | Connection URL for the external key-value store (Redis, Upstash, DynamoDB, etc.) |
+| `PORT` | No | HTTP port (self-hosted Node.js only). Default: `3000` |
 | `LOG_LEVEL` | No | `debug`, `info`, `warn`, `error`. Default: `info` |
 | `MAX_BATCH_SIZE` | No | Maximum cards per `BatchUpdateCardHeads` call. Default: `100` (contract maximum) |
 | `STALENESS_WINDOW_SECONDS` | No | Maximum age of revocation data before press rejects issuance. Default: `300` (5 minutes) |
 
 ---
 
-### 3.3 Persistent State — SQLite
+### 3.3 Persistent State — External KV Store
 
-The press uses an embedded SQLite database (WAL mode) for all runtime state. No external database is required.
+All durable state is stored in an external key-value store accessed via Nitro's `useStorage()` API. The underlying driver (Redis, Upstash, Cloudflare KV, DynamoDB, etc.) is operator-configured via `EXTERNAL_KV_URL` and the Nitro storage driver for that backend.
 
-**Initialization:** The database is created at `$DATA_DIR/press.db` on first boot. Schema migrations run automatically on startup.
+No local SQLite database is used. On restart or cold start, the press reads any required state from the KV store and falls back to on-chain reads where the KV store is absent (e.g., for log head CIDs).
 
-**Backup:** Operators should back up the SQLite file regularly. On loss of the database, the press can reconstruct log head state by reading on-chain `CardEntry` records, but local rate limit counters and offer deduplication state will be lost.
+**Key namespaces and schemas:**
 
-```sql
--- Tracks the current log head per policy; single row per policy.
--- Row-level locking (BEGIN IMMEDIATE) prevents concurrent update races.
-CREATE TABLE policy_log_heads (
-  policy_card_cid  TEXT    NOT NULL PRIMARY KEY,
-  log_head_cid     TEXT    NOT NULL,
-  seq              INTEGER NOT NULL DEFAULT 0,
-  updated_at       INTEGER NOT NULL  -- Unix timestamp
-);
-
--- Open offers in flight for the two-phase targeted issuance flow.
--- 'offer_cid' is the CID of the signed offer blob posted by the issuer.
-CREATE TABLE offers_in_flight (
-  offer_cid     TEXT    NOT NULL PRIMARY KEY,
-  policy_cid    TEXT    NOT NULL,
-  created_at    INTEGER NOT NULL,  -- Unix timestamp
-  finalized     INTEGER NOT NULL DEFAULT 0,  -- 0 = pending, 1 = finalized
-  expires_at    INTEGER           -- Unix timestamp; null = no expiry
-);
-
--- Per-requester and per-app-card write counts for rate limiting.
--- window_start is the Unix timestamp of the start of the current 7-day window.
-CREATE TABLE rate_limit_counts (
-  entity_address  TEXT    NOT NULL,  -- card registry address (keccak256 of pubkey)
-  entity_type     TEXT    NOT NULL,  -- 'holder' or 'app_card'
-  operation       TEXT    NOT NULL,  -- operation name (e.g. 'register_sub_card')
-  policy_address  TEXT    NOT NULL,
-  window_start    INTEGER NOT NULL,
-  count           INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (entity_address, entity_type, operation, policy_address, window_start)
-);
-
--- Per-policy weekly write totals for the press-funded write limit.
-CREATE TABLE policy_write_counts (
-  policy_address  TEXT    NOT NULL,
-  window_start    INTEGER NOT NULL,
-  count           INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (policy_address, window_start)
-);
-
--- Pre-funded gas account balances for app cards, used for sub-card operations.
--- Apps fund their balance by sending ETH to the press's Arbitrum address with their
--- app_card_address (keccak256 of their ML-DSA-44 pubkey, hex-encoded) in the transaction calldata.
--- The press monitors incoming ETH transfers and credits balances on confirmation.
--- Deducted on RegisterSubCard; sponsored (from press balance) on DeregisterSubCard if zero.
-CREATE TABLE app_gas_accounts (
-  app_card_address  TEXT    NOT NULL PRIMARY KEY,  -- hex-encoded keccak256 of app ML-DSA-44 pubkey
-  balance_wei       TEXT    NOT NULL DEFAULT '0',  -- stored as string to avoid integer overflow
-  last_funded_at    INTEGER,                        -- Unix timestamp of most recent incoming transfer
-  last_debited_at   INTEGER                         -- Unix timestamp of most recent deduction
-);
 ```
+press:log_head:<policy_card_cid>
+  → { log_head_cid: string, seq: number, updated_at: number }
+  Tracks the current log head CID per policy. On absence, read from on-chain.
+
+press:offer:<offer_cid>
+  → { policy_cid: string, created_at: number, finalized: boolean, expires_at: number | null }
+  Open offers in flight for the two-phase targeted issuance flow.
+
+press:rate:<entity_address>:<entity_type>:<operation>:<policy_address>:<window_start>
+  → number (count)
+  Per-entity rolling 7-day write counts for rate limiting.
+
+press:policy_writes:<policy_address>:<window_start>
+  → number (count)
+  Per-policy weekly total write counts (press-funded operations).
+
+press:app_gas:<app_card_address>
+  → { balance_wei: string, last_funded_at: number | null, last_debited_at: number | null }
+  Pre-funded gas account balances for app cards.
+  Apps fund their balance by sending ETH to the press's Arbitrum address with their
+  app_card_address (keccak256 of their ML-DSA-44 pubkey, hex-encoded) in calldata.
+```
+
+**Recovery:** On loss of KV state, the press can reconstruct log head state by reading on-chain `CardEntry` records. Rate limit counters and offer deduplication state cannot be recovered; operators should use a durable, replicated KV backend for production deployments.
 
 ---
 
-### 3.4 IPFS Pinning — web3.storage
+### 3.4 IPFS Pinning — Piñata
 
-The press uses **web3.storage (w3up)** for all IPFS content publishing and pinning. web3.storage stores content on Filecoin as well as IPFS, providing long-term persistence guarantees appropriate for card records that must remain verifiable indefinitely.
+The press uses **Piñata** for all IPFS content publishing and pinning. Piñata pins content on IPFS and provides a dedicated gateway for reliable content retrieval.
 
-The press does not run an IPFS node. All IPFS interactions go through the w3up client library (`@web3-storage/w3up-client`).
+**SDK:** `pinata` npm package (official Piñata SDK v2).
 
 **Initialization (at startup):**
 
-1. The press loads the w3up agent key from `W3UP_KEY`.
-2. The press connects to the w3up space identified by `W3UP_SPACE`.
-3. The press confirms the space is accessible before accepting any traffic.
+1. The press loads the Piñata JWT from `PINATA_JWT`.
+2. The press connects to its dedicated gateway via `PINATA_GATEWAY_URL`.
+3. The press confirms Piñata is reachable before accepting any traffic (via a test pin health check).
 
-**Upload pattern:** All content is uploaded and pinned in a single w3up call. The w3up client returns the root CID of the uploaded content. The press validates that the returned CID is the expected hash of the uploaded bytes before recording it in any signed object or on-chain write.
+**Upload and pin pattern:** New content (card documents, log entries, issuance records) is uploaded and pinned in a single Piñata call. Piñata returns the root CID. The press validates the returned CID against the expected hash before recording it in any signed object or on-chain write.
 
-**CID validation:** Before submitting any on-chain write that includes a CID, the press re-derives the expected CID from the content bytes and confirms it matches what w3up returned. A mismatch is treated as a hard error; the on-chain write is not submitted.
+**Fetch pattern:** Content fetches (for reading cards during chain validation, policy resolution, etc.) use the press's dedicated Piñata gateway (`PINATA_GATEWAY_URL`). The press's IPFS provider, passed to the `CardVerifier` instance (see §5.0), wraps this gateway.
+
+**CID validation:** Before any on-chain write that includes a CID, the press re-derives the expected CID from the content bytes and confirms it matches what Piñata returned. A mismatch is a hard error; the on-chain write is not submitted.
+
+---
+
+### 3.5 CID Reconciliation
+
+Presses are responsible for pinning all card CIDs registered in the storage contract. This extends beyond CIDs the press itself published: when a press joins a policy, it must ensure any existing cards under that policy are pinned, and it must continue to pin cards it did not originally publish.
+
+**Reconciliation job:** A Nitro scheduled task (`nitro/tasks/reconcile-cids.ts`) runs on a configurable schedule (default: every 6 hours). It:
+
+1. Reads all `CardRegistered` and `CardHeadUpdated` events from the Arbitrum One registry contract, starting from the last processed block (stored in the KV store under `press:reconcile:last_block`).
+2. For each event, extracts the `log_head_cid` (or `initial_log_cid` for `CardRegistered`) from the event data.
+3. For each CID, calls `pinata.pinByHash(cid)` to ensure Piñata has pinned it. Piñata's `pinByHash` is idempotent — if the CID is already pinned, the call is a no-op.
+4. Advances `press:reconcile:last_block` to the latest processed block on success.
+5. Logs any CIDs that could not be resolved or pinned (content not reachable on the IPFS network) for operator review.
+
+**Initial bootstrap:** On first deployment, the press sets `press:reconcile:last_block` to the block at which the registry contract was deployed and runs the reconciliation job to catch up. This ensures the press pins the full history of CIDs for all policies it serves.
+
+**Active pinning:** In addition to the scheduled reconciliation, the press pins every CID it produces during normal operations (card documents, log entries, issuance records) immediately upon upload (see `pinToIPFS` in §5.1). Active pinning and scheduled reconciliation together ensure that the press holds pins for all content it is responsible for.
 
 ---
 
@@ -234,6 +231,49 @@ Endpoints return standard HTTP status codes. Press-side error codes (§7) are in
 
 ## 5. Functions
 
+### 5.0 Verifier Integration
+
+The press instantiates a single `CardVerifier` from `@membership-card-protocol/verifier` at startup and reuses it across all requests. The verifier handles all chain walking, revocation checking, and app-certification chain verification. The press does not reimplement these algorithms.
+
+**Setup:**
+
+```typescript
+import { CardVerifier } from '@membership-card-protocol/verifier';
+import type { RpcProvider, IpfsProvider } from '@membership-card-protocol/verifier';
+
+// RpcProvider wraps the press's viem/ethers connection to the registry contract.
+const pressRpcProvider: RpcProvider = {
+  getCardEntry: (address) => registryContract.getCardEntry(address),
+  isPolicyAuthorizer: (address) => registryContract.isPolicyAuthorizer(address),
+  getPressAuthorization: (policyAddress, pressAddress) =>
+    registryContract.getPressAuthorization(policyAddress, pressAddress),
+  getSubCardEntry: (address) => registryContract.getSubCardEntry(address),
+  getLogEntries: (cardAddress) => registryContract.getLogEntries(cardAddress),
+  getEasAnnotations: () => [],  // press does not perform annotation lookups
+};
+
+// IpfsProvider wraps the press's Piñata dedicated gateway.
+const pressIpfsProvider: IpfsProvider = {
+  fetch: async (cid) => {
+    const response = await fetch(`${PINATA_GATEWAY_URL}/ipfs/${cid}`);
+    if (!response.ok) throw new Error(`IPFS fetch failed: ${cid} → ${response.status}`);
+    return new Uint8Array(await response.arrayBuffer());
+  },
+};
+
+const verifier = new CardVerifier({
+  rpc: pressRpcProvider,
+  ipfs: pressIpfsProvider,
+  revocationFreshnessWindowSeconds: STALENESS_WINDOW_SECONDS,
+  rejectStaleRevocation: true,
+  fetchAnnotations: false,
+});
+```
+
+**Usage:** Wherever the press previously walked card chains or checked revocation status, it now calls `verifier.verifyCard(cardAddress)`. The result's `chain_reaches_trusted_root`, `is_currently_valid`, and `was_valid_at_signing_time` fields replace the press's prior internal checks.
+
+---
+
 ### 5.1 Card Issuance
 
 These functions implement the targeted card issuance flow (`card_offering_and_acceptance.md`). They are invoked sequentially; the `/issue` and `/issue/finalize` endpoints call them in order.
@@ -248,28 +288,34 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 **Steps:**
 
 1. Confirm the request includes: `policy_cid`, `requester_card_pointer`, `recipient_card_pointer` (or invitation delivery method), and any required field values.
-2. Resolve the policy card from IPFS using `resolveCard(policy_cid)`.
+2. Resolve the policy card from IPFS using the press's Piñata gateway (the policy card is a public document; the press fetches it directly without decryption).
 3. Confirm the policy's `valid_until` has not passed (if set).
 4. Confirm the press's own `press_card_cid` appears in `policy.approved_presses`.
-5. Call `evaluatePredicates(policy, requester_card, recipient_card)`.
+5. Call `evaluatePredicates(policy, requester_card_address, recipient_card_address)`.
 6. Call `checkRateLimits('register_card', requester_card_address, policy_address)`.
 
-**Returns:** Validated policy snapshot and resolved card chains, or an error code.
+**Returns:** Validated policy snapshot and card verification results, or an error code.
 
 ---
 
-#### `evaluatePredicates(policy, requesterCard, recipientCard)`
+#### `evaluatePredicates(policy, requesterCardAddress, recipientCardAddress)`
 
 **Called by:** `validateIssuanceRequest`, `processOpenOfferClaim`
-**Purpose:** Evaluate the policy's `requester_predicate` and `recipient_predicate` against the resolved card chains.
+**Purpose:** Validate the requester and recipient card chains and evaluate the policy's predicates using the verifier package.
 
 **Steps:**
 
-1. If `policy.requester_predicate` is present, evaluate it against the requester's resolved chain. Reject with `P-02` if not satisfied.
-2. If `policy.recipient_predicate` is present, evaluate it against the recipient's resolved chain. Reject with `P-03` if not satisfied.
-3. For every card in both chains, call `checkRevocationStatus(cardCid)`. If any ancestor card is revoked with `effective_date ≤ now`, reject with `P-04`.
+1. Call `verifier.verifyCard(requesterCardAddress)`.
+   - If `chain_reaches_trusted_root !== true`, reject with `P-02`.
+   - If `is_currently_valid === false`, reject with `P-04`.
+2. Call `verifier.verifyCard(recipientCardAddress)`.
+   - If `chain_reaches_trusted_root !== true`, reject with `P-03`.
+   - If `is_currently_valid === false`, reject with `P-04`.
+3. If either result's `revocation.data_freshness_seconds` exceeds `STALENESS_WINDOW_SECONDS`, reject with `P-17`.
+4. If `policy.requester_predicate` is present, evaluate it against the requester's chain (extracted from the verifier's chain walk result). Reject with `P-02` if not satisfied.
+5. If `policy.recipient_predicate` is present, evaluate it against the recipient's chain. Reject with `P-03` if not satisfied.
 
-**Returns:** `{ passed: true }` or an error with the first failing predicate and card.
+**Returns:** `{ passed: true, requesterResult, recipientResult }` or an error with the first failing check.
 
 ---
 
@@ -284,7 +330,7 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 2. Add `press_card: PRESS_CARD_CID`.
 3. Add `recipient_pubkey` from the countersigned offer.
 4. Add `holder_signature` from the countersigned offer.
-5. Populate `ancestry_pubkeys`: resolve the issuer card chain and the press card chain from IPFS; collect ML-DSA-44 public keys in order from the immediate parent toward the root. Use the cached chain resolved during `evaluatePredicates`.
+5. Populate `ancestry_pubkeys`: resolve the issuer card chain and the press card chain from IPFS (using the verifier's IpfsProvider for consistency); collect ML-DSA-44 public keys in order from the immediate parent toward the root. Use the cached chain resolved during `evaluatePredicates`.
 6. If this card is the result of a master key rotation, include `past_keys` (supplied by the holder in the rotation request).
 
 **Returns:** Assembled `CardDocument` (all fields except `press_signature`).
@@ -309,13 +355,13 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 #### `publishCard(signedCardDocument)`
 
 **Called by:** `/issue/finalize` handler, `processOpenOfferClaim`
-**Purpose:** Encrypt the card, upload it to IPFS via web3.storage, and return the CID.
+**Purpose:** Encrypt the card, upload it to IPFS via Piñata, and return the CID.
 
 **Steps:**
 
 1. Derive the content key: `HKDF-SHA3-256(recipient_pubkey, info="card-content-v1")`.
 2. Encrypt the canonical RFC 8785 JSON of the signed card with AES-256-GCM (random 96-bit nonce).
-3. Upload the encrypted bytes to web3.storage via `pinToIPFS(encryptedBytes)`.
+3. Upload the encrypted bytes to Piñata via `pinToIPFS(encryptedBytes)`.
 4. Validate the returned CID by re-deriving it from the uploaded bytes.
 
 **Returns:** CID of the encrypted card on IPFS.
@@ -325,12 +371,12 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 #### `pinToIPFS(content)`
 
 **Called by:** `publishCard`, `appendLogEntry`, `appendIssuanceRecord`
-**Purpose:** Upload bytes to web3.storage and return the root CID.
+**Purpose:** Upload bytes to Piñata and return the root CID.
 
 **Steps:**
 
-1. Call `w3upClient.uploadBytes(content)` (or `uploadFile` / `uploadDirectory` as appropriate).
-2. Receive the root CID from w3up.
+1. Call `pinata.upload.file(new File([content], 'content'))` using the Piñata SDK.
+2. Receive the root CID from Piñata.
 3. Re-derive the expected CID from `content` using the same hash function (SHA2-256 / multihash).
 4. Confirm the derived CID equals the returned CID. If they differ, abort and return error `P-10`.
 
@@ -407,7 +453,7 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 4. Verify `keccak256(offer.issuer_pubkey)` equals the `offer.issuer_card` pointer address. Reject with `P-05` on mismatch.
 5. Verify `offer.issuer_signature` over canonical RFC 8785 JSON of all offer fields except `issuer_signature`, using `offer.issuer_pubkey`. Reject with `P-05` on failure.
 6. Verify `submission.recipient_signature` over canonical RFC 8785 JSON of `claim_payload`. Reject with `P-06` on failure.
-7. Call `evaluatePredicates(policy, issuerCard, recipientCard)` (recipient is the submitter).
+7. Call `evaluatePredicates(policy, issuer_card_address, recipient_card_address)` (recipient is the submitter).
 8. Pre-flight on-chain check: read `OpenOfferUseCounts[offer_id]` and confirm `use_count < max_acceptances` and `block.timestamp < expires_at`. Reject with `P-07` or `P-08` before submitting any transaction.
 9. Call `assembleCardDocument(policy, offer, submission.claim_payload.recipient_pubkey)`.
 10. Call `signCardDocument`, `publishCard`.
@@ -444,15 +490,14 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 
 **Steps:**
 
-1. Verify `intentSignature` over canonical RFC 8785 JSON of `updateIntent` using the updater's ML-DSA-44 public key (resolved from `updateIntent.updater_card` via `resolveCard`). Reject with `P-09` on failure.
+1. Verify `intentSignature` over canonical RFC 8785 JSON of `updateIntent` using the updater's ML-DSA-44 public key. To resolve the updater's public key: call `verifier.verifyCard(updateIntent.updater_card_address)` and extract the public key from the resolved card chain. Reject with `P-09` on signature failure.
 2. Confirm `updateIntent.timestamp` is within the press's staleness window. Reject stale intents.
-3. Resolve the target card (`updateIntent.target_card`) via `resolveCard`.
-4. Resolve the policy from the target card's `policy_id`.
-5. Evaluate the relevant `update_policy` predicate for each field in `field_updates` (for 1xx–7xx codes). For revocation codes (8xx–9xx), evaluate `policy.revocation_permissions`.
-6. Confirm the updater card chain satisfies the predicate. Reject with `P-11` if not.
-7. Multiple revocation entries on the same card are permitted; if present, the entry with the earliest `effective_date` governs (per `card_updates.md`). Field update codes (1xx–7xx) may be applied to a card that already has a revocation entry — revocation does not block further field updates.
-8. Call `checkRateLimits('update_card_head', updater_card_address, policy_address)` for 1xx codes.
-9. Call `appendLogEntry(target_card, updateIntent)` to build, sign, publish, and register the new `LogEntry`.
+3. Resolve the target card's policy from the on-chain `CardEntry` (via the press's RPC connection).
+4. Evaluate the relevant `update_policy` predicate for each field in `field_updates` (for 1xx–7xx codes). For revocation codes (8xx–9xx), evaluate `policy.revocation_permissions`. Use `verifier.verifyCard(updateIntent.updater_card_address)` for the chain data required by predicate evaluation.
+5. Confirm the updater card chain satisfies the predicate. Reject with `P-11` if not.
+6. Multiple revocation entries on the same card are permitted; if present, the entry with the earliest `effective_date` governs (per `card_updates.md`). Field update codes (1xx–7xx) may be applied to a card that already has a revocation entry — revocation does not block further field updates.
+7. Call `checkRateLimits('update_card_head', updater_card_address, policy_address)` for 1xx codes.
+8. Call `appendLogEntry(target_card, updateIntent)` to build, sign, publish, and register the new `LogEntry`.
 
 **Returns:** `{ log_entry_cid, new_log_head_cid }` on success.
 
@@ -465,7 +510,7 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 
 **Steps:**
 
-1. Fetch the current log head CID for the target card (from SQLite `policy_log_heads`, or on-chain if local state is missing).
+1. Fetch the current log head CID for the target card (from the KV store under `press:log_head:<policy_cid>`, or on-chain if local state is missing).
 2. Assemble the `LogEntry`:
    - `version`: current log length + 1.
    - `code`: from `updateIntent.code`.
@@ -505,7 +550,7 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
    ```
 3. Sign `keccak256(payload_bytes)` with secp256r1 → `press_signature`.
 4. Call `UpdateCardHead(card_address, new_log_cid, payload_bytes, press_signature)` on the registry.
-5. On `E-08` (`STALE_PREV_CID`): the log head was updated by another process between the press reading it and submitting the transaction. Fetch the current on-chain head, update local SQLite state, and retry once. If still failing after one retry, return error `P-12`.
+5. On `E-08` (`STALE_PREV_CID`): the log head was updated by another process between the press reading it and submitting the transaction. Fetch the current on-chain head, update the KV store, and retry once. If still failing after one retry, return error `P-12`.
 
 **Returns:** Transaction hash on success.
 
@@ -524,7 +569,7 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 2. Confirm `keccak256(subCardDoc.holder_primary_card_pubkey)` equals the `holder_primary_card` pointer address. Reject with `P-13` on mismatch.
 3. Confirm `keccak256(subCardDoc.app_card_pubkey)` equals the `app_card` pointer address. Reject with `P-13` on mismatch.
 4. Verify `holderSignature` over canonical RFC 8785 JSON of the document including `app_signature`, excluding `holder_signature`, using `subCardDoc.holder_primary_card_pubkey`. Reject with `P-14` on failure.
-5. Call `verifyAppCertificationChain(subCardDoc.app_card, subCardDoc.app_card_pubkey)`.
+5. Call `verifyAppCertificationChain(subCardDoc.app_card_address)`.
 6. Confirm `attestation_level` is `"T2"` unless the governing policy explicitly accepts `"T1"`. If `"T2"`, verify `attestation_proof` against `hash(recipient_pubkey)`.
 7. Call `checkRateLimits('register_sub_card', holder_card_address, policy_address)`.
 8. Call `checkRateLimits('register_sub_card_app', app_card_address, policy_address)`.
@@ -536,21 +581,21 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 
 ---
 
-#### `verifyAppCertificationChain(appCardPointer, appCardPubkey)`
+#### `verifyAppCertificationChain(appCardAddress)`
 
 **Called by:** `processSubCardRegistration`
-**Purpose:** Walk the app card's chain to confirm it reaches the governance authority's app-certification policy root. This is a press-side verification; it is not performed by the contract or by runtime verifiers.
+**Purpose:** Confirm the app card's chain reaches the governance authority's app-certification policy root.
 
 **Steps:**
 
-1. Confirm `keccak256(appCardPubkey)` equals `appCardPointer`. Reject with `P-13` on mismatch.
-2. Derive the app card's content key: `HKDF-SHA3-256(appCardPubkey, info="card-content-v1")`.
-3. Fetch and decrypt the app card from IPFS via `resolveCard(appCardPointer)`.
-4. Walk the app card's `ancestry_pubkeys` chain toward the root, applying the binding check (`keccak256(entry_pubkey)` must equal the on-chain address for that link) at each hop.
-5. Confirm the chain terminates at the governance authority's app-certification policy root (registered in `PolicyAuthorizerKeys` on-chain).
-6. Reject with `P-15` if the chain does not reach the expected root.
+1. Call `verifier.verifyCard(appCardAddress)`.
+2. Confirm `result.chain_reaches_trusted_root === true` where the trusted root is the governance authority's app-certification policy root (registered in `PolicyAuthorizerKeys` on-chain and present in the press's `trustedRoots` configuration).
+3. Confirm the app card is not revoked (`result.is_currently_valid === true`).
+4. Reject with `P-15` if the chain does not reach the expected root or the app card is revoked.
 
 **Returns:** `{ certified: true }` or an error.
+
+**Note:** The press configures the verifier with the app-certification policy root as a trusted root for this check. The verifier's `isPolicyAuthorizer` RPC call is authoritative; no additional chain-walking logic is required.
 
 ---
 
@@ -577,8 +622,8 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 **Steps:**
 
 1. Resolve the `SubCardEntry` on-chain for `subCardAddress`; confirm it is active.
-2. Fetch the `SubCardDocument` from IPFS using `sub_card_doc_cid` from the on-chain entry.
-3. Resolve the master card from `subCardDoc.holder_primary_card` via `resolveCard`.
+2. Fetch the `SubCardDocument` from IPFS using the CID from the on-chain entry (via the Piñata gateway).
+3. Resolve the master card's public key from its `CardEntry` on-chain.
 4. Verify `masterSignature` over canonical RFC 8785 JSON of `sigPayload` using the master card's primary key. Reject with `P-14` on failure.
 5. Check the requesting app's gas balance.
    - If sufficient: deduct the gas cost from the app balance and submit `DeregisterSubCard`.
@@ -589,61 +634,7 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 
 ---
 
-### 5.5 Chain Verification
-
-#### `resolveCard(cardPointerOrCid)`
-
-**Called by:** All functions that need to read card content
-**Purpose:** Fetch a card's `CardDocument` from IPFS by its on-chain registry pointer or its content CID.
-
-**Steps:**
-
-1. If given a registry pointer (bytes32 address): call `GetCardEntry(address)` on the registry contract to get `log_head_cid`. Follow `forward_to` if non-zero.
-2. Fetch the encrypted bytes at the CID from IPFS via the w3up gateway.
-3. Identify the `recipient_pubkey` of the card (requires knowing it to derive the content key). For known presses and policy cards, the public key is cached or provided. For chains being walked, the `ancestry_pubkeys` field provides the hint; apply the binding check before use.
-4. Derive content key: `HKDF-SHA3-256(recipient_pubkey, info="card-content-v1")`.
-5. Decrypt with AES-256-GCM. Hard-reject on authentication failure.
-6. Parse and return the `CardDocument`.
-
-**Returns:** Decrypted `CardDocument`.
-
----
-
-#### `verifyCardChain(cardPointer, trustedRoots)`
-
-**Called by:** `evaluatePredicates`, `processOpenOfferClaim`, `verifyAppCertificationChain`
-**Purpose:** Walk a card's chain from the given pointer back to a trusted root, verifying every link.
-
-**Steps:**
-
-1. Call `resolveCard(cardPointer)` → `card`.
-2. Verify `card.issuer_signature` against `card.ancestry_pubkeys[0]` (the immediate parent's public key). Apply binding check: `keccak256(ancestry_pubkeys[0])` must equal the `issuer_card` pointer address. Reject on mismatch or signature failure.
-3. Call `checkRevocationStatus(cardPointer)`.
-4. If the current card's address is in `trustedRoots`, terminate — chain is valid.
-5. Recurse on `card.issuer_card`.
-
-**Returns:** `{ valid: true, chain: [CardDocument] }` or a specific error.
-
----
-
-#### `checkRevocationStatus(cardPointerOrCid)`
-
-**Called by:** `verifyCardChain`, `evaluatePredicates`
-**Purpose:** Determine whether a card has a revocation entry in its log with `effective_date ≤ now`.
-
-**Steps:**
-
-1. Fetch the current `log_head_cid` for the card (on-chain via `GetCardEntry`).
-2. Walk the CID-linked log from the head backward (following `prev_log_root`) until a `LogEntry` with `code` in 8xx–9xx is found, or the genesis `CardDocument` is reached.
-3. Confirm the log walk does not exceed a configurable maximum depth.
-4. If a revocation entry is found with `effective_date ≤ now`, return `{ revoked: true, effective_date, code }`.
-5. Confirm the log head CID was fetched within `STALENESS_WINDOW_SECONDS`. If the on-chain read took longer than the staleness window (e.g., due to RPC latency or cache use), return error `P-17`. The press must refuse issuance if it cannot confirm it is reading a recent view of the revocation state; `STALENESS_WINDOW_SECONDS` bounds how stale an "all clear" from this function may be.
-
-**Returns:** `{ revoked: false }` or `{ revoked: true, ... }` or error `P-17`.
-
----
-
-### 5.6 Log Management
+### 5.5 Log Management
 
 #### `getLogHead(policyCid)`
 
@@ -652,8 +643,8 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 
 **Steps:**
 
-1. Check SQLite `policy_log_heads` for the policy CID.
-2. If not present (first run or after recovery), read from on-chain via `GetCardEntry(policy_address)`.
+1. Check the KV store under `press:log_head:<policy_cid>`.
+2. If not present (first run or after recovery), read from on-chain via the registry contract.
 3. Return `{ log_head_cid, seq }`.
 
 ---
@@ -665,7 +656,7 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 
 **Steps:**
 
-1. Resolve the policy card via `resolveCard(policyCid)` to get `policy.auditors`.
+1. Resolve the policy card via the Piñata gateway to get `policy.auditors`.
 2. If `policy.auditors` is empty or absent, skip — no auditors to notify.
 3. Assemble the `PressIssuanceRecord` plaintext:
    ```json
@@ -680,19 +671,19 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 4. For each card address in `policy.auditors`, send the `PressIssuanceRecord` as an E2E encrypted message via the normal message routing layer (HTTPS to the auditor's wallet service endpoint, encrypted to the auditor card's public key).
 5. Await a confirmation message from each auditor acknowledging receipt and recording. Apply a configurable timeout (default: 30 seconds per auditor).
 6. If an auditor does not confirm within the timeout, log a warning and continue — issuance is not blocked by an unresponsive auditor. Alert the policy administrator.
-7. Record which auditors confirmed and which timed out in the press log (local SQLite only — not on IPFS).
+7. Record which auditors confirmed and which timed out in the KV store (local state only — not on IPFS).
 
 **Returns:** `{ confirmed_auditors: string[], timed_out_auditors: string[] }`.
 
 ---
 
-### 5.7 Audit Epoch Management
+### 5.6 Audit Epoch Management
 
-Removed. Audit epochs and ML-KEM-based AEK distribution are replaced by direct auditor messaging (see §5.6). Auditors maintain their own records of issuance notifications received from the press.
+Removed. Audit epochs and ML-KEM-based AEK distribution are replaced by direct auditor messaging (see §5.5). Auditors maintain their own records of issuance notifications received from the press.
 
 ---
 
-### 5.8 On-Chain Operations
+### 5.7 On-Chain Operations
 
 #### `buildPressSignedPayload(op, fields)`
 
@@ -701,7 +692,7 @@ Removed. Audit epochs and ML-KEM-based AEK distribution are replaced by direct a
 
 **Steps:**
 
-1. Assemble the payload object with `op`, all operation-specific fields, `press_address`, the current `sequence` (fetched from SQLite or from on-chain if stale), and `timestamp`.
+1. Assemble the payload object with `op`, all operation-specific fields, `press_address`, the current `sequence` (fetched from the registry contract — see `getNextSequence`), and `timestamp`.
 2. Serialize as canonical RFC 8785 JSON.
 3. Sign `keccak256(payload_bytes)` with the press's secp256r1 private key.
 
@@ -719,7 +710,7 @@ Removed. Audit epochs and ML-KEM-based AEK distribution are replaced by direct a
 1. Call `GetPressAuthorization(policy_address, press_address)` on the registry contract.
 2. Return `PressAuthEntry.next_sequence`.
 
-**Note:** The press does not cache this value locally; it always reads from the contract to avoid sequence mismatches after restarts or concurrent writes. A `SEQUENCE_MISMATCH` (E-07) revert triggers an immediate re-read and one retry.
+**Note:** The press always reads this value from the contract rather than caching it, to avoid sequence mismatches after restarts or concurrent writes. A `SEQUENCE_MISMATCH` (E-07) revert triggers an immediate re-read and one retry.
 
 ---
 
@@ -735,13 +726,13 @@ Removed. Audit epochs and ML-KEM-based AEK distribution are replaced by direct a
 3. Build the `BatchUpdateCardHeadsPayload` with the full `updates` array.
 4. Sign with secp256r1.
 5. Call `BatchUpdateCardHeads(policy_address, updates, payload_bytes, press_signature)` on the registry.
-6. On success, increment `next_sequence` by 1 (not by the number of items).
+6. On success, `next_sequence` is incremented by 1 (not by the number of items — the entire batch counts as one write for replay prevention).
 
 **Returns:** Transaction hash.
 
 ---
 
-### 5.9 Rate Limiting
+### 5.8 Rate Limiting
 
 #### `checkRateLimits(operation, entityAddress, policyAddress)`
 
@@ -751,10 +742,10 @@ Removed. Audit epochs and ML-KEM-based AEK distribution are replaced by direct a
 **Steps:**
 
 1. Determine the 7-day window start: `floor(now / 7_days) * 7_days`.
-2. Query SQLite for `rate_limit_counts` where `entity_address = entityAddress AND operation = operation AND policy_address = policyAddress AND window_start = windowStart`.
+2. Read the count from the KV store under `press:rate:<entityAddress>:<entityType>:<operation>:<policyAddress>:<windowStart>`. Default to 0 if absent.
 3. If `count >= limit` for this operation (see §6), reject with `P-18`.
-4. Separately check `policy_write_counts` for the press-funded weekly total. Reject with `P-19` if at or above the per-policy limit.
-5. If within limits, increment the count (deferred — actual increment happens after the operation succeeds, in `recordWrite`).
+4. Separately read `press:policy_writes:<policyAddress>:<windowStart>` for the press-funded weekly total. Reject with `P-19` if at or above the per-policy limit.
+5. If within limits, defer the counter increment to `recordWrite` (called after the operation succeeds).
 
 ---
 
@@ -765,11 +756,9 @@ Removed. Audit epochs and ML-KEM-based AEK distribution are replaced by direct a
 
 **Steps:**
 
-1. Begin SQLite transaction.
-2. Upsert `rate_limit_counts` (increment `count` by 1).
-3. Upsert `policy_write_counts` (increment `count` by 1).
-4. Commit.
-5. If total is now ≥ 80% of any limit, call `sendSuspiciousActivityAlert`.
+1. Increment `press:rate:<entityAddress>:<entityType>:<operation>:<policyAddress>:<windowStart>` in the KV store (atomic increment).
+2. Increment `press:policy_writes:<policyAddress>:<windowStart>` in the KV store (atomic increment).
+3. If total is now ≥ 80% of any limit, call `sendSuspiciousActivityAlert`.
 
 ---
 
@@ -780,7 +769,7 @@ Removed. Audit epochs and ML-KEM-based AEK distribution are replaced by direct a
 
 **Steps:**
 
-1. Resolve the policy card from IPFS to get the granting agency's wallet service endpoint.
+1. Resolve the policy card from the Piñata gateway to get the granting agency's wallet service endpoint.
 2. POST an alert payload to the granting agency's HTTPS endpoint:
    ```json
    {
@@ -797,7 +786,7 @@ Removed. Audit epochs and ML-KEM-based AEK distribution are replaced by direct a
 
 ---
 
-### 5.10 Gas Management
+### 5.9 Gas Management
 
 #### `checkGasBalance()`
 
@@ -820,7 +809,7 @@ Removed. Audit epochs and ML-KEM-based AEK distribution are replaced by direct a
 
 **Steps:**
 
-1. Query the press's internal ledger (SQLite, app gas accounts table — see OQ-A2) for the current balance of `appCardAddress`.
+1. Read `press:app_gas:<appCardAddress>` from the KV store.
 2. Estimate gas for the operation.
 3. For `RegisterSubCard`: if balance < estimated cost, return `{ sufficient: false }`. Caller rejects with `P-16`.
 4. For `DeregisterSubCard`: if balance is zero, return `{ sufficient: false, sponsor: true }`. Caller sponsors from the press's Arbitrum balance.
@@ -851,15 +840,15 @@ Press-side error codes (not on-chain reverts). Returned in the HTTP response bod
 | Code | Trigger |
 |---|---|
 | `P-01` | Press sub-card not in `approved_presses` for the requested policy |
-| `P-02` | `requester_predicate` not satisfied |
-| `P-03` | `recipient_predicate` not satisfied |
-| `P-04` | Ancestor card revoked with `effective_date ≤ now` |
+| `P-02` | `requester_predicate` not satisfied, or requester chain does not reach a trusted root |
+| `P-03` | `recipient_predicate` not satisfied, or recipient chain does not reach a trusted root |
+| `P-04` | Card revoked with `effective_date ≤ now` (requester, recipient, or ancestor) |
 | `P-05` | Invalid `issuer_signature` on open offer (binding check failed or ML-DSA-44 sig invalid) |
 | `P-06` | Invalid `recipient_signature` on open offer claim |
 | `P-07` | Open offer expired (press-side pre-flight before on-chain submission) |
 | `P-08` | Open offer at capacity (press-side pre-flight) |
 | `P-09` | Invalid `intent_signature` on `UpdateIntentPayload` |
-| `P-10` | CID mismatch: derived CID does not match CID returned by web3.storage |
+| `P-10` | CID mismatch: CID derived from content bytes does not match CID returned by Piñata |
 | `P-11` | `update_policy` predicate not satisfied for one or more field updates |
 | `P-12` | `STALE_PREV_CID` revert on retry — concurrent log head conflict not resolvable |
 | `P-13` | Pubkey binding check failed: `keccak256(pubkey) ≠ pointer address` |
@@ -872,17 +861,17 @@ Press-side error codes (not on-chain reverts). Returned in the HTTP response bod
 | `P-20` | Insufficient ETH balance to cover estimated gas cost |
 | `P-21` | Policy `valid_until` has passed; press will not issue new cards under this policy |
 | `P-22` | Offer timestamp is stale (replay prevention) |
-| `P-24` | web3.storage upload failed; IPFS pin not confirmed |
+| `P-24` | Piñata upload failed; IPFS pin not confirmed |
 
 ---
 
 ## 8. Key Rotation
 
-**secp256r1 key rotation:** If the press's on-chain authorization key is compromised or requires routine rotation, the Press Registry Governance Body calls `AuthorizePress` with the press's `press_address` and a new `press_pubkey`. The press must be restarted with the new `PRESS_SECP256R1_PRIVATE_KEY`. No SQLite changes are required; the `next_sequence` is reset on-chain.
+**secp256r1 key rotation:** If the press's on-chain authorization key is compromised or requires routine rotation, the Press Registry Governance Body calls `AuthorizePress` with the press's `press_address` and a new `press_pubkey`. The press is redeployed with the new `PRESS_SECP256R1_PRIVATE_KEY`. No KV store changes are required; the `next_sequence` is reset on-chain.
 
-**ML-DSA-44 key rotation:** Rotating the press's IPFS identity key requires issuing a new press card with the new public key, updating the policy's `approved_presses` list, registering the new press card on-chain via `AuthorizePress`, and redeploying the container with updated `PRESS_MLDSA44_PRIVATE_KEY` and `PRESS_CARD_CID`. Cards previously issued under the old press card remain valid; their `press_card` pointer is immutable.
+**ML-DSA-44 key rotation:** Rotating the press's IPFS identity key requires issuing a new press card with the new public key, updating the policy's `approved_presses` list, registering the new press card on-chain via `AuthorizePress`, and redeploying with updated `PRESS_MLDSA44_PRIVATE_KEY` and `PRESS_CARD_CID`. Cards previously issued under the old press card remain valid; their `press_card` pointer is immutable.
 
-**On-chain key scheme upgrade (secp256r1 → ML-DSA-44):** When the protocol advances to Phase 2 or Phase 3 (see `ARCHITECTURE.md` ADR-012), the press submits `RotateOnChainKeyScheme` with a dual-signature payload. This operation is self-initiated by the press; no governance action is required. The press must be restarted after the rotation transaction confirms so that subsequent writes use the ML-DSA-44 on-chain signing path.
+**On-chain key scheme upgrade (secp256r1 → ML-DSA-44):** When the protocol advances to Phase 2 or Phase 3 (see `ARCHITECTURE.md` ADR-012), the press submits `RotateOnChainKeyScheme` with a dual-signature payload. This operation is self-initiated by the press; no governance action is required. The press is redeployed after the rotation transaction confirms so that subsequent writes use the ML-DSA-44 on-chain signing path.
 
 ---
 
@@ -890,10 +879,26 @@ Press-side error codes (not on-chain reverts). Returned in the HTTP response bod
 
 | ID | Area | Resolution |
 |---|---|---|
-| ~~**OQ-A1**~~ | Audit | **Closed.** Auditor key distribution via ML-KEM is replaced by direct E2E messaging. Auditors are listed in `policy.auditors` as card addresses; the press messages each auditor at issuance time using the normal routing layer. No `kem_pubkey` field is required. |
-| ~~**OQ-A2**~~ | Gas | **Closed.** Apps pre-fund their gas balance by sending ETH directly to the press's Arbitrum One address with their `app_card_address` in the transaction calldata. See §3.3 `app_gas_accounts`. |
+| ~~**OQ-A1**~~ | Audit | **Closed.** Auditor key distribution via ML-KEM is replaced by direct E2E messaging. Auditors are listed in `policy.auditors` as card addresses; the press messages each auditor at issuance time using the normal routing layer. |
+| ~~**OQ-A2**~~ | Gas | **Closed.** Apps pre-fund their gas balance by sending ETH directly to the press's Arbitrum One address with their `app_card_address` in the transaction calldata. See §3.3 `app_gas` KV namespace. |
 | ~~**OQ-A3**~~ | Recovery | **Closed (no longer applicable).** AEK recovery is not needed — there is no AEK. The press does not hold any epoch key material. Auditors maintain their own records. |
-| ~~**OQ-A4**~~ | Serialization | **Closed (stale).** `ARCHITECTURE.md` ADR-010 is already Accepted — RFC 8785 (JCS) adopted. |
+| ~~**OQ-A4**~~ | Serialization | **Closed.** `ARCHITECTURE.md` ADR-010 is Accepted — RFC 8785 (JCS) adopted. |
+| **OQ-B1** | KV backend | The external KV store driver is operator-selected (Redis, Upstash, Cloudflare KV, DynamoDB, etc.) via Nitro's `useStorage()` API. The press spec is storage-driver-agnostic; the operator's Nitro configuration specifies the driver. No specific backend is prescribed here. |
+| **OQ-B2** | Reconciliation catch-up | The CID reconciliation job (§3.5) bootstraps by setting `press:reconcile:last_block` to the registry contract's deploy block. For large deployments with many historical cards, the initial catch-up may require multiple runs or a higher-frequency schedule until caught up. The appropriate schedule is operator-configurable. |
+| **OQ-B3** | Verifier RpcProvider for log entries | The verifier's `RpcProvider.getLogEntries()` must return the full ordered log for a card address. The current registry contract stores only the head CID (not the full log); the press's RPC provider must walk the CID-linked chain from the head to reconstruct the ordered log. This is the same log-walking logic the press previously implemented in `checkRevocationStatus`. It now lives exclusively in the RPC provider implementation, not in the press itself. |
+
+---
+
+## 10. Dependencies
+
+| Package | Purpose |
+|---|---|
+| `nitropack` (or `nitro`) | Serverless application framework; HTTP routing, scheduled tasks, storage API |
+| `@membership-card-protocol/verifier` | Chain walking, revocation checking, app certification chain verification |
+| `pinata` | Piñata SDK v2 — IPFS content upload and pinning |
+| `viem` or `ethers` | Arbitrum One RPC client for registry contract calls and event indexing |
+| `@noble/post-quantum` | ML-DSA-44 signing (FIPS 204) |
+| `@noble/hashes` | keccak256, HKDF-SHA3-256 |
 
 ---
 
