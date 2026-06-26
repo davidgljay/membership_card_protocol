@@ -1,10 +1,10 @@
 # Card Protocol — Registry Contract Spec
 
-**Version:** 0.3 (draft)  
-**Date:** 2026-06-19  
+**Version:** 0.6 (draft)  
+**Date:** 2026-06-25  
 **Status:** Draft  
 **Contract target:** Arbitrum One (Stylus / WASM-compiled Rust)  
-**Amends:** v0.2 — three-contract architecture adopted (storage / logic / verifier). Logic contract is upgradeable via 7-day timelock `UpgradeLogic` (RootPolicyBody). Storage contract is immutable and enforces unconditional audit-trail invariants. §3.7, §4.14, §6.3 added/rewritten; events, error codes, and read operations updated. See also v0.1→v0.2: on-chain verification changed from ML-DSA-44 to secp256r1/RIP-7212 per ADR-012.
+**Amends:** v0.5 — DNS admin card secp256r1 on-chain signing added. New storage table `DnsAdminCardKeys` (§3.11) maps DNS admin card addresses to secp256r1 public keys. `RegisterDomain` (§4.17) accepts and stores the admin's secp256r1 public key. `DeregisterDomain` (§4.18) clears it. `RegisterSubCard` (§4.3) gains two new parameters and an on-chain RIP-7212 verification step triggered when the master card is a DNS admin card; a compromised press can no longer register fraudulent sub-cards of domain admin cards without the admin's secp256r1 private key. Error code E-47 added. See also v0.4→v0.5: DNS authorization model hardened. `SetPolicyAddress` (§4.19) gains explicit domain-card binding check: `admin_card_address` must match `DomainRegistrations[domain].admin_card_address`; optional `sub_card_address` must be a registered direct sub-card of that admin card (`SubCardRegistrations` one-hop check). Governance-quorum write path split into dedicated `GovernanceSetPolicyAddress` (§4.23) for rollback and fraud remediation. `SetDnsGovernancePolicyAddress` (§4.24) added, making `DnsGovernancePolicyAddress` mutable via `DnsGovernanceBody` quorum rather than write-once. `PolicyAddressSet` event gains `sub_card_address` field. Two new events: `PolicyAddressGovernanceSet` and `DnsGovernancePolicyAddressUpdated`. Error codes E-45–E-46 added. See also v0.3→v0.4: DNS resolution support added. `DnsGovernanceBody` added to `GovernanceBodyId` enum (§3.6). New storage tables `DomainRegistrations` (§3.8), `PolicyAddresses` (§3.9), and global variable `DnsGovernancePolicyAddress` (§3.10). Six new write operations §4.17–4.22. Two new read operations in §5. Six new events in §7. Error codes E-37–E-44 in §8. See also `specs/dns_resolution.md` for the full DNS resolution protocol spec. See also v0.2→v0.3: three-contract architecture adopted (storage / logic / verifier). Logic contract is upgradeable via 7-day timelock `UpgradeLogic` (RootPolicyBody). Storage contract is immutable and enforces unconditional audit-trail invariants. §3.7, §4.14, §6.3 added/rewritten; events, error codes, and read operations updated. See also v0.1→v0.2: on-chain verification changed from ML-DSA-44 to secp256r1/RIP-7212 per ADR-012.
 
 ---
 
@@ -20,6 +20,10 @@
    - 3.5 [OpenOfferUseCounts](#35-openofferusecounts)
    - 3.6 [GovernanceKeysets](#36-governancekeysets)
    - 3.7 [Logic Contract Address and Storage Access Control](#37-logic-contract-address-and-storage-access-control)
+   - 3.8 [DomainRegistrations](#38-domainregistrations)
+   - 3.9 [PolicyAddresses](#39-policyaddresses)
+   - 3.10 [DnsGovernancePolicyAddress](#310-dnsgovernancepolicyaddress)
+   - 3.11 [DnsAdminCardKeys](#311-dnsadmincardkeys)
 4. [Write Operations](#4-write-operations)
    - 4.1 [RegisterCard](#41-registercard)
    - 4.2 [UpdateCardHead](#42-updatecardhead)
@@ -37,6 +41,14 @@
    - 4.14 [UpgradeLogic](#414-upgradelogic)
    - 4.15 [BatchUpdateCardHeads](#415-batchupdatecardheads)
    - 4.16 [DisablePolicyDeletePermanently](#416-disablepolicydeletepermanently)
+   - 4.17 [RegisterDomain](#417-registerdomain)
+   - 4.18 [DeregisterDomain](#418-deregisterdomain)
+   - 4.19 [SetPolicyAddress](#419-setpolicyaddress)
+   - 4.20 [RemovePolicyAddress](#420-removepolicyaddress)
+   - 4.21 [ClearDomainEntries](#421-cleardomainentries)
+   - 4.22 [FlagDomainFraudRisk](#422-flagdomainfraudrisk)
+   - 4.23 [GovernanceSetPolicyAddress](#423-governancesetpolicyaddress)
+   - 4.24 [SetDnsGovernancePolicyAddress](#424-setdnsgovernancepolicyaddress)
 5. [Read Operations](#5-read-operations)
 6. [Authorization Model](#6-authorization-model)
    - 6.1 [Card Write Gate](#61-card-write-gate)
@@ -252,12 +264,12 @@ The contract enforces `use_count < max_acceptances` (skipped if `max_acceptances
 
 ### 3.6 GovernanceKeysets
 
-Two governance bodies, each with an M-of-N quorum key set. Each body's keyset is stored separately.
+Three governance bodies, each with an M-of-N quorum key set. Each body's keyset is stored separately.
 
 ```
 GovernanceKeysets: mapping (GovernanceBodyId → GovernanceKeyset)
 
-GovernanceBodyId: enum { RootPolicyBody, PressRegistryBody }
+GovernanceBodyId: enum { RootPolicyBody, PressRegistryBody, DnsGovernanceBody }
 
 GovernanceKeyset {
     keys          bytes[64][]     — Ordered array of active secp256r1 public keys (64 bytes each,
@@ -282,8 +294,16 @@ GovernanceKeyset {
 | `RevokePress` | `PressRegistryBody` |
 | `RotateAuthorizerKey` | `RootPolicyBody` |
 | `RotateGovernanceKeys` | The body whose keyset is being rotated (self-amending) |
+| `RegisterDomain` | `DnsGovernanceBody` |
+| `DeregisterDomain` | `DnsGovernanceBody` |
+| `ClearDomainEntries` | `DnsGovernanceBody` |
+| `FlagDomainFraudRisk` | `DnsGovernanceBody` |
+| `GovernanceSetPolicyAddress` | `DnsGovernanceBody` |
+| `SetDnsGovernancePolicyAddress` | `DnsGovernanceBody` |
 
-Both bodies govern with the same quorum verification logic; they differ only in what operations they unlock.
+All three bodies govern with the same quorum verification logic (§6.2); they differ only in what operations they unlock. `DnsGovernanceBody` is bootstrapped as 1-of-1 (single deployer key) at deploy time, the same bootstrap pattern as `RootPolicyBody` and `PressRegistryBody`.
+
+**`DnsGovernanceBody` scope.** The DNS Governance Body operates independently of `RootPolicyBody` and `PressRegistryBody`. Its keyset is self-amending via `RotateGovernanceKeys(DnsGovernanceBody, ...)`, authorized by the existing `DnsGovernanceBody` quorum. It has no supervisory relationship with the other two bodies. The DNS governance authority's operational mandate is specified in `governance/dns_governance_authority.md` (Phase 3 deliverable).
 
 **Bootstrap (OQ-15, resolved 2026-06-14):** The contract is deployed with a 1-of-1 governance keyset (single deployer key, `quorum = 1`). As additional governance members are invited in, the deployer calls `RotateGovernanceKeys` to expand `keys[]` and raise `quorum`. Once the board has multiple members, all further additions and removals require a quorum vote via `RotateGovernanceKeys`. The quorum threshold itself is board-updatable through the same self-amending operation. No deploy-time timelock or external multisig is required; the single-key bootstrap is the accepted initial trust anchor.
 
@@ -342,6 +362,127 @@ The setters are not user-facing functions. They are called exclusively by the lo
 These invariants preserve the audit trail and ensure that the core record of what has existed on-chain is permanent, independent of future protocol logic changes.
 
 **Re-authorization after revocation.** A previously-revoked press may be re-authorized by the Press Registry Governance Body calling `AuthorizePress` again with the same `press_address`. On re-authorization, `revoked_at` is reset to `0` and `active` is set to `true`. The complete authorization history — including the original revocation timestamp — is preserved permanently in the `PressRevoked` and `PressAuthorized` on-chain event log and does not need to be retained in storage state.
+
+---
+
+---
+
+### 3.11 DnsAdminCardKeys
+
+Maps the on-chain address of a DNS admin card to its secp256r1 public key, enabling on-chain verification of the admin card holder's authorization for sub-card registrations.
+
+```
+DnsAdminCardKeys: mapping (bytes32 → bytes[64])
+
+key:   card_address (bytes32)       — On-chain registry address of the DNS admin card
+                                      (same key used in CardEntries and DomainRegistrations).
+value: secp256r1_pubkey (bytes[64]) — secp256r1 public key (uncompressed x||y, 32+32 bytes)
+                                      held by the domain admin card holder specifically for
+                                      DNS admin operations. Verified via RIP-7212.
+                                      Zero value (bytes[64](0)) means the card address is not
+                                      a registered DNS admin card or has been deregistered.
+```
+
+**Written by:** `RegisterDomain` (§4.17) — stores the key when a domain admin card is registered. `DeregisterDomain` (§4.18) — clears the entry (sets to zero) when a domain is deregistered.
+
+**Read by:** `RegisterSubCard` (§4.3) — if `DnsAdminCardKeys[master_card_address]` is non-zero, the sub-card registration requires an additional secp256r1 signature from the admin card holder, verified on-chain via RIP-7212. If zero, the standard ML-DSA-44 press-side check applies (unchanged behavior for non-DNS-admin master cards).
+
+**Key management.** The secp256r1 keypair is separate from the admin card holder's ML-DSA-44 IPFS identity key. It is generated specifically for DNS admin on-chain operations. The private key must be held by the domain admin card holder — compromise of this key allows an attacker (if they also control a press) to authorize fraudulent sub-card registrations. Key rotation requires re-registration: the governance authority calls `DeregisterDomain` then `RegisterDomain` with the new secp256r1 key.
+
+**Why a separate table rather than a field on `CardEntry`.** `CardEntry` is a general-purpose structure used by all cards in the protocol. Adding a secp256r1 key field to `CardEntry` would impose storage overhead on every card. Only DNS admin cards require on-chain secp256r1 signing; a dedicated table is more storage-efficient and keeps the general card model unchanged.
+
+---
+
+### 3.8 DomainRegistrations
+
+One entry per registered `mcard://` domain. Keyed by the domain string (lowercase-normalized, no trailing dot, maximum 255 bytes per RFC 1035).
+
+```
+DomainRegistrations: mapping (string → DomainEntry)
+
+DomainEntry {
+    admin_card_address      bytes32   — On-chain registry address (CardEntry key) of the current
+                                        active domain admin card. The card was issued under
+                                        DnsGovernancePolicyAddress (§3.10). Set at RegisterDomain
+                                        time. This is the card whose holder has authority to submit
+                                        SetPolicyAddress calls for this domain (either directly or
+                                        by delegating to sub-path-scoped sub-cards in SubCardRegistrations).
+
+    registered_at           uint64    — Unix timestamp of the most recent RegisterDomain call for
+                                        this domain. Updated on re-registration (new admin card
+                                        replacing an old one). Prior registration timestamps are
+                                        preserved in the DomainRegistered event log.
+
+    fraud_risk              uint8     — Current fraud risk level.
+                                        0 = normal (default; no restrictions)
+                                        1 = monitored (public key registration required;
+                                            brand-name scanning applied by authority)
+                                        2 = suspended (SetPolicyAddress and RemovePolicyAddress
+                                            rejected on-chain; E-39)
+                                        Set by FlagDomainFraudRisk (§4.22). See dns_resolution.md §7.
+
+    suspension_expires_at   uint64    — Unix timestamp after which a fraud_risk == 2 suspension
+                                        lapses for resolution purposes. Zero if not currently
+                                        suspended. The contract does NOT automatically reset
+                                        fraud_risk to 0 when this timestamp is reached; the DNS
+                                        governance authority must call FlagDomainFraudRisk to
+                                        explicitly restore normal status after a suspension expires.
+
+    exists                  bool      — True once RegisterDomain has been called for this domain.
+                                        Used to distinguish unregistered domains (no entry) from
+                                        domains with entries but no PolicyAddresses (registered but
+                                        empty). Write-once-true: once set to true by RegisterDomain,
+                                        no setter may reset it to false. DeregisterDomain sets
+                                        fraud_risk to 0, clears admin_card_address, and clears
+                                        suspension_expires_at, but leaves exists == true to preserve
+                                        the audit trail that the domain was once registered.
+}
+```
+
+**Storage note.** Mapping keys are Solidity `string` (dynamic type). In Stylus / Rust, this maps to `StorageString`. Keys MUST be lowercase-normalized before storage reads and writes. The storage contract does not validate domain format beyond rejecting empty strings and strings exceeding 255 bytes.
+
+---
+
+### 3.9 PolicyAddresses
+
+One entry per registered domain/path pair. Keyed by a hash of the domain and path.
+
+```
+PolicyAddresses: mapping (bytes32 → bytes32)
+
+key:   keccak256(<domain_bytes> || 0x00 || <path_bytes>)
+         — <domain_bytes>: UTF-8 encoding of the lowercase domain string (no trailing dot).
+           <path_bytes>:   UTF-8 encoding of the path string (no leading slash; case-sensitive).
+           0x00:           Single zero-byte separator preventing hash collisions between
+                           a domain with empty path and a domain/path pair where the path
+                           begins with the domain prefix. This derivation is canonical;
+                           all callers MUST use exactly this form.
+           Example: domain "nytimes.com", path "staff/reporter"
+                    → keccak256(bytes("nytimes.com") || 0x00 || bytes("staff/reporter"))
+
+value: bytes32
+         — On-chain registry address (CardEntry key) of the policy card active at this
+           domain/path. Zero value (bytes32(0)) means no entry is registered. A zero
+           response from LookupPolicyAddress MUST be treated as "not registered."
+           The policy card's IPFS content is fetched via GetCardEntry(value).log_head_cid.
+```
+
+**No iteration required.** `PolicyAddresses` is a flat mapping; there is no on-chain way to enumerate all paths for a domain. `ClearDomainEntries` (§4.21) clears entries by re-deriving their keys from a list of paths supplied in the governance payload. The list of active paths is an off-chain responsibility of the DNS governance authority, which tracks them via `PolicyAddressSet` and `PolicyAddressRemoved` events.
+
+---
+
+### 3.10 DnsGovernancePolicyAddress
+
+A single global storage variable holding the on-chain policy address under which all domain admin cards are issued.
+
+```
+DnsGovernancePolicyAddress: bytes32
+```
+
+- Initialized to `bytes32(0)` at storage contract deployment. Set to the DNS governance authority's policy address during bootstrap via `SetDnsGovernancePolicyAddress` (§4.24, requires `DnsGovernanceBody` quorum).
+- **Mutable via `DnsGovernanceBody` quorum.** Unlike `LogicContract` (which has a timelock), `DnsGovernancePolicyAddress` is updated by a single governance operation. This is an intentional escape hatch for policy key compromise recovery: the governance body can rotate to a new policy, re-issue domain admin cards under it, and update each domain via `RegisterDomain`. See §4.24 for the full migration warning.
+- **Used by:** `SetPolicyAddress` (§4.19) to verify that the submitting press is authorized under the DNS governance policy (`PressAuthorizations[DnsGovernancePolicyAddress][press_address]`). Also used at `RegisterDomain` time to verify that the admin card being registered was issued under this policy.
+- **Zero-value guard.** `SetPolicyAddress` and `RemovePolicyAddress` (press path) MUST revert with E-40 if `DnsGovernancePolicyAddress == bytes32(0)`. `GovernanceSetPolicyAddress` (§4.23) and `RegisterDomain` (§4.17) also check this. `SetDnsGovernancePolicyAddress` itself is the only operation that may write a non-zero value when the current value is zero.
 
 ---
 
@@ -464,10 +605,18 @@ RegisterSubCard(
                                          Note: master card holder keys are ML-DSA-44 (IPFS identity
                                          keys); this is not a secp256r1 signature. The press verifies
                                          this off-chain against the holder's CardDocument pubkey.
+    admin_secp_payload     bytes,      — Canonical RFC 8785 JSON of AdminAuthorizeSubCardPayload (see below).
+                                         Required (non-empty) when DnsAdminCardKeys[master_card_address]
+                                         is non-zero (master is a DNS admin card). Empty bytes otherwise.
+    admin_secp_signature   bytes[64]   — secp256r1 signature (r||s) over keccak256(admin_secp_payload),
+                                         verified on-chain via RIP-7212 against
+                                         DnsAdminCardKeys[master_card_address].
+                                         Required (non-zero) when master is a DNS admin card.
+                                         Must be bytes[64](0) when master is not a DNS admin card.
 ) → void
 ```
 
-**`RegisterSubCardPayload`:**
+**`RegisterSubCardPayload` (press-signed):**
 
 ```json
 {
@@ -481,20 +630,52 @@ RegisterSubCard(
 }
 ```
 
+**`AdminAuthorizeSubCardPayload` (admin card secp256r1-signed; required only when master is a DNS admin card):**
+
+```json
+{
+  "op":                  "admin_authorize_sub_card",
+  "sub_card_address":    "<base64url — bytes32>",
+  "master_card_address": "<base64url — bytes32>",
+  "sub_card_doc_cid":    "<base64url — CID bytes of the SubCardDocument on IPFS>",
+  "timestamp":           "<ISO 8601>"
+}
+```
+
+The `sub_card_address` and `sub_card_doc_cid` fields in `AdminAuthorizeSubCardPayload` must match the corresponding calldata parameters exactly. The contract verifies this consistency before accepting the signature. Replay prevention is provided by `sub_card_address` uniqueness — the contract already rejects any `sub_card_address` with an existing active `SubCardRegistrations` entry, so each admin-signed authorization can be submitted at most once without a separate nonce.
+
 **Preconditions checked by contract:**
 
 1. `master_card_address` exists in `CardEntries`.
 2. `sub_card_address` does not already exist in `SubCardRegistrations` with `active == true`.
-3. `registration_log_head` matches `CardEntries[master_card_address].log_head_cid` at call time. (Ensures the snapshot is current; prevents a holder from registering a sub-card claiming authority the master no longer holds.)
+3. `registration_log_head` matches `CardEntries[master_card_address].log_head_cid` at call time.
 4. Press authorization checks (§6.1) pass for the master card's policy.
+5. **Admin card secp256r1 check (conditional on master card type):**
+   - If `DnsAdminCardKeys[master_card_address] != bytes[64](0)` (master is a DNS admin card):
+     - `admin_secp_signature` must be non-zero. Error: E-47.
+     - `admin_secp_payload` must encode `sub_card_address` and `sub_card_doc_cid` matching the calldata values. Error: E-47.
+     - `admin_secp_signature` must verify via RIP-7212 against `DnsAdminCardKeys[master_card_address]` over `keccak256(admin_secp_payload)`. Error: E-47.
+   - If `DnsAdminCardKeys[master_card_address] == bytes[64](0)` (master is not a DNS admin card):
+     - `admin_secp_signature` must be `bytes[64](0)` and `admin_secp_payload` must be empty. Error: E-47 if either is non-zero/non-empty (prevents spurious signatures).
 
-> **Master signature is press-side only.** The press verifies `master_signature` (ML-DSA-44) off-chain against the holder public key from the card's `CardDocument` (fetched from IPFS) before submitting. The contract does not re-verify the master signature. The holder signature in calldata is retained as an auditable proof of holder intent. A press submitting a sub-card registration without a valid holder signature is detectable by observers and constitutes a press policy violation (press-side error E-22).
+> **Master ML-DSA-44 signature is press-side only.** The press verifies `master_signature` (ML-DSA-44) off-chain against the holder public key from the card's `CardDocument` (fetched from IPFS) before submitting. The contract does not re-verify the ML-DSA-44 signature. The holder signature in calldata is retained as an auditable proof of holder intent. A press submitting without a valid ML-DSA-44 holder signature is a press policy violation (press-side error E-22).
+
+> **Admin secp256r1 signature is on-chain verified.** For DNS admin master cards, the admin card holder's secp256r1 signature is verified by the contract via RIP-7212. A compromised press cannot register a fraudulent sub-card of a domain admin card without possession of the admin holder's secp256r1 private key, regardless of whether it skips the ML-DSA-44 press-side check.
 
 > **App-chain verification is press-side only.** Before submitting `RegisterSubCard`, the press reads the `SubCardDocument` at `sub_card_doc_cid` from IPFS, verifies `app_signature`, and walks the `app_card` chain using `app_card_pubkey` to confirm it reaches the governance authority's app-certification policy root (applying the keccak256 binding check: `keccak256(app_card_pubkey)` must equal the `app_card` pointer address, and each subsequent hop uses the app card's own `ancestry_pubkeys`). The contract stores only the CID pointer to this document; it does not perform any app-chain verification. Runtime verifiers rely on the press having completed this check at registration time — they do not re-walk the app-certification chain independently (see `protocol-objects.md §16` Verifier chain walk).
 
 **State changes:**
 
 - Creates `SubCardRegistrations[sub_card_address] = { master_card_address, registration_log_head, sub_card_doc_cid, active: true, registered_at: block.timestamp, deregistered_at: 0 }`.
+
+**Acceptance criteria (DNS admin card path):**
+
+- [ ] `RegisterSubCard` with a DNS admin master and a valid `AdminAuthorizeSubCardPayload` signed by the correct secp256r1 key succeeds (all other preconditions passing).
+- [ ] Returns E-47 if master is a DNS admin card and `admin_secp_signature` is `bytes[64](0)`.
+- [ ] Returns E-47 if `admin_secp_payload` encodes `sub_card_address` or `sub_card_doc_cid` that differ from the calldata values.
+- [ ] Returns E-47 if secp256r1 signature verification against `DnsAdminCardKeys[master_card_address]` fails.
+- [ ] Returns E-47 if master is not a DNS admin card (`DnsAdminCardKeys` entry is zero) but `admin_secp_signature` is non-zero.
+- [ ] `RegisterSubCard` with a non-DNS-admin master and `admin_secp_signature == bytes[64](0)` behaves identically to the pre-v0.6 behavior (no regression).
 
 ---
 
@@ -1155,6 +1336,509 @@ DisablePolicyDeletePermanently(
 
 ---
 
+### 4.17 RegisterDomain
+
+**Called by:** DNS Governance Body (quorum required)  
+**Purpose:** Create or update the `DomainRegistrations` entry for a domain after the DNS governance authority has verified TXT record ownership. Sets the active domain admin card address for the domain.
+
+```
+RegisterDomain(
+    domain               string,    — Lowercase domain string (no trailing dot). Maximum 255 bytes.
+    admin_card_address   bytes32,   — On-chain registry address of the domain admin card to register.
+                                      The card must already exist in CardEntries and must have been
+                                      issued under DnsGovernancePolicyAddress.
+    admin_secp256r1_key  bytes[64], — secp256r1 public key (uncompressed x||y, 32+32 bytes) held by
+                                      the domain admin card holder for on-chain sub-card authorization.
+                                      Stored in DnsAdminCardKeys[admin_card_address]. The holder
+                                      generates this keypair specifically for DNS admin operations;
+                                      it is distinct from their ML-DSA-44 IPFS identity key.
+    governance_payload   bytes,     — Canonical RFC 8785 JSON of RegisterDomainPayload (see below)
+    governance_sigs      bytes[]    — secp256r1 signatures (r||s, 64 bytes each) from DnsGovernanceBody
+                                      key holders; verified via RIP-7212
+) → void
+```
+
+**`RegisterDomainPayload`:**
+
+```json
+{
+  "op":                   "register_domain",
+  "domain":               "<domain string>",
+  "admin_card_address":   "<base64url — bytes32>",
+  "admin_secp256r1_key":  "<base64url — 64 bytes, secp256r1 x||y>",
+  "governance_version":   <uint32 — current GovernanceKeysets[DnsGovernanceBody].version>,
+  "nonce":                "<base64url>",
+  "timestamp":            "<ISO 8601>"
+}
+```
+
+**Preconditions:**
+
+1. `domain` is non-empty and does not exceed 255 bytes.
+2. `admin_card_address` exists in `CardEntries` (the card is registered on-chain).
+3. `CardEntries[admin_card_address].policy_address == DnsGovernancePolicyAddress` (the card was issued under the DNS governance policy).
+4. If `DomainRegistrations[domain].exists == true`: the existing entry has no active admin card (`admin_card_address == bytes32(0)`) OR this call is an explicit re-registration authorized by governance quorum after the prior admin card was deactivated. **Error: E-38 if the domain already has an active admin card** (non-zero `admin_card_address`) — a new registration requires the prior admin to be cleared first via `DeregisterDomain`.
+5. `DnsGovernanceBody` quorum signature check (§6.2).
+
+**State changes:**
+
+- Creates or updates `DomainRegistrations[domain]`:
+  - Sets `admin_card_address = admin_card_address`.
+  - Sets `registered_at = block.timestamp`.
+  - Sets `fraud_risk = 0` (new registrations always start at normal risk).
+  - Sets `suspension_expires_at = 0`.
+  - Sets `exists = true` (write-once; already true on re-registration).
+- Sets `DnsAdminCardKeys[admin_card_address] = admin_secp256r1_key`.
+- Emits `DomainRegistered(domain, admin_card_address, block.timestamp)`.
+
+**Acceptance criteria:**
+
+- [ ] `RegisterDomain` with valid quorum signatures and an unregistered domain creates `DomainRegistrations[domain]` with correct fields, writes `DnsAdminCardKeys[admin_card_address]`, and emits `DomainRegistered`.
+- [ ] `RegisterDomain` for a domain that already has a non-zero `admin_card_address` returns E-38 without modifying state.
+- [ ] `RegisterDomain` for a domain whose prior entry has `admin_card_address == bytes32(0)` (cleared by `DeregisterDomain`) succeeds and re-registers the domain.
+- [ ] `RegisterDomain` where `admin_card_address` does not exist in `CardEntries` returns E-02.
+- [ ] `RegisterDomain` where `CardEntries[admin_card_address].policy_address != DnsGovernancePolicyAddress` returns E-40.
+- [ ] `RegisterDomain` with insufficient governance signatures returns E-18.
+- [ ] `RegisterDomain` always sets `fraud_risk = 0` and `suspension_expires_at = 0` regardless of prior state.
+- [ ] After `RegisterDomain`, `GetDnsAdminCardKey(admin_card_address)` returns the registered secp256r1 key.
+- [ ] After `RegisterDomain`, a `RegisterSubCard` call with `master_card_address == admin_card_address` and no `admin_secp_signature` returns E-47.
+
+---
+
+### 4.18 DeregisterDomain
+
+**Called by:** DNS Governance Body (quorum required)  
+**Purpose:** Clear the active admin card address from a domain entry, preventing new `SetPolicyAddress` submissions under the domain. Used during domain handoff (the prior admin is removed before the new admin is registered), or to permanently close a domain registration.
+
+```
+DeregisterDomain(
+    domain               string,
+    governance_payload   bytes,
+    governance_sigs      bytes[]   — DnsGovernanceBody quorum
+) → void
+```
+
+**`DeregisterDomainPayload`:**
+
+```json
+{
+  "op":                 "deregister_domain",
+  "domain":             "<domain string>",
+  "governance_version": <uint32>,
+  "nonce":              "<base64url>",
+  "timestamp":          "<ISO 8601>"
+}
+```
+
+**Preconditions:**
+
+1. `DomainRegistrations[domain].exists == true` (domain is registered). Error: E-37 if not found.
+2. `DnsGovernanceBody` quorum signature check (§6.2).
+
+**State changes:**
+
+- Records `old_admin = DomainRegistrations[domain].admin_card_address`.
+- Sets `DomainRegistrations[domain].admin_card_address = bytes32(0)`.
+- Sets `DnsAdminCardKeys[old_admin] = bytes[64](0)` — clears the admin card's secp256r1 key so the deregistered card can no longer authorize sub-card registrations.
+- Does NOT clear `exists` (the domain's audit history is preserved).
+- Does NOT clear `fraud_risk` or `suspension_expires_at` (fraud status survives deregistration; a re-registered domain does not inherit a clean slate if it was previously flagged — that requires an explicit `FlagDomainFraudRisk(domain, 0, 0)` call).
+- Emits `DomainDeregistered(domain, block.timestamp)`.
+
+**Note:** `DeregisterDomain` clears the admin card reference and its secp256r1 key, but does not remove `PolicyAddresses` entries. The DNS governance authority SHOULD call `ClearDomainEntries` (§4.21) in the same governance action or immediately after to remove the domain's policy entries. Leaving stale entries means `LookupPolicyAddress` will continue to return results for the deregistered domain until the entries are explicitly cleared.
+
+**Acceptance criteria:**
+
+- [ ] `DeregisterDomain` for a registered domain sets `admin_card_address = bytes32(0)`, clears `DnsAdminCardKeys[old_admin]` to zero, and emits `DomainDeregistered`.
+- [ ] `DeregisterDomain` for an unregistered domain (exists == false) returns E-37.
+- [ ] `DeregisterDomain` does not clear `fraud_risk` or `suspension_expires_at`.
+- [ ] `DeregisterDomain` does not clear `exists`.
+- [ ] After `DeregisterDomain`, `GetDnsAdminCardKey(old_admin_card_address)` returns `bytes[64](0)`.
+- [ ] After `DeregisterDomain`, a `RegisterSubCard` call with the old admin card as master no longer requires `admin_secp_signature` (key is zero, check is skipped).
+- [ ] After `DeregisterDomain`, a subsequent `RegisterDomain` for the same domain succeeds (the `admin_card_address == bytes32(0)` precondition is met).
+
+---
+
+### 4.19 SetPolicyAddress
+
+**Called by:** Press authorized under `DnsGovernancePolicyAddress` policy, on behalf of a domain admin card holder or a sub-path-scoped sub-card holder.  
+**Purpose:** Register or update the policy card address for a specific domain/path pair in `PolicyAddresses`. This is the core operation that makes `mcard://domain/path` URIs resolvable.
+
+```
+SetPolicyAddress(
+    domain               string,    — Lowercase domain string.
+    path                 string,    — Path string (no leading slash; case-sensitive). Maximum 512 bytes.
+    policy_card_address  bytes32,   — On-chain registry address of the policy card to register at this
+                                      domain/path. Must exist in CardEntries.
+    admin_card_address   bytes32,   — On-chain registry address of the registered domain admin card.
+                                      Must exactly match DomainRegistrations[domain].admin_card_address.
+                                      Passed explicitly so the signed payload is self-describing.
+    sub_card_address     bytes32,   — bytes32(0) if the domain admin card holder is submitting directly.
+                                      Non-zero: the sub-path-scoped sub-card whose holder is submitting.
+                                      Must be a direct sub-card of admin_card_address registered in
+                                      SubCardRegistrations (one-hop only; sub-sub-cards not recognized).
+    press_sig_payload    bytes,     — Canonical RFC 8785 JSON of SetPolicyAddressPayload (see below)
+    press_signature      bytes[64]  — secp256r1 signature (r||s) over keccak256(press_sig_payload),
+                                      verified via RIP-7212 against PressAuthorizations[
+                                      DnsGovernancePolicyAddress][press_address].press_public_key
+) → void
+```
+
+**`SetPolicyAddressPayload` (signed by press):**
+
+```json
+{
+  "op":                   "set_policy_address",
+  "domain":               "<domain string>",
+  "path":                 "<path string>",
+  "policy_card_address":  "<base64url — bytes32>",
+  "admin_card_address":   "<base64url — bytes32>",
+  "sub_card_address":     "<base64url — bytes32; zero bytes32 if admin submitting directly>",
+  "press_address":        "<base64url — bytes32>",
+  "sequence":             <uint64 — must equal PressAuthorizations[DnsGovernancePolicyAddress][press_address].next_sequence>,
+  "timestamp":            "<ISO 8601>"
+}
+```
+
+**Preconditions checked by contract:**
+
+1. `DnsGovernancePolicyAddress != bytes32(0)` — DNS governance policy is initialized. Error: E-40.
+2. `DomainRegistrations[domain].exists == true`. Error: E-37.
+3. `DomainRegistrations[domain].fraud_risk != 2 OR block.timestamp >= DomainRegistrations[domain].suspension_expires_at` — domain not currently suspended. Error: E-39.
+4. `admin_card_address == DomainRegistrations[domain].admin_card_address` — the supplied admin card is the registered domain admin. Error: E-46.
+5. If `sub_card_address != bytes32(0)`:
+   - `SubCardRegistrations[sub_card_address].active == true`. Error: E-45.
+   - `SubCardRegistrations[sub_card_address].master_card_address == admin_card_address`. Error: E-45.
+6. `PressAuthorizations[DnsGovernancePolicyAddress][press_address]` exists and `active == true`. Error: E-03 / E-04 / E-05.
+7. `press_signature` verifies via RIP-7212 against `PressAuthorizations[DnsGovernancePolicyAddress][press_address].press_public_key` over `press_sig_payload`. Error: E-06.
+8. `sequence` in `press_sig_payload` equals `PressAuthorizations[DnsGovernancePolicyAddress][press_address].next_sequence`. On success, `next_sequence` incremented by 1. Error: E-07.
+9. `CardEntries[policy_card_address].exists == true`. Error: E-41.
+
+**Why the contract does not re-check `admin_card_address.policy_address`.** `RegisterDomain` (§4.17) already verifies that `CardEntries[admin_card_address].policy_address == DnsGovernancePolicyAddress` before writing to `DomainRegistrations`. Any address stored in `DomainRegistrations[domain].admin_card_address` is therefore guaranteed to have been issued under the DNS governance policy by construction. Re-verifying here is redundant.
+
+**Preconditions checked by press (off-chain only; not re-verified on-chain):**
+
+- The holder's ML-DSA-44 signature over the `SetPolicyAddressIntent` is valid against the active card's public key from IPFS (admin card if `sub_card_address == 0`; sub-card if non-zero).
+- If `sub_card_address != bytes32(0)`: the `dns_path_scope` regex in the sub-card's IPFS document matches `path`. Press-side error: E-44.
+- If `DomainRegistrations[domain].fraud_risk == 1`: the domain admin's public key is registered with the DNS governance authority before submission.
+
+**Security note — compromised press scope.** A compromised press cannot register fraudulent sub-cards of a domain admin card: `RegisterSubCard` now requires the admin's secp256r1 signature verified on-chain (§4.3 precondition 5), which a compromised press cannot forge. A compromised press is still able to submit fraudulent `SetPolicyAddress` calls for domains it legitimately administers (the secp256r1 key only gates sub-card registration, not direct policy writes). `GovernanceSetPolicyAddress` (§4.23) provides rollback for fraudulent entries; `RevokePress` stops further submissions.
+
+**State changes:**
+
+- Computes `key = keccak256(domain_bytes || 0x00 || path_bytes)`.
+- Sets `PolicyAddresses[key] = policy_card_address`.
+- Increments `PressAuthorizations[DnsGovernancePolicyAddress][press_address].next_sequence` by 1.
+- Emits `PolicyAddressSet(domain, path, policy_card_address, admin_card_address, sub_card_address, press_address, block.timestamp)`.
+
+**Acceptance criteria:**
+
+- [ ] A valid call sets `PolicyAddresses[keccak256(domain||"\x00"||path)] = policy_card_address` and emits `PolicyAddressSet` with correct parameters including `admin_card_address` and `sub_card_address`.
+- [ ] A subsequent `LookupPolicyAddress(domain, path)` returns the new `policy_card_address`.
+- [ ] Returns E-40 if `DnsGovernancePolicyAddress == bytes32(0)`.
+- [ ] Returns E-37 if `DomainRegistrations[domain].exists == false`.
+- [ ] Returns E-39 if domain is actively suspended.
+- [ ] Returns E-46 if `admin_card_address != DomainRegistrations[domain].admin_card_address`.
+- [ ] Returns E-45 if `sub_card_address` is non-zero but not in `SubCardRegistrations` with `master_card_address == admin_card_address` and `active == true`.
+- [ ] Returns E-45 if `sub_card_address` is a sub-card of a sub-card of the admin (depth > 1); the one-hop check fails.
+- [ ] Returns E-04 / E-05 on press authorization failure.
+- [ ] Returns E-06 on press signature verification failure.
+- [ ] Returns E-07 on sequence mismatch.
+- [ ] Returns E-41 if `CardEntries[policy_card_address].exists == false`.
+- [ ] Press-side: rejects (E-44) submissions where `sub_card_address` is non-zero and the sub-card's `dns_path_scope` does not match `path`.
+
+---
+
+### 4.20 RemovePolicyAddress
+
+**Called by:** Press authorized under `DnsGovernancePolicyAddress` policy, on behalf of a domain admin card holder; OR DNS Governance Body (quorum required) for governance-initiated removal.  
+**Purpose:** Remove the policy card address for a specific domain/path pair from `PolicyAddresses`. After removal, `LookupPolicyAddress` returns zero for this path.
+
+```
+RemovePolicyAddress(
+    domain               string,
+    path                 string,
+    card_address         bytes32,   — Zero bytes32 if called with governance quorum; otherwise the
+                                      domain admin card address authorizing the removal.
+    press_sig_payload    bytes,     — Empty bytes if called with governance quorum.
+    press_signature      bytes[64], — Zero if called with governance quorum.
+    governance_payload   bytes,     — Empty bytes if called by press on behalf of card holder.
+    governance_sigs      bytes[]    — Empty array if called by press on behalf of card holder.
+) → void
+```
+
+**Authorization paths (exactly one must be satisfied):**
+
+**Path A — Press-authorized removal (card holder initiated):**
+- Verifies press is authorized under `DnsGovernancePolicyAddress` (same checks as §4.19 preconditions 4–8).
+- Verifies `card_address` is active and issued under `DnsGovernancePolicyAddress` (preconditions 7–8).
+- `governance_sigs` must be an empty array.
+
+**Path B — Governance-authorized removal (DNS governance body initiated, e.g., fraud response):**
+- `DnsGovernanceBody` quorum signature check (§6.2) over `governance_payload`.
+- `card_address` is ignored (set to `bytes32(0)` by convention); `press_sig_payload` and `press_signature` are ignored.
+- `press_signature` must be `bytes[64](0)`.
+
+**Shared preconditions (both paths):**
+
+1. `PolicyAddresses[keccak256(domain||"\x00"||path)]` is non-zero (entry exists). Error: E-42.
+2. `DomainRegistrations[domain].exists == true`. Error: E-37.
+
+**State changes:**
+
+- Sets `PolicyAddresses[keccak256(domain_bytes || 0x00 || path_bytes)] = bytes32(0)`.
+- Emits `PolicyAddressRemoved(domain, path, block.timestamp)`.
+
+**Note:** A zero value is the "not registered" sentinel (§3.9 zero-value semantics). Overwriting with zero is the correct removal mechanism; there is no `delete` operation.
+
+**Acceptance criteria:**
+
+- [ ] Path A (press): a valid press-authorized removal zeroes the `PolicyAddresses` entry and emits `PolicyAddressRemoved`.
+- [ ] Path B (governance): a valid governance-quorum removal zeroes the entry and emits `PolicyAddressRemoved`.
+- [ ] Returns E-42 if the `PolicyAddresses` entry is already zero (not registered).
+- [ ] Returns E-37 if `DomainRegistrations[domain].exists == false`.
+- [ ] Press path: returns E-04/E-05/E-06/E-07 on press authorization failures (same as §4.19).
+- [ ] Governance path: returns E-18 if governance quorum is not met.
+- [ ] After a successful removal, `LookupPolicyAddress(domain, path)` returns `bytes32(0)`.
+
+---
+
+### 4.21 ClearDomainEntries
+
+**Called by:** DNS Governance Body (quorum required)  
+**Purpose:** Remove all `PolicyAddresses` entries for a given domain. Used during domain handoff (clearing prior admin's entries before re-registration) and as part of the fraud suspension action.
+
+```
+ClearDomainEntries(
+    domain               string,
+    paths                string[],  — Ordered list of paths whose entries should be cleared.
+                                      The contract computes keccak256(domain||"\x00"||path) for
+                                      each path and zeroes the corresponding PolicyAddresses entry.
+                                      Paths whose PolicyAddresses entry is already zero are skipped
+                                      silently (no error).
+    governance_payload   bytes,
+    governance_sigs      bytes[]    — DnsGovernanceBody quorum
+) → void
+```
+
+**`ClearDomainEntriesPayload`:**
+
+```json
+{
+  "op":                 "clear_domain_entries",
+  "domain":             "<domain string>",
+  "paths":              ["<path1>", "<path2>", "..."],
+  "governance_version": <uint32>,
+  "nonce":              "<base64url>",
+  "timestamp":          "<ISO 8601>"
+}
+```
+
+**Why paths are caller-supplied.** `PolicyAddresses` is a flat mapping; the contract cannot enumerate keys. The DNS governance authority maintains the authoritative list of active paths for each domain (by indexing `PolicyAddressSet` and `PolicyAddressRemoved` events). The authority supplies this list in the governance payload, which is signed as part of the quorum signature — ensuring the path list is attested by a governance quorum and cannot be tampered with in transit.
+
+**Preconditions:**
+
+1. `DomainRegistrations[domain].exists == true`. Error: E-37.
+2. `DnsGovernanceBody` quorum signature check (§6.2).
+3. `len(paths) >= 1` and `len(paths) <= 500` (batch size limit, implementation-defined; prevents gas exhaustion). Error: E-33 (batch size invalid, reusing existing code).
+
+**State changes:**
+
+For each path in `paths`:
+- Computes `key = keccak256(domain_bytes || 0x00 || path_bytes)`.
+- If `PolicyAddresses[key] != bytes32(0)`: sets `PolicyAddresses[key] = bytes32(0)`.
+- If `PolicyAddresses[key] == bytes32(0)`: no-op (skip silently).
+
+After processing all paths:
+- Emits `DomainEntriesCleared(domain, len(paths_cleared), block.timestamp)` where `len(paths_cleared)` is the count of paths that were non-zero before clearing.
+
+**Acceptance criteria:**
+
+- [ ] `ClearDomainEntries` with a valid path list zeroes all matching `PolicyAddresses` entries and emits `DomainEntriesCleared` with the correct cleared count.
+- [ ] Paths that were already zero are skipped without error; they do not count toward `paths_cleared`.
+- [ ] Returns E-37 if `DomainRegistrations[domain].exists == false`.
+- [ ] Returns E-18 if quorum is not met.
+- [ ] Returns E-33 if `paths` is empty or exceeds 500 entries.
+- [ ] After `ClearDomainEntries`, `LookupPolicyAddress` returns zero for all cleared paths.
+
+---
+
+### 4.22 FlagDomainFraudRisk
+
+**Called by:** DNS Governance Body (quorum required)  
+**Purpose:** Set or update the fraud risk level for a registered domain. Used to escalate suspicious domains to "monitored" (level 1) or "suspended" (level 2) status, and to restore normal status (level 0) after a suspension expires.
+
+```
+FlagDomainFraudRisk(
+    domain                  string,
+    fraud_risk              uint8,    — New fraud risk level: 0, 1, or 2. Values > 2 are rejected.
+    suspension_expires_at   uint64,   — Unix timestamp for suspension expiry.
+                                        Required to be > block.timestamp if fraud_risk == 2.
+                                        Must be 0 if fraud_risk == 0 or fraud_risk == 1.
+    governance_payload      bytes,
+    governance_sigs         bytes[]   — DnsGovernanceBody quorum
+) → void
+```
+
+**`FlagDomainFraudRiskPayload`:**
+
+```json
+{
+  "op":                    "flag_domain_fraud_risk",
+  "domain":                "<domain string>",
+  "fraud_risk":            <uint8>,
+  "suspension_expires_at": <uint64>,
+  "governance_version":    <uint32>,
+  "nonce":                 "<base64url>",
+  "timestamp":             "<ISO 8601>"
+}
+```
+
+**Preconditions:**
+
+1. `DomainRegistrations[domain].exists == true`. Error: E-37.
+2. `fraud_risk <= 2` (values > 2 are invalid). Error: E-43 (invalid domain string reused for parameter validation — see §8 note).
+3. If `fraud_risk == 2`: `suspension_expires_at > block.timestamp` (suspension expiry must be in the future). Error: E-43.
+4. If `fraud_risk != 2`: `suspension_expires_at == 0`. Error: E-43.
+5. `DnsGovernanceBody` quorum signature check (§6.2).
+
+**State changes:**
+
+- Sets `DomainRegistrations[domain].fraud_risk = fraud_risk`.
+- Sets `DomainRegistrations[domain].suspension_expires_at = suspension_expires_at`.
+- Emits `DomainFraudRiskUpdated(domain, fraud_risk, suspension_expires_at, block.timestamp)`.
+
+**Acceptance criteria:**
+
+- [ ] `FlagDomainFraudRisk(domain, 1, 0)` sets fraud_risk to 1, suspension_expires_at to 0, emits `DomainFraudRiskUpdated`.
+- [ ] `FlagDomainFraudRisk(domain, 2, future_timestamp)` sets fraud_risk to 2 and suspension_expires_at, emits `DomainFraudRiskUpdated`.
+- [ ] `FlagDomainFraudRisk(domain, 0, 0)` restores normal status (fraud_risk = 0, suspension_expires_at = 0), emits `DomainFraudRiskUpdated`.
+- [ ] Returns E-37 if domain does not exist.
+- [ ] Returns E-43 if fraud_risk > 2.
+- [ ] Returns E-43 if fraud_risk == 2 and suspension_expires_at == 0 or <= block.timestamp.
+- [ ] Returns E-43 if fraud_risk != 2 and suspension_expires_at != 0.
+- [ ] Returns E-18 if quorum is not met.
+- [ ] After `FlagDomainFraudRisk(domain, 2, t)`, a `SetPolicyAddress` call for that domain returns E-39 if block.timestamp < t.
+- [ ] After `FlagDomainFraudRisk(domain, 0, 0)`, a subsequent `SetPolicyAddress` for that domain succeeds (assuming all other preconditions pass).
+
+---
+
+### 4.23 GovernanceSetPolicyAddress
+
+**Called by:** DNS Governance Body (quorum required)  
+**Purpose:** Directly write or clear a `PolicyAddresses` entry without going through a press or domain admin card. The primary use case is rollback after fraud: restoring a legitimate mapping that was overwritten by a fraudulent `SetPolicyAddress` call, or clearing an unauthorized entry when the domain admin is unavailable. Also used for emergency correction when a domain admin card has been compromised and no legitimate press submission is possible.
+
+Unlike `SetPolicyAddress` (§4.19), this operation:
+- Bypasses press and card holder authorization entirely.
+- Works on suspended domains (fraud_risk == 2) — governance must be able to remediate even when a domain is locked.
+- Can clear an entry by setting `policy_card_address = bytes32(0)` (equivalent to `RemovePolicyAddress` governance path).
+
+```
+GovernanceSetPolicyAddress(
+    domain               string,
+    path                 string,
+    policy_card_address  bytes32,   — Target value to write. bytes32(0) clears the entry
+                                      (same effect as RemovePolicyAddress governance path).
+                                      If non-zero, must exist in CardEntries.
+    governance_payload   bytes,
+    governance_sigs      bytes[]    — DnsGovernanceBody quorum
+) → void
+```
+
+**`GovernanceSetPolicyAddressPayload`:**
+
+```json
+{
+  "op":                   "governance_set_policy_address",
+  "domain":               "<domain string>",
+  "path":                 "<path string>",
+  "policy_card_address":  "<base64url — bytes32; zero bytes32 to clear the entry>",
+  "governance_version":   <uint32 — current GovernanceKeysets[DnsGovernanceBody].version>,
+  "nonce":                "<base64url>",
+  "timestamp":            "<ISO 8601>"
+}
+```
+
+**Preconditions:**
+
+1. `DomainRegistrations[domain].exists == true`. Error: E-37.
+2. If `policy_card_address != bytes32(0)`: `CardEntries[policy_card_address].exists == true`. Error: E-41.
+3. `DnsGovernanceBody` quorum signature check (§6.2).
+
+**Note:** No suspension check (precondition 3 of §4.19 is absent). Governance can write to any registered domain regardless of `fraud_risk` level.
+
+**State changes:**
+
+- Computes `key = keccak256(domain_bytes || 0x00 || path_bytes)`.
+- Reads existing value: `old_policy_card_address = PolicyAddresses[key]`.
+- Sets `PolicyAddresses[key] = policy_card_address`.
+- Emits `PolicyAddressGovernanceSet(domain, path, policy_card_address, old_policy_card_address, block.timestamp)`.
+
+**Acceptance criteria:**
+
+- [ ] A valid governance-quorum call sets `PolicyAddresses[key]` to `policy_card_address` and emits `PolicyAddressGovernanceSet` with both new and old values.
+- [ ] `policy_card_address = bytes32(0)` clears the entry; `LookupPolicyAddress` subsequently returns zero.
+- [ ] Works on suspended domains (fraud_risk == 2) without reverting.
+- [ ] Returns E-37 if domain does not exist.
+- [ ] Returns E-41 if `policy_card_address` is non-zero but not in `CardEntries`.
+- [ ] Returns E-18 if quorum is not met.
+- [ ] `old_policy_card_address` in the event correctly reflects the value before the write (zero if entry was not previously set).
+
+---
+
+### 4.24 SetDnsGovernancePolicyAddress
+
+**Called by:** DNS Governance Body (quorum required)  
+**Purpose:** Update the global `DnsGovernancePolicyAddress` storage variable to point to a new DNS governance policy card. The primary use case is recovery from a policy authorizer key compromise: the governance body registers a new policy via `RegisterPolicy`, then calls this operation to redirect `SetPolicyAddress` authorization to the new policy.
+
+> **⚠ Breaking change.** Changing `DnsGovernancePolicyAddress` orphans all existing domain admin cards — their `CardEntries[card_address].policy_address` will no longer match the new value, causing `RegisterDomain` checks to fail for them. All domains whose admin cards are orphaned will need their admin cards re-issued under the new policy and re-registered via `RegisterDomain`. Plan a full migration before executing this operation. Use `GovernanceSetPolicyAddress` (§4.23) for routine rollback; this operation is a last-resort escape hatch.
+
+```
+SetDnsGovernancePolicyAddress(
+    new_policy_address   bytes32,   — On-chain registry address of the new DNS governance policy.
+                                      Must exist in PolicyAuthorizerKeys (registered via RegisterPolicy).
+    governance_payload   bytes,
+    governance_sigs      bytes[]    — DnsGovernanceBody quorum
+) → void
+```
+
+**`SetDnsGovernancePolicyAddressPayload`:**
+
+```json
+{
+  "op":                    "set_dns_governance_policy_address",
+  "new_policy_address":    "<base64url — bytes32>",
+  "governance_version":    <uint32 — current GovernanceKeysets[DnsGovernanceBody].version>,
+  "nonce":                 "<base64url>",
+  "timestamp":             "<ISO 8601>"
+}
+```
+
+**Preconditions:**
+
+1. `new_policy_address != bytes32(0)`. Error: E-43.
+2. `new_policy_address` exists in `PolicyAuthorizerKeys` (must be a recognized policy). Error: E-03.
+3. `new_policy_address != DnsGovernancePolicyAddress` (no no-op updates). Error: E-43.
+4. `DnsGovernanceBody` quorum signature check (§6.2).
+
+**State changes:**
+
+- Records `old_address = DnsGovernancePolicyAddress`.
+- Sets `DnsGovernancePolicyAddress = new_policy_address`.
+- Emits `DnsGovernancePolicyAddressUpdated(old_address, new_policy_address, block.timestamp)`.
+
+**Acceptance criteria:**
+
+- [ ] A valid governance-quorum call updates `DnsGovernancePolicyAddress` and emits `DnsGovernancePolicyAddressUpdated` with old and new addresses.
+- [ ] Subsequent `RegisterDomain` calls check against the new `DnsGovernancePolicyAddress`.
+- [ ] Subsequent `SetPolicyAddress` calls check press authorization against `PressAuthorizations[new_policy_address]`.
+- [ ] Returns E-43 if `new_policy_address == bytes32(0)`.
+- [ ] Returns E-03 if `new_policy_address` is not in `PolicyAuthorizerKeys`.
+- [ ] Returns E-43 if `new_policy_address == DnsGovernancePolicyAddress` (no-op guard).
+- [ ] Returns E-18 if quorum is not met.
+- [ ] Domain admin cards issued under the old policy address become unregisterable under `RegisterDomain` after the update; their `CardEntries` entries are unaffected (the cards still exist, their `policy_address` field is immutable).
+
+---
+
 ## 5. Read Operations
 
 These are view functions — no state change, no fee beyond RPC costs.
@@ -1172,6 +1856,9 @@ These are view functions — no state change, no fee beyond RPC costs.
 | `GetLogicContract()` | `address` | Address of the current logic contract |
 | `GetPendingLogicUpgrade()` | `PendingUpgrade` | Pending upgrade proposal, or zero-value if none |
 | `GetVerifierModule()` | `address` | Address of the current verifier module (stored in logic contract, not storage contract) |
+| `LookupPolicyAddress(domain string, path string)` | `bytes32` | Returns `PolicyAddresses[keccak256(domain_bytes \|\| 0x00 \|\| path_bytes)]`. Returns `bytes32(0)` if no entry is registered at this domain/path. The domain is lowercased by the contract before key derivation. |
+| `GetDomainRegistration(domain string)` | `DomainEntry` | Full domain entry including `admin_card_address`, `registered_at`, `fraud_risk`, `suspension_expires_at`, `exists`. Returns zero-value `DomainEntry` (exists = false) if the domain is not registered. |
+| `GetDnsAdminCardKey(card_address bytes32)` | `bytes[64]` | Returns the secp256r1 public key registered for a DNS admin card via `RegisterDomain`. Returns `bytes[64](0)` if `card_address` is not a registered DNS admin card or if its domain has been deregistered. Used by presses to confirm whether a master card requires `admin_secp_signature` before submitting `RegisterSubCard`. |
 
 ---
 
@@ -1374,7 +2061,7 @@ AuthorizerKeyRotated(
 )
 
 GovernanceKeysRotated(
-    body_id            uint8,    — 0 = RootPolicyBody, 1 = PressRegistryBody
+    body_id            uint8,    — 0 = RootPolicyBody, 1 = PressRegistryBody, 2 = DnsGovernanceBody
     new_quorum         uint8,
     key_count          uint8,
     version            uint32,
@@ -1409,9 +2096,64 @@ LogicUpgradeCancelled(
 PolicyDeletePermanentlyDisabled(
     timestamp   uint64
 )
+
+DomainRegistered(
+    domain              string,   — Lowercase domain string
+    admin_card_address  bytes32,  — On-chain registry address of the domain admin card
+    timestamp           uint64
+)
+
+DomainDeregistered(
+    domain      string,
+    timestamp   uint64
+)
+
+PolicyAddressSet(
+    domain               string,   — Lowercase domain string
+    path                 string,   — Path string (no leading slash)
+    policy_card_address  bytes32,  — The policy card address now registered at this domain/path
+    admin_card_address   bytes32,  — The registered domain admin card
+    sub_card_address     bytes32,  — The sub-card whose holder made the request; bytes32(0) if the
+                                     admin card holder submitted directly
+    press_address        bytes32,  — The press that submitted the transaction
+    timestamp            uint64
+)
+
+PolicyAddressGovernanceSet(
+    domain                  string,   — Lowercase domain string
+    path                    string,   — Path string (no leading slash)
+    policy_card_address     bytes32,  — The value written (bytes32(0) if entry was cleared)
+    old_policy_card_address bytes32,  — The value before this write (bytes32(0) if entry was unset)
+    timestamp               uint64
+)
+
+PolicyAddressRemoved(
+    domain      string,
+    path        string,
+    timestamp   uint64
+)
+
+DomainEntriesCleared(
+    domain          string,
+    paths_cleared   uint32,   — Number of non-zero PolicyAddresses entries cleared in this call
+    timestamp       uint64
+)
+
+DomainFraudRiskUpdated(
+    domain                  string,
+    fraud_risk              uint8,
+    suspension_expires_at   uint64,
+    timestamp               uint64
+)
+
+DnsGovernancePolicyAddressUpdated(
+    old_address   bytes32,   — DnsGovernancePolicyAddress value before the update
+    new_address   bytes32,   — New DnsGovernancePolicyAddress value
+    timestamp     uint64
+)
 ```
 
-**`AddressTransition` purpose.** This event is the on-chain archive of address changes resulting from master key rotations. Off-chain indexers can build an `old_address → new_address` lookup table from these events, enabling resolution of old addresses even when the old card's IPFS content is no longer pinned and the IPFS-level `successor` field is unreachable. See `key_rotation.md §2.3`.
+**`AddressTransition` purpose (DNS resolution spec).** This event is the on-chain archive of address changes resulting from master key rotations. Off-chain indexers can build an `old_address → new_address` lookup table from these events, enabling resolution of old addresses even when the old card's IPFS content is no longer pinned and the IPFS-level `successor` field is unreachable. See `key_rotation.md §2.3`.
 
 **Note:** Events do not include the new governance keys or press public keys in plaintext — these are available from the call data on the same transaction. Emitting 1,312-byte public keys in events would significantly increase log storage costs.
 
@@ -1460,6 +2202,17 @@ PolicyDeletePermanentlyDisabled(
 | E-34 | `BATCH_ITEM_INVALID` | `BatchUpdateCardHeads` item failed validation: duplicate `card_address` within the batch, or `card_address` belongs to a policy other than `policy_address`. |
 | E-35 | `POLICY_DELETE_DISABLED` | `delete_policy_authorizer_key` called after `PolicyDeleteDisabled == true`. |
 | E-36 | `POLICY_DELETE_ALREADY_DISABLED` | `DisablePolicyDeletePermanently` called when `PolicyDeleteDisabled` is already `true`. |
+| E-37 | `DOMAIN_NOT_FOUND` | Operation targets a domain not present in `DomainRegistrations` (`exists == false`). Applies to `DeregisterDomain`, `SetPolicyAddress`, `RemovePolicyAddress`, `ClearDomainEntries`, `FlagDomainFraudRisk`. |
+| E-38 | `DOMAIN_ALREADY_REGISTERED` | `RegisterDomain` called for a domain that already has a non-zero `admin_card_address` in `DomainRegistrations`. The prior admin must be cleared via `DeregisterDomain` before re-registration. |
+| E-39 | `DOMAIN_SUSPENDED` | `SetPolicyAddress` (or `RemovePolicyAddress` via press path) rejected because `DomainRegistrations[domain].fraud_risk == 2` and `block.timestamp < DomainRegistrations[domain].suspension_expires_at`. The domain is actively suspended. |
+| E-40 | `CARD_NOT_DNS_GOVERNANCE_POLICY` | The `card_address` supplied to `SetPolicyAddress` or `RemovePolicyAddress` was not issued under `DnsGovernancePolicyAddress` (`CardEntries[card_address].policy_address != DnsGovernancePolicyAddress`), or `DnsGovernancePolicyAddress` is `bytes32(0)` (DNS governance not yet initialized). |
+| E-41 | `POLICY_CARD_NOT_FOUND` | The `policy_card_address` supplied to `SetPolicyAddress` does not exist in `CardEntries` (`CardEntries[policy_card_address].exists == false`). |
+| E-42 | `DOMAIN_PATH_ENTRY_NOT_FOUND` | `RemovePolicyAddress` called for a domain/path pair whose `PolicyAddresses` entry is already zero (not registered or already removed). |
+| E-43 | `INVALID_DNS_PARAMETER` | A parameter to a DNS write operation failed validation: domain string is empty or exceeds 255 bytes (`RegisterDomain`, `DeregisterDomain`); `fraud_risk` value is > 2 or inconsistent with `suspension_expires_at` (`FlagDomainFraudRisk`). |
+| E-44 | `DOMAIN_PATH_SCOPE_VIOLATION` | **Press-side rejection only.** The domain admin sub-card's `dns_path_scope` regex (from its IPFS card document) does not match the `path` argument in the `SetPolicyAddress` submission. The press refuses to submit the on-chain transaction. This is not an on-chain revert code. |
+| E-45 | `SUB_CARD_NOT_DOMAIN_ADMIN_SUBCARD` | `sub_card_address` in `SetPolicyAddress` is non-zero but fails the on-chain binding check: either `SubCardRegistrations[sub_card_address]` does not exist, `active == false`, or `master_card_address != admin_card_address`. Sub-sub-cards (depth > 1 from the domain admin) also trigger this error since the one-hop check fails. |
+| E-46 | `ADMIN_CARD_MISMATCH` | `admin_card_address` in `SetPolicyAddress` does not match `DomainRegistrations[domain].admin_card_address`. The caller supplied an admin card that is not the registered admin for this domain. |
+| E-47 | `INVALID_ADMIN_CARD_SIGNATURE` | `RegisterSubCard` failed the admin card secp256r1 check (§4.3 precondition 5). Covers: missing signature when master is a DNS admin card; payload field mismatch (`sub_card_address` or `sub_card_doc_cid` inconsistent with calldata); RIP-7212 signature verification failure; and spurious non-zero signature when master is not a DNS admin card. |
 
 ---
 
