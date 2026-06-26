@@ -1,0 +1,33 @@
+{
+  "name": "@membership-card-protocol/press",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Card Protocol press — validates, co-signs, publishes, and registers cards",
+  "scripts": {
+    "dev": "nitro dev",
+    "build": "nitro build",
+    "build:lambda": "NITRO_PRESET=aws-lambda nitro build",
+    "build:node": "NITRO_PRESET=node-server nitro build",
+    "start": "node .output/server/index.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "//": "TODO: replace file: reference with versioned npm ref once @membership-card-protocol/verifier is published",
+  "dependencies": {
+    "@membership-card-protocol/verifier": "file:../membership_card_verifier/packages/verifier",
+    "nitropack": "^2.11.0",
+    "pinata": "^2.0.0",
+    "viem": "^2.30.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=9"
+  }
+}

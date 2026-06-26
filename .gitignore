@@ -2,6 +2,9 @@
 membership_card_verifier/node_modules
 membership_card_verifier/packages/*/node_modules
 membership_card_verifier/packages/*/dist
+press/node_modules
+press/.output
+press/.nitro
 
 # Claude Code agent worktrees (temporary, local only)
 .claude/worktrees/
