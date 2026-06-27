@@ -10,8 +10,10 @@ export interface PressConfig {
   PRESS_SECP256R1_PRIVATE_KEY: string;
   ARBITRUM_RPC_URL: string;
   REGISTRY_CONTRACT_ADDRESS: string;
-  PINATA_JWT: string;
-  PINATA_GATEWAY_URL: string;
+  FILEBASE_KEY: string;
+  FILEBASE_SECRET: string;
+  FILEBASE_BUCKET: string;
+  FILEBASE_GATEWAY_URL: string;
   EXTERNAL_KV_URL: string;
   PORT: number;
   LOG_LEVEL: 'debug' | 'info' | 'warn' | 'error';
@@ -93,8 +95,13 @@ export function loadConfig(): PressConfig {
 
   const ARBITRUM_RPC_URL = requireEnv('ARBITRUM_RPC_URL');
   const REGISTRY_CONTRACT_ADDRESS = requireEnv('REGISTRY_CONTRACT_ADDRESS');
-  const PINATA_JWT = requireEnv('PINATA_JWT');
-  const PINATA_GATEWAY_URL = requireEnv('PINATA_GATEWAY_URL');
+  const FILEBASE_KEY = requireEnv('FILEBASE_KEY');
+  const FILEBASE_SECRET = requireEnv('FILEBASE_SECRET');
+  const FILEBASE_BUCKET = requireEnv('FILEBASE_BUCKET');
+  const FILEBASE_GATEWAY_URL = optionalEnv(
+    'FILEBASE_GATEWAY_URL',
+    'https://ipfs.filebase.io'
+  );
   const EXTERNAL_KV_URL = requireEnv('EXTERNAL_KV_URL');
 
   const PORT = parseInt(optionalEnv('PORT', '3000'), 10);
@@ -112,8 +119,10 @@ export function loadConfig(): PressConfig {
     PRESS_SECP256R1_PRIVATE_KEY,
     ARBITRUM_RPC_URL,
     REGISTRY_CONTRACT_ADDRESS,
-    PINATA_JWT,
-    PINATA_GATEWAY_URL,
+    FILEBASE_KEY,
+    FILEBASE_SECRET,
+    FILEBASE_BUCKET,
+    FILEBASE_GATEWAY_URL,
     EXTERNAL_KV_URL,
     PORT,
     LOG_LEVEL,
