@@ -11,6 +11,13 @@
       "types": "./dist/index.d.ts"
     }
   },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=22"
   },
@@ -18,7 +25,8 @@
     "build": "tsc --project tsconfig.json",
     "typecheck": "tsc --noEmit",
     "test": "NODE_OPTIONS=--experimental-global-webcrypto vitest run",
-    "test:watch": "NODE_OPTIONS=--experimental-global-webcrypto vitest"
+    "test:watch": "NODE_OPTIONS=--experimental-global-webcrypto vitest",
+    "prepublishOnly": "pnpm run build && pnpm run test"
   },
   "dependencies": {
     "@noble/curves": "^1.9.0",

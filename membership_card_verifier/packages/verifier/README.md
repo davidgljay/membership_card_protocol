@@ -58,7 +58,7 @@ The package has no bundled RPC client or IPFS client. You supply those via the p
 # ethers.js v6 RPC wrapper
 npm install @membership-card-protocol/verifier-rpc-provider
 
-# web3.storage-compatible IPFS wrapper
+# Filebase IPFS wrapper (default) — or web3.storage-compatible alternative
 npm install @membership-card-protocol/verifier-ipfs-provider
 ```
 
@@ -69,10 +69,10 @@ npm install @membership-card-protocol/verifier-ipfs-provider
 ```typescript
 import { CardVerifier } from "@membership-card-protocol/verifier";
 import { EthersRpcProvider } from "@membership-card-protocol/verifier-rpc-provider";
-import { Web3StorageIpfsProvider } from "@membership-card-protocol/verifier-ipfs-provider";
+import { FilebaseIpfsProvider } from "@membership-card-protocol/verifier-ipfs-provider";
 
 const rpc = new EthersRpcProvider(registryContract);
-const ipfs = new Web3StorageIpfsProvider(storageClient);
+const ipfs = new FilebaseIpfsProvider();
 
 const verifier = new CardVerifier({ rpc, ipfs });
 
@@ -136,9 +136,26 @@ interface IpfsProvider {
 Must throw if the CID cannot be resolved — the package treats a thrown error as a provider failure, not a verification failure. Implement your own caching policy inside the provider; the core package makes no assumptions about caching.
 
 ```typescript
+import { FilebaseIpfsProvider } from "@membership-card-protocol/verifier-ipfs-provider";
+
+// Default: Filebase public IPFS gateway with a 30s timeout
+const ipfs = new FilebaseIpfsProvider();
+
+// Custom gateway (e.g. a dedicated Filebase bucket gateway) with a custom timeout
+const ipfs = new FilebaseIpfsProvider({
+  gatewayUrl: "https://mybucket.myfilebase.com/ipfs",
+  timeoutMs: 15_000,
+});
+```
+
+`FilebaseIpfsProvider` resolves CIDs through Filebase's public IPFS gateway (`https://ipfs.filebase.io/ipfs`) with no credentials required. Pass a `gatewayUrl` to point at a different gateway.
+
+A web3.storage-compatible alternative is also available for existing deployments:
+
+```typescript
 import { Web3StorageIpfsProvider } from "@membership-card-protocol/verifier-ipfs-provider";
 
-const ipfs = new Web3StorageIpfsProvider(storageClient, 30_000); // 30s timeout
+const ipfs = new Web3StorageIpfsProvider(storageClient, 30_000);
 ```
 
 ---

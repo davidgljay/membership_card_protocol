@@ -2,7 +2,7 @@
   "name": "@membership-card-protocol/verifier-ipfs-provider",
   "version": "0.1.0",
   "type": "module",
-  "description": "web3.storage-compatible IpfsProvider implementation for @membership-card-protocol/verifier",
+  "description": "Filebase and web3.storage IpfsProvider implementations for @membership-card-protocol/verifier",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

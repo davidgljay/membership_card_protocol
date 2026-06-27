@@ -1,6 +1,7 @@
 export { CardVerifier } from "./CardVerifier.js";
 export { CardProtocolError } from "./errors.js";
 export { canonicalize } from "./canonicalize.js";
+export { mlDsa44Verify } from "./crypto.js";
 
 export type {
   RpcProvider,
