@@ -64,9 +64,19 @@ export async function handleUpdate(
     policy = { field_definitions: {}, approved_presses: [ctx.config.PRESS_CARD_CID] } as import('../types.js').PolicyDocument;
   }
 
-  // 4. Verify update_policy predicate (P-11) for field updates (1xx–7xx codes).
+  // 4. Evaluate update_policy predicate (P-11) for field updates (1xx–7xx codes).
   if (update_intent.code < 800) {
-    // Phase 3: predicate evaluation for updates deferred; passes by default.
+    // Verify the updater's chain reaches a trusted root (satisfies the default update predicate).
+    // Full per-field update_policy predicate evaluation requires decrypting the target card,
+    // which is a Phase 4+ enhancement. For now: chain validity is the gate.
+    const updaterResult = await ctx.verifier.verifyCard(update_intent.updater_card_address);
+    if (updaterResult.chain_reaches_trusted_root !== true) {
+      throw Object.assign(
+        new Error('P-11: Updater card chain does not satisfy the update_policy predicate'),
+        { pressCode: 'P-11' }
+      );
+    }
+
     // Rate limit check for 1xx codes.
     if (update_intent.code < 200) {
       await checkRateLimits(ctx.kv, 'update_card_head', update_intent.updater_card_address, 'holder', policyAddress);
