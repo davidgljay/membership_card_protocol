@@ -11,8 +11,9 @@ const validEnv: Record<string, string> = {
   PRESS_SECP256R1_PRIVATE_KEY: '0x' + 'ab'.repeat(32),
   ARBITRUM_RPC_URL: 'https://arb1.arbitrum.io/rpc',
   REGISTRY_CONTRACT_ADDRESS: '0x' + '00'.repeat(20),
-  PINATA_JWT: 'test-jwt',
-  PINATA_GATEWAY_URL: 'https://test.mypinata.cloud',
+  FILEBASE_KEY: 'test-key',
+  FILEBASE_SECRET: 'test-secret',
+  FILEBASE_BUCKET: 'test-bucket',
   EXTERNAL_KV_URL: 'redis://localhost:6379',
 };
 
