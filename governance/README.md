@@ -18,8 +18,9 @@ This folder documents each body's purpose, on-chain powers, member profiles, and
 |---|---|---|---|
 | [RootPolicyBody](./RootPolicyBody/mandate.md) | `GovernanceBodyId::RootPolicyBody` | Protocol infrastructure: policy registration, logic upgrades, protocol-level commitments | 4-of-5 |
 | [PressRegistryBody](./PressRegistryBody/mandate.md) | `GovernanceBodyId::PressRegistryBody` | Press operations: authorization, revocation, compliance rules | 4-of-5 |
+| [DnsGovernanceBody](./DnsGovernanceBody/mandate.md) | `GovernanceBodyId::DnsGovernanceBody` | DNS namespace: domain registration, policy address verification, fraud monitoring | M-of-N (bootstrapped 1-of-1) |
 
-**Separation of concerns.** `RootPolicyBody` governs the protocol's rules and infrastructure. `PressRegistryBody` governs the press operators who use those rules to issue cards. Neither body directs the other's operational decisions.
+**Separation of concerns.** `RootPolicyBody` governs the protocol's rules and infrastructure. `PressRegistryBody` governs the press operators who use those rules to issue cards. `DnsGovernanceBody` governs the `mcard://` human-readable namespace, operating independently of the other two bodies. None of the three bodies directs the others' operational decisions.
 
 ---
 
@@ -43,6 +44,15 @@ This folder documents each body's purpose, on-chain powers, member profiles, and
 - [`PressRegistryBody/mandate.md`](./PressRegistryBody/mandate.md) — Purpose, on-chain powers, enforcement process, cross-body coordination
 - [`PressRegistryBody/member-profile.md`](./PressRegistryBody/member-profile.md) — Seat composition, required skills, inclusion commitments, conflict-of-interest policy
 - [`PressRegistryBody/press-rules.md`](./PressRegistryBody/press-rules.md) — Rules for press operators; violation categories and enforcement process *(v0.1 skeleton — content sections require adoption by `PressRegistryBody` once convened)*
+
+### DnsGovernanceBody
+- [`DnsGovernanceBody/mandate.md`](./DnsGovernanceBody/mandate.md) — Purpose, on-chain powers, off-chain process, fraud escalation criteria, responsibilities table, auditor role
+
+### DNS Governance Scripts
+- [`../governance/scripts/`](./scripts/) — Three Nitro TypeScript script stubs:
+  - [`txt-verification.ts`](./scripts/txt-verification.ts) — DNS TXT record verification and domain admin card issuance
+  - [`admin-deactivation.ts`](./scripts/admin-deactivation.ts) — Admin chain deactivation during domain handoff
+  - [`policy-address-verifier.ts`](./scripts/policy-address-verifier.ts) — Continuous `PolicyAddressSet` event monitoring and verification
 
 ### Research
 - [`research/off-chain-governance-research.md`](./research/off-chain-governance-research.md) — Survey of governance precedents: internet protocol bodies (IETF, ICANN, W3C, Wikimedia), community-accountable governance (survivor-led orgs, CARE principles, transformative justice, participatory budgeting), and Web3 governance (EIP process, DAO failure modes, Protocol Guild)

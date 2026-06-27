@@ -1,0 +1,19 @@
+{
+  "name": "@card-protocol/dns-governance-scripts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DNS Governance Authority scripts — Nitro server handlers and polling tasks",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "h3": "^1.15.3",
+    "nitropack": "^2.11.12",
+    "viem": "^2.30.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "@types/node": "^22.15.32"
+  }
+}
