@@ -158,10 +158,20 @@ export interface BatchUpdateParams {
 // ---------------------------------------------------------------------------
 
 export function createRegistryClient(config: PressConfig): RegistryClient {
+  // Signing account: the secp256r1 key whose pubkey is registered on-chain in PressAuthorizations.
+  // Used only for signing press payloads — never submits transactions directly.
   const account: Account = privateKeyToAccount(
     (config.PRESS_SECP256R1_PRIVATE_KEY.startsWith('0x')
       ? config.PRESS_SECP256R1_PRIVATE_KEY
       : `0x${config.PRESS_SECP256R1_PRIVATE_KEY}`) as Hex
+  );
+
+  // Gas wallet: a separate Ethereum account that holds ETH and pays transaction fees.
+  // msg.sender on all transactions is this account, not the press signing account.
+  const gasAccount: Account = privateKeyToAccount(
+    (config.PRESS_GAS_WALLET_PRIVATE_KEY.startsWith('0x')
+      ? config.PRESS_GAS_WALLET_PRIVATE_KEY
+      : `0x${config.PRESS_GAS_WALLET_PRIVATE_KEY}`) as Hex
   );
 
   const publicClient: PublicClient = createPublicClient({
@@ -169,8 +179,9 @@ export function createRegistryClient(config: PressConfig): RegistryClient {
     transport: http(config.ARBITRUM_RPC_URL),
   });
 
+  // walletClient uses the gas wallet for tx submission.
   const walletClient: WalletClient = createWalletClient({
-    account,
+    account: gasAccount,
     chain: arbitrum,
     transport: http(config.ARBITRUM_RPC_URL),
   });
@@ -194,7 +205,7 @@ export function createRegistryClient(config: PressConfig): RegistryClient {
       functionName: 'GetPressAuthorization',
       args: [policyAddress, pressAddress],
     });
-    const [press_public_key, mldsa44_key_hash, key_scheme, active, next_sequence, authorized_at, revoked_at] = result as [Uint8Array, Hex, number, boolean, bigint, bigint, bigint];
+    const [press_public_key, mldsa44_key_hash, key_scheme, active, next_sequence, authorized_at, revoked_at] = result as unknown as [Uint8Array, Hex, number, boolean, bigint, bigint, bigint];
     return { press_public_key: new Uint8Array(press_public_key), mldsa44_key_hash, key_scheme, active, next_sequence, authorized_at, revoked_at };
   }
 
@@ -232,7 +243,7 @@ export function createRegistryClient(config: PressConfig): RegistryClient {
           abi: REGISTRY_ABI,
           functionName: functionName as never,
           args: args as never,
-          account,
+          account: gasAccount,
           chain: arbitrum,
         });
         await publicClient.waitForTransactionReceipt({ hash });
@@ -258,7 +269,7 @@ export function createRegistryClient(config: PressConfig): RegistryClient {
       functionName: 'GetCardEntry',
       args: [cardAddress],
     });
-    const [log_head_cid, policy_address, last_press_address, forward_to, exists] = result as [Uint8Array, Hex, Hex, Hex, boolean];
+    const [log_head_cid, policy_address, last_press_address, forward_to, exists] = result as unknown as [Uint8Array, Hex, Hex, Hex, boolean];
     return {
       log_head_cid: new Uint8Array(log_head_cid),
       policy_address,
@@ -285,7 +296,7 @@ export function createRegistryClient(config: PressConfig): RegistryClient {
       functionName: 'GetSubCardEntry',
       args: [subCardAddress],
     });
-    const [master_card_address, registration_log_head, sub_card_doc_cid, active, registered_at, deregistered_at] = result as [Hex, Uint8Array, Uint8Array, boolean, bigint, bigint];
+    const [master_card_address, registration_log_head, sub_card_doc_cid, active, registered_at, deregistered_at] = result as unknown as [Hex, Uint8Array, Uint8Array, boolean, bigint, bigint];
     return {
       master_card_address,
       registration_log_head: new Uint8Array(registration_log_head),
