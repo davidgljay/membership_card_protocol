@@ -1,7 +1,7 @@
 # membership_card_verifier — Implementation Plan
 
 **Date:** 2026-06-20  
-**Status:** Draft  
+**Status:** Complete  
 **Strategic plan:** [verifier-strategic-plan.md](./verifier-strategic-plan.md)  
 **Spec:** [specs/object_specs/card_verifier.md](../specs/object_specs/card_verifier.md)
 
