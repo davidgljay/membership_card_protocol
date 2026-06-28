@@ -44,12 +44,13 @@ describe("CardVerifier", () => {
 
   it("verifyEnvelope returns deterministic envelope_id", async () => {
     const sub = generateKeypair();
+    const payload = { message: "hello", protocol_version: "0.1", timestamp: "2026-06-20T00:00:00Z" };
     const envelope: SignedMessageEnvelope = {
-      payload: { message: "hello", timestamp: "2026-06-20T00:00:00Z" },
+      payload,
       signatures: [
         {
           public_key: Buffer.from(sub.publicKey).toString("base64url"),
-          signature: Buffer.from(ml_dsa44.sign(canonicalize({ message: "hello", timestamp: "2026-06-20T00:00:00Z" }), sub.secretKey)).toString("base64url"),
+          signature: Buffer.from(ml_dsa44.sign(canonicalize(payload), sub.secretKey)).toString("base64url"),
         },
       ],
     };
@@ -68,7 +69,7 @@ describe("CardVerifier", () => {
   it("verifyEnvelope returns one result per signature entry", async () => {
     const sub1 = generateKeypair();
     const sub2 = generateKeypair();
-    const payload = { message: "multi-sig", timestamp: "2026-06-20T00:00:00Z" };
+    const payload = { message: "multi-sig", protocol_version: "0.1", timestamp: "2026-06-20T00:00:00Z" };
     const canonical = canonicalize(payload);
     const envelope: SignedMessageEnvelope = {
       payload,
@@ -108,7 +109,7 @@ describe("CardVerifier", () => {
 
   it("stage2 hard rejection propagates skipped to stages 3–5", async () => {
     const sub = generateKeypair();
-    const payload = { message: "test", timestamp: "2026-06-20T00:00:00Z" };
+    const payload = { message: "test", protocol_version: "0.1", timestamp: "2026-06-20T00:00:00Z" };
     const canonical = canonicalize(payload);
     const envelope: SignedMessageEnvelope = {
       payload,

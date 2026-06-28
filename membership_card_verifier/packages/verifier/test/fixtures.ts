@@ -45,6 +45,7 @@ export function makeCardDoc(
     policy_id: "QmFakePolicyCID",
     issuer_card: keccak256(new Uint8Array(issuerPub)),
     press_card: keccak256(new Uint8Array(pressPub)),
+    protocol_version: "0.1",
     issued_at: "2026-06-20T00:00:00Z",
     ancestry_pubkeys: ancestryPubkeys,
     ...extra,

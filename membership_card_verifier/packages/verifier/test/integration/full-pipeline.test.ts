@@ -91,7 +91,7 @@ describe("full pipeline integration", () => {
     const encAppDoc = encryptForCard(app.publicKey, new TextEncoder().encode(JSON.stringify(appCardDoc)));
 
     // Sign the envelope with the sub-card key
-    const payload = { message: "hello world", timestamp: "2026-06-20T00:00:00Z" };
+    const payload = { message: "hello world", protocol_version: "0.1", timestamp: "2026-06-20T00:00:00Z" };
     const canonical = canonicalize(payload);
     const sig = ml_dsa44.sign(canonical, sub.secretKey);
     const envelope: SignedMessageEnvelope = {
@@ -208,7 +208,7 @@ describe("full pipeline integration", () => {
     const encMasterDoc = encryptForCard(holder.publicKey, new TextEncoder().encode(JSON.stringify(masterDoc)));
     const encAppDoc = encryptForCard(app.publicKey, new TextEncoder().encode(JSON.stringify(appCardDoc)));
 
-    const payload = { message: "hello", timestamp: "2026-06-20T00:00:00Z" };
+    const payload = { message: "hello", protocol_version: "0.1", timestamp: "2026-06-20T00:00:00Z" };
     const sig = ml_dsa44.sign(canonicalize(payload), sub.secretKey);
     const envelope: SignedMessageEnvelope = {
       payload,

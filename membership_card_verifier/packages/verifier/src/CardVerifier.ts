@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { canonicalize } from "./canonicalize.js";
+import { PROTOCOL_VERSION_0_1 } from "./constants.js";
 import { keccak256 } from "./crypto.js";
 import { CardProtocolError } from "./errors.js";
 import { verifyStage1 } from "./stages/stage1.js";
@@ -8,6 +9,7 @@ import { verifyStage3 } from "./stages/stage3.js";
 import { verifyStage4 } from "./stages/stage4.js";
 import { verifyStage5 } from "./stages/stage5.js";
 import { verifyStage6 } from "./stages/stage6.js";
+import { extractProtocolVersion } from "./version.js";
 import type {
   VerifierConfig,
   SignedMessageEnvelope,
@@ -63,9 +65,44 @@ export class CardVerifier {
   async verifyEnvelope(
     envelope: SignedMessageEnvelope
   ): Promise<EnvelopeVerificationResult> {
+    const verified_at = new Date().toISOString();
+
+    let protocol_version: string;
+    try {
+      protocol_version = extractProtocolVersion(envelope.payload);
+    } catch (e) {
+      if (e instanceof CardProtocolError) {
+        const raw = envelope.payload.protocol_version;
+        const ver = typeof raw === "string" ? raw : "unknown";
+        return {
+          envelope_id: "",
+          verified_at,
+          protocol_version: ver,
+          signatures: [{
+            signer_card: "",
+            signature_valid: false,
+            scope_clean: "skipped",
+            chain_reaches_trusted_root: "skipped",
+            app_card_chain_valid: "skipped",
+            revocation: { status: "unknown", code: null, effective_date: null, data_freshness_seconds: 0 },
+            was_valid_at_signing_time: "skipped",
+            is_currently_valid: "skipped",
+            log_updates: [],
+            policy_compliant: "skipped",
+            policy_match: null,
+            press_subsequently_revoked: false,
+            non_compliance_reported: false,
+            addressed_to_verifier: false,
+            errors: [{ stage: 1, code: e.code, message: e.message }],
+            annotations: [],
+          }],
+        };
+      }
+      throw e;
+    }
+
     const canonicalEnvelope = canonicalize(envelope);
     const envelope_id = createHash("sha256").update(canonicalEnvelope).digest("hex");
-    const verified_at = new Date().toISOString();
 
     const signatures = await Promise.all(
       envelope.signatures.map((entry) =>
@@ -73,7 +110,7 @@ export class CardVerifier {
       )
     );
 
-    return { envelope_id, verified_at, signatures };
+    return { envelope_id, verified_at, protocol_version, signatures };
   }
 
   async verifyCard(
@@ -126,6 +163,7 @@ export class CardVerifier {
     return {
       signer_card: cardAddress,
       signature_valid: null,
+      protocol_version: PROTOCOL_VERSION_0_1,
       scope_clean: "skipped",
       chain_reaches_trusted_root: isTrustedRoot,
       app_card_chain_valid: "skipped",
@@ -311,6 +349,7 @@ export class CardVerifier {
     return {
       signer_card: cardAddress,
       signature_valid: null,
+      protocol_version: PROTOCOL_VERSION_0_1,
       scope_clean: "skipped",
       chain_reaches_trusted_root: "skipped",
       app_card_chain_valid: "skipped",

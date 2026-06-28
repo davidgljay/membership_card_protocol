@@ -21,6 +21,17 @@
 //!       --message '<canonical_json>' \
 //!       --signature 0x<128-hex r||s>
 //!     → prints "true" or "false"
+//!
+//! Protocol version requirement (v0.1):
+//!   All message payloads passed to this tool must include
+//!   `"protocol_version": "0.1"` as a field. The canonical JSON
+//!   (RFC 8785) places this field between "message" and "timestamp"
+//!   due to lexicographic key ordering:
+//!
+//!     {"message":"...","protocol_version":"0.1","timestamp":"..."}
+//!
+//!   Payloads that omit this field will be rejected by the TypeScript
+//!   verifier with error code MISSING_PROTOCOL_VERSION.
 
 use p256::ecdsa::{
     signature::hazmat::{PrehashSigner, PrehashVerifier},

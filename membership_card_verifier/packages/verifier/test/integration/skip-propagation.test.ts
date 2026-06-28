@@ -11,7 +11,7 @@ import type { RpcProvider, IpfsProvider, SignedMessageEnvelope, SubCardEntry } f
 const DUMMY_APP_CERT_ROOT = "0x" + "d".repeat(64);
 
 function makeEnvelope(publicKey: Uint8Array, secretKey: Uint8Array): SignedMessageEnvelope {
-  const payload = { message: "test", timestamp: "2026-06-20T00:00:00Z" };
+  const payload = { message: "test", protocol_version: "0.1", timestamp: "2026-06-20T00:00:00Z" };
   const sig = ml_dsa44.sign(canonicalize(payload), secretKey);
   return {
     payload,
