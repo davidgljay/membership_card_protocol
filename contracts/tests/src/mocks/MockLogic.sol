@@ -931,4 +931,37 @@ contract MockLogic {
     {
         return storageContract.get_domain_entry(_domainHash(domain));
     }
+
+    // ── §4.17 SetProtocolVersion / GetProtocolVersion ─────────────────────────
+
+    event ProtocolVersionUpdated(string old_version, string new_version, uint64 timestamp);
+
+    string internal _protocolVersion;
+
+    /// Returns the current protocol version string, defaulting to "0.1" when not
+    /// explicitly set (matches logic contract behaviour for pre-§4.17 deployments).
+    function get_protocol_version() external view returns (string memory) {
+        bytes memory b = bytes(_protocolVersion);
+        if (b.length == 0) return "0.1";
+        return _protocolVersion;
+    }
+
+    /// §4.17 SetProtocolVersion (RootPolicyBody quorum required).
+    function set_protocol_version(
+        string calldata new_version,
+        bytes32 payload_hash,
+        bytes32 nonce_key,
+        uint32 payload_version,
+        bytes[] calldata governance_sigs
+    ) external {
+        if (bytes(new_version).length == 0) revert InvalidPayload();
+
+        string memory old_version = bytes(_protocolVersion).length == 0 ? "0.1" : _protocolVersion;
+
+        _verifyGovernanceQuorum(ROOT_POLICY_BODY, payload_hash, nonce_key, payload_version, governance_sigs);
+
+        _protocolVersion = new_version;
+
+        emit ProtocolVersionUpdated(old_version, new_version, uint64(block.timestamp));
+    }
 }

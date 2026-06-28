@@ -47,7 +47,7 @@ use stylus_sdk::{
     evm,
     msg,
     prelude::*,
-    storage::{StorageAddress, StorageBool, StorageU64, StorageU8, StorageU32, StorageFixedBytes},
+    storage::{StorageAddress, StorageBool, StorageString, StorageU64, StorageU8, StorageU32, StorageFixedBytes},
 };
 
 pub mod write_gate;
@@ -373,6 +373,12 @@ stylus_sdk::alloy_sol_types::sol! {
         bytes32 indexed new_address,
         uint64 timestamp
     );
+
+    event ProtocolVersionUpdated(
+        string old_version,
+        string new_version,
+        uint64 timestamp
+    );
 }
 
 // ─── Error selectors ─────────────────────────────────────────────────────────
@@ -465,6 +471,13 @@ pub struct LogicContract {
     pub pending_verifier_proposed_at: StorageU64,
     pub pending_verifier_governance_version: StorageU32,
     pub pending_verifier_nonce: StorageB256,
+
+    /// Current protocol version string (e.g. "0.1").
+    ///
+    /// Empty string means the contract was deployed before this field existed;
+    /// get_protocol_version() returns the hardcoded default "0.1" in that case.
+    /// Updated via SetProtocolVersion (RootPolicyBody quorum, §4.17).
+    pub protocol_version: StorageString,
 }
 
 // ─── StorageB256 (needed in logic contract storage) ──────────────────────────
@@ -541,6 +554,32 @@ impl LogicContract {
     /// This is the read path for the verifier address (§5 — GetVerifierModule).
     pub fn get_verifier_module(&self) -> Result<Address, Vec<u8>> {
         Ok(self.verifier_module.get())
+    }
+
+    /// Get the current protocol version string (e.g. "0.1").
+    ///
+    /// Returns the value stored by SetProtocolVersion, or "0.1" if no version has
+    /// been explicitly set (empty storage slot — contracts deployed before §4.17
+    /// was added are treated as v0.1).
+    pub fn get_protocol_version(&self) -> Result<alloc::string::String, Vec<u8>> {
+        let stored = self.protocol_version.get_string();
+        if stored.is_empty() {
+            Ok(alloc::string::String::from("0.1"))
+        } else {
+            Ok(stored)
+        }
+    }
+
+    /// §4.17 SetProtocolVersion — Update the protocol version string.
+    ///
+    /// Requires RootPolicyBody quorum. Emits ProtocolVersionUpdated.
+    pub fn set_protocol_version(
+        &mut self,
+        new_version: alloc::string::String,
+        governance_payload: Vec<u8>,
+        governance_sigs: Vec<Vec<u8>>,
+    ) -> Result<(), Vec<u8>> {
+        governance_ops::set_protocol_version(self, new_version, governance_payload, governance_sigs)
     }
 
     // ════════════════════════════════════════════════════════════════════════

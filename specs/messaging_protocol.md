@@ -23,15 +23,16 @@ A card's **registry address** (its mutable pointer hash in the Arbitrum One card
 ```json
 {
   "payload": {
-    "type":         "<message type — see taxonomy below>",
-    "content":      { ... },
-    "recipients":   ["<card hash — on-chain registry address>", ...],
-    "senders":      ["<card hash — on-chain registry address>", ...],
-    "timestamp":    "<ISO 8601>",
-    "in_reply_to":  "<hash of prior payload>",
-    "edit_of":      "<hash of prior payload>",
-    "retracts":     "<hash of prior payload>",
-    "forwards":     "<hash of the original payload being forwarded — set only on a ForwardPackage forward_envelope>"
+    "type":              "<message type — see taxonomy below>",
+    "content":           { ... },
+    "edit_of":           "<hash of prior payload>",
+    "forwards":          "<hash of the original payload being forwarded — set only on a ForwardPackage forward_envelope>",
+    "in_reply_to":       "<hash of prior payload>",
+    "protocol_version":  "<string — current protocol version, e.g. '0.1'; read from the logic contract via getProtocolVersion()>",
+    "recipients":        ["<card hash — on-chain registry address>", ...],
+    "retracts":          "<hash of prior payload>",
+    "senders":           ["<card hash — on-chain registry address>", ...],
+    "timestamp":         "<ISO 8601>"
   },
   "signatures": [
     {
@@ -42,7 +43,11 @@ A card's **registry address** (its mutable pointer hash in the Arbitrum One card
 }
 ```
 
+> **RFC 8785 field ordering note:** The payload fields above are listed in their canonical lexicographic order. `protocol_version` sorts between `in_reply_to` (`in_r` < `proto`) and `recipients` (`proto` < `r`). `edit_of`, `retracts`, and `forwards` are optional; when absent they are omitted from the document (not set to `null`). Signing tools do not need to insert fields in this order — the RFC 8785 canonicalizer re-sorts automatically.
+
 `edit_of`, `retracts`, and `forwards` are mutually exclusive (`in_reply_to` may accompany any of them). `forwards` is set only on the `forward_envelope` of a `ForwardPackage` (see `protocol-objects.md §5.1` and `process_specs/card_signing.md`). `type` is inside the payload and therefore covered by the signature — a recipient cannot be tricked about what kind of message they received. The hash of the canonical payload is the message ID; there is no separate `id` field. Each entry in `signatures` carries only `public_key` and `signature`; the signer's card hash is derived as `keccak256(public_key)` and is not stored in the entry.
+
+`protocol_version` is required on every message payload. Senders populate it by calling `getProtocolVersion()` on the logic contract (or using the last known value, which is stable between protocol upgrades). Verifiers reject envelopes whose `protocol_version` is missing or not in their known-versions list.
 
 `senders` lists the card hashes of the cards whose identity is being asserted by this message, parallel to the `signatures` array. A signer sub-card maps to exactly one sender master card. For most message types the sender list has one entry; co-signed messages may have several.
 

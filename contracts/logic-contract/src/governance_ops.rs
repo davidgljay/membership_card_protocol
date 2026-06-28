@@ -29,6 +29,8 @@ use stylus_sdk::{
     evm,
 };
 
+use alloc::string::String;
+
 use crate::{
     errors,
     IStorage,
@@ -418,6 +420,54 @@ pub fn rotate_governance_keys(
         new_quorum,
         key_count: new_key_count,
         version: new_version,
+        timestamp: ts,
+    });
+
+    Ok(())
+}
+
+// ─── §4.17 SetProtocolVersion ────────────────────────────────────────────────
+
+/// Update the protocol version string (RootPolicyBody quorum required).
+///
+/// Preconditions (§4.17):
+/// 1. new_version must be non-empty.
+/// 2. Quorum signature check (§6.2, RootPolicyBody).
+///
+/// The new version takes effect immediately. Presses and message senders
+/// should call getProtocolVersion() before assembling each artifact to pick
+/// up the new value. Verifiers continue to accept all versions in their
+/// KNOWN_PROTOCOL_VERSIONS list until a logic upgrade removes old entries.
+pub fn set_protocol_version(
+    contract: &mut LogicContract,
+    new_version: String,
+    governance_payload: Vec<u8>,
+    governance_sigs: Vec<Vec<u8>>,
+) -> Result<(), Vec<u8>> {
+    if new_version.is_empty() {
+        return Err(errors::make_error(errors::INVALID_PAYLOAD));
+    }
+
+    // Capture old version before mutation for the event.
+    let old_version = {
+        let stored = contract.protocol_version.get_string();
+        if stored.is_empty() {
+            String::from("0.1")
+        } else {
+            stored
+        }
+    };
+
+    // Quorum verification (marks nonce as used).
+    verify_governance_quorum(contract, ROOT_POLICY_BODY, &governance_payload, &governance_sigs)?;
+
+    // Write the new protocol version.
+    contract.protocol_version.set_str(&new_version);
+
+    let ts = current_timestamp();
+    evm::log(crate::ProtocolVersionUpdated {
+        old_version,
+        new_version,
         timestamp: ts,
     });
 
