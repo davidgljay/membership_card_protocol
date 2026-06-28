@@ -59,11 +59,6 @@ The genesis document of a card. Every card — including policy cards, press sub
 
 ```json
 {
-  "policy_id":        "<base64url — CID of the governing policy card>",
-  "issuer_card":      "<base64url — mutable pointer in registry of the offerer (issuer) who constructed the offer>",
-  "press_card":      "<base64url — mutable pointer in registry of the press sub-card that validated and registered this card>",
-  "recipient_pubkey": "<base64url — recipient's ML-DSA-44 public key, 1312 bytes raw>",
-  "issued_at":        "<ISO 8601 timestamp>",
   "ancestry_pubkeys": [
     "<base64url — ML-DSA-44 public key of the immediate parent (issuer card), 1312 bytes raw>",
     "<base64url — ML-DSA-44 public key of the next ancestor up the issuer chain>",
@@ -72,6 +67,10 @@ The genesis document of a card. Every card — including policy cards, press sub
     "<base64url — ML-DSA-44 public key of the press card's issuer (policy card holder), if applicable>",
     "..."
   ],
+  "holder_signature":  "<base64url — holder's ML-DSA-44 countersignature over the offer including recipient_pubkey (excludes holder_signature, press_signature)>",
+  "issued_at":         "<ISO 8601 timestamp>",
+  "issuer_card":       "<base64url — mutable pointer in registry of the offerer (issuer) who constructed the offer>",
+  "issuer_signature":  "<base64url — offerer's ML-DSA-44 signature over canonical RFC 8785 JSON of the offer (excludes recipient_pubkey, holder_signature, press_signature)>",
   "past_keys": [
     {
       "pubkey":      "<base64url — ML-DSA-44 public key that was previously the recipient_pubkey, 1312 bytes raw>",
@@ -79,19 +78,24 @@ The genesis document of a card. Every card — including policy cards, press sub
       "rotated_at":  "<ISO 8601 — timestamp at which this key was superseded by the next key in the chain>"
     }
   ],
-  "issuer_signature": "<base64url — offerer's ML-DSA-44 signature over canonical RFC 8785 JSON of the offer (excludes recipient_pubkey, holder_signature, press_signature)>",
-  "holder_signature": "<base64url — holder's ML-DSA-44 countersignature over the offer including recipient_pubkey (excludes holder_signature, press_signature)>",
-  "press_signature":  "<base64url — press's ML-DSA-44 signature over the complete countersigned document (excludes press_signature), applied last after validation>",
+  "policy_id":         "<base64url — CID of the governing policy card>",
+  "press_card":        "<base64url — mutable pointer in registry of the press sub-card that validated and registered this card>",
+  "press_signature":   "<base64url — press's ML-DSA-44 signature over the complete countersigned document (excludes press_signature), applied last after validation>",
+  "protocol_version":  "<string — protocol version in force at issuance, e.g. '0.1'; read from the logic contract via getProtocolVersion()>",
+  "recipient_pubkey":  "<base64url — recipient's ML-DSA-44 public key, 1312 bytes raw>",
 
   "<policy-defined fields>": "..."
 }
 ```
+
+> **RFC 8785 field ordering note:** The JSON example above lists fields in their RFC 8785 canonical order (lexicographic by Unicode code point). The `protocol_version` field sorts between `press_signature` (`press_s` < `proto`) and `recipient_pubkey` (`proto` < `r`). Signing tools that construct the object and then canonicalize it do not need to insert fields in this order — RFC 8785 re-sorts regardless of construction order.
 
 | Field | Type | Required | Mutable | Notes |
 |---|---|---|---|---|
 | `policy_id` | `cid` | Yes | No | Pinned to the policy at time of issuance |
 | `issuer_card` | `card-pointer` | Yes | No | The offerer who constructed and first-signed the offer; used to evaluate `requester_predicate` and verify `issuer_signature` |
 | `press_card` | `card-pointer` | Yes | No | Identifies the press that validated and registered the card; used to walk the authorization chain |
+| `protocol_version` | `string` | Yes | No | Protocol version string in force at the time of issuance (e.g. `"0.1"`). Set by the press: the press reads `getProtocolVersion()` from the logic contract and includes the returned value in the assembled card document. Covered by all three signatures. Verifiers reject cards whose `protocol_version` is not in their known-versions list. |
 | `recipient_pubkey` | `base64url` | Yes | No | Added by holder before countersigning; empty in the offer phase |
 | `issued_at` | `timestamp` | Yes | No | Set by the offerer at offer construction |
 | `ancestry_pubkeys` | `array of base64url` | Yes | No | Ordered array of ML-DSA-44 public keys (1312 bytes each, base64url) for every ancestor card a verifier must resolve to walk this card's chain to a trusted root. Ordered from immediate parent (the issuer card's public key) up toward the root, covering the issuer chain and the press/policy chain as applicable. Set at issuance; covered by all three signatures. **Root base case:** a card whose own address is a registered trusted root (present in the on-chain `PolicyAuthorizerKeys` table) carries `ancestry_pubkeys: []` — the empty array. `[]` is a legal, signed value; omission of the field is a schema violation. A card whose immediate parent is a registered trusted root likewise carries `[]` (the parent is already the termination point). **This field is always present.** This is an **untrusted hint**: the verifier MUST confirm `keccak256(entry_pubkey)` equals the on-chain address it is resolving for each entry; a wrong or forged pubkey yields an address mismatch or an undecryptable ciphertext and MUST be rejected. Per-link on-chain addresses remain authoritative. |
@@ -103,11 +107,11 @@ The genesis document of a card. Every card — including policy cards, press sub
 | `supersession_note` | `text` | No | No | Human-readable explanation of why this card supersedes the one pointed to by `supersedes`. Present only when `supersedes` is set. |
 
 **Signing sequence (three parties, fixed order):**
-1. The **offerer's wallet service** assembles the document with all policy-defined fields, `issuer_card`, `press_card`, `issued_at`, `ancestry_pubkeys` (the ordered array of ancestor ML-DSA-44 public keys, from immediate parent toward root), and `past_keys` if applicable (present and oldest-first when this card is the product of a master key rotation; omitted otherwise), leaving `recipient_pubkey`, `holder_signature`, and `press_signature` absent.
-2. The offerer signs canonical RFC 8785 JSON of that offer with the offerer's card key → `issuer_signature`. `ancestry_pubkeys` and `past_keys` (if present) are covered by this signature. `recipient_pubkey` is excluded (not yet present).
-3. The offer is presented to the recipient, who reviews, generates a fresh ML-DSA-44 keypair, adds `recipient_pubkey`, and signs canonical RFC 8785 JSON of the offer-plus-pubkey → `holder_signature`. `ancestry_pubkeys` and `past_keys` (if present) are covered by this signature.
+1. The **offerer's wallet service** assembles the document with all policy-defined fields, `issuer_card`, `press_card`, `issued_at`, `ancestry_pubkeys` (the ordered array of ancestor ML-DSA-44 public keys, from immediate parent toward root), and `past_keys` if applicable (present and oldest-first when this card is the product of a master key rotation; omitted otherwise), leaving `recipient_pubkey`, `holder_signature`, `press_signature`, and `protocol_version` absent. (`protocol_version` is added by the press in step 5 — the offerer does not know which version the press will attest to.)
+2. The offerer signs canonical RFC 8785 JSON of that offer with the offerer's card key → `issuer_signature`. `ancestry_pubkeys` and `past_keys` (if present) are covered by this signature. `recipient_pubkey` and `protocol_version` are excluded (not yet present).
+3. The offer is presented to the recipient, who reviews, generates a fresh ML-DSA-44 keypair, adds `recipient_pubkey`, and signs canonical RFC 8785 JSON of the offer-plus-pubkey → `holder_signature`. `ancestry_pubkeys` and `past_keys` (if present) are covered by this signature. `protocol_version` is excluded (not yet present).
 4. The offerer validates the countersigned result (confirms the recipient countersigned the intended offer).
-5. The countersigned card is sent to the **press**, which validates policy compliance, signs canonical RFC 8785 JSON of the complete document with its press sub-card key → `press_signature`, posts it to IPFS encrypted under the ADR-006 content key, and registers it on-chain. `ancestry_pubkeys` and `past_keys` (if present) are covered by this signature.
+5. The countersigned card is sent to the **press**, which calls `getProtocolVersion()` on the logic contract to obtain the current protocol version string, adds `protocol_version` to the document, validates policy compliance, signs canonical RFC 8785 JSON of the complete document (including `protocol_version`) with its press sub-card key → `press_signature`, posts it to IPFS encrypted under the ADR-006 content key, and registers it on-chain. `ancestry_pubkeys`, `past_keys` (if present), and `protocol_version` are all covered by `press_signature`.
 
 **Content encryption and the offer phase.** ADR-006 content encryption (`content_key = HKDF-SHA3-256(recipient_pubkey, info="card-content-v1")`, AES-256-GCM) applies only to the **registered** card document the press posts in step 5. The offer-phase document assembled in steps 1–2 (without `recipient_pubkey`, `holder_signature`, or `press_signature`) has no `recipient_pubkey` yet, so the content key is undefined for it. Offer-phase `CardDocument`s are **not** content-encrypted under this scheme. They are conveyed to the prospective recipient either in the clear within the invite payload (e.g. a `mcard://invite` URL) or protected only by the transport / E2E message encryption used to deliver the `card_offer` message (ML-KEM per ADR-007). The distinction is important: the ADR-007 E2E transport encryption that protects the `card_offer` message in transit is separate from the ADR-006 at-rest content encryption that protects the registered card on IPFS. Content encryption begins only at step 5.
 
