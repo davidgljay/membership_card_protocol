@@ -66,13 +66,14 @@ export interface CardDocument {
   policy_id: string;
   issuer_card: string;
   press_card: string;
+  press_signature: string;
+  protocol_version: string;
   recipient_pubkey: string;
   issued_at: string;
   ancestry_pubkeys: string[];
   past_keys?: PastKey[];
   issuer_signature: string;
   holder_signature: string;
-  press_signature: string;
   [key: string]: unknown;
 }
 
@@ -117,6 +118,7 @@ export interface VerifierConfig {
 export interface SignedMessageEnvelope {
   payload: {
     message: string;
+    protocol_version: string;
     timestamp: string;
     [key: string]: unknown;
   };
@@ -138,6 +140,7 @@ export interface VerifyCardOptions {
 export interface EnvelopeVerificationResult {
   envelope_id: string;
   verified_at: string;
+  protocol_version: string;
   signatures: SignatureVerificationResult[];
 }
 
@@ -163,6 +166,7 @@ export interface SignatureVerificationResult {
 export interface CardVerificationResult
   extends Omit<SignatureVerificationResult, "signature_valid"> {
   signature_valid: null;
+  protocol_version: string;
 }
 
 export interface RevocationStatus {
