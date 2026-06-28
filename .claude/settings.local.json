@@ -14,7 +14,8 @@
       "Bash(pnpm add *)",
       "Bash(pnpm -r test)",
       "Bash(npm run *)",
-      "Bash(grep -n \"pub use\\\\|sol_interface\\\\|sol!\" /Users/davidjay/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stylus-proc-0.8.4/src/lib.rs 2>/dev/null | head -20)"
+      "Bash(grep -n \"pub use\\\\|sol_interface\\\\|sol!\" /Users/davidjay/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stylus-proc-0.8.4/src/lib.rs 2>/dev/null | head -20)",
+      "Bash(pnpm -r typecheck)"
     ]
   }
 }

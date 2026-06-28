@@ -114,38 +114,72 @@ cargo run --manifest-path scripts/Cargo.toml --bin gen_test_vectors
 # Writes scripts/test_vectors.json
 ```
 
+## Phase 4 Migration Note (DNS Resolution)
+
+Phase 4 adds DNS resolution tables to the storage contract:
+`DomainRegistrations`, `PolicyAddresses`, `DnsAdminCardKeys`, `DnsGovernancePolicyAddress`.
+
+**The storage contract must be redeployed** — new storage mappings require new contract bytecode;
+Stylus contracts cannot add storage slots via logic upgrades. The storage contract address changes,
+which is a protocol migration. The prior Sepolia deployment (testnet) is superseded; any state from
+the prior deployment is abandoned. Mainnet has not yet been deployed, so no migration is needed there.
+
+The `DnsGovernanceBody` (body_id=2) governance keyset is bootstrapped alongside `RootPolicyBody`
+and `PressRegistryBody` in `storage.initialize()`. No separate initialization call is needed for
+the DNS governance body itself.
+
 ## Post-Deployment Bootstrap Sequence
 
 After `initialize()` calls, the protocol is in a 1-of-1 governance state with the
-deployer's secp256r1 key controlling both governance bodies. This is a temporary
+deployer's secp256r1 key controlling all three governance bodies. This is a temporary
 state and must be transitioned as soon as possible.
 
 **Recommended bootstrap order:**
 
-1. **RegisterPolicy**: Register the first policy (e.g., the organization's policy).
-2. **AuthorizePress**: Authorize the first press under that policy.
-3. **RotateGovernanceKeys** (RootPolicyBody): Expand from 1-of-1 to multi-sig
+1. **RegisterPolicy** (RootPolicyBody quorum): Register the organization's main policy.
+2. **AuthorizePress** (PressRegistryBody quorum): Authorize the first press under that policy.
+3. **DNS bootstrap** — run `./contracts/scripts/setup_dns.sh`:
+   - **RegisterPolicy** (RootPolicyBody quorum): Register the DNS governance policy.
+   - **AuthorizePress** (PressRegistryBody quorum): Authorize a press under the DNS policy.
+   - **SetDnsGovernancePolicyAddress** (DnsGovernanceBody quorum): Wire the DNS policy into storage.
+4. **RotateGovernanceKeys** (RootPolicyBody): Expand from 1-of-1 to multi-sig
    (minimum 3 keys, majority quorum). This is the most critical step — the 1-of-1
    bootstrap key is a single point of failure.
-4. **RotateGovernanceKeys** (PressRegistryBody): Expand press registry governance.
-5. Confirm the bootstrap key is safely stored or destroyed.
+5. **RotateGovernanceKeys** (PressRegistryBody): Expand press registry governance.
+6. **RotateGovernanceKeys** (DnsGovernanceBody): Add board member keys; add dedicated script key.
+7. Confirm the bootstrap key is safely stored or destroyed.
+
+**DNS end-to-end verification** — after step 3, run `./contracts/scripts/test_dns.sh` to verify
+RegisterDomain → SetPolicyAddress → LookupPolicyAddress → RemovePolicyAddress.
 
 ## Deployed Addresses
 
-### Arbitrum Sepolia (Testnet)
+### Arbitrum Sepolia (Testnet) — Phase 4 (DNS)
 
-_Not yet deployed. Update this section after first testnet deployment._
+_Update after running `./contracts/scripts/deploy.sh sepolia` for Phase 4._
+_See `deployments/sepolia.json` for the current deployment record._
 
 ```json
 {
   "network": "arbitrum_sepolia",
   "contracts": {
-    "verifier_module": "0x...",
-    "storage_contract": "0x...",
-    "logic_contract": "0x..."
+    "verifier_module": "0xdf4c20783a1c88f47363adbcf654a12f35d77d3e",
+    "storage_contract": "0x... (Phase 4 — update after deployment)",
+    "logic_contract":   "0x... (Phase 4 — update after deployment)"
   }
 }
 ```
+
+**Superseded Sepolia deployments (pre-Phase-4):**
+
+| Deployment | Storage | Logic | Notes |
+|---|---|---|---|
+| 2026-06-23 | `0xe497b4ba...` | `0xa1711fc1...` | DNS tables not included; superseded |
+| 2026-06-22 | `0x9272a512...` | `0xd73116bd...` | ABI selector fix; pre-DNS |
+| 2026-06-22 | `0x9272a512...` | `0xc6bf998e...` | Original broken sol_interface! selectors |
+
+The verifier module (`0xdf4c2078...`) is NOT redeployed — it has no state and does
+not need new DNS-specific logic.
 
 ### Arbitrum One (Mainnet)
 
