@@ -1,7 +1,7 @@
 # Implementation Plan: Verifier-Side app_card Chain Walk
 
 **Date:** 2026-06-28  
-**Status:** Draft  
+**Status:** Complete  
 **Strategic plan:** `plans/app-card-chain-walk-strategic-plan.md`
 
 ---
@@ -43,9 +43,9 @@ Phases 1 and 2 (governance + spec) are independent of Phase 3 (types). Phase 4 (
 
 ---
 
-## Phase 1 — Governance Documentation
+## Phase 1 — Governance Documentation ✅
 
-### Step 1.1 — Write `governance/app_certification_body.md`
+### Step 1.1 — Write `governance/app_certification_body.md` ✅
 
 **What:**  
 Create the directory and file if they don't exist. The document must cover four elements:
@@ -87,9 +87,9 @@ Create the directory and file if they don't exist. The document must cover four 
 
 ---
 
-## Phase 2 — Spec Updates
+## Phase 2 — Spec Updates ✅
 
-### Step 2.1 — Update `specs/protocol-objects.md §16`
+### Step 2.1 — Update `specs/protocol-objects.md §16` ✅
 
 **Remove** the entire paragraph beginning with `**App-certification chain: press-side, not runtime.**` (the paragraph that says "Runtime verifiers do NOT independently walk the `app_card` chain").
 
@@ -123,7 +123,7 @@ the binding enforcement layer.
 
 ---
 
-### Step 2.2 — Update `specs/card_protocol_spec.md §7 Step 2`
+### Step 2.2 — Update `specs/card_protocol_spec.md §7 Step 2` ✅
 
 Locate the Step 2 verification stage description. Add an explicit sub-step after the existing binding checks and on-chain registration check:
 
@@ -142,7 +142,7 @@ Locate the Step 2 verification stage description. Add an explicit sub-step after
 
 ---
 
-### Step 2.3 — Update `specs/object_specs/press.md §5.4`
+### Step 2.3 — Update `specs/object_specs/press.md §5.4` ✅
 
 In the `processSubCardRegistration` function and `verifyAppCertificationChain` description, add a note that the press check is now an early gate, not the sole authority:
 
@@ -172,9 +172,9 @@ regardless.
 
 ---
 
-## Phase 3 — Type Changes
+## Phase 3 — Type Changes ✅
 
-### Step 3.1 — Update `src/types.ts`
+### Step 3.1 — Update `src/types.ts` ✅
 
 **Two changes:**
 
@@ -198,7 +198,7 @@ app_card_chain_valid: boolean | "skipped";
 
 ---
 
-### Step 3.2 — Error codes
+### Step 3.2 — Error codes ✅
 
 `CardProtocolError` accepts any string `code`, so no changes to `errors.ts` are needed. The two new codes are used inline:
 
@@ -209,9 +209,9 @@ Document both codes in comments at the point of use.
 
 ---
 
-## Phase 4 — Verifier Code Changes
+## Phase 4 — Verifier Code Changes ✅
 
-### Step 4.1 — Update `src/stages/stage2.ts`
+### Step 4.1 — Update `src/stages/stage2.ts` ✅
 
 **Update `Stage2Result`** to add:
 ```typescript
@@ -337,7 +337,7 @@ return {
 
 ---
 
-### Step 4.2 — Update `src/CardVerifier.ts`
+### Step 4.2 — Update `src/CardVerifier.ts` ✅
 
 **Constructor — add validation after the existing `ipfs` check:**
 ```typescript
@@ -397,9 +397,9 @@ app_card_chain_valid: "skipped",
 
 ---
 
-## Phase 5 — Tests
+## Phase 5 — Tests ✅
 
-### Step 5.1 — Add unit tests to `test/stages/stage2.test.ts`
+### Step 5.1 — Add unit tests to `test/stages/stage2.test.ts` ✅
 
 Read `test/stages/stage2.test.ts` and `test/fixtures.ts` first to understand the existing mock/fixture structure before adding cases.
 
@@ -427,7 +427,7 @@ Read `test/stages/stage2.test.ts` and `test/fixtures.ts` first to understand the
 
 ---
 
-### Step 5.2 — Update integration tests
+### Step 5.2 — Update integration tests ✅
 
 Read `test/integration/full-pipeline.test.ts` and `test/integration/verifier.test.ts` before editing.
 

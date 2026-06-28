@@ -102,6 +102,7 @@ export interface SubCardDocument {
 export interface VerifierConfig {
   rpc: RpcProvider;
   ipfs: IpfsProvider;
+  appCertificationRoot: string;
   trustedRoots?: string[];
   revocationFreshnessWindowSeconds?: number;
   rejectStaleRevocation?: boolean;
@@ -145,6 +146,7 @@ export interface SignatureVerificationResult {
   signature_valid: boolean | null;
   scope_clean: boolean | "skipped";
   chain_reaches_trusted_root: boolean | "skipped";
+  app_card_chain_valid: boolean | "skipped";
   revocation: RevocationStatus;
   was_valid_at_signing_time: boolean | "skipped";
   is_currently_valid: boolean | "skipped";

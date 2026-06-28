@@ -8,6 +8,8 @@ import { canonicalize } from "../../src/canonicalize.js";
 import { generateKeypair, encryptForCard, makeCardDoc, makeSubCardDoc } from "../fixtures.js";
 import type { RpcProvider, IpfsProvider, SignedMessageEnvelope, SubCardEntry } from "../../src/types.js";
 
+const DUMMY_APP_CERT_ROOT = "0x" + "d".repeat(64);
+
 function makeEnvelope(publicKey: Uint8Array, secretKey: Uint8Array): SignedMessageEnvelope {
   const payload = { message: "test", timestamp: "2026-06-20T00:00:00Z" };
   const sig = ml_dsa44.sign(canonicalize(payload), secretKey);
@@ -47,7 +49,7 @@ describe("hard rejection skip propagation", () => {
   it("stage2 card not found → stages 3–5 are skipped", async () => {
     const sub = generateKeypair();
     const rpc = mockRpc({ getCardEntry: vi.fn().mockResolvedValue(null) });
-    const verifier = new CardVerifier({ rpc, ipfs: mockIpfs() });
+    const verifier = new CardVerifier({ rpc, ipfs: mockIpfs(), appCertificationRoot: DUMMY_APP_CERT_ROOT });
     const result = await verifier.verifyEnvelope(makeEnvelope(sub.publicKey, sub.secretKey));
     const r = result.signatures[0]!;
     expect(r.scope_clean).toBe(false);
@@ -64,7 +66,7 @@ describe("hard rejection skip propagation", () => {
     });
     // Provide garbage bytes that will fail AES-GCM auth
     const ipfs = mockIpfs({ QmSub: new Uint8Array(40).fill(0xaa) });
-    const verifier = new CardVerifier({ rpc, ipfs });
+    const verifier = new CardVerifier({ rpc, ipfs, appCertificationRoot: DUMMY_APP_CERT_ROOT });
     const result = await verifier.verifyEnvelope(makeEnvelope(sub.publicKey, sub.secretKey));
     const r = result.signatures[0]!;
     expect(r.scope_clean).toBe(false);
@@ -78,12 +80,13 @@ describe("hard rejection skip propagation", () => {
     const sub = generateKeypair();
     const holder = generateKeypair();
     const app = generateKeypair();
+    const appCertRoot = generateKeypair();
     const issuer = generateKeypair();
     const press = generateKeypair();
     const fakeAncestor = generateKeypair();
 
     const subDoc = makeSubCardDoc(holder.publicKey, holder.secretKey, app.publicKey, app.secretKey, sub.publicKey);
-    // Master card has ancestry_pubkeys pointing to fakeAncestor (which points to itself)
+    // Master card has ancestry_pubkeys pointing to fakeAncestor (which points to itself — causes depth exceeded in stage 3)
     const masterDoc = makeCardDoc(
       holder.publicKey, issuer.secretKey, holder.secretKey, press.secretKey,
       [Buffer.from(fakeAncestor.publicKey).toString("base64url")]
@@ -92,10 +95,13 @@ describe("hard rejection skip propagation", () => {
       fakeAncestor.publicKey, issuer.secretKey, fakeAncestor.secretKey, press.secretKey,
       [Buffer.from(fakeAncestor.publicKey).toString("base64url")] // cycle
     );
+    // App card chains to appCertRoot (direct hop) — stage 2 must pass before stage 3 runs
+    const appCardDoc = makeCardDoc(app.publicKey, appCertRoot.secretKey, app.secretKey, press.secretKey, [Buffer.from(appCertRoot.publicKey).toString("base64url")]);
 
     const encSub = encryptForCard(sub.publicKey, new TextEncoder().encode(JSON.stringify(subDoc)));
     const encMaster = encryptForCard(holder.publicKey, new TextEncoder().encode(JSON.stringify(masterDoc)));
     const encAncestor = encryptForCard(fakeAncestor.publicKey, new TextEncoder().encode(JSON.stringify(ancestorDoc)));
+    const encApp = encryptForCard(app.publicKey, new TextEncoder().encode(JSON.stringify(appCardDoc)));
 
     const subEntry: SubCardEntry = { master_card_address: holder.address, registration_log_head: "0x", sub_card_doc_cid: "QmSub", active: true, registered_at: "2026-01-01T00:00:00Z", deregistered_at: null };
 
@@ -103,14 +109,15 @@ describe("hard rejection skip propagation", () => {
       getCardEntry: vi.fn().mockImplementation((addr: string) => {
         if (addr === sub.address) return Promise.resolve({ exists: true, log_head_cid: "QmSub", policy_address: "0x", last_press_address: "0x", forward_to: null });
         if (addr === holder.address) return Promise.resolve({ exists: true, log_head_cid: "QmMaster", policy_address: "0x", last_press_address: "0x", forward_to: null });
+        if (addr === app.address) return Promise.resolve({ exists: true, log_head_cid: "QmApp", policy_address: "0x", last_press_address: "0x", forward_to: null });
         return Promise.resolve({ exists: true, log_head_cid: "QmAncestor", policy_address: "0x", last_press_address: "0x", forward_to: null });
       }),
       getSubCardEntry: vi.fn().mockResolvedValue(subEntry),
       isPolicyAuthorizer: vi.fn().mockResolvedValue(false),
     });
-    const ipfs = mockIpfs({ QmSub: encSub, QmMaster: encMaster, QmAncestor: encAncestor });
+    const ipfs = mockIpfs({ QmSub: encSub, QmMaster: encMaster, QmAncestor: encAncestor, QmApp: encApp });
 
-    const verifier = new CardVerifier({ rpc, ipfs, maxChainDepth: 2 });
+    const verifier = new CardVerifier({ rpc, ipfs, maxChainDepth: 2, appCertificationRoot: appCertRoot.address });
     const result = await verifier.verifyEnvelope(makeEnvelope(sub.publicKey, sub.secretKey));
     const r = result.signatures[0]!;
     // Stage 2 should pass (scope_clean: true)

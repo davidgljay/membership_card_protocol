@@ -6,6 +6,8 @@ import { canonicalize } from "../../src/canonicalize.js";
 import { generateKeypair, encryptForCard, makeCardDoc, makeSubCardDoc } from "../fixtures.js";
 import type { RpcProvider, IpfsProvider, SignedMessageEnvelope, SubCardEntry } from "../../src/types.js";
 
+const DUMMY_APP_CERT_ROOT = "0x" + "e".repeat(64);
+
 function mockRpc(overrides: Partial<RpcProvider> = {}): RpcProvider {
   return {
     getCardEntry: vi.fn().mockResolvedValue(null),
@@ -30,13 +32,13 @@ function mockIpfs(responses: Record<string, Uint8Array> = {}): IpfsProvider {
 describe("CardVerifier", () => {
   it("constructor rejects missing rpc", () => {
     expect(
-      () => new CardVerifier({ rpc: undefined as never, ipfs: mockIpfs() })
+      () => new CardVerifier({ rpc: undefined as never, ipfs: mockIpfs(), appCertificationRoot: DUMMY_APP_CERT_ROOT })
     ).toThrow(CardProtocolError);
   });
 
   it("constructor rejects missing ipfs", () => {
     expect(
-      () => new CardVerifier({ rpc: mockRpc(), ipfs: undefined as never })
+      () => new CardVerifier({ rpc: mockRpc(), ipfs: undefined as never, appCertificationRoot: DUMMY_APP_CERT_ROOT })
     ).toThrow(CardProtocolError);
   });
 
@@ -55,7 +57,7 @@ describe("CardVerifier", () => {
     const rpc = mockRpc({
       getCardEntry: vi.fn().mockResolvedValue(null), // card not found → scope_clean: false
     });
-    const verifier = new CardVerifier({ rpc, ipfs: mockIpfs() });
+    const verifier = new CardVerifier({ rpc, ipfs: mockIpfs(), appCertificationRoot: DUMMY_APP_CERT_ROOT });
 
     const r1 = await verifier.verifyEnvelope(envelope);
     const r2 = await verifier.verifyEnvelope(envelope);
@@ -83,7 +85,7 @@ describe("CardVerifier", () => {
     };
 
     const rpc = mockRpc({ getCardEntry: vi.fn().mockResolvedValue(null) });
-    const verifier = new CardVerifier({ rpc, ipfs: mockIpfs() });
+    const verifier = new CardVerifier({ rpc, ipfs: mockIpfs(), appCertificationRoot: DUMMY_APP_CERT_ROOT });
     const result = await verifier.verifyEnvelope(envelope);
     expect(result.signatures).toHaveLength(2);
     expect(result.signatures[0]?.signature_valid).toBe(true);
@@ -97,7 +99,7 @@ describe("CardVerifier", () => {
       isPolicyAuthorizer: vi.fn().mockResolvedValue(true),
       getLogEntries: vi.fn().mockResolvedValue([]),
     });
-    const verifier = new CardVerifier({ rpc, ipfs: mockIpfs() });
+    const verifier = new CardVerifier({ rpc, ipfs: mockIpfs(), appCertificationRoot: DUMMY_APP_CERT_ROOT });
     const result = await verifier.verifyCard(card.address);
     expect(result.signature_valid).toBeNull();
     expect(result.chain_reaches_trusted_root).toBe(true);
@@ -120,7 +122,7 @@ describe("CardVerifier", () => {
 
     // Card not found → hard rejection at stage 2
     const rpc = mockRpc({ getCardEntry: vi.fn().mockResolvedValue(null) });
-    const verifier = new CardVerifier({ rpc, ipfs: mockIpfs() });
+    const verifier = new CardVerifier({ rpc, ipfs: mockIpfs(), appCertificationRoot: DUMMY_APP_CERT_ROOT });
     const result = await verifier.verifyEnvelope(envelope);
     const sig = result.signatures[0]!;
     expect(sig.scope_clean).toBe(false);

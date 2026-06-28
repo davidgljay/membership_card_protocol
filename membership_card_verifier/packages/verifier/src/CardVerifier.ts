@@ -39,9 +39,16 @@ export class CardVerifier {
     if (!config.ipfs) {
       throw new CardProtocolError("MISSING_IPFS_PROVIDER", "VerifierConfig.ipfs is required");
     }
+    if (!config.appCertificationRoot) {
+      throw new CardProtocolError(
+        "APP_CERTIFICATION_ROOT_NOT_CONFIGURED",
+        "VerifierConfig.appCertificationRoot is required"
+      );
+    }
     this.config = {
       rpc: config.rpc,
       ipfs: config.ipfs,
+      appCertificationRoot: config.appCertificationRoot,
       trustedRoots: config.trustedRoots ?? DEFAULTS.trustedRoots,
       revocationFreshnessWindowSeconds:
         config.revocationFreshnessWindowSeconds ?? DEFAULTS.revocationFreshnessWindowSeconds,
@@ -121,6 +128,7 @@ export class CardVerifier {
       signature_valid: null,
       scope_clean: "skipped",
       chain_reaches_trusted_root: isTrustedRoot,
+      app_card_chain_valid: "skipped",
       revocation: stage4.revocation,
       was_valid_at_signing_time: stage4.was_valid_at_signing_time,
       is_currently_valid: stage4.is_currently_valid,
@@ -157,12 +165,15 @@ export class CardVerifier {
     const signerCard = keccak256(publicKeyBytes);
 
     // Stage 2
-    const stage2 = await verifyStage2(publicKeyBytes, this.config.rpc, this.config.ipfs);
+    const stage2 = await verifyStage2(publicKeyBytes, this.config.rpc, this.config.ipfs, {
+      appCertificationRoot: this.config.appCertificationRoot,
+      maxChainDepth: this.config.maxChainDepth,
+    });
     errors.push(...stage2.errors);
 
     if (stage2.scope_clean === false && !stage2.master_card_doc) {
       // Hard rejection: skip stages 3–5
-      return this.#buildResult(signerCard, signatureValid, stage2.scope_clean, "skipped", errors, {
+      return this.#buildResult(signerCard, signatureValid, stage2.scope_clean, "skipped", stage2.app_card_chain_valid, errors, {
         revocation: { status: "unknown", code: null, effective_date: null, data_freshness_seconds: 0 },
         was_valid_at_signing_time: "skipped",
         is_currently_valid: "skipped",
@@ -185,7 +196,7 @@ export class CardVerifier {
 
     if (stage3.chain_reaches_trusted_root === false && stage3.errors.some((e) => e.code === "DECRYPTION_FAILED" || e.code === "ADDRESS_BINDING_MISMATCH")) {
       // Hard rejection mid-chain: skip stages 4–5
-      return this.#buildResult(signerCard, signatureValid, stage2.scope_clean, stage3.chain_reaches_trusted_root, errors, {
+      return this.#buildResult(signerCard, signatureValid, stage2.scope_clean, stage3.chain_reaches_trusted_root, stage2.app_card_chain_valid, errors, {
         revocation: { status: "unknown", code: null, effective_date: null, data_freshness_seconds: 0 },
         was_valid_at_signing_time: "skipped",
         is_currently_valid: "skipped",
@@ -243,6 +254,7 @@ export class CardVerifier {
       signature_valid: signatureValid,
       scope_clean: stage2.scope_clean,
       chain_reaches_trusted_root: stage3.chain_reaches_trusted_root,
+      app_card_chain_valid: stage2.app_card_chain_valid,
       revocation: stage4.revocation,
       was_valid_at_signing_time: stage4.was_valid_at_signing_time,
       is_currently_valid: stage4.is_currently_valid,
@@ -262,6 +274,7 @@ export class CardVerifier {
     signatureValid: boolean,
     scopeClean: boolean | "skipped",
     chainReachesTrustedRoot: boolean | "skipped",
+    appCardChainValid: boolean | "skipped",
     errors: VerificationError[],
     overrides: {
       revocation: SignatureVerificationResult["revocation"];
@@ -276,6 +289,7 @@ export class CardVerifier {
       signature_valid: signatureValid,
       scope_clean: scopeClean,
       chain_reaches_trusted_root: chainReachesTrustedRoot,
+      app_card_chain_valid: appCardChainValid,
       revocation: overrides.revocation,
       was_valid_at_signing_time: overrides.was_valid_at_signing_time,
       is_currently_valid: overrides.is_currently_valid,
@@ -299,6 +313,7 @@ export class CardVerifier {
       signature_valid: null,
       scope_clean: "skipped",
       chain_reaches_trusted_root: "skipped",
+      app_card_chain_valid: "skipped",
       revocation: { status: "unknown", code: null, effective_date: null, data_freshness_seconds: 0 },
       was_valid_at_signing_time: "skipped",
       is_currently_valid: "skipped",

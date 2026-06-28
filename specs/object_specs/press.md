@@ -597,6 +597,8 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 
 **Note:** The press configures the verifier with the app-certification policy root as a trusted root for this check. The verifier's `isPolicyAuthorizer` RPC call is authoritative; no additional chain-walking logic is required.
 
+**Note:** The press's app certification check is an early gate — it prevents uncertified sub-cards from reaching the on-chain registry, providing fail-fast feedback before gas is spent. It is not the sole line of defense: runtime verifiers independently re-walk the `app_card` chain using their configured `appCertificationRoot`. A sub-card registered by a compromised press with an uncertified `app_card` will fail Stage 2 verification regardless.
+
 ---
 
 #### `registerSubCardOnChain(subCardAddress, masterCardAddress, registrationLogHead, subCardDocCid)`

@@ -7,6 +7,7 @@ import type {
   CardDocument,
   SubCardDocument,
   VerificationError,
+  VerifierConfig,
 } from "../types.js";
 
 export interface Stage2Result {
@@ -14,13 +15,15 @@ export interface Stage2Result {
   signer_card: string;
   master_card_doc?: CardDocument;
   master_card_pubkey?: Uint8Array;
+  app_card_chain_valid: boolean | "skipped";
   errors: VerificationError[];
 }
 
 export async function verifyStage2(
   publicKeyBytes: Uint8Array,
   rpc: RpcProvider,
-  ipfs: IpfsProvider
+  ipfs: IpfsProvider,
+  config: Pick<VerifierConfig, "appCertificationRoot" | "maxChainDepth">
 ): Promise<Stage2Result> {
   const errors: VerificationError[] = [];
   const signerCard = keccak256(publicKeyBytes);
@@ -29,7 +32,7 @@ export async function verifyStage2(
   const cardEntry = await rpc.getCardEntry(signerCard);
   if (!cardEntry || !cardEntry.exists) {
     errors.push({ stage: 2, code: "CARD_NOT_FOUND", message: `No card entry for ${signerCard}` });
-    return { scope_clean: false, signer_card: signerCard, errors };
+    return { scope_clean: false, signer_card: signerCard, app_card_chain_valid: false, errors };
   }
 
   // Step 3: derive leaf content key
@@ -44,7 +47,7 @@ export async function verifyStage2(
   } catch (e) {
     const code = e instanceof CardProtocolError ? e.code : "DECRYPTION_FAILED";
     errors.push({ stage: 2, code, message: String(e) });
-    return { scope_clean: false, signer_card: signerCard, errors };
+    return { scope_clean: false, signer_card: signerCard, app_card_chain_valid: false, errors };
   }
 
   // Step 5 & 6: binding checks on holder_primary_card and app_card
@@ -56,7 +59,7 @@ export async function verifyStage2(
       code: "ADDRESS_BINDING_MISMATCH",
       message: "keccak256(holder_primary_card_pubkey) does not match holder_primary_card pointer",
     });
-    return { scope_clean: false, signer_card: signerCard, errors };
+    return { scope_clean: false, signer_card: signerCard, app_card_chain_valid: false, errors };
   }
 
   const appPubkeyBytes = Buffer.from(subCardDoc.app_card_pubkey, "base64url");
@@ -67,7 +70,7 @@ export async function verifyStage2(
       code: "ADDRESS_BINDING_MISMATCH",
       message: "keccak256(app_card_pubkey) does not match app_card pointer",
     });
-    return { scope_clean: false, signer_card: signerCard, errors };
+    return { scope_clean: false, signer_card: signerCard, app_card_chain_valid: false, errors };
   }
 
   // Step 7: derive master card content key
@@ -77,7 +80,7 @@ export async function verifyStage2(
   const masterCardEntry = await rpc.getCardEntry(holderCardAddress);
   if (!masterCardEntry || !masterCardEntry.exists) {
     errors.push({ stage: 2, code: "CARD_NOT_FOUND", message: `Master card not found: ${holderCardAddress}` });
-    return { scope_clean: false, signer_card: signerCard, errors };
+    return { scope_clean: false, signer_card: signerCard, app_card_chain_valid: false, errors };
   }
 
   let masterCardDoc: CardDocument;
@@ -88,7 +91,7 @@ export async function verifyStage2(
   } catch (e) {
     const code = e instanceof CardProtocolError ? e.code : "DECRYPTION_FAILED";
     errors.push({ stage: 2, code, message: String(e) });
-    return { scope_clean: false, signer_card: signerCard, errors };
+    return { scope_clean: false, signer_card: signerCard, app_card_chain_valid: false, errors };
   }
 
   // Step 9: confirm sub-card appears in master's registrations (via on-chain SubCardEntry)
@@ -99,7 +102,7 @@ export async function verifyStage2(
       code: "ADDRESS_BINDING_MISMATCH",
       message: "Sub-card on-chain entry does not link to expected master card",
     });
-    return { scope_clean: false, signer_card: signerCard, errors };
+    return { scope_clean: false, signer_card: signerCard, app_card_chain_valid: false, errors };
   }
 
   // Step 10: verify master card holder's ML-DSA-44 signature on sub-card registration
@@ -113,13 +116,13 @@ export async function verifyStage2(
   );
   if (!holderSigValid) {
     errors.push({ stage: 2, code: "INVALID_HOLDER_SIGNATURE", message: "Holder signature on sub-card document is invalid" });
-    return { scope_clean: false, signer_card: signerCard, errors };
+    return { scope_clean: false, signer_card: signerCard, app_card_chain_valid: false, errors };
   }
 
   // Step 11: check on-chain active status
   if (!subCardEntry.active) {
     errors.push({ stage: 2, code: "SUB_CARD_INACTIVE", message: "Sub-card is not active on-chain" });
-    return { scope_clean: false, signer_card: signerCard, errors };
+    return { scope_clean: false, signer_card: signerCard, app_card_chain_valid: false, errors };
   }
 
   // Step 12: verify app_signature using app_card_pubkey
@@ -135,11 +138,90 @@ export async function verifyStage2(
     errors.push({ stage: 2, code: "INVALID_APP_SIGNATURE", message: "App signature on sub-card document is invalid" });
   }
 
+  // Step 13: app_card chain walk — confirm app_card chains to appCertificationRoot
+  // (APP_CARD_CHAIN_NOT_TRUSTED if the chain does not reach the configured root)
+  const appCertRoot = config.appCertificationRoot;
+  const maxDepth = config.maxChainDepth ?? 64;
+
+  const appCardContentKey = hkdfSha3256(new Uint8Array(appPubkeyBytes), "card-content-v1");
+  const appCardEntry = await rpc.getCardEntry(appCardAddress);
+  if (!appCardEntry || !appCardEntry.exists) {
+    errors.push({
+      stage: 2,
+      code: "APP_CARD_CHAIN_NOT_TRUSTED",
+      message: `app_card ${appCardAddress} not found on-chain`,
+    });
+    return { scope_clean: false, signer_card: signerCard, app_card_chain_valid: false, errors };
+  }
+
+  let appCardDoc: CardDocument;
+  try {
+    const encrypted = await ipfs.fetch(appCardEntry.log_head_cid);
+    const decrypted = aes256gcmDecrypt(appCardContentKey, encrypted);
+    appCardDoc = JSON.parse(new TextDecoder().decode(decrypted)) as CardDocument;
+  } catch (e) {
+    const code = e instanceof CardProtocolError ? e.code : "DECRYPTION_FAILED";
+    errors.push({ stage: 2, code, message: String(e) });
+    return { scope_clean: false, signer_card: signerCard, app_card_chain_valid: false, errors };
+  }
+
+  let currentDoc = appCardDoc;
+  let currentAddress = appCardAddress;
+  let chainReached = currentAddress === appCertRoot;
+
+  for (let depth = 0; depth < maxDepth && !chainReached; depth++) {
+    if (currentDoc.ancestry_pubkeys.length === 0) {
+      chainReached = currentAddress === appCertRoot;
+      break;
+    }
+    const nextPubkeyB64 = currentDoc.ancestry_pubkeys[0];
+    if (!nextPubkeyB64) break;
+    const nextPubkeyBytes = new Uint8Array(Buffer.from(nextPubkeyB64, "base64url"));
+    const nextAddress = keccak256(nextPubkeyBytes);
+
+    if (nextAddress === appCertRoot) {
+      chainReached = true;
+      break;
+    }
+
+    const nextEntry = await rpc.getCardEntry(nextAddress);
+    if (!nextEntry || !nextEntry.exists) {
+      errors.push({
+        stage: 2,
+        code: "APP_CARD_CHAIN_NOT_TRUSTED",
+        message: `Ancestor app card not found on-chain: ${nextAddress}`,
+      });
+      return { scope_clean: false, signer_card: signerCard, app_card_chain_valid: false, errors };
+    }
+
+    const nextContentKey = hkdfSha3256(nextPubkeyBytes, "card-content-v1");
+    try {
+      const encrypted = await ipfs.fetch(nextEntry.log_head_cid);
+      const decrypted = aes256gcmDecrypt(nextContentKey, encrypted);
+      currentDoc = JSON.parse(new TextDecoder().decode(decrypted)) as CardDocument;
+      currentAddress = nextAddress;
+    } catch (e) {
+      const code = e instanceof CardProtocolError ? e.code : "DECRYPTION_FAILED";
+      errors.push({ stage: 2, code, message: String(e) });
+      return { scope_clean: false, signer_card: signerCard, app_card_chain_valid: false, errors };
+    }
+  }
+
+  if (!chainReached) {
+    errors.push({
+      stage: 2,
+      code: "APP_CARD_CHAIN_NOT_TRUSTED",
+      message: `app_card chain for ${appCardAddress} does not reach appCertificationRoot (${appCertRoot})`,
+    });
+    return { scope_clean: false, signer_card: signerCard, app_card_chain_valid: false, errors };
+  }
+
   return {
     scope_clean: true,
     signer_card: signerCard,
     master_card_doc: masterCardDoc,
     master_card_pubkey: new Uint8Array(holderPubkeyBytes),
+    app_card_chain_valid: true,
     errors,
   };
 }
