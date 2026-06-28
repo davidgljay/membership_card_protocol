@@ -31,18 +31,69 @@ The address is a fixed-length hash that any party who holds the card's public ke
 
 ## Wallet Service Registry
 
-> **Status note (INC-35 decision, 2026-06-15):** The Wallet Service Registry is **off-chain**. It will not live in the card registry contract. The full registry design — discovery endpoint, registration/revocation protocol, `wallet_service_id` assignment — will be specified in the wallet service spec. This document uses `wallet_service_id` as a stable opaque identifier; treat it as a placeholder until that spec is written.
+Each wallet service is identified by its **wallet service card** — a card registered in the on-chain card registry like any other card, but held by the wallet service operator. The mutable pointer of the wallet service card is its stable `wallet_service_id`.
 
-Wallet services are registered in an off-chain **Wallet Service Registry** maintained by wallet service operators. A registered wallet service has:
+### Peer List
+
+Because the total number of wallet services in the network is small, each wallet service maintains a **peer list** — a static operator configuration listing all known wallet services:
 
 | Field | Description |
 |---|---|
-| `wallet_service_id` | Stable identifier for this wallet service (format TBD in wallet service spec) |
-| `endpoint` | Base HTTPS URL accepting inbound routing envelopes |
+| `wallet_service_id` | Mutable pointer of the wallet service card |
+| `endpoint` | Base HTTPS URL for inbound routing envelopes and binding announcements |
 | `transport_flags` | Bitmask of supported transports (see Transport Extensibility below) |
-| `active` | Whether this wallet service is currently accepting routed messages |
+| `pubkey_hash` | `keccak256` of the wallet service card's ML-DSA-44 public key (for announcement verification) |
 
-Wallet services maintain routing tables that map each card hash to the wallet service currently holding it. The exact mechanism by which wallet services learn card-to-wallet-service bindings — including the format of binding announcements, the discovery endpoint, and the migration-notification protocol — is deferred to the wallet service spec. This document uses `wallet_service_id` as a stable opaque identifier for a wallet service instance.
+Adding or removing a wallet service from the network requires updating peer lists out-of-band across all operators.
+
+### Binding Announcements
+
+When a wallet service acquires a card — through new card registration or migration — it broadcasts a **`CardBindingAnnouncement`** to all peers via HTTP POST to each peer's `/bindings/announce` endpoint.
+
+**`CardBindingAnnouncement` payload (the object both parties sign):**
+
+```json
+{
+  "type":               "card_registration" | "card_migration",
+  "card_hash":          "<keccak256(card_pubkey) — on-chain registry address>",
+  "wallet_service_id":  "<mutable pointer of the announcing wallet service card>",
+  "endpoint":           "<HTTPS URL of the announcing wallet service>",
+  "timestamp":          "<ISO 8601>",
+  "nonce":              "<32-byte random value, base64url — replay prevention>"
+}
+```
+
+**Announcement envelope:**
+
+```json
+{
+  "payload":    { "...CardBindingAnnouncement payload..." },
+  "signatures": [
+    {
+      "public_key": "<ML-DSA-44 public key of signing card, base64url>",
+      "role":       "wallet_service" | "cardholder",
+      "signature":  "<ML-DSA-44 signature over canonical RFC 8785 JSON of payload, base64url>"
+    }
+  ]
+}
+```
+
+`card_registration` announcements carry a single `wallet_service` signature. `card_migration` announcements require dual signatures — `wallet_service` and `cardholder` — before peers will accept them. See `process_specs/card_migration.md` for the migration protocol.
+
+Receiving wallet services verify all signatures before updating their routing table. The `wallet_service` signer is verified by checking that `keccak256(public_key)` resolves to the `wallet_service_id` in the payload. The `cardholder` signer is verified by checking that `keccak256(public_key)` matches the `card_hash` in the payload.
+
+### Binding Conflict Resolution
+
+A wallet service may receive conflicting announcements for the same `card_hash` (e.g., a stale `card_registration` and a later `card_migration`). Conflicts are resolved in order:
+
+1. A `card_migration` announcement (cardholder-signed) **always supersedes** a `card_registration` announcement for the same `card_hash`, regardless of timestamps.
+2. Between two `card_migration` announcements, prefer the one with the **later `timestamp`**.
+3. Between two `card_registration` announcements, prefer the one with the **later `timestamp`**.
+4. Announcements carrying a nonce already present in the local nonce cache are **rejected**. Nonces are retained for a rolling 24-hour window.
+
+### Startup Sync
+
+A wallet service coming online after downtime, or joining the network for the first time, fetches current binding state from all known peers before accepting traffic. Each wallet service exposes a `/bindings` endpoint that returns its full routing table as a list of signed `CardBindingAnnouncement` objects. A new or recovering wallet service fetches from all peers, merges the results applying the conflict resolution rules above, and builds its initial routing table.
 
 ---
 
@@ -126,12 +177,13 @@ The originating wallet service being visible narrows the anonymity set for the s
 
 ## Card Migration
 
-When a card holder moves their card from one wallet service to another, the routing table must update. The migration process:
+Card migration is specified in full in `process_specs/card_migration.md`. Key properties relevant to routing:
 
-1. The holder authenticates to the new wallet service and initiates migration.
-2. The new wallet service announces the updated card-to-wallet-service binding through the off-chain Wallet Service Registry (design deferred to the wallet service spec), signed by the holder's card key. All wallet services receive the updated binding and update `routing_table[card_hash]`.
-3. The old wallet service forwards any queued messages to the new wallet service and then drops the card from its store.
-4. Messages in flight addressed to the old wallet service during the migration window are handled via the `410 Gone` retry mechanism.
+- Migration does not require the participation of the old wallet service.
+- Both the new wallet service and the cardholder must sign the migration announcement.
+- The announcement is a `card_migration` type `CardBindingAnnouncement`, broadcast to all peers.
+- A valid dual-signed `card_migration` announcement always supersedes any `card_registration` entry in the routing table (see Binding Conflict Resolution above).
+- Messages in flight addressed to the old wallet service during the migration window are handled via the `410 Gone` retry mechanism.
 
 No on-chain event is posted for card migration; routing state is entirely off-chain.
 
@@ -175,3 +227,4 @@ Full sender anonymity at the wallet-service level requires Nym transport (`0x04`
 - `specs/messaging_protocol.md` — `SignedMessageEnvelope` structure; message types; `recipients` and `senders` fields
 - `specs/object_specs/registry_contract.md` — on-chain card registry (note: routing state and the Wallet Service Registry are off-chain; see INC-35)
 - `specs/process_specs/card_offering_and_acceptance.md` — uses routing delivery (step 22: SCIP delivery to recipient wallet service)
+- `specs/process_specs/card_migration.md` — full card migration protocol; dual-signature requirement; old wallet service behavior
