@@ -7,7 +7,7 @@
 //! Stylus SDK dependency and can be used in tests, scripts, and off-chain tooling
 //! in addition to the WASM contracts.
 //!
-//! ## Error Code Reference (§8 of registry_contract.md v0.3)
+//! ## Error Code Reference (§8 of registry_contract.md v0.6)
 //!
 //! | Code | Name | Trigger |
 //! |------|------|---------|
@@ -46,6 +46,17 @@
 //! | E-32 | UPGRADE_ADDRESS_MISMATCH | Confirmation address != pending address |
 //! | E-33 | BATCH_SIZE_INVALID | BatchUpdateCardHeads: empty or > 100 items |
 //! | E-34 | BATCH_ITEM_INVALID | Duplicate card or cross-policy item in batch |
+//! | E-37 | DOMAIN_NOT_FOUND | Operation targets a domain with exists == false |
+//! | E-38 | DOMAIN_ALREADY_REGISTERED | RegisterDomain when domain already has active admin |
+//! | E-39 | DOMAIN_SUSPENDED | SetPolicyAddress on suspended domain |
+//! | E-40 | CARD_NOT_DNS_GOVERNANCE_POLICY | Card not issued under DnsGovernancePolicyAddress |
+//! | E-41 | POLICY_CARD_NOT_FOUND | policy_card_address does not exist in CardEntries |
+//! | E-42 | DOMAIN_PATH_ENTRY_NOT_FOUND | RemovePolicyAddress on zero entry |
+//! | E-43 | INVALID_DNS_PARAMETER | Bad domain string length or inconsistent fraud_risk params |
+//! | E-44 | DOMAIN_PATH_SCOPE_VIOLATION | Press-side only; dns_path_scope mismatch |
+//! | E-45 | SUB_CARD_NOT_DOMAIN_ADMIN_SUBCARD | sub_card_address not a direct sub-card of admin |
+//! | E-46 | ADMIN_CARD_MISMATCH | admin_card_address != DomainRegistrations[domain].admin_card_address |
+//! | E-47 | INVALID_ADMIN_CARD_SIGNATURE | RegisterSubCard admin secp256r1 check failed |
 
 #![no_std]
 
@@ -56,6 +67,15 @@ pub const MAX_CID_LEN: usize = 64;
 
 /// Maximum number of items in a BatchUpdateCardHeads call (§4.15).
 pub const MAX_BATCH_SIZE: usize = 100;
+
+/// Maximum number of paths in a ClearDomainEntries call (§4.21).
+pub const MAX_CLEAR_ENTRIES_BATCH: usize = 500;
+
+/// Maximum length in bytes of a DNS path string (§4.19).
+pub const MAX_DNS_PATH_LEN: usize = 512;
+
+/// Maximum length in bytes of a domain string (RFC 1035 §2.3.4).
+pub const MAX_DOMAIN_LEN: usize = 255;
 
 /// Unix seconds in 7 days — the logic upgrade timelock duration (§4.14).
 pub const LOGIC_UPGRADE_TIMELOCK_SECS: u64 = 7 * 24 * 60 * 60;
@@ -84,6 +104,10 @@ pub enum GovernanceBodyId {
     RootPolicyBody = 0,
     /// Governs: AuthorizePress, RevokePress.
     PressRegistryBody = 1,
+    /// Governs: RegisterDomain, DeregisterDomain, SetPolicyAddress (governance path),
+    /// RemovePolicyAddress (governance path), ClearDomainEntries, FlagDomainFraudRisk,
+    /// GovernanceSetPolicyAddress, SetDnsGovernancePolicyAddress.
+    DnsGovernanceBody = 2,
 }
 
 impl GovernanceBodyId {
@@ -91,6 +115,7 @@ impl GovernanceBodyId {
         match v {
             0 => Some(GovernanceBodyId::RootPolicyBody),
             1 => Some(GovernanceBodyId::PressRegistryBody),
+            2 => Some(GovernanceBodyId::DnsGovernanceBody),
             _ => None,
         }
     }
@@ -217,6 +242,29 @@ pub enum ContractError {
     BatchSizeInvalid,
     /// E-34: Batch item failed: duplicate card_address or cross-policy card.
     BatchItemInvalid,
+
+    // DNS operation errors (§8, E-37–E-47)
+    /// E-37: Domain not found in DomainRegistrations (exists == false).
+    DomainNotFound,
+    /// E-38: RegisterDomain for a domain that already has a non-zero admin_card_address.
+    DomainAlreadyRegistered,
+    /// E-39: SetPolicyAddress on a suspended domain (fraud_risk == 2, active suspension).
+    DomainSuspended,
+    /// E-40: Card not issued under DnsGovernancePolicyAddress, or DnsGovernancePolicyAddress == 0.
+    CardNotDnsGovernancePolicy,
+    /// E-41: policy_card_address does not exist in CardEntries.
+    PolicyCardNotFound,
+    /// E-42: RemovePolicyAddress on an entry that is already zero.
+    DomainPathEntryNotFound,
+    /// E-43: Bad domain string length or inconsistent fraud_risk/suspension_expires_at params.
+    InvalidDnsParameter,
+    // E-44 (DOMAIN_PATH_SCOPE_VIOLATION) is press-side only — not enforced on-chain.
+    /// E-45: sub_card_address is not a registered direct sub-card of admin_card_address.
+    SubCardNotDomainAdminSubcard,
+    /// E-46: admin_card_address does not match DomainRegistrations[domain].admin_card_address.
+    AdminCardMismatch,
+    /// E-47: RegisterSubCard admin secp256r1 check failed (missing, mismatched, or invalid sig).
+    InvalidAdminCardSignature,
 
     // Internal errors (not in spec, used for implementation-specific cases)
     /// Payload JSON is malformed or missing required fields.
@@ -414,6 +462,22 @@ pub struct PendingVerifierUpgrade {
     pub governance_version: u32,
     /// Replay-prevention nonce from proposal payload.
     pub nonce: [u8; 32],
+}
+
+/// Off-chain representation of a DomainEntry (§3.8).
+/// Used in tests and scripts. On-chain storage uses Stylus storage types.
+#[derive(Clone, Debug, Default)]
+pub struct DomainEntry {
+    /// Registry address of the current active domain admin card.
+    pub admin_card_address: [u8; 32],
+    /// Unix timestamp of most recent RegisterDomain call.
+    pub registered_at: u64,
+    /// 0 = normal, 1 = monitored, 2 = suspended.
+    pub fraud_risk: u8,
+    /// Unix timestamp after which suspension lapses; 0 if not suspended.
+    pub suspension_expires_at: u64,
+    /// Write-once-true. Once true, cannot be cleared.
+    pub exists: bool,
 }
 
 /// A single item in a BatchUpdateCardHeads call (§4.15).

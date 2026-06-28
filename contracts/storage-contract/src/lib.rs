@@ -76,6 +76,10 @@ const E_POLICY_DELETE_DISABLED: &[u8; 4] = b"\x00\x00\x00\x01";
 /// TODO: Replace with keccak256("PolicyDeleteAlreadyDisabled()")[0..4] before deployment.
 const E_POLICY_DELETE_ALREADY_DISABLED: &[u8; 4] = b"\x00\x00\x00\x02";
 
+/// Selector for domain exists write-once invariant (storage-level, not in spec error table).
+/// Fired when set_domain_entry tries to clear exists from true to false.
+const E_DOMAIN_EXISTS_IMMUTABLE: &[u8; 4] = b"\x00\x00\x00\x03";
+
 // ─── Storage structs ──────────────────────────────────────────────────────────
 
 /// Per-card storage entry (§3.1).
@@ -156,6 +160,21 @@ pub struct StorageGovernanceKeyset {
     pub version: StorageU32,
     /// 0 = secp256r1, 1 = ML-DSA-44.
     pub key_scheme: StorageU8,
+}
+
+/// DNS domain registration entry (§3.8).
+#[storage]
+pub struct StorageDomainEntry {
+    /// Registry address of the current active domain admin card.
+    pub admin_card_address: StorageB256,
+    /// Unix timestamp of most recent RegisterDomain.
+    pub registered_at: StorageU64,
+    /// 0 = normal, 1 = monitored, 2 = suspended.
+    pub fraud_risk: StorageU8,
+    /// Unix timestamp after which suspension lapses; 0 if not suspended.
+    pub suspension_expires_at: StorageU64,
+    /// Write-once-true: once set true by RegisterDomain, cannot be unset.
+    pub exists: StorageBool,
 }
 
 /// Pending logic upgrade proposal (§3.7).
@@ -247,6 +266,25 @@ pub struct StorageContract {
     /// §3.7 Write-once-true: once true, delete_policy_authorizer_key reverts unconditionally.
     /// Set by disable_policy_delete_permanently (governance-gated via logic contract).
     policy_delete_disabled: StorageBool,
+
+    // ── DNS resolution state ──────────────────────────────────────────────────
+
+    /// §3.8 Domain registrations. Key = keccak256(lowercase_domain_bytes).
+    /// The logic contract computes the hash; the storage contract stores by pre-computed key.
+    domain_registrations: StorageMap<B256, StorageDomainEntry>,
+
+    /// §3.9 Policy addresses. Key = keccak256(domain_bytes || 0x00 || path_bytes).
+    /// Value = policy card address (bytes32); zero value means not registered.
+    policy_addresses: StorageMap<B256, StorageB256>,
+
+    /// §3.11 DNS admin card secp256r1 keys. Key = admin_card_address (bytes32).
+    /// Value = 64-byte secp256r1 public key. Zero-length = not a DNS admin card.
+    /// Written by RegisterDomain; cleared by DeregisterDomain.
+    dns_admin_card_keys: StorageMap<B256, StorageBytes>,
+
+    /// §3.10 Policy address under which domain admin cards are issued.
+    /// Mutable via DnsGovernanceBody quorum (SetDnsGovernancePolicyAddress, §4.24).
+    dns_governance_policy_address: StorageB256,
 }
 
 // ─── Access control helper ────────────────────────────────────────────────────
@@ -334,6 +372,16 @@ impl StorageContract {
         // Bootstrap PressRegistryBody (id=1) with the same 1-of-1 keyset.
         {
             let mut keyset = self.governance_keysets.setter(1u8);
+            keyset.keys_flat.set_bytes(pubkey_bytes);
+            keyset.key_count.set(U8::from(1u8));
+            keyset.quorum.set(U8::from(1u8));
+            keyset.version.set(U32::from(0u32));
+            keyset.key_scheme.set(U8::from(0u8));
+        }
+
+        // Bootstrap DnsGovernanceBody (id=2) with the same 1-of-1 keyset (§3.6 bootstrap pattern).
+        {
+            let mut keyset = self.governance_keysets.setter(2u8);
             keyset.keys_flat.set_bytes(pubkey_bytes);
             keyset.key_count.set(U8::from(1u8));
             keyset.quorum.set(U8::from(1u8));
@@ -865,6 +913,135 @@ impl StorageContract {
     /// Get the current value of policy_delete_disabled.
     pub fn get_policy_delete_disabled(&self) -> Result<bool, Vec<u8>> {
         Ok(self.policy_delete_disabled.get())
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // DNS resolution — Getter functions (§3.8–3.11, §5)
+    // ════════════════════════════════════════════════════════════════════════
+
+    /// Get the domain entry for a pre-computed domain hash (keccak256 of domain bytes).
+    /// Returns (admin_card_address, registered_at, fraud_risk, suspension_expires_at, exists).
+    /// Returns zero-value tuple when the domain is not registered.
+    pub fn get_domain_entry(
+        &self,
+        domain_hash: B256,
+    ) -> Result<(B256, u64, u8, u64, bool), Vec<u8>> {
+        let entry = self.domain_registrations.getter(domain_hash);
+        Ok((
+            entry.admin_card_address.get(),
+            entry.registered_at.get().to::<u64>(),
+            entry.fraud_risk.get().to::<u8>(),
+            entry.suspension_expires_at.get().to::<u64>(),
+            entry.exists.get(),
+        ))
+    }
+
+    /// Look up the policy card address for a pre-computed domain/path hash.
+    /// Key = keccak256(domain_bytes || 0x00 || path_bytes), computed by the logic contract.
+    /// Returns bytes32(0) when no entry is registered.
+    pub fn get_policy_address(&self, key: B256) -> Result<B256, Vec<u8>> {
+        Ok(self.policy_addresses.getter(key).get())
+    }
+
+    /// Get the secp256r1 public key registered for a DNS admin card.
+    /// Returns 64 bytes when the card is a registered DNS admin card; empty bytes otherwise.
+    pub fn get_dns_admin_card_key(&self, card_address: B256) -> Result<Vec<u8>, Vec<u8>> {
+        Ok(self.dns_admin_card_keys.getter(card_address).get_bytes())
+    }
+
+    /// Get the global DNS governance policy address (§3.10).
+    /// Returns bytes32(0) if not yet initialized via SetDnsGovernancePolicyAddress.
+    pub fn get_dns_governance_policy_address(&self) -> Result<B256, Vec<u8>> {
+        Ok(self.dns_governance_policy_address.get())
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // DNS resolution — Setter functions (onlyLogic, §3.8–3.11)
+    // ════════════════════════════════════════════════════════════════════════
+
+    /// Create or update a domain registration entry.
+    ///
+    /// Unconditional invariant: `exists` is write-once-true.
+    /// Once a domain entry's `exists` is true, it cannot be set to false.
+    /// (DeregisterDomain calls this with exists=true, zeroing admin_card_address only.)
+    ///
+    /// Called by: RegisterDomain (§4.17), DeregisterDomain (§4.18), FlagDomainFraudRisk (§4.22).
+    pub fn set_domain_entry(
+        &mut self,
+        domain_hash: B256,
+        admin_card_address: B256,
+        registered_at: u64,
+        fraud_risk: u8,
+        suspension_expires_at: u64,
+        exists: bool,
+    ) -> Result<(), Vec<u8>> {
+        self.require_logic_contract()?;
+
+        // Enforce write-once-true on exists.
+        let current_exists = self.domain_registrations.getter(domain_hash).exists.get();
+        if current_exists && !exists {
+            return Err(E_DOMAIN_EXISTS_IMMUTABLE.to_vec());
+        }
+
+        let mut entry = self.domain_registrations.setter(domain_hash);
+        entry.admin_card_address.set(admin_card_address);
+        entry.registered_at.set(U64::from(registered_at));
+        entry.fraud_risk.set(U8::from(fraud_risk));
+        entry.suspension_expires_at.set(U64::from(suspension_expires_at));
+        entry.exists.set(exists);
+        Ok(())
+    }
+
+    /// Set (or clear) the policy card address for a domain/path key.
+    ///
+    /// `key` = keccak256(domain_bytes || 0x00 || path_bytes), pre-computed by the logic contract.
+    /// `value` = bytes32(0) to clear an entry; non-zero to register one.
+    ///
+    /// Called by: SetPolicyAddress (§4.19), RemovePolicyAddress (§4.20),
+    ///            ClearDomainEntries (§4.21), GovernanceSetPolicyAddress (§4.23).
+    pub fn set_policy_address(
+        &mut self,
+        key: B256,
+        value: B256,
+    ) -> Result<(), Vec<u8>> {
+        self.require_logic_contract()?;
+        self.policy_addresses.setter(key).set(value);
+        Ok(())
+    }
+
+    /// Set the secp256r1 public key for a DNS admin card (§3.11).
+    ///
+    /// `key_bytes` must be exactly 64 bytes (to register) or empty (to clear).
+    ///
+    /// Called by: RegisterDomain (§4.17) to register; DeregisterDomain (§4.18) to clear
+    ///            (pass empty `key_bytes` to zero the entry).
+    pub fn set_dns_admin_card_key(
+        &mut self,
+        card_address: B256,
+        key_bytes: Vec<u8>,
+    ) -> Result<(), Vec<u8>> {
+        self.require_logic_contract()?;
+
+        let bytes = key_bytes.as_slice();
+        if !bytes.is_empty() && bytes.len() != 64 {
+            return Err(b"InvalidKeyLength".to_vec());
+        }
+
+        self.dns_admin_card_keys
+            .setter(card_address)
+            .set_bytes(bytes);
+        Ok(())
+    }
+
+    /// Set the global DNS governance policy address (§3.10).
+    ///
+    /// Called by: SetDnsGovernancePolicyAddress (§4.24, DnsGovernanceBody quorum).
+    /// The quorum requirement is enforced in the logic contract; the storage contract
+    /// only enforces the caller-is-logic-contract access control.
+    pub fn set_dns_governance_policy_address(&mut self, addr: B256) -> Result<(), Vec<u8>> {
+        self.require_logic_contract()?;
+        self.dns_governance_policy_address.set(addr);
+        Ok(())
     }
 }
 

@@ -124,7 +124,8 @@ contract IntegrationTest is Test {
         bytes memory sub_doc = hex"1220deadbeef";
         logicContract.register_sub_card(
             sub_card, card1, CID_V2, sub_doc,
-            PRESS_ADDR, bytes32(0), _pressSig(), 2
+            PRESS_ADDR, bytes32(0), _pressSig(), 2,
+            new bytes(0), new bytes(0)
         );
         (bytes32 master,,,bool sub_active,,) = storageContract.get_sub_card_entry(sub_card);
         assertEq(master, card1, "Sub-card master should be card1");

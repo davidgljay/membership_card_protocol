@@ -3,7 +3,7 @@
 **Version:** 0.1 (draft)  
 **Date:** 2026-06-25  
 **Status:** Draft — pending CP-1 approval  
-**Contract spec:** [registry_contract.md](object_specs/registry_contract.md) §3.6, §3.8–3.9, §4.17–4.22  
+**Contract spec:** [registry_contract.md](object_specs/registry_contract.md) §3.6, §3.8–3.11, §4.17–4.24  
 **Implementation plan:** [dns-implementation-plan.md](../plans/dns-implementation-plan.md)
 
 ---
@@ -17,6 +17,7 @@
    - 4.1 [DomainRegistrations](#41-domainregistrations)
    - 4.2 [PolicyAddresses](#42-policyaddresses)
    - 4.3 [DnsGovernancePolicyAddress](#43-dnsgovernancepolicyaddress)
+   - 4.4 [DnsAdminCardKeys](#44-dnsadmincardkeys)
 5. [Domain Admin Cards](#5-domain-admin-cards)
    - 5.1 [Full-Domain Admin Cards](#51-full-domain-admin-cards)
    - 5.2 [Sub-Path-Scoped Admin Cards](#52-sub-path-scoped-admin-cards)
@@ -219,6 +220,29 @@ All domain admin cards — full-domain and sub-path-scoped alike — are issued 
 
 ---
 
+### 4.4 DnsAdminCardKeys
+
+Maps each DNS admin card's on-chain address to a secp256r1 public key held by the admin card holder specifically for on-chain sub-card authorization.
+
+```
+DnsAdminCardKeys: mapping (bytes32 → bytes[64])
+
+key:   card_address (bytes32)       — On-chain registry address of the DNS admin card.
+value: secp256r1_pubkey (bytes[64]) — secp256r1 public key (uncompressed x||y, 32+32 bytes).
+                                      Zero value means the card is not a registered DNS admin card
+                                      or its domain has been deregistered.
+```
+
+**Written by:** `RegisterDomain` (registry contract §4.17) stores the key alongside the admin card registration. `DeregisterDomain` (§4.18) clears it to zero.
+
+**Read by:** `RegisterSubCard` (§4.3). When `DnsAdminCardKeys[master_card_address]` is non-zero, the contract requires an `AdminAuthorizeSubCardPayload` signed by the admin's secp256r1 key, verified on-chain via RIP-7212. This prevents a compromised press from registering fraudulent sub-cards of domain admin cards without the admin's secp256r1 private key.
+
+**Key separation.** This key is distinct from the admin card holder's ML-DSA-44 IPFS identity key. The ML-DSA-44 key governs `SetPolicyAddressIntent` signing and other holder-initiated operations; the secp256r1 key governs sub-card delegation authorization on-chain. Holders generate the secp256r1 keypair specifically for DNS admin operations and provide the public key during the domain registration flow (§6.1).
+
+**Key rotation.** Rotation requires `DeregisterDomain` followed by `RegisterDomain` with the new secp256r1 key. There is no standalone key-rotation operation; the governance authority oversees both calls.
+
+---
+
 ## 5. Domain Admin Cards
 
 Domain admin cards are the credential type that grants write authority over `PolicyAddresses` entries. They are standard cards in the card protocol sense — issued via a press, stored on IPFS, registered on-chain — but with two additional properties:
@@ -252,13 +276,15 @@ The `dns_path_scope` regex constrains which paths the sub-card may pass to `SetP
 
 **Scope inheritance.** A sub-card of a sub-path-scoped card inherits the parent's scope constraint and may narrow it further (its own `dns_path_scope` must be a subset of the parent's). A sub-card whose `dns_path_scope` would allow paths outside the parent's scope is a press policy violation; the press MUST reject such issuance (press-side error E-22, as this is a master card holder authorization failure).
 
+**Creating a sub-path-scoped admin card.** Issuing a sub-path-scoped admin sub-card uses the standard `RegisterSubCard` operation, but because the master card is a DNS admin card, the admin card holder must provide an additional secp256r1 signature (`AdminAuthorizeSubCardPayload`) authorizing the specific sub-card address and its IPFS document. This signature is verified on-chain via RIP-7212 against `DnsAdminCardKeys[admin_card_address]` (§4.4). The press cannot register a sub-path-scoped admin card without the domain admin's secp256r1 private key.
+
 **Verification responsibility.** The press verifies scope:
 1. Fetches the card document from IPFS.
 2. Extracts the `dns_path_scope` field (if present; absence means the card is a full-domain admin card, which is only valid if the card is the direct admin card, not a sub-card).
 3. Tests the regex against the requested path.
 4. For sub-cards of sub-cards: walks the sub-card chain to verify that each parent's scope is consistent with the child's scope.
 
-The contract does not verify scope. Scope verification is exclusively press-side, and fraudulent scope violations are detectable by the DNS governance authority via the `PolicyAddressSet` event (see §6.2 step 5).
+The contract does not verify scope. Scope verification is exclusively press-side, and fraudulent scope violations are detectable by the DNS governance authority via the `PolicyAddressSet` event (see §6.2 step 8).
 
 ---
 
@@ -297,7 +323,7 @@ This is the process by which a new domain admin card is created and a domain is 
 _mcard.<domain>  TXT  "mcard-verify=<card_address_hex>.<pubkey_fingerprint>"
 ```
 - `<card_address_hex>` — lowercase hex-encoded bytes32 (64 characters, no `0x` prefix).
-- `<pubkey_fingerprint>` — lowercase hex-encoded first 8 bytes of `keccak256(applicant_pubkey)` (16 characters).
+- `<pubkey_fingerprint>` — lowercase hex-encoded first 8 bytes of `keccak256(applicant_ml_dsa_pubkey)` (16 characters). This is the applicant's ML-DSA-44 IPFS identity key, not the secp256r1 DNS admin key.
 - The two parts are separated by a single `.`.
 - Multiple TXT records at `_mcard.<domain>` are allowed; at least one must match.
 
@@ -561,4 +587,4 @@ The following table summarizes all acceptance criteria in this spec, grouped by 
 | Brand-name scanning | §7.4 |
 | Domain handoff | §8 |
 
-Contract-level acceptance criteria (on-chain preconditions, state changes, error codes) are specified in `specs/object_specs/registry_contract.md §4.17–4.22`.
+Contract-level acceptance criteria (on-chain preconditions, state changes, error codes) are specified in `specs/object_specs/registry_contract.md §4.17–4.24`.

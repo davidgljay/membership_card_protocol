@@ -113,8 +113,8 @@ contract MockStorage {
 
         logic_contract_addr = initial_logic_address;
 
-        // Bootstrap both governance keysets with 1-of-1.
-        for (uint8 i = 0; i <= 1; i++) {
+        // Bootstrap all three governance keysets with 1-of-1 (including DnsGovernanceBody id=2).
+        for (uint8 i = 0; i <= 2; i++) {
             governance_keysets_map[i] = GovernanceKeyset({
                 keys_flat: deployer_secp256r1_pubkey,
                 key_count: 1,
@@ -417,5 +417,87 @@ contract MockStorage {
 
     function set_key_scheme_phase(uint8 phase) external onlyLogic {
         key_scheme_phase_val = phase;
+    }
+
+    function disable_policy_delete_permanently() external onlyLogic {
+        // Stub: no-op in mock (tests use set_policy_authorizer_key directly).
+    }
+
+    function get_policy_delete_disabled() external pure returns (bool) {
+        return false;
+    }
+
+    // ── DNS resolution — state (§3.8–3.11) ───────────────────────────────────
+
+    struct DomainEntry {
+        bytes32 admin_card_address;
+        uint64 registered_at;
+        uint8 fraud_risk;
+        uint64 suspension_expires_at;
+        bool exists;
+    }
+
+    mapping(bytes32 => DomainEntry) public domain_registrations_map;
+    mapping(bytes32 => bytes32) public policy_addresses_map;
+    mapping(bytes32 => bytes) public dns_admin_card_keys_map;
+    bytes32 public dns_governance_policy_address_val;
+
+    error DomainExistsImmutable();
+
+    // ── DNS resolution — getters ──────────────────────────────────────────────
+
+    function get_domain_entry(bytes32 domain_hash)
+        external view
+        returns (bytes32, uint64, uint8, uint64, bool)
+    {
+        DomainEntry storage e = domain_registrations_map[domain_hash];
+        return (e.admin_card_address, e.registered_at, e.fraud_risk, e.suspension_expires_at, e.exists);
+    }
+
+    function get_policy_address(bytes32 key) external view returns (bytes32) {
+        return policy_addresses_map[key];
+    }
+
+    function get_dns_admin_card_key(bytes32 card_address) external view returns (bytes memory) {
+        return dns_admin_card_keys_map[card_address];
+    }
+
+    function get_dns_governance_policy_address() external view returns (bytes32) {
+        return dns_governance_policy_address_val;
+    }
+
+    // ── DNS resolution — setters (onlyLogic) ─────────────────────────────────
+
+    function set_domain_entry(
+        bytes32 domain_hash,
+        bytes32 admin_card_address,
+        uint64 registered_at,
+        uint8 fraud_risk,
+        uint64 suspension_expires_at,
+        bool new_exists
+    ) external onlyLogic {
+        // Unconditional invariant: exists is write-once-true.
+        if (domain_registrations_map[domain_hash].exists && !new_exists) {
+            revert DomainExistsImmutable();
+        }
+        DomainEntry storage e = domain_registrations_map[domain_hash];
+        e.admin_card_address = admin_card_address;
+        e.registered_at = registered_at;
+        e.fraud_risk = fraud_risk;
+        e.suspension_expires_at = suspension_expires_at;
+        e.exists = new_exists;
+    }
+
+    function set_policy_address(bytes32 key, bytes32 value) external onlyLogic {
+        policy_addresses_map[key] = value;
+    }
+
+    function set_dns_admin_card_key(bytes32 card_address, bytes calldata key_bytes) external onlyLogic {
+        if (key_bytes.length != 0 && key_bytes.length != 64) revert InvalidKeyLength();
+        dns_admin_card_keys_map[card_address] = key_bytes;
+    }
+
+    function set_dns_governance_policy_address(bytes32 addr) external onlyLogic {
+        dns_governance_policy_address_val = addr;
     }
 }

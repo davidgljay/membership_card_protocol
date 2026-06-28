@@ -8,12 +8,15 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@noble/curves": "^2.2.0",
+    "@noble/hashes": "^2.2.0",
     "h3": "^1.15.3",
     "nitropack": "^2.11.12",
     "viem": "^2.30.0"
   },
   "devDependencies": {
-    "typescript": "^5.8.3",
-    "@types/node": "^22.15.32"
+    "@membership-card-protocol/verifier": "file:../../membership_card_verifier/packages/verifier",
+    "@types/node": "^22.15.32",
+    "typescript": "^5.8.3"
   }
 }

@@ -56,6 +56,7 @@ pub mod subcard_ops;
 pub mod governance_ops;
 pub mod upgrade_ops;
 pub mod key_scheme_ops;
+pub mod dns_ops;
 
 use write_gate::WriteGate;
 
@@ -155,6 +156,29 @@ sol_interface! {
         function clearPendingLogicUpgrade() external;
         function setKeySchemePhase(uint8 phase) external;
         function disablePolicyDeletePermanently() external;
+
+        // ── DNS resolution getters (§3.8–3.11) ───────────────────────────────
+        function getDomainEntry(bytes32 domain_hash)
+            external view returns (bytes32, uint64, uint8, uint64, bool);
+        function getPolicyAddress(bytes32 key)
+            external view returns (bytes32);
+        function getDnsAdminCardKey(bytes32 card_address)
+            external view returns (uint8[]);
+        function getDnsGovernancePolicyAddress()
+            external view returns (bytes32);
+
+        // ── DNS resolution setters (§3.8–3.11) ───────────────────────────────
+        function setDomainEntry(
+            bytes32 domain_hash,
+            bytes32 admin_card_address,
+            uint64 registered_at,
+            uint8 fraud_risk,
+            uint64 suspension_expires_at,
+            bool exists
+        ) external;
+        function setPolicyAddress(bytes32 key, bytes32 value) external;
+        function setDnsAdminCardKey(bytes32 card_address, uint8[] key_bytes) external;
+        function setDnsGovernancePolicyAddress(bytes32 addr) external;
     }
 
     /// Interface to the verifier module.
@@ -293,6 +317,62 @@ stylus_sdk::alloy_sol_types::sol! {
     event PolicyDeletePermanentlyDisabled(
         uint64 timestamp
     );
+
+    // ── DNS resolution events (§7) ────────────────────────────────────────────
+
+    event DomainRegistered(
+        bytes domain,
+        bytes32 indexed admin_card_address,
+        uint64 timestamp
+    );
+
+    event DomainDeregistered(
+        bytes domain,
+        uint64 timestamp
+    );
+
+    event PolicyAddressSet(
+        bytes domain,
+        bytes path,
+        bytes32 indexed policy_card_address,
+        bytes32 admin_card_address,
+        bytes32 sub_card_address,
+        bytes32 press_address,
+        uint64 timestamp
+    );
+
+    event PolicyAddressRemoved(
+        bytes domain,
+        bytes path,
+        uint64 timestamp
+    );
+
+    event DomainEntriesCleared(
+        bytes domain,
+        uint32 paths_cleared,
+        uint64 timestamp
+    );
+
+    event DomainFraudRiskUpdated(
+        bytes domain,
+        uint8 fraud_risk,
+        uint64 suspension_expires_at,
+        uint64 timestamp
+    );
+
+    event PolicyAddressGovernanceSet(
+        bytes domain,
+        bytes path,
+        bytes32 policy_card_address,
+        bytes32 old_policy_card_address,
+        uint64 timestamp
+    );
+
+    event DnsGovernancePolicyAddressUpdated(
+        bytes32 indexed old_address,
+        bytes32 indexed new_address,
+        uint64 timestamp
+    );
 }
 
 // ─── Error selectors ─────────────────────────────────────────────────────────
@@ -337,6 +417,18 @@ pub mod errors {
     pub const INVALID_PAYLOAD: &[u8] = b"InvalidPayload()";
     pub const NO_UPGRADE_PENDING: &[u8] = b"NoUpgradePending()";
     pub const STALE_REGISTRATION_LOG_HEAD: &[u8] = b"StaleRegistrationLogHead()";
+
+    // DNS operation errors (E-37–E-47)
+    pub const DOMAIN_NOT_FOUND: &[u8] = b"DomainNotFound()";
+    pub const DOMAIN_ALREADY_REGISTERED: &[u8] = b"DomainAlreadyRegistered()";
+    pub const DOMAIN_SUSPENDED: &[u8] = b"DomainSuspended()";
+    pub const CARD_NOT_DNS_GOVERNANCE_POLICY: &[u8] = b"CardNotDnsGovernancePolicy()";
+    pub const POLICY_CARD_NOT_FOUND: &[u8] = b"PolicyCardNotFound()";
+    pub const DOMAIN_PATH_ENTRY_NOT_FOUND: &[u8] = b"DomainPathEntryNotFound()";
+    pub const INVALID_DNS_PARAMETER: &[u8] = b"InvalidDnsParameter()";
+    pub const SUB_CARD_NOT_DOMAIN_ADMIN_SUBCARD: &[u8] = b"SubCardNotDomainAdminSubcard()";
+    pub const ADMIN_CARD_MISMATCH: &[u8] = b"AdminCardMismatch()";
+    pub const INVALID_ADMIN_CARD_SIGNATURE: &[u8] = b"InvalidAdminCardSignature()";
 
     /// Build a revert payload from an error name string.
     /// Uses keccak256 of the error signature as the selector (4 bytes).
@@ -537,6 +629,10 @@ impl LogicContract {
     // ════════════════════════════════════════════════════════════════════════
 
     /// §4.3 RegisterSubCard — Register a new sub-card under a master card.
+    ///
+    /// When `master_card_address` is a DNS admin card (`DnsAdminCardKeys[master]` is non-zero),
+    /// `admin_secp_payload` and `admin_secp_signature` are required and verified on-chain (E-47).
+    /// For non-DNS-admin master cards, both must be empty/zero.
     pub fn register_sub_card(
         &mut self,
         sub_card_address: B256,
@@ -546,10 +642,12 @@ impl LogicContract {
         press_address: B256,
         press_sig_payload: Vec<u8>,
         press_signature: Vec<u8>,
-        master_sig_payload: Vec<u8>, // ML-DSA-44 payload (auditable; not verified on-chain)
-        master_signature: Vec<u8>,   // ML-DSA-44 signature (auditable; not verified on-chain)
+        master_sig_payload: Vec<u8>,    // ML-DSA-44 payload (auditable; not verified on-chain)
+        master_signature: Vec<u8>,      // ML-DSA-44 signature (auditable; not verified on-chain)
+        admin_secp_payload: Vec<u8>,    // AdminAuthorizeSubCardPayload; required for DNS admin masters
+        admin_secp_signature: Vec<u8>,  // secp256r1 sig; required for DNS admin masters (E-47)
     ) -> Result<(), Vec<u8>> {
-        subcard_ops::register_sub_card(self, sub_card_address, master_card_address, registration_log_head, sub_card_doc_cid, press_address, press_sig_payload, press_signature)
+        subcard_ops::register_sub_card(self, sub_card_address, master_card_address, registration_log_head, sub_card_doc_cid, press_address, press_sig_payload, press_signature, admin_secp_payload, admin_secp_signature)
     }
 
     /// §4.4 DeregisterSubCard — Mark a sub-card as inactive.
@@ -801,6 +899,146 @@ impl LogicContract {
 
     pub fn get_storage_contract(&self) -> Result<Address, Vec<u8>> {
         Ok(self.storage_contract.get())
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // DNS resolution operations (§4.17–4.24)
+    // See dns_ops.rs for implementation details
+    // ════════════════════════════════════════════════════════════════════════
+
+    /// §4.17 RegisterDomain — Register a domain after TXT verification (DnsGovernanceBody quorum).
+    pub fn register_domain(
+        &mut self,
+        domain: Vec<u8>,
+        admin_card_address: B256,
+        admin_secp256r1_key: Vec<u8>,
+        governance_payload: Vec<u8>,
+        governance_sigs: Vec<Vec<u8>>,
+    ) -> Result<(), Vec<u8>> {
+        dns_ops::register_domain(self, domain, admin_card_address, admin_secp256r1_key, governance_payload, governance_sigs)
+    }
+
+    /// §4.18 DeregisterDomain — Remove the active admin card for a domain (DnsGovernanceBody quorum).
+    pub fn deregister_domain(
+        &mut self,
+        domain: Vec<u8>,
+        governance_payload: Vec<u8>,
+        governance_sigs: Vec<Vec<u8>>,
+    ) -> Result<(), Vec<u8>> {
+        dns_ops::deregister_domain(self, domain, governance_payload, governance_sigs)
+    }
+
+    /// §4.19 SetPolicyAddress — Register a policy card address at a domain/path.
+    /// Authorized by press under DnsGovernancePolicyAddress on behalf of domain admin (or sub-card).
+    pub fn set_policy_address(
+        &mut self,
+        domain: Vec<u8>,
+        path: Vec<u8>,
+        policy_card_address: B256,
+        admin_card_address: B256,
+        sub_card_address: B256,
+        press_address: B256,
+        press_sig_payload: Vec<u8>,
+        press_signature: Vec<u8>,
+    ) -> Result<(), Vec<u8>> {
+        dns_ops::set_policy_address(self, domain, path, policy_card_address, admin_card_address, sub_card_address, press_address, press_sig_payload, press_signature)
+    }
+
+    /// §4.20 RemovePolicyAddress — Remove a policy address entry.
+    /// Two authorization paths: press (card_address non-zero) or DnsGovernanceBody quorum.
+    pub fn remove_policy_address(
+        &mut self,
+        domain: Vec<u8>,
+        path: Vec<u8>,
+        card_address: B256,
+        press_address: B256,
+        press_sig_payload: Vec<u8>,
+        press_signature: Vec<u8>,
+        governance_payload: Vec<u8>,
+        governance_sigs: Vec<Vec<u8>>,
+    ) -> Result<(), Vec<u8>> {
+        dns_ops::remove_policy_address(self, domain, path, card_address, press_address, press_sig_payload, press_signature, governance_payload, governance_sigs)
+    }
+
+    /// §4.21 ClearDomainEntries — Remove all PolicyAddresses entries for a domain (DnsGovernanceBody quorum).
+    pub fn clear_domain_entries(
+        &mut self,
+        domain: Vec<u8>,
+        paths: Vec<Vec<u8>>,
+        governance_payload: Vec<u8>,
+        governance_sigs: Vec<Vec<u8>>,
+    ) -> Result<(), Vec<u8>> {
+        dns_ops::clear_domain_entries(self, domain, paths, governance_payload, governance_sigs)
+    }
+
+    /// §4.22 FlagDomainFraudRisk — Set the fraud risk level for a domain (DnsGovernanceBody quorum).
+    pub fn flag_domain_fraud_risk(
+        &mut self,
+        domain: Vec<u8>,
+        fraud_risk: u8,
+        suspension_expires_at: u64,
+        governance_payload: Vec<u8>,
+        governance_sigs: Vec<Vec<u8>>,
+    ) -> Result<(), Vec<u8>> {
+        dns_ops::flag_domain_fraud_risk(self, domain, fraud_risk, suspension_expires_at, governance_payload, governance_sigs)
+    }
+
+    /// §4.23 GovernanceSetPolicyAddress — Directly write or clear a PolicyAddresses entry (DnsGovernanceBody quorum).
+    /// Primary rollback primitive. Works on suspended domains. Zero policy_card_address clears the entry.
+    pub fn governance_set_policy_address(
+        &mut self,
+        domain: Vec<u8>,
+        path: Vec<u8>,
+        policy_card_address: B256,
+        governance_payload: Vec<u8>,
+        governance_sigs: Vec<Vec<u8>>,
+    ) -> Result<(), Vec<u8>> {
+        dns_ops::governance_set_policy_address(self, domain, path, policy_card_address, governance_payload, governance_sigs)
+    }
+
+    /// §4.24 SetDnsGovernancePolicyAddress — Rotate the global DNS governance policy address (DnsGovernanceBody quorum).
+    /// Breaking change: orphans all existing domain admin cards. Last-resort escape hatch.
+    pub fn set_dns_governance_policy_address(
+        &mut self,
+        new_policy_address: B256,
+        governance_payload: Vec<u8>,
+        governance_sigs: Vec<Vec<u8>>,
+    ) -> Result<(), Vec<u8>> {
+        dns_ops::set_dns_governance_policy_address(self, new_policy_address, governance_payload, governance_sigs)
+    }
+
+    // DNS pass-through reads (§5)
+
+    pub fn lookup_policy_address(
+        &self,
+        domain: Vec<u8>,
+        path: Vec<u8>,
+    ) -> Result<B256, Vec<u8>> {
+        let key = dns_ops::policy_address_key(&domain, &path);
+        let storage = IStorage::new(self.storage_contract.get());
+        storage.get_policy_address(static_call_ctx(), key).map_err(|e| e.encode())
+    }
+
+    pub fn get_domain_registration(
+        &self,
+        domain: Vec<u8>,
+    ) -> Result<(B256, u64, u8, u64, bool), Vec<u8>> {
+        let domain_hash = dns_ops::domain_hash(&domain);
+        let storage = IStorage::new(self.storage_contract.get());
+        storage.get_domain_entry(static_call_ctx(), domain_hash).map_err(|e| e.encode())
+    }
+
+    pub fn get_dns_admin_card_key(&self, card_address: B256) -> Result<Vec<u8>, Vec<u8>> {
+        let storage = IStorage::new(self.storage_contract.get());
+        storage
+            .get_dns_admin_card_key(static_call_ctx(), card_address)
+            .map_err(|e| e.encode())
+            .map(|k| k.to_vec())
+    }
+
+    pub fn get_dns_governance_policy_address(&self) -> Result<B256, Vec<u8>> {
+        let storage = IStorage::new(self.storage_contract.get());
+        storage.get_dns_governance_policy_address(static_call_ctx()).map_err(|e| e.encode())
     }
 }
 

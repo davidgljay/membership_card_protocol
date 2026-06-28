@@ -7,7 +7,7 @@ import "./mocks/MockLogic.sol";
 import "./mocks/MockVerifier.sol";
 
 /// @title Storage Invariant Tests
-/// @notice Verifies all five unconditional storage invariants from §3.7.
+/// @notice Verifies all unconditional storage invariants from §3.7 and §3.8 (DNS).
 ///
 /// These tests use MockStorage (Solidity) rather than the Stylus WASM contract.
 /// The MockStorage implements the same invariant checks as the Rust implementation.
@@ -18,6 +18,9 @@ import "./mocks/MockVerifier.sol";
 ///      3. PressAuthorizations[p][a].revoked_at is write-once-non-zero.
 ///      4. SubCardRegistrations[addr].deregistered_at is write-once-non-zero.
 ///      5. PolicyAuthorizerKeys has no unconditional delete (governed by DeregisterPolicy).
+///      6. DomainRegistrations[domain].exists is write-once-true (§3.8).
+///
+/// @dev DNS setter access control (§3.8–3.11): All DNS setters enforce onlyLogic (E-29).
 contract StorageInvariantsTest is Test {
     MockStorage public storageContract;
     MockLogic public logicContract;
@@ -227,5 +230,99 @@ contract StorageInvariantsTest is Test {
         vm.prank(address(logicContract));
         vm.expectRevert(MockStorage.CidTooLong.selector);
         storageContract.set_card_entry(keccak256("cid_test"), long_cid, POLICY_ADDR, PRESS_ADDR, true);
+    }
+
+    // ── Invariant 6: DomainEntry.exists is write-once-true (§3.8) ────────────
+
+    bytes32 constant DOMAIN_HASH = keccak256(bytes("example.com"));
+
+    /// @notice Once a domain entry's exists=true, it cannot be set to false.
+    function test_invariant6_domain_exists_write_once_true() public {
+        // Create a domain entry with exists=true.
+        vm.prank(address(logicContract));
+        storageContract.set_domain_entry(DOMAIN_HASH, bytes32(0), 0, 0, 0, true);
+
+        (,,,, bool exists) = storageContract.get_domain_entry(DOMAIN_HASH);
+        assertTrue(exists);
+
+        // Attempt to set exists=false — should revert.
+        vm.prank(address(logicContract));
+        vm.expectRevert(MockStorage.DomainExistsImmutable.selector);
+        storageContract.set_domain_entry(DOMAIN_HASH, bytes32(0), 0, 0, 0, false);
+    }
+
+    /// @notice A new domain entry can be created (exists=false → exists=true is allowed).
+    function test_invariant6_new_domain_creation_allowed() public {
+        bytes32 d2 = keccak256(bytes("other.com"));
+        (,,,, bool pre_exists) = storageContract.get_domain_entry(d2);
+        assertFalse(pre_exists);
+
+        vm.prank(address(logicContract));
+        storageContract.set_domain_entry(d2, bytes32(0), 0, 0, 0, true);
+
+        (,,,, bool post_exists) = storageContract.get_domain_entry(d2);
+        assertTrue(post_exists);
+    }
+
+    /// @notice Mutable fields on a domain entry (admin_card_address, fraud_risk, etc.)
+    ///         can be updated without violating the exists invariant.
+    function test_invariant6_mutable_fields_updatable() public {
+        vm.prank(address(logicContract));
+        storageContract.set_domain_entry(DOMAIN_HASH, bytes32(uint256(1)), 0, 0, 0, true);
+
+        // Update admin_card_address to zero (as DeregisterDomain does).
+        vm.prank(address(logicContract));
+        storageContract.set_domain_entry(DOMAIN_HASH, bytes32(0), 0, 1, 0, true);
+
+        (bytes32 admin,, uint8 fr,,) = storageContract.get_domain_entry(DOMAIN_HASH);
+        assertEq(admin, bytes32(0));
+        assertEq(fr, 1);
+    }
+
+    // ── DNS setter access control (§3.8–3.11) ────────────────────────────────
+
+    /// @notice Non-logic callers are rejected by all DNS setters (E-29).
+    function test_dns_setters_access_control() public {
+        address rando = address(0xBEEF);
+
+        vm.prank(rando);
+        vm.expectRevert(MockStorage.CallerNotLogicContract.selector);
+        storageContract.set_domain_entry(DOMAIN_HASH, bytes32(0), 0, 0, 0, true);
+
+        vm.prank(rando);
+        vm.expectRevert(MockStorage.CallerNotLogicContract.selector);
+        storageContract.set_policy_address(keccak256("key"), bytes32(0));
+
+        vm.prank(rando);
+        vm.expectRevert(MockStorage.CallerNotLogicContract.selector);
+        storageContract.set_dns_admin_card_key(bytes32(0), new bytes(64));
+
+        vm.prank(rando);
+        vm.expectRevert(MockStorage.CallerNotLogicContract.selector);
+        storageContract.set_dns_governance_policy_address(bytes32(uint256(1)));
+    }
+
+    /// @notice set_dns_admin_card_key rejects keys that are neither empty nor 64 bytes.
+    function test_dns_admin_card_key_length_enforced() public {
+        vm.prank(address(logicContract));
+        vm.expectRevert(MockStorage.InvalidKeyLength.selector);
+        storageContract.set_dns_admin_card_key(bytes32(uint256(1)), new bytes(32));
+    }
+
+    /// @notice DNS invariants survive a logic upgrade (new logic enforces the same rules).
+    function test_invariant6_survives_logic_upgrade() public {
+        // Register a domain under the old logic.
+        vm.prank(address(logicContract));
+        storageContract.set_domain_entry(DOMAIN_HASH, bytes32(0), 0, 0, 0, true);
+
+        // Upgrade to a new logic contract.
+        MockLogic newLogic = new MockLogic(address(storageContract), address(verifier));
+        vm.prank(address(logicContract));
+        storageContract.set_logic_contract(address(newLogic));
+
+        // New logic still cannot set exists=false.
+        vm.prank(address(newLogic));
+        vm.expectRevert(MockStorage.DomainExistsImmutable.selector);
+        storageContract.set_domain_entry(DOMAIN_HASH, bytes32(0), 0, 0, 0, false);
     }
 }

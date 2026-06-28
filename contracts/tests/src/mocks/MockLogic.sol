@@ -30,6 +30,7 @@ contract MockLogic {
     // Governance body IDs.
     uint8 constant ROOT_POLICY_BODY = 0;
     uint8 constant PRESS_REGISTRY_BODY = 1;
+    uint8 constant DNS_GOVERNANCE_BODY = 2;
 
     // Timelocks.
     uint256 constant LOGIC_UPGRADE_TIMELOCK = 7 days;
@@ -124,6 +125,18 @@ contract MockLogic {
     error InvalidPayload();
     error NoUpgradePending();
     error StaleRegistrationLogHead();
+
+    // DNS errors (E-37–E-47)
+    error DomainNotFound();
+    error DomainAlreadyRegistered();
+    error DomainSuspended();
+    error CardNotDnsGovernancePolicy();
+    error PolicyCardNotFound();
+    error DomainPathEntryNotFound();
+    error InvalidDnsParameter();
+    error SubCardNotDomainAdminSubcard();
+    error AdminCardMismatch();
+    error InvalidAdminCardSignature();
 
     constructor(address _storage, address _verifier) {
         storageContract = MockStorage(_storage);
@@ -387,7 +400,9 @@ contract MockLogic {
         bytes32 press_address,
         bytes32 payload_hash,
         bytes calldata press_signature,
-        uint64 expected_sequence
+        uint64 expected_sequence,
+        bytes calldata admin_secp_payload_hash_bytes, // keccak256 of AdminAuthorizeSubCardPayload; zero = not a DNS admin
+        bytes calldata admin_secp_signature           // 64-byte secp256r1 sig; empty = not a DNS admin
     ) external {
         (bytes memory master_cid, bytes32 master_policy,,, bool master_exists) =
             storageContract.get_card_entry(master_card_address);
@@ -399,6 +414,22 @@ contract MockLogic {
         if (keccak256(master_cid) != keccak256(registration_log_head)) revert StaleRegistrationLogHead();
         if (registration_log_head.length > MAX_CID_LEN) revert LogCidTooLong();
         if (sub_card_doc_cid.length > MAX_CID_LEN) revert LogCidTooLong();
+
+        // Admin secp256r1 check (§4.3 precondition 5).
+        bytes memory dns_admin_key = storageContract.get_dns_admin_card_key(master_card_address);
+        bool is_dns_admin_master = dns_admin_key.length == 64;
+
+        if (is_dns_admin_master) {
+            if (admin_secp_signature.length != 64 || admin_secp_payload_hash_bytes.length != 32)
+                revert InvalidAdminCardSignature();
+            bytes32 admin_msg_hash = bytes32(admin_secp_payload_hash_bytes);
+            bool admin_sig_valid = MockVerifier(verifierModule).verify_secp256r1(
+                admin_msg_hash, admin_secp_signature, dns_admin_key
+            );
+            if (!admin_sig_valid) revert InvalidAdminCardSignature();
+        } else {
+            if (admin_secp_signature.length != 0) revert InvalidAdminCardSignature();
+        }
 
         _runWriteGate(master_policy, press_address, payload_hash, press_signature, expected_sequence);
 
@@ -609,5 +640,295 @@ contract MockLogic {
 
         storageContract.clear_pending_logic_upgrade();
         emit LogicUpgradeCancelled(pending_addr, uint64(block.timestamp));
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // DNS resolution operations (§4.17–4.24)
+    // ════════════════════════════════════════════════════════════════════════
+
+    // DNS events
+    event DomainRegistered(bytes domain, bytes32 indexed admin_card_address, uint64 timestamp);
+    event DomainDeregistered(bytes domain, uint64 timestamp);
+    event PolicyAddressSet(bytes domain, bytes path, bytes32 indexed policy_card_address, bytes32 admin_card_address, bytes32 sub_card_address, bytes32 press_address, uint64 timestamp);
+    event PolicyAddressRemoved(bytes domain, bytes path, uint64 timestamp);
+    event DomainEntriesCleared(bytes domain, uint32 paths_cleared, uint64 timestamp);
+    event DomainFraudRiskUpdated(bytes domain, uint8 fraud_risk, uint64 suspension_expires_at, uint64 timestamp);
+    event PolicyAddressGovernanceSet(bytes domain, bytes path, bytes32 policy_card_address, bytes32 old_policy_card_address, uint64 timestamp);
+    event DnsGovernancePolicyAddressUpdated(bytes32 indexed old_address, bytes32 indexed new_address, uint64 timestamp);
+
+    // Internal: compute domain hash (keccak256 of domain bytes).
+    function _domainHash(bytes memory domain) internal pure returns (bytes32) {
+        return keccak256(domain);
+    }
+
+    // Internal: compute policy address key keccak256(domain || 0x00 || path).
+    function _policyAddressKey(bytes memory domain, bytes memory path) internal pure returns (bytes32) {
+        return keccak256(abi.encodePacked(domain, bytes1(0x00), path));
+    }
+
+    // Internal: governance quorum check for DnsGovernanceBody.
+    function _dnsGovQuorum(
+        bytes32 payload_hash,
+        bytes32 nonce_key,
+        uint32 payload_version,
+        bytes[] calldata governance_sigs
+    ) internal {
+        _verifyGovernanceQuorum(DNS_GOVERNANCE_BODY, payload_hash, nonce_key, payload_version, governance_sigs);
+    }
+
+    // ── §4.17 RegisterDomain ─────────────────────────────────────────────────
+
+    function register_domain(
+        bytes memory domain,
+        bytes32 admin_card_address,
+        bytes calldata admin_secp256r1_key,
+        bytes32 payload_hash,
+        bytes32 nonce_key,
+        uint32 payload_version,
+        bytes[] calldata governance_sigs
+    ) external {
+        if (domain.length == 0 || domain.length > 255) revert InvalidDnsParameter();
+        if (admin_secp256r1_key.length != 64) revert InvalidDnsParameter();
+
+        bytes32 dns_policy = storageContract.get_dns_governance_policy_address();
+        if (dns_policy == bytes32(0)) revert CardNotDnsGovernancePolicy();
+
+        (,bytes32 card_policy,,,bool card_exists) = storageContract.get_card_entry(admin_card_address);
+        if (!card_exists) revert CardNotFound();
+        if (card_policy != dns_policy) revert CardNotDnsGovernancePolicy();
+
+        bytes32 d_hash = _domainHash(domain);
+        (bytes32 existing_admin,,,,bool already_exists) = storageContract.get_domain_entry(d_hash);
+        if (already_exists && existing_admin != bytes32(0)) revert DomainAlreadyRegistered();
+
+        _dnsGovQuorum(payload_hash, nonce_key, payload_version, governance_sigs);
+
+        uint64 ts = uint64(block.timestamp);
+        storageContract.set_domain_entry(d_hash, admin_card_address, ts, 0, 0, true);
+        storageContract.set_dns_admin_card_key(admin_card_address, admin_secp256r1_key);
+
+        emit DomainRegistered(domain, admin_card_address, ts);
+    }
+
+    // ── §4.18 DeregisterDomain ───────────────────────────────────────────────
+
+    function deregister_domain(
+        bytes memory domain,
+        bytes32 payload_hash,
+        bytes32 nonce_key,
+        uint32 payload_version,
+        bytes[] calldata governance_sigs
+    ) external {
+        if (domain.length == 0 || domain.length > 255) revert InvalidDnsParameter();
+
+        bytes32 d_hash = _domainHash(domain);
+        (bytes32 old_admin, uint64 reg_at, uint8 fr, uint64 sus,bool exists) =
+            storageContract.get_domain_entry(d_hash);
+        if (!exists) revert DomainNotFound();
+
+        _dnsGovQuorum(payload_hash, nonce_key, payload_version, governance_sigs);
+
+        storageContract.set_domain_entry(d_hash, bytes32(0), reg_at, fr, sus, true);
+        if (old_admin != bytes32(0)) {
+            storageContract.set_dns_admin_card_key(old_admin, new bytes(0));
+        }
+
+        emit DomainDeregistered(domain, uint64(block.timestamp));
+    }
+
+    // ── §4.19 SetPolicyAddress ───────────────────────────────────────────────
+
+    function set_policy_address(
+        bytes memory domain,
+        bytes memory path,
+        bytes32 policy_card_address,
+        bytes32 admin_card_address,
+        bytes32 sub_card_address,
+        bytes32 press_address,
+        bytes32 payload_hash,
+        bytes calldata press_signature,
+        uint64 expected_sequence
+    ) external {
+        if (domain.length == 0 || domain.length > 255) revert InvalidDnsParameter();
+
+        bytes32 dns_policy = storageContract.get_dns_governance_policy_address();
+        if (dns_policy == bytes32(0)) revert CardNotDnsGovernancePolicy();
+
+        bytes32 d_hash = _domainHash(domain);
+        (bytes32 registered_admin,, uint8 fr, uint64 sus, bool exists) =
+            storageContract.get_domain_entry(d_hash);
+        if (!exists) revert DomainNotFound();
+
+        if (fr == 2 && block.timestamp < sus) revert DomainSuspended();
+        if (admin_card_address != registered_admin) revert AdminCardMismatch();
+
+        if (sub_card_address != bytes32(0)) {
+            (bytes32 sc_master,,, bool sc_active,,) = storageContract.get_sub_card_entry(sub_card_address);
+            if (!sc_active || sc_master != admin_card_address) revert SubCardNotDomainAdminSubcard();
+        }
+
+        _runWriteGate(dns_policy, press_address, payload_hash, press_signature, expected_sequence);
+
+        if (!storageContract.card_exists(policy_card_address)) revert PolicyCardNotFound();
+
+        bytes32 key = _policyAddressKey(domain, path);
+        storageContract.set_policy_address(key, policy_card_address);
+
+        emit PolicyAddressSet(domain, path, policy_card_address, admin_card_address, sub_card_address, press_address, uint64(block.timestamp));
+    }
+
+    // ── §4.20 RemovePolicyAddress ────────────────────────────────────────────
+
+    function remove_policy_address(
+        bytes memory domain,
+        bytes memory path,
+        bytes32 card_address,       // non-zero = press path; zero = governance path
+        bytes32 press_address,
+        bytes32 press_payload_hash,
+        bytes calldata press_signature,
+        uint64 press_sequence,
+        bytes32 gov_payload_hash,
+        bytes32 gov_nonce_key,
+        uint32 gov_version,
+        bytes[] calldata governance_sigs
+    ) external {
+        bytes32 d_hash = _domainHash(domain);
+        (,,,,bool exists) = storageContract.get_domain_entry(d_hash);
+        if (!exists) revert DomainNotFound();
+
+        bytes32 key = _policyAddressKey(domain, path);
+        if (storageContract.get_policy_address(key) == bytes32(0)) revert DomainPathEntryNotFound();
+
+        if (card_address != bytes32(0)) {
+            // Path A: press.
+            bytes32 dns_policy = storageContract.get_dns_governance_policy_address();
+            if (dns_policy == bytes32(0)) revert CardNotDnsGovernancePolicy();
+            (,bytes32 card_policy,,,bool ce) = storageContract.get_card_entry(card_address);
+            if (!ce) revert CardNotFound();
+            if (card_policy != dns_policy) revert CardNotDnsGovernancePolicy();
+            _runWriteGate(dns_policy, press_address, press_payload_hash, press_signature, press_sequence);
+        } else {
+            // Path B: governance.
+            _dnsGovQuorum(gov_payload_hash, gov_nonce_key, gov_version, governance_sigs);
+        }
+
+        storageContract.set_policy_address(key, bytes32(0));
+        emit PolicyAddressRemoved(domain, path, uint64(block.timestamp));
+    }
+
+    // ── §4.21 ClearDomainEntries ─────────────────────────────────────────────
+
+    function clear_domain_entries(
+        bytes memory domain,
+        bytes[] calldata paths,
+        bytes32 payload_hash,
+        bytes32 nonce_key,
+        uint32 payload_version,
+        bytes[] calldata governance_sigs
+    ) external {
+        if (paths.length == 0 || paths.length > 500) revert BatchSizeInvalid();
+
+        bytes32 d_hash = _domainHash(domain);
+        (,,,,bool exists) = storageContract.get_domain_entry(d_hash);
+        if (!exists) revert DomainNotFound();
+
+        _dnsGovQuorum(payload_hash, nonce_key, payload_version, governance_sigs);
+
+        uint32 cleared = 0;
+        for (uint256 i = 0; i < paths.length; i++) {
+            bytes32 key = _policyAddressKey(domain, paths[i]);
+            if (storageContract.get_policy_address(key) != bytes32(0)) {
+                storageContract.set_policy_address(key, bytes32(0));
+                cleared++;
+            }
+        }
+
+        emit DomainEntriesCleared(domain, cleared, uint64(block.timestamp));
+    }
+
+    // ── §4.22 FlagDomainFraudRisk ────────────────────────────────────────────
+
+    function flag_domain_fraud_risk(
+        bytes memory domain,
+        uint8 fraud_risk,
+        uint64 suspension_expires_at,
+        bytes32 payload_hash,
+        bytes32 nonce_key,
+        uint32 payload_version,
+        bytes[] calldata governance_sigs
+    ) external {
+        if (fraud_risk > 2) revert InvalidDnsParameter();
+        if (fraud_risk == 2 && (suspension_expires_at == 0 || suspension_expires_at <= block.timestamp))
+            revert InvalidDnsParameter();
+        if (fraud_risk != 2 && suspension_expires_at != 0) revert InvalidDnsParameter();
+
+        bytes32 d_hash = _domainHash(domain);
+        (bytes32 admin, uint64 reg_at,,,bool exists) = storageContract.get_domain_entry(d_hash);
+        if (!exists) revert DomainNotFound();
+
+        _dnsGovQuorum(payload_hash, nonce_key, payload_version, governance_sigs);
+
+        storageContract.set_domain_entry(d_hash, admin, reg_at, fraud_risk, suspension_expires_at, true);
+        emit DomainFraudRiskUpdated(domain, fraud_risk, suspension_expires_at, uint64(block.timestamp));
+    }
+
+    // ── §4.23 GovernanceSetPolicyAddress ────────────────────────────────────
+
+    function governance_set_policy_address(
+        bytes memory domain,
+        bytes memory path,
+        bytes32 policy_card_address,
+        bytes32 payload_hash,
+        bytes32 nonce_key,
+        uint32 payload_version,
+        bytes[] calldata governance_sigs
+    ) external {
+        bytes32 d_hash = _domainHash(domain);
+        (,,,,bool exists) = storageContract.get_domain_entry(d_hash);
+        if (!exists) revert DomainNotFound();
+
+        if (policy_card_address != bytes32(0) && !storageContract.card_exists(policy_card_address))
+            revert PolicyCardNotFound();
+
+        _dnsGovQuorum(payload_hash, nonce_key, payload_version, governance_sigs);
+
+        bytes32 key = _policyAddressKey(domain, path);
+        bytes32 old_value = storageContract.get_policy_address(key);
+        storageContract.set_policy_address(key, policy_card_address);
+
+        emit PolicyAddressGovernanceSet(domain, path, policy_card_address, old_value, uint64(block.timestamp));
+    }
+
+    // ── §4.24 SetDnsGovernancePolicyAddress ──────────────────────────────────
+
+    function set_dns_governance_policy_address(
+        bytes32 new_policy_address,
+        bytes32 payload_hash,
+        bytes32 nonce_key,
+        uint32 payload_version,
+        bytes[] calldata governance_sigs
+    ) external {
+        if (new_policy_address == bytes32(0)) revert InvalidDnsParameter();
+        if (!storageContract.policy_exists(new_policy_address)) revert UnrecognizedPolicy();
+        if (new_policy_address == storageContract.get_dns_governance_policy_address())
+            revert InvalidDnsParameter();
+
+        _dnsGovQuorum(payload_hash, nonce_key, payload_version, governance_sigs);
+
+        bytes32 old = storageContract.get_dns_governance_policy_address();
+        storageContract.set_dns_governance_policy_address(new_policy_address);
+        emit DnsGovernancePolicyAddressUpdated(old, new_policy_address, uint64(block.timestamp));
+    }
+
+    // DNS pass-through reads
+    function lookup_policy_address(bytes memory domain, bytes memory path) external view returns (bytes32) {
+        return storageContract.get_policy_address(_policyAddressKey(domain, path));
+    }
+
+    function get_domain_registration(bytes memory domain)
+        external view
+        returns (bytes32, uint64, uint8, uint64, bool)
+    {
+        return storageContract.get_domain_entry(_domainHash(domain));
     }
 }

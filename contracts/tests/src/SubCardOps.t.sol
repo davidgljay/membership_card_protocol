@@ -7,6 +7,18 @@ import "./mocks/MockLogic.sol";
 import "./mocks/MockVerifier.sol";
 
 /// @title Sub-Card Operations Tests (§4.3, §4.4)
+///
+/// @dev These tests cover RegisterSubCard and DeregisterSubCard for non-DNS-admin
+///      master cards. The new `admin_secp_payload` and `admin_secp_signature` parameters
+///      are passed as empty (new bytes(0)) since none of the master cards in this suite
+///      have DnsAdminCardKeys entries.
+///
+///      Tests for the admin secp256r1 check (§4.3 precondition 5) — which fires when the
+///      master card IS a registered DNS admin card — live in DnsOps.t.sol:
+///        test_register_sub_card_dns_admin_requires_secp_sig
+///        test_register_sub_card_dns_admin_valid_secp_sig_succeeds
+///        test_register_sub_card_non_dns_admin_no_secp_sig_succeeds
+///        test_register_sub_card_non_dns_admin_spurious_secp_sig_reverts
 contract SubCardOpsTest is Test {
     MockStorage public storage_;
     MockLogic public logic;
@@ -43,7 +55,8 @@ contract SubCardOpsTest is Test {
     function test_register_sub_card_success() public {
         logic.register_sub_card(
             SUB_CARD, MASTER_CARD, CID1, SUB_DOC_CID,
-            PRESS, bytes32(0), new bytes(64), 0
+            PRESS, bytes32(0), new bytes(64), 0,
+            new bytes(0), new bytes(0)
         );
 
         (bytes32 master,,,bool active,,) = storage_.get_sub_card_entry(SUB_CARD);
@@ -56,7 +69,8 @@ contract SubCardOpsTest is Test {
         vm.expectRevert(MockLogic.CardNotFound.selector);
         logic.register_sub_card(
             SUB_CARD, bad_master, CID1, SUB_DOC_CID,
-            PRESS, bytes32(0), new bytes(64), 0
+            PRESS, bytes32(0), new bytes(64), 0,
+            new bytes(0), new bytes(0)
         );
     }
 
@@ -65,20 +79,23 @@ contract SubCardOpsTest is Test {
         vm.expectRevert(MockLogic.StaleRegistrationLogHead.selector);
         logic.register_sub_card(
             SUB_CARD, MASTER_CARD, wrong_head, SUB_DOC_CID,
-            PRESS, bytes32(0), new bytes(64), 0
+            PRESS, bytes32(0), new bytes(64), 0,
+            new bytes(0), new bytes(0)
         );
     }
 
     function test_register_sub_card_already_active_reverts() public {
         logic.register_sub_card(
             SUB_CARD, MASTER_CARD, CID1, SUB_DOC_CID,
-            PRESS, bytes32(0), new bytes(64), 0
+            PRESS, bytes32(0), new bytes(64), 0,
+            new bytes(0), new bytes(0)
         );
 
         vm.expectRevert(MockLogic.SubCardAlreadyActive.selector);
         logic.register_sub_card(
             SUB_CARD, MASTER_CARD, CID1, SUB_DOC_CID,
-            PRESS, bytes32(0), new bytes(64), 1
+            PRESS, bytes32(0), new bytes(64), 1,
+            new bytes(0), new bytes(0)
         );
     }
 
@@ -87,7 +104,8 @@ contract SubCardOpsTest is Test {
         vm.expectRevert(MockLogic.LogCidTooLong.selector);
         logic.register_sub_card(
             SUB_CARD, MASTER_CARD, CID1, long_cid,
-            PRESS, bytes32(0), new bytes(64), 0
+            PRESS, bytes32(0), new bytes(64), 0,
+            new bytes(0), new bytes(0)
         );
     }
 
@@ -95,7 +113,8 @@ contract SubCardOpsTest is Test {
         assertEq(storage_.get_next_sequence(POLICY, PRESS), 0);
         logic.register_sub_card(
             SUB_CARD, MASTER_CARD, CID1, SUB_DOC_CID,
-            PRESS, bytes32(0), new bytes(64), 0
+            PRESS, bytes32(0), new bytes(64), 0,
+            new bytes(0), new bytes(0)
         );
         assertEq(storage_.get_next_sequence(POLICY, PRESS), 1);
     }
@@ -105,7 +124,8 @@ contract SubCardOpsTest is Test {
     function _registerSubCard() internal {
         logic.register_sub_card(
             SUB_CARD, MASTER_CARD, CID1, SUB_DOC_CID,
-            PRESS, bytes32(0), new bytes(64), 0
+            PRESS, bytes32(0), new bytes(64), 0,
+            new bytes(0), new bytes(0)
         );
     }
 

@@ -1,0 +1,45 @@
+name: Publish @membership-card-protocol/verifier
+
+on:
+  push:
+    tags:
+      - 'verifier/v*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write  # required for npm provenance
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'pnpm'
+          cache-dependency-path: membership_card_verifier/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: membership_card_verifier
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        working-directory: membership_card_verifier/packages/verifier
+        run: pnpm run build
+
+      - name: Test
+        working-directory: membership_card_verifier/packages/verifier
+        run: pnpm run test
+
+      - name: Publish
+        working-directory: membership_card_verifier/packages/verifier
+        run: npm publish --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

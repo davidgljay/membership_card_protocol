@@ -26,47 +26,70 @@ The DNS Governance Authority operates the `DnsGovernanceBody` — the on-chain g
 
 ---
 
+## Authorization Model
+
+`DnsGovernanceBody` operations are divided into two tiers based on who must authorize them:
+
+**Script-authorized operations (1-of-1, automated):** These are triggered by verifiable, deterministic criteria (a TXT record is present; a card document doesn't exist; a scope regex doesn't match). They are signed by the dedicated **script key** — a single secp256r1 key held by the authority's automation infrastructure. The `DnsGovernanceBody` keyset is bootstrapped with this key at quorum=1, allowing the script to satisfy the on-chain quorum requirement alone.
+
+**Board-authorized operations (M-of-N, human):** These require judgment beyond what a deterministic script can provide. They are signed by M-of-N governance board members using their individual secp256r1 keys. Scripts generate unsigned payloads for these operations and alert board members; they never submit board operations autonomously.
+
+The script key and board member keys are all members of the same `DnsGovernanceBody` keyset. As the authority expands, the keyset grows and quorum is set to 1 (for script operations to function). Board-required operations are enforced by policy, not by a second on-chain quorum check — scripts simply do not call them. The mandate documents which tier each operation belongs to.
+
+| Tier | Key | Quorum | Who signs |
+|---|---|---|---|
+| Script-authorized | `DNS_SCRIPT_PRIVATE_KEY` (env) | 1 sig | Automation script |
+| Board-authorized | Individual board member keys | M human sigs (M-of-N board members) | Human operators, out-of-band |
+
+**Gas wallets.** The script key is NOT used to pay Ethereum gas. A separate **script gas wallet** (`DNS_SCRIPT_GAS_WALLET_KEY`) holds ETH and pays transaction fees. Similarly, press operations (RegisterCard, UpdateCardHead) use a separate **press gas wallet** (`PRESS_GAS_WALLET_KEY`) distinct from the press's on-chain signing key. This separation ensures that a signing key compromise does not expose ETH funds, and that a gas wallet compromise cannot forge governance signatures.
+
+---
+
 ## On-Chain Powers
 
-Every action listed here requires a valid quorum signature from the active `DnsGovernanceBody` keyset, verified on-chain via the RIP-7212 secp256r1 precompile.
+Every action listed here requires a valid signature from the `DnsGovernanceBody` keyset via the RIP-7212 secp256r1 precompile. The tier (Script / Board) indicates who must sign.
 
-### RegisterDomain — `§4.17`
+### RegisterDomain — `§4.17` · *Script-authorized*
 
 Creates a domain entry in `DomainRegistrations` after DNS TXT verification succeeds. Sets `admin_card_address` to the newly-issued domain admin card and stores the admin's secp256r1 public key in `DnsAdminCardKeys`.
 
-**Trigger:** Successful completion of the `txt-verification` script. `RegisterDomain` is never called without a verified TXT record.
+**Trigger:** Successful completion of the `txt-verification` script. Signed by the script key. Never called manually.
 
-### DeregisterDomain — `§4.18`
+### DeregisterDomain — `§4.18` · *Script-authorized*
 
-Clears the `admin_card_address` from a domain entry, preventing new `SetPolicyAddress` submissions under that domain. Used during domain handoff and when a domain registration is terminated.
+Clears the `admin_card_address` from a domain entry, preventing new `SetPolicyAddress` submissions. Used during domain handoff (before re-registration with a new admin) and when a domain registration is terminated.
 
-**Note:** `DeregisterDomain` preserves the domain's `fraud_risk` and `suspension_expires_at`. A previously flagged domain that is re-registered does not start with a clean fraud history.
+**Note:** `DeregisterDomain` preserves `fraud_risk` and `suspension_expires_at`. A previously flagged domain re-registered by a new owner does not inherit a clean fraud history.
 
-### GovernanceSetPolicyAddress — `§4.23`
+### RemovePolicyAddress (governance path) — `§4.20` · *Script-authorized*
 
-Directly writes or clears a `PolicyAddresses` entry. The primary rollback operation — used to restore a legitimate mapping after a fraudulent overwrite, or to clear an unauthorized entry when the legitimate domain admin is unavailable.
+Removes a specific domain/path policy address entry via the governance path. Used by `policy-address-verifier` for deterministic fraud removals (scope violations, brand-name matches, stale entries).
 
-**This is a broad power.** It allows the body to write any policy address for any domain. It must only be used in response to confirmed fraud, failed verification, or emergency correction. Every use must be recorded in the fraud audit log with a documented rationale.
+### ClearDomainEntries — `§4.21` · *Script-authorized*
 
-### RemovePolicyAddress (governance path) — `§4.20`
+Removes all specified `PolicyAddresses` entries for a domain in a single action. Used by `admin-deactivation` during domain handoff and as part of fraud response when a domain is suspended.
 
-Removes a specific domain/path policy address entry via governance quorum. Used when `GovernanceSetPolicyAddress` (with zero value) is not appropriate — for example, when the authority wants to remove an entry without implicitly setting it to "cleared by governance."
+### GovernanceSetPolicyAddress (automated clearing) — `§4.23` · *Script-authorized (for stale/invalid entries)*
 
-### ClearDomainEntries — `§4.21`
+Used by `policy-address-verifier` to zero out entries where the policy card no longer exists on-chain. This is a deterministic, scripted operation — the card existence check is unambiguous.
 
-Removes all specified `PolicyAddresses` entries for a domain in a single governance action. Used during domain handoff (clearing a prior admin's entries before the new admin re-registers) and as part of the fraud suspension action (removing all entries when a domain is suspended).
+**Board use (rollback/manual intervention) — `§4.23` · *Board-authorized*:** When used to restore a prior legitimate value or perform manual correction after fraud, `GovernanceSetPolicyAddress` requires M-of-N board signatures. Scripts generate unsigned payloads for these cases and alert board members; they do not submit.
 
-### FlagDomainFraudRisk — `§4.22`
+### FlagDomainFraudRisk — `§4.22` · *Board-authorized*
 
-Sets the `fraud_risk` level for a domain (`0` = normal, `1` = monitored, `2` = suspended). Used to escalate suspicious domains, suspend confirmed violators, and restore domains after a suspension expires.
+Sets the `fraud_risk` level for a domain. Scripts detect fraud violations and generate unsigned payloads for board review; the board signs and submits.
 
-### SetDnsGovernancePolicyAddress — `§4.24`
+- **Level 1 (Monitored):** Script detects automated-flag condition (edit distance = 1 from brand list). Board confirms and signs `FlagDomainFraudRisk(domain, 1, 0)`.
+- **Level 2 (Suspended):** Script detects confirmed violation (brand-name impersonation in policy card). Board signs `FlagDomainFraudRisk(domain, 2, expiry)` and `ClearDomainEntries`.
+- **Restoration (Level 0):** Board signs after reviewing the domain admin's restoration request.
 
-Rotates the global `DnsGovernancePolicyAddress` storage variable to a new policy address. **This is a last-resort escape hatch** — it orphans all existing domain admin cards and requires a full migration. It should only be used if `RotateAuthorizerKey` on the existing policy is insufficient (e.g., the authorizer key is irretrievably lost).
+### SetDnsGovernancePolicyAddress — `§4.24` · *Board-authorized*
 
-### RotateGovernanceKeys — `§4.10` (self-amending)
+Rotates the global `DnsGovernancePolicyAddress` to a new policy address. **Last-resort escape hatch** — orphans all existing domain admin cards. Requires M-of-N board quorum. Never called by scripts.
 
-Amends the `DnsGovernanceBody` keyset: adds or removes member keys, updates the quorum threshold. Self-amending — the current quorum must approve changes to its own membership.
+### RotateGovernanceKeys — `§4.10` · *Board-authorized (self-amending)*
+
+Amends the `DnsGovernanceBody` keyset: adds or removes keys (script or board), updates quorum. Self-amending — current quorum must approve changes to its own membership.
 
 ---
 
