@@ -7,12 +7,22 @@ export interface PressConfig {
   PRESS_CARD_CID: string;
   PRESS_POLICY_CIDS: string[];
   PRESS_MLDSA44_PRIVATE_KEY: Uint8Array;
+  /**
+   * secp256r1 private key (hex) registered in PressAuthorizations on-chain.
+   * Used exclusively for signing press payloads. Does NOT pay gas.
+   */
   PRESS_SECP256R1_PRIVATE_KEY: string;
+  /**
+   * Separate Ethereum wallet private key (hex) that holds ETH and pays gas
+   * for all on-chain transactions. Never used for press payload signing.
+   * The press's on-chain identity (PressAuthorizations key) comes from
+   * PRESS_SECP256R1_PRIVATE_KEY; msg.sender comes from this key.
+   */
+  PRESS_GAS_WALLET_PRIVATE_KEY: string;
   ARBITRUM_RPC_URL: string;
   REGISTRY_CONTRACT_ADDRESS: string;
   FILEBASE_KEY: string;
   FILEBASE_SECRET: string;
-  FILEBASE_BUCKET: string;
   FILEBASE_GATEWAY_URL: string;
   EXTERNAL_KV_URL: string;
   PORT: number;
@@ -93,11 +103,19 @@ export function loadConfig(): PressConfig {
     process.exit(1);
   }
 
+  const PRESS_GAS_WALLET_PRIVATE_KEY = requireEnv('PRESS_GAS_WALLET_PRIVATE_KEY');
+  if (!/^(0x)?[0-9a-fA-F]{64}$/.test(PRESS_GAS_WALLET_PRIVATE_KEY)) {
+    console.error(
+      'Press startup error: PRESS_GAS_WALLET_PRIVATE_KEY must be a 32-byte hex string (64 hex chars, with or without 0x prefix).'
+    );
+    process.exit(1);
+  }
+
   const ARBITRUM_RPC_URL = requireEnv('ARBITRUM_RPC_URL');
   const REGISTRY_CONTRACT_ADDRESS = requireEnv('REGISTRY_CONTRACT_ADDRESS');
   const FILEBASE_KEY = requireEnv('FILEBASE_KEY');
   const FILEBASE_SECRET = requireEnv('FILEBASE_SECRET');
-  const FILEBASE_BUCKET = requireEnv('FILEBASE_BUCKET');
+  // Bucket is hardcoded to 'membership_card_protocol' in ipfs/client.ts.
   const FILEBASE_GATEWAY_URL = optionalEnv(
     'FILEBASE_GATEWAY_URL',
     'https://ipfs.filebase.io'
@@ -117,11 +135,11 @@ export function loadConfig(): PressConfig {
     PRESS_POLICY_CIDS,
     PRESS_MLDSA44_PRIVATE_KEY,
     PRESS_SECP256R1_PRIVATE_KEY,
+    PRESS_GAS_WALLET_PRIVATE_KEY,
     ARBITRUM_RPC_URL,
     REGISTRY_CONTRACT_ADDRESS,
     FILEBASE_KEY,
     FILEBASE_SECRET,
-    FILEBASE_BUCKET,
     FILEBASE_GATEWAY_URL,
     EXTERNAL_KV_URL,
     PORT,

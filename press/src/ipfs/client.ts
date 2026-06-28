@@ -25,6 +25,11 @@ import type { PressConfig } from '../config.js';
 
 const FILEBASE_ENDPOINT = 'https://s3.filebase.com';
 const FILEBASE_REGION = 'us-east-1';
+// All protocol content lives in this single bucket, addressed only by CID.
+// The S3 interface is used purely as a pinning mechanism; retrieval always goes
+// through the public IPFS gateway. Governance scripts use the same bucket under
+// the `dns-governance/` prefix; the press uses `press/`.
+const FILEBASE_BUCKET = 'membership_card_protocol';
 
 export interface IpfsClient {
   pinToIPFS(content: Uint8Array): Promise<string>;
@@ -52,7 +57,7 @@ export function createIpfsClient(config: PressConfig): IpfsClient {
 
       let cid: string;
       try {
-        cid = await uploadAndCaptureCid(s3, config.FILEBASE_BUCKET, key, content);
+        cid = await uploadAndCaptureCid(s3, FILEBASE_BUCKET, key, content);
       } catch (err) {
         throw Object.assign(
           new Error(`Filebase upload failed: ${String(err)}`),
@@ -97,51 +102,28 @@ export function createIpfsClient(config: PressConfig): IpfsClient {
  * absent (shouldn't happen with Filebase, but defensive), we fall back to
  * a HeadObject call which returns it in object metadata.
  */
+/**
+ * Upload content and retrieve the Filebase-assigned IPFS CID via HeadObject metadata.
+ * Two round trips (PUT + HEAD) is reliable and avoids AWS SDK middleware typing issues.
+ * Filebase stores the CID in object metadata under the key "cid".
+ */
 async function uploadAndCaptureCid(
   s3: S3Client,
   bucket: string,
   key: string,
   content: Uint8Array
 ): Promise<string> {
-  let cidFromHeader: string | undefined;
+  await s3.send(new PutObjectCommand({
+    Bucket: bucket,
+    Key: key,
+    Body: content,
+    ContentType: 'application/octet-stream',
+  }));
 
-  // Middleware runs after deserialization; captures the raw HTTP response header.
-  const handler = s3.middlewareStack.resolve(
-    (next) => async (args) => {
-      const result = await next(args);
-      const httpResponse = result.response as {
-        headers?: Record<string, string>;
-      };
-      if (httpResponse?.headers) {
-        cidFromHeader = httpResponse.headers['x-amz-meta-cid'];
-      }
-      return result;
-    },
-    { step: 'deserialize', priority: 'low', name: 'captureFilecoinCid' }
-  );
-
-  await handler(
-    new PutObjectCommand({
-      Bucket: bucket,
-      Key: key,
-      Body: content,
-      ContentType: 'application/octet-stream',
-    })
-  );
-
-  if (cidFromHeader) {
-    return cidFromHeader;
-  }
-
-  // Fallback: HeadObject returns the CID in Metadata.cid
-  const head = await s3.send(
-    new HeadObjectCommand({ Bucket: bucket, Key: key })
-  );
+  const head = await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
   const cid = head.Metadata?.['cid'];
   if (!cid) {
-    throw new Error(
-      `Filebase did not return an IPFS CID for object ${key} in bucket ${bucket}`
-    );
+    throw new Error(`Filebase did not return an IPFS CID for object ${key} in bucket ${bucket}`);
   }
   return cid;
 }
@@ -164,7 +146,7 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
 }
 
 async function sha256Hex(data: Uint8Array): Promise<string> {
-  const hash = await crypto.subtle.digest('SHA-256', data);
+  const hash = await crypto.subtle.digest('SHA-256', data as unknown as BufferSource);
   return Buffer.from(hash).toString('hex');
 }
 
@@ -186,14 +168,14 @@ export async function checkFilebaseHealth(config: PressConfig): Promise<void> {
   // HeadObject on a non-existent key: 404 means auth worked; any other error is a problem.
   try {
     await s3.send(
-      new HeadObjectCommand({ Bucket: config.FILEBASE_BUCKET, Key: '__health_check__' })
+      new HeadObjectCommand({ Bucket: FILEBASE_BUCKET, Key: '__health_check__' })
     );
   } catch (err) {
     const errName = (err as { name?: string }).name;
     // 404 (NotFound) is fine — it means we reached Filebase and authenticated.
     if (errName === 'NotFound' || errName === 'NoSuchKey') return;
     throw new Error(
-      `Filebase health check failed for bucket "${config.FILEBASE_BUCKET}": ${String(err)}`
+      `Filebase health check failed for bucket "${FILEBASE_BUCKET}": ${String(err)}`
     );
   }
 }
