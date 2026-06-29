@@ -1,0 +1,16 @@
+{
+  "apps": [
+    {
+      "app_id": "example-wallet",
+      "platform": "apns",
+      "wallet_ws_url": "wss://wallet.example.com/ws",
+      "apns": {
+        "key_file": "/app/config/secrets/apns-key.p8",
+        "key_id": "ABCD123456",
+        "team_id": "WXYZ789012",
+        "bundle_id": "com.example.wallet",
+        "sandbox": true
+      }
+    }
+  ]
+}
