@@ -119,6 +119,7 @@ export function assembleCardDocument(
   recipientPubkey: string,
   holderSignature: SignatureField,
   ancestryPubkeys: string[],
+  protocolVersion: string,
   pastKeys?: PastKey[]
 ): Record<string, unknown> {
   const doc: Record<string, unknown> = {
@@ -126,6 +127,7 @@ export function assembleCardDocument(
     ...offer,
     // Add press fields.
     press_card: config.PRESS_CARD_CID,
+    protocol_version: protocolVersion,
     recipient_pubkey: recipientPubkey,
     holder_signature: holderSignature,
     ancestry_pubkeys: ancestryPubkeys,

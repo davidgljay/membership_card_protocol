@@ -12,6 +12,7 @@ import {
   verifyIssuerSignature,
   verifyHolderSignature,
 } from '../../src/functions/issuance.js';
+
 import { canonicalize, canonicalizeExcluding } from '../../src/serialization.js';
 import { createDecipheriv } from 'node:crypto';
 import { hkdf } from '@noble/hashes/hkdf';
@@ -55,6 +56,32 @@ function makeOffer(): IssuerOffer {
     },
   };
 }
+
+describe('assembleCardDocument', () => {
+  it('includes protocol_version in the assembled document', () => {
+    const offer = makeOffer();
+    const holderSig = { public_key: toBase64url(HOLDER_PK), signature: toBase64url(new Uint8Array(2420)) };
+    const doc = assembleCardDocument(CONFIG, offer, toBase64url(HOLDER_PK), holderSig, [], '0.1');
+    expect(doc['protocol_version']).toBe('0.1');
+  });
+
+  it('reflects the protocol_version provided by the caller', () => {
+    const offer = makeOffer();
+    const holderSig = { public_key: toBase64url(HOLDER_PK), signature: toBase64url(new Uint8Array(2420)) };
+    const doc = assembleCardDocument(CONFIG, offer, toBase64url(HOLDER_PK), holderSig, [], '0.2');
+    expect(doc['protocol_version']).toBe('0.2');
+  });
+
+  it('includes all expected press fields alongside protocol_version', () => {
+    const offer = makeOffer();
+    const holderSig = { public_key: toBase64url(HOLDER_PK), signature: toBase64url(new Uint8Array(2420)) };
+    const doc = assembleCardDocument(CONFIG, offer, toBase64url(HOLDER_PK), holderSig, [], '0.1');
+    expect(doc['press_card']).toBe(CONFIG.PRESS_CARD_CID);
+    expect(doc['recipient_pubkey']).toBe(toBase64url(HOLDER_PK));
+    expect(doc['protocol_version']).toBe('0.1');
+    expect(doc['ancestry_pubkeys']).toEqual([]);
+  });
+});
 
 describe('signCardDocument', () => {
   it('adds a valid press_signature to the card document', () => {

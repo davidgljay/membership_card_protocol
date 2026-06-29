@@ -102,12 +102,14 @@ export async function handleOpenOfferClaim(
   }
 
   // 8. Assemble, sign, publish card.
+  const protocolVersion = await ctx.registry.getProtocolVersion();
   const assembled = assembleCardDocument(
     ctx.config,
     offer as import('../types.js').IssuerOffer,
     recipient_pubkey,
     recipient_signature,
-    [] // ancestry: Phase 3 placeholder
+    [], // ancestry: Phase 3 placeholder
+    protocolVersion
   );
   const signed = signCardDocument(ctx.config, assembled);
   const cardCid = await publishCard(signed, ctx.ipfs);

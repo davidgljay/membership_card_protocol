@@ -124,6 +124,7 @@ export async function handleIssueFinalize(
   // Assemble, sign, and publish card.
   const policy = await fetchPolicyCard(ctx.ipfs, offerRecord.policy_cid);
   const ancestry: string[] = []; // Phase 3: ancestry chain walk deferred to Phase 4.
+  const protocolVersion = await ctx.registry.getProtocolVersion();
 
   const assembled = assembleCardDocument(
     ctx.config,
@@ -131,6 +132,7 @@ export async function handleIssueFinalize(
     body.recipient_pubkey,
     body.holder_signature,
     ancestry,
+    protocolVersion,
     body.past_keys
   );
 

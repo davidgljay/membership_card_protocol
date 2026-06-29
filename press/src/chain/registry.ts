@@ -49,6 +49,7 @@ const REGISTRY_ABI = parseAbi([
   'function GetPressAuthorization(bytes32 policy_address, bytes32 press_address) external view returns (bytes press_public_key, bytes32 mldsa44_key_hash, uint8 key_scheme, bool active, uint64 next_sequence, uint64 authorized_at, uint64 revoked_at)',
   'function GetOpenOfferUseCount(bytes32 offer_id) external view returns (uint64 use_count)',
   'function GetSubCardEntry(bytes32 sub_card_address) external view returns (bytes32 master_card_address, bytes registration_log_head, bytes sub_card_doc_cid, bool active, uint64 registered_at, uint64 deregistered_at)',
+  'function get_protocol_version() external view returns (string)',
 ]);
 
 // On-chain revert selectors the press needs to act on.
@@ -98,6 +99,8 @@ export interface RegistryClient {
   getNextSequence(policyAddress: Hex): Promise<bigint>;
   getOpenOfferUseCount(offerId: Hex): Promise<bigint>;
   getSubCardEntry(subCardAddress: Hex): Promise<SubCardEntry>;
+  /** Read the current protocol version string from the logic contract. */
+  getProtocolVersion(): Promise<string>;
 
   registerCard(params: RegisterCardParams): Promise<Hex>;
   updateCardHead(params: UpdateCardHeadParams): Promise<Hex>;
@@ -287,6 +290,16 @@ export function createRegistryClient(config: PressConfig): RegistryClient {
       args: [offerId],
     });
     return result as bigint;
+  }
+
+  async function getProtocolVersion(): Promise<string> {
+    const result = await publicClient.readContract({
+      address: contractAddress,
+      abi: REGISTRY_ABI,
+      functionName: 'get_protocol_version',
+      args: [],
+    });
+    return result as string;
   }
 
   async function getSubCardEntry(subCardAddress: Hex): Promise<SubCardEntry> {
@@ -512,6 +525,7 @@ export function createRegistryClient(config: PressConfig): RegistryClient {
     getNextSequence,
     getOpenOfferUseCount,
     getSubCardEntry,
+    getProtocolVersion,
     registerCard,
     updateCardHead,
     claimOpenOffer,
