@@ -1,0 +1,43 @@
+import http from "node:http";
+import { router } from "./router.js";
+import { loadAppRegistry } from "./utils/apps.js";
+import { runStartupChecks } from "./startup.js";
+
+const PORT = parseInt(process.env.PORT ?? "3000", 10);
+
+const APP_REGISTRY_PATH = process.env.APP_REGISTRY_PATH;
+if (!APP_REGISTRY_PATH) {
+  console.error("APP_REGISTRY_PATH environment variable is required");
+  process.exit(1);
+}
+loadAppRegistry(APP_REGISTRY_PATH);
+
+const server = http.createServer((req, res) => {
+  Promise.resolve(router(req, res)).catch((err: unknown) => {
+    console.error("Unhandled route error:", err);
+    if (!res.headersSent) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "INTERNAL_ERROR", message: "Unexpected error" }));
+    }
+  });
+});
+
+server.on("upgrade", (req, socket, head) => {
+  import("./routes/ws.js").then(({ handleUpgrade }) => {
+    handleUpgrade(req, socket, head);
+  });
+});
+
+// Run startup checks before accepting requests
+runStartupChecks()
+  .then(() => {
+    server.listen(PORT, () => {
+      console.log(`Relay listening on port ${PORT}`);
+    });
+  })
+  .catch((err) => {
+    console.error("Startup failed:", err);
+    process.exit(1);
+  });
+
+export { server };

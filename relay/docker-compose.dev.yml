@@ -1,0 +1,21 @@
+services:
+  relay:
+    build:
+      context: .
+      target: build
+    command: npx tsx watch src/server.ts
+    volumes:
+      - ./src:/app/src
+      - ./config:/app/config
+      - db_data:/data
+    environment:
+      - NODE_ENV=development
+
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
