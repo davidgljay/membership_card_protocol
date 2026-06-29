@@ -6,8 +6,28 @@ export interface UuidRecord {
   app_id: string;
   push_token: string;
   wallet_ws_url: string;
+  device_credential: string;
   status: UuidStatus;
   created_at: string;
+}
+
+export interface CredentialRecord {
+  push_token: string;
+  app_id: string;
+  created_at: string;
+}
+
+export interface PendingMessage {
+  uuid: string;
+  blob: string;
+  wallet_url: string;
+  received_at: string;
+}
+
+export interface DeleteJob {
+  wallet_url: string;
+  uuid: string;
+  attempts: number;
 }
 
 let client: Redis | null = null;
@@ -116,4 +136,106 @@ export async function closeRedis(): Promise<void> {
     await client.quit();
     client = null;
   }
+}
+
+// ── Device credential store ────────────────────────────────────────────────
+
+export async function setCredential(
+  credential: string,
+  record: CredentialRecord,
+  ttlSeconds: number
+): Promise<void> {
+  const redis = getRedisClient();
+  const key = `cred:${credential}`;
+  await redis.hset(key, record as unknown as Record<string, string>);
+  await redis.expire(key, ttlSeconds);
+}
+
+export async function getCredential(credential: string): Promise<CredentialRecord | null> {
+  const redis = getRedisClient();
+  const raw = await redis.hgetall(`cred:${credential}`);
+  if (!raw || !raw.push_token) return null;
+  return raw as unknown as CredentialRecord;
+}
+
+export async function refreshCredential(
+  credential: string,
+  pushToken: string,
+  ttlSeconds: number
+): Promise<boolean> {
+  const redis = getRedisClient();
+  const key = `cred:${credential}`;
+  const exists = await redis.exists(key);
+  if (!exists) return false;
+  await redis.hset(key, "push_token", pushToken);
+  await redis.expire(key, ttlSeconds);
+  return true;
+}
+
+// ── Message store ──────────────────────────────────────────────────────────
+
+const DRAIN_MESSAGES_SCRIPT = `
+local items = redis.call('LRANGE', KEYS[1], 0, -1)
+if #items > 0 then
+  redis.call('DEL', KEYS[1])
+end
+return items
+`;
+
+export async function storeMessage(
+  credential: string,
+  entry: PendingMessage,
+  ttlSeconds: number
+): Promise<void> {
+  const redis = getRedisClient();
+  const key = `messages:${credential}`;
+  await redis.rpush(key, JSON.stringify(entry));
+  await redis.expire(key, ttlSeconds);
+}
+
+export async function drainMessages(credential: string): Promise<PendingMessage[]> {
+  const redis = getRedisClient();
+  const raw = (await redis.eval(DRAIN_MESSAGES_SCRIPT, 1, `messages:${credential}`)) as string[];
+  return raw.map((item) => JSON.parse(item) as PendingMessage);
+}
+
+// ── Pending delete queue ───────────────────────────────────────────────────
+
+const DEQUEUE_DELETES_SCRIPT = `
+local now = ARGV[1]
+local jobs = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', now)
+if #jobs > 0 then
+  redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now)
+end
+return jobs
+`;
+
+const PENDING_DELETES_KEY = "pending_deletes";
+
+export async function enqueuePendingDelete(
+  job: DeleteJob,
+  executeAtMs: number
+): Promise<void> {
+  const redis = getRedisClient();
+  await redis.zadd(PENDING_DELETES_KEY, executeAtMs, JSON.stringify(job));
+}
+
+export async function dequeuePendingDeletes(): Promise<DeleteJob[]> {
+  const redis = getRedisClient();
+  const now = Date.now().toString();
+  const raw = (await redis.eval(
+    DEQUEUE_DELETES_SCRIPT,
+    1,
+    PENDING_DELETES_KEY,
+    now
+  )) as string[];
+  return raw.map((item) => JSON.parse(item) as DeleteJob);
+}
+
+export async function requeuePendingDelete(
+  job: DeleteJob,
+  executeAtMs: number
+): Promise<void> {
+  const redis = getRedisClient();
+  await redis.zadd(PENDING_DELETES_KEY, executeAtMs, JSON.stringify(job));
 }

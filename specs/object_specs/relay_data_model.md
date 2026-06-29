@@ -1,8 +1,9 @@
 # Notification Relay — Data Model Spec
 
-**Version:** 0.2 (draft)
-**Date:** 2026-06-28
+**Version:** 0.3 (draft)
+**Date:** 2026-06-29
 **Status:** Draft
+**Changes from v0.2:** `device_credential` field added to UUID records (issued per registration session; authenticates `GET /sse`, `GET /pending`, and `POST /ack`). New Redis sections: Message Store (`messages:{push_token}` list) and Pending Delete Queue (`pending_deletes` sorted set). UUID state machine note updated: UUIDs transition to `consumed` on relay receipt of blob, not on device pickup. New environment variables added.
 
 ---
 
@@ -16,7 +17,9 @@
    - 2.4 [Atomic Transitions](#24-atomic-transitions)
    - 2.5 [Startup Scan for Stuck Active UUIDs](#25-startup-scan-for-stuck-active-uuids)
    - 2.6 [Empty-Store Detection](#26-empty-store-detection)
-3. [SQLite — Device Registry](#3-sqlite--device-registry)
+3. [Redis — Message Store](#3-redis--message-store)
+4. [Redis — Pending Delete Queue](#4-redis--pending-delete-queue)
+5. [SQLite — Device Registry](#5-sqlite--device-registry)
    - 3.1 [Schema](#31-schema)
    - 3.2 [Operations](#32-operations)
    - 3.3 [Pruning](#33-pruning)
@@ -66,12 +69,15 @@ Each UUID key is a Redis hash with the following fields:
 | Field | Type | Description |
 |---|---|---|
 | `app_id` | string | App identifier; references the app registry |
-| `push_token` | string | Platform push token for the device; used when the UUID is presented to `/notify/{uuid}` |
-| `wallet_ws_url` | string | Base WebSocket URL of the wallet service; used when the UUID is presented to `/ws/{uuid}` |
+| `push_token` | string | Platform push token for the device |
+| `wallet_ws_url` | string | Base WebSocket URL of the wallet service; used when the UUID is presented to `/ws/{uuid}` or when sending staggered deletes |
+| `device_credential` | string | Opaque token shared by all UUIDs in the same registration session; authenticates `GET /sse`, `GET /pending`, and `POST /ack` |
 | `status` | string | `"unused"`, `"in_flight"`, `"active"`, or `"consumed"` |
 | `created_at` | string | ISO 8601 UTC timestamp of UUID creation |
 
-UUIDs are untyped — both `push_token` and `wallet_ws_url` are stored on every record. The endpoint the UUID is presented to determines which field is used. This allows the device to freely allocate UUIDs between push delivery and WebSocket use without the relay enforcing a split.
+UUIDs are untyped — a UUID may be used at `POST /deliver/{uuid}` (message delivery) or `GET /ws/{uuid}` (WebSocket bridging). The device allocates UUIDs between these uses without the relay enforcing a split.
+
+**`device_credential`:** All UUIDs returned in a single `POST /register` call share the same `device_credential` value. The relay can resolve `device_credential → push_token` by looking up any UUID that carries that credential. Credentials are opaque random tokens generated alongside the UUID pool; they carry no device-identifiable information beyond the push token association already present in the UUID record.
 
 **Why `wallet_ws_url` is stored per-UUID:** The app registry is mutable (reloaded on restart). Storing the wallet URL at registration time ensures that in-flight UUIDs always resolve to the correct endpoint, even if the app config changes between registration and use.
 
@@ -127,9 +133,133 @@ Note: a store is also empty immediately after first deployment (before any regis
 
 ---
 
-## 3. SQLite — Device Registry
+## 3. Redis — Message Store
 
-### 3.1 Schema
+### 3.1 Key Schema
+
+Pending message blobs are stored as a Redis list under the key:
+
+```
+messages:{push_token}
+```
+
+where `{push_token}` is the platform push token for the device. Each list entry is a JSON-encoded object:
+
+```json
+{
+  "uuid":         "<delivery UUID — used as message identifier and for staggered delete>",
+  "blob":         "<E2E encrypted message blob, base64url>",
+  "wallet_url":   "<wallet service base URL — used for staggered delete>",
+  "received_at":  "<ISO 8601 UTC timestamp>"
+}
+```
+
+### 3.2 Operations
+
+**Store a message (on `POST /deliver/{uuid}`):**
+
+```
+RPUSH messages:{push_token} <json entry>
+EXPIRE messages:{push_token} <UUID_TTL_SECONDS>  -- refreshed on each push
+```
+
+**Retrieve and clear (on `GET /pending`):**
+
+Implemented as a Lua script to atomically read and delete:
+
+```lua
+local key = KEYS[1]
+local items = redis.call('LRANGE', key, 0, -1)
+redis.call('DEL', key)
+return items
+```
+
+**Remove individual entry (after SSE/WebSocket delivery, before `POST /ack`):**
+
+Not performed individually. The message store is cleared atomically on `GET /pending`. For SSE delivery, messages are removed from the store only after `POST /ack` is received; if no ack arrives (connection drop), the blob remains in the store for `GET /pending` pickup.
+
+### 3.3 TTL
+
+The `messages:{push_token}` key TTL is reset to `UUID_TTL_SECONDS` (default 30 days) on each `RPUSH`. A device that is offline for more than 30 days after its last received message will have its pending blobs expired by Redis. On next wake, the device calls `GET /pending`, receives an empty list, and fetches messages via re-registration and wallet retransmission.
+
+### 3.4 Privacy Note
+
+The message store key includes the push token in plaintext. This is consistent with the relay's existing storage of push tokens in UUID records; the relay already associates push tokens with delivery events. The message store does not add new push-token-linked data beyond what is already present in the UUID store.
+
+---
+
+## 4. Redis — Pending Delete Queue
+
+### 4.1 Key Schema
+
+Staggered wallet delete jobs are stored in a Redis sorted set:
+
+```
+pending_deletes
+```
+
+Each member is a JSON-encoded job object:
+
+```json
+{
+  "wallet_url": "<wallet service base URL>",
+  "uuid":       "<delivery UUID>",
+  "attempts":   0
+}
+```
+
+The sort score is the Unix timestamp (seconds) at which the job should be executed.
+
+### 4.2 Operations
+
+**Enqueue a delete job (on `POST /ack`):**
+
+```
+ZADD pending_deletes <execute_at_unix_ts> <json job>
+```
+
+where `execute_at_unix_ts = now + random(0, MAX_DELETE_DELAY_SECONDS)`.
+
+**Dequeue ready jobs (background poll):**
+
+```lua
+-- Returns all jobs with score <= now, atomically removes them
+local now = ARGV[1]
+local jobs = redis.call('ZRANGEBYSCORE', 'pending_deletes', '-inf', now)
+if #jobs > 0 then
+  redis.call('ZREMRANGEBYSCORE', 'pending_deletes', '-inf', now)
+end
+return jobs
+```
+
+**Requeue on failure (exponential backoff):**
+
+```
+ZADD pending_deletes <new_execute_at> <updated_json_job>
+```
+
+Backoff schedule: `min(base_delay * 2^attempts, 86400)` seconds, where `base_delay = 300` (5 minutes) and the cap is 86400 (24 hours). `attempts` is incremented in the job JSON before requeuing.
+
+### 4.3 Durability
+
+The pending delete queue is held in Redis (in-memory, no persistence). Jobs lost to a relay restart are benign: the wallet service retains messages until it receives the delete call. If the call never arrives, the wallet retransmits on device UUID re-registration; the device deduplicates by message ID within the decrypted blob.
+
+### 4.4 Background Job
+
+A background polling loop runs on `DELETE_JOB_POLL_INTERVAL_MS` (default 60,000 ms). On each tick:
+
+1. Dequeue all jobs with `score ≤ now` using the Lua script above.
+2. For each job, call `DELETE {wallet_url}/messages/{uuid}`.
+3. On success (2xx) or 404: discard the job.
+4. On failure (5xx, timeout, network error): requeue with exponential backoff.
+
+On relay shutdown (`SIGTERM`), the background job performs one final flush (best-effort, 5-second timeout) before the process exits.
+
+---
+
+## 5. SQLite — Device Registry
+
+### 5.1 Schema
 
 ```sql
 CREATE TABLE IF NOT EXISTS device_registry (
@@ -146,7 +276,7 @@ The `push_token` is the primary key. A device that re-registers with the same pu
 
 No UUID associations are stored in SQLite. The only purpose of this table is to hold enough information to send a re-registration push after a Redis restart.
 
-### 3.2 Operations
+### 5.2 Operations
 
 **Upsert on registration:**
 
@@ -179,7 +309,7 @@ WHERE last_registered_at < ?;  -- cutoff = now - 90 days
 
 Run weekly on a randomized schedule (± up to 1 hour jitter to avoid thundering herd across instances).
 
-### 3.3 Pruning
+### 5.3 Pruning
 
 Records older than **90 days** are deleted. The 90-day threshold balances two concerns:
 
@@ -190,9 +320,9 @@ Records older than **90 days** are deleted. The 90-day threshold balances two co
 
 ---
 
-## 4. App Registry Config
+## 6. App Registry Config
 
-### 4.1 JSON Schema
+### 6.1 JSON Schema
 
 The app registry is a JSON file at the path specified by the `APP_REGISTRY_PATH` environment variable. It is loaded once at startup; changes require a service restart.
 
@@ -218,7 +348,7 @@ interface AppConfig {
 }
 ```
 
-### 4.2 Example
+### 6.2 Example
 
 ```json
 {
@@ -249,7 +379,7 @@ interface AppConfig {
 
 Note that two app entries can share the same `wallet_ws_url` — iOS and Android variants of the same wallet are common.
 
-### 4.3 Validation Rules
+### 6.3 Validation Rules
 
 The service validates the registry on startup and exits with a clear error message if any of the following conditions are violated:
 
@@ -262,51 +392,99 @@ The service validates the registry on startup and exits with a clear error messa
 
 ---
 
-## 5. UUID State Machine
+## 7. UUID State Machine
 
-### 5.1 States
+### 7.1 States
 
 | State | Meaning |
 |---|---|
 | `unused` | UUID has been issued to a device; not yet presented to the relay for delivery |
-| `in_flight` | Push dispatch is in progress. Transient — prevents double-delivery under concurrent `/notify` requests. |
+| `in_flight` | Push dispatch in progress after blob receipt. Transient — prevents double-delivery under concurrent `/deliver` requests. |
 | `active` | UUID is currently bridging a live device ↔ wallet WebSocket session. |
-| `consumed` | UUID has been permanently used (push delivered or WebSocket session closed). |
+| `consumed` | UUID has been permanently used (blob accepted, or WebSocket session closed). |
 
-`consumed` is a terminal state. There is no transition out of `consumed`. `in_flight` is transient and should never be a resting state under normal operation; it is resolved to `consumed` or `unused` within the same request lifecycle.
+`consumed` is a terminal state. `in_flight` is transient: it is resolved to `consumed` or `unused` within the same request lifecycle.
 
-### 5.2 Transitions
+**Key change from v0.2:** Delivery UUIDs now transition to `consumed` when the relay accepts and stores the blob (`POST /deliver/{uuid}`), not when the device picks up the message. Message lifecycle is tracked separately in the message store (§3); UUID status is not used to track delivery to the device.
+
+### 7.2 Transitions
 
 | From | To | Trigger | Endpoint |
 |---|---|---|---|
-| `unused` | `in_flight` | Push dispatch begins (atomic lock) | `POST /notify/{uuid}` |
-| `in_flight` | `consumed` | Push dispatched successfully | `POST /notify/{uuid}` |
-| `in_flight` | `unused` | Push dispatch failed (APNs/FCM error) | `POST /notify/{uuid}` |
+| `unused` | `in_flight` | Blob receipt begins (atomic lock) | `POST /deliver/{uuid}` |
+| `in_flight` | `consumed` | Blob stored successfully | `POST /deliver/{uuid}` |
+| `in_flight` | `unused` | Blob storage or push dispatch failed | `POST /deliver/{uuid}` |
 | `unused` | `active` | Device WebSocket connection accepted | `GET /ws/{uuid}` on open |
 | `unused` | `consumed` | Wallet service rejects outbound WebSocket | `GET /ws/{uuid}` on wallet rejection |
 | `active` | `consumed` | Session teardown (device close, wallet close, network error) | `GET /ws/{uuid}` on close |
 | `active` | `consumed` | Relay startup scan (unclean shutdown recovery) | Startup hook |
-| `in_flight` | `consumed` | Relay startup scan (crash during push dispatch) | Startup hook |
+| `in_flight` | `consumed` | Relay startup scan (crash during delivery) | Startup hook |
 | TTL expiry | key deleted | 30 days elapsed with no transition | Redis automatic |
 
-### 5.3 Invalid Transitions
-
-The Lua transition script enforces that the current status matches the expected `from` state before applying any transition. The following are explicitly invalid and return an error:
+### 7.3 Invalid Transitions
 
 | Attempted transition | Error returned |
 |---|---|
 | Any → from `consumed` | `UUID_CONSUMED` (410 or WebSocket 4010) |
-| `in_flight` → via a second `/notify` call | `UUID_CONSUMED` (410) — the `unused → in_flight` transition fails because status is already `in_flight` |
-| `active` → `unused` | Not representable; Lua script rejects wrong-status transitions |
+| `in_flight` → via a second `/deliver` call | `UUID_CONSUMED` (410) |
+| `active` → `unused` | Rejected by Lua script |
 | Transition on unknown key | `UNKNOWN_UUID` (404 or WebSocket 4004) |
 
-**Startup scan and `in_flight`:** If the relay crashes while a push dispatch is in progress, the UUID is left in `in_flight`. On next startup, the stuck-state scan treats `in_flight` as unrecoverable (we cannot know whether the push was delivered before the crash) and transitions it to `consumed`. This is the conservative choice: the wallet service's next `POST /notify/{uuid}` call will receive 410 and move to the next UUID in its pool.
-
-**Note on `active` UUID startup scan:** The data model spec previously noted that `in_flight` is "push UUID only." With untyped UUIDs (v0.2+), any UUID can be used for either delivery mode. `in_flight` is still specific to the push path (`POST /notify/{uuid}` is the only endpoint that uses it); WebSocket UUIDs go directly `unused → active`. The startup scan handles both stuck states.
+**Startup scan:** `in_flight` UUIDs found on startup are transitioned to `consumed` (we cannot know if the blob was stored before the crash). `active` UUIDs are also transitioned to `consumed` (WebSocket sessions do not survive restarts). Both counts are logged at `WARN` level.
 
 ---
 
-## 6. Environment Variables
+## 8. Device Credential Store
+
+### 8.1 Purpose and Threat Model
+
+The device credential authenticates the device to the relay for all device-facing endpoints: `POST /register` (replenishment), `GET /sse`, `GET /pending`, and `POST /ack`. It prevents the following attacks:
+
+- **Message interception:** An attacker who knows the device's push token cannot drain the message store without also possessing the device credential.
+- **False ack / clearance hijacking:** An attacker cannot cause the relay to schedule wallet deletes for messages the device has not received.
+- **UUID registration abuse:** A `POST /register` call without a valid credential creates a new isolated credential — it cannot inject UUIDs into an existing device's pool or access its messages.
+
+The message store is keyed by `device_credential` (not `push_token`). Two registrations with the same push token but different credentials produce isolated message stores; only the credential associated with the UUIDs the wallet actually uses will receive wallet-originated blobs.
+
+### 8.2 Key Schema
+
+Device credentials are stored in Redis as a hash under:
+
+```
+cred:{device_credential}
+```
+
+Fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `push_token` | string | Platform push token associated with this credential |
+| `app_id` | string | App identifier |
+| `created_at` | string | ISO 8601 UTC timestamp |
+
+TTL: 30 days, refreshed on every `POST /register` call that presents this credential.
+
+### 8.3 Bootstrap vs. Replenishment
+
+**Bootstrap (first registration):** `POST /register` with no `Authorization` header. The relay generates a new credential, stores it under `cred:{credential}`, and returns it in the response. The device must store this credential in device secure storage (iOS Keychain / Android Keystore) immediately.
+
+**Replenishment:** `POST /register` with `Authorization: Bearer {device_credential}`. The relay validates the credential exists and is not expired, issues new UUIDs under the same credential (updating the `push_token` if it has rotated), and refreshes the credential TTL.
+
+Attempting replenishment with an unknown or expired credential returns `401 INVALID_CREDENTIAL`. The device must re-bootstrap (new `POST /register` without auth) and re-register UUIDs with all wallet services.
+
+### 8.4 Message Store Key
+
+The message store (§3) uses `device_credential` as the key:
+
+```
+messages:{device_credential}
+```
+
+This ensures that blobs delivered to a UUID are only accessible to the device that registered that UUID — even if another entity independently calls `POST /register` with the same push token.
+
+---
+
+## 9. Environment Variables
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
@@ -315,6 +493,8 @@ The Lua transition script enforces that the current status matches the expected 
 | `APP_REGISTRY_PATH` | Yes | — | Path to the app registry JSON config file |
 | `RELAY_ID` | Yes | — | Unique identifier for this relay instance, included in re-registration push payloads |
 | `PORT` | No | `3000` | HTTP port the relay listens on |
-| `UUID_TTL_SECONDS` | No | `2592000` | TTL for UUID records in Redis (default 30 days) |
+| `UUID_TTL_SECONDS` | No | `2592000` | TTL for UUID records and device credentials in Redis (default 30 days) |
 | `DEVICE_REGISTRY_RETENTION_DAYS` | No | `90` | Age threshold for device registry pruning |
+| `MAX_DELETE_DELAY_SECONDS` | No | `21600` | Upper bound of staggered wallet delete delay (default 6 hours) |
+| `DELETE_JOB_POLL_INTERVAL_MS` | No | `60000` | How often the delete background job polls Redis (default 60 seconds) |
 | `NODE_ENV` | No | `production` | Set to `development` for verbose logging and stub push mode |

@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readBody, sendJson, sendError } from "../utils/http.js";
 import { getApp } from "../utils/apps.js";
-import { setUuid } from "../utils/storage/redis.js";
+import { setUuid, setCredential, getCredential, refreshCredential } from "../utils/storage/redis.js";
 import { upsertDevice } from "../utils/storage/sqlite.js";
 import type { UuidRecord } from "../utils/storage/redis.js";
 
@@ -9,6 +9,13 @@ interface RegisterBody {
   app_id?: unknown;
   push_token?: unknown;
   count?: unknown;
+}
+
+function extractBearerToken(req: IncomingMessage): string | null {
+  const auth = req.headers["authorization"];
+  if (!auth || !auth.startsWith("Bearer ")) return null;
+  const token = auth.slice("Bearer ".length).trim();
+  return token.length > 0 ? token : null;
 }
 
 export async function handleRegister(
@@ -51,8 +58,61 @@ export async function handleRegister(
   }
 
   const ttl = parseInt(process.env.UUID_TTL_SECONDS ?? "2592000", 10);
-  const uuids: string[] = [];
+  const existingCredential = extractBearerToken(req);
 
+  let deviceCredential: string;
+  let isBootstrap: boolean;
+
+  if (existingCredential) {
+    // Replenishment: validate existing credential
+    let credRecord;
+    try {
+      credRecord = await getCredential(existingCredential);
+    } catch (err) {
+      console.error("Redis read failed during credential lookup:", err);
+      sendError(res, 500, "INTERNAL_ERROR", "Failed to validate credential");
+      return;
+    }
+
+    if (!credRecord) {
+      sendError(res, 401, "INVALID_CREDENTIAL", "Device credential is unknown or has expired");
+      return;
+    }
+
+    // Update push_token if rotated, refresh TTL
+    try {
+      await refreshCredential(existingCredential, push_token, ttl);
+    } catch (err) {
+      console.error("Failed to refresh credential:", err);
+      sendError(res, 500, "INTERNAL_ERROR", "Failed to refresh credential");
+      return;
+    }
+
+    deviceCredential = existingCredential;
+    isBootstrap = false;
+  } else {
+    // Bootstrap: generate a new credential
+    const bytes = new Uint8Array(32);
+    crypto.getRandomValues(bytes);
+    deviceCredential = Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+
+    try {
+      await setCredential(deviceCredential, {
+        push_token,
+        app_id,
+        created_at: new Date().toISOString(),
+      }, ttl);
+    } catch (err) {
+      console.error("Redis write failed during credential creation:", err);
+      sendError(res, 500, "INTERNAL_ERROR", "Failed to create credential");
+      return;
+    }
+
+    isBootstrap = true;
+  }
+
+  // Generate UUIDs under the resolved credential
+  const uuids: string[] = [];
   try {
     for (let i = 0; i < count; i++) {
       const uuid = crypto.randomUUID();
@@ -60,6 +120,7 @@ export async function handleRegister(
         app_id,
         push_token,
         wallet_ws_url: app.wallet_ws_url,
+        device_credential: deviceCredential,
         status: "unused",
         created_at: new Date().toISOString(),
       };
@@ -67,7 +128,7 @@ export async function handleRegister(
       uuids.push(uuid);
     }
   } catch (err) {
-    console.error("Redis write failed during registration:", err);
+    console.error("Redis write failed during UUID generation:", err);
     sendError(res, 500, "INTERNAL_ERROR", "Failed to write UUID records");
     return;
   }
@@ -79,5 +140,9 @@ export async function handleRegister(
     // Non-fatal: UUIDs are already written; log and continue
   }
 
-  sendJson(res, 200, { uuids });
+  if (isBootstrap) {
+    sendJson(res, 200, { uuids, device_credential: deviceCredential });
+  } else {
+    sendJson(res, 200, { uuids });
+  }
 }

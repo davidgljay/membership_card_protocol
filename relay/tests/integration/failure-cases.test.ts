@@ -116,6 +116,7 @@ async function seedUuid(uuid: string, status: "unused" | "active" | "in_flight" 
     app_id: TEST_APP_ID,
     push_token: "test-token",
     wallet_ws_url: walletBaseUrl,
+    device_credential: "test-device-credential",
     status,
     created_at: new Date().toISOString(),
   }, 300);
@@ -126,7 +127,7 @@ async function seedUuid(uuid: string, status: "unused" | "active" | "in_flight" 
 describe("Failure case: UUID pool exhausted at wallet", () => {
   it("wallet moves to next UUID after 404 on unknown UUID", async () => {
     // Relay returns 404 on unknown UUID — wallet should discard and use next
-    const { status, body } = await post("/notify/00000000-0000-4000-8000-000000000099");
+    const { status, body } = await post("/deliver/00000000-0000-4000-8000-000000000099", { blob: "x" });
     expect(status).toBe(404);
     expect(body.error).toBe("UNKNOWN_UUID");
   });
@@ -134,24 +135,20 @@ describe("Failure case: UUID pool exhausted at wallet", () => {
   it("wallet moves to next UUID after 410 on consumed UUID", async () => {
     const uuid = crypto.randomUUID();
     await seedUuid(uuid, "consumed");
-    const { status, body } = await post(`/notify/${uuid}`);
+    const { status, body } = await post(`/deliver/${uuid}`, { blob: "x" });
     expect(status).toBe(410);
     expect(body.error).toBe("UUID_CONSUMED");
   });
 });
 
 describe("Failure case: relay unreachable / push dispatch fails", () => {
-  it("UUID is NOT consumed when push dispatch fails (502 returned, UUID retryable)", async () => {
-    // In production mode dispatchPush would throw; we simulate by using an in_flight UUID
-    // which causes the transition to fail — we instead test the retry path directly
-    // by seeding a UUID, letting notify transition it to in_flight, and checking rollback.
-    // Since we're in stub mode (NODE_ENV=development), push always "succeeds". We test
-    // the 502 path by pre-poisoning the UUID to in_flight so the Lua transition fails
-    // (simulating a concurrent request that already claimed the UUID).
+  it("UUID is NOT consumed when deliver is attempted on an in_flight UUID", async () => {
+    // Simulate a concurrent request that already claimed the UUID (in_flight).
+    // A second caller attempting to deliver should get 410 UUID_CONSUMED and
+    // the UUID should remain in_flight (not double-consumed).
     const uuid = crypto.randomUUID();
     await seedUuid(uuid, "in_flight");
-    const { status, body } = await post(`/notify/${uuid}`);
-    // status != unused → 410 UUID_CONSUMED (in_flight treated as consumed for the caller)
+    const { status, body } = await post(`/deliver/${uuid}`, { blob: "x" });
     expect(status).toBe(410);
     expect(body.error).toBe("UUID_CONSUMED");
     // The UUID remains in_flight (not consumed by this caller)
@@ -214,8 +211,8 @@ describe("Failure case: push token rotated", () => {
     const uuid = crypto.randomUUID();
     await setUuid(uuid, {
       app_id: TEST_APP_ID, push_token: "old-token",
-      wallet_ws_url: walletBaseUrl, status: "unused",
-      created_at: new Date().toISOString(),
+      wallet_ws_url: walletBaseUrl, device_credential: "test-cred",
+      status: "unused", created_at: new Date().toISOString(),
     }, 1); // 1 second TTL
 
     // Confirm UUID exists
@@ -230,11 +227,11 @@ describe("Failure case: push token rotated", () => {
     const uuid = crypto.randomUUID();
     await setUuid(uuid, {
       app_id: TEST_APP_ID, push_token: "old-token",
-      wallet_ws_url: walletBaseUrl, status: "unused",
-      created_at: new Date().toISOString(),
+      wallet_ws_url: walletBaseUrl, device_credential: "test-cred",
+      status: "unused", created_at: new Date().toISOString(),
     }, 1);
     await new Promise<void>((r) => setTimeout(r, 1500));
-    const { status, body } = await post(`/notify/${uuid}`);
+    const { status, body } = await post(`/deliver/${uuid}`, { blob: "x" });
     expect(status).toBe(404);
     expect(body.error).toBe("UNKNOWN_UUID");
   });
@@ -244,12 +241,12 @@ describe("Failure case: UUID rejected by relay (already used or unknown)", () =>
   it("relay returns 410 for already-used UUID — wallet discards and retries with next UUID", async () => {
     const uuid = crypto.randomUUID();
     await seedUuid(uuid, "consumed");
-    const { status } = await post(`/notify/${uuid}`);
+    const { status } = await post(`/deliver/${uuid}`, { blob: "x" });
     expect(status).toBe(410);
   });
 
   it("relay returns 404 for unknown UUID", async () => {
-    const { status } = await post("/notify/aaaaaaaa-0000-4000-8000-000000000000");
+    const { status } = await post("/deliver/aaaaaaaa-0000-4000-8000-000000000000", { blob: "x" });
     expect(status).toBe(404);
   });
 });

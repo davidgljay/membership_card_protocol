@@ -2,6 +2,7 @@ import { scanActiveUuids, transitionUuid } from "./utils/storage/redis.js";
 import { runReregistrationCheck } from "./utils/reregistration.js";
 import { getDb } from "./utils/storage/sqlite.js";
 import { startPruningJob } from "./utils/pruning.js";
+import { startWalletClearance } from "./utils/wallet_clearance.js";
 
 export async function runStartupChecks(): Promise<void> {
   // Ensure SQLite schema is created
@@ -28,4 +29,7 @@ export async function runStartupChecks(): Promise<void> {
 
   // Weekly SQLite pruning job
   startPruningJob();
+
+  // Staggered wallet clearance background job
+  startWalletClearance();
 }
