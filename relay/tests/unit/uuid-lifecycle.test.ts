@@ -21,11 +21,12 @@ process.env.REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 
 const TTL = 60;
 
-function makeRecord(status: UuidStatus): UuidRecord {
+function makeRecord(status: UuidStatus, deviceCredential = "test-device-credential"): UuidRecord {
   return {
     app_id: "test-app",
     push_token: "test-token",
     wallet_ws_url: "wss://wallet.example.com/ws",
+    device_credential: deviceCredential,
     status,
     created_at: new Date().toISOString(),
   };

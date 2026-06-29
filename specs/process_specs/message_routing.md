@@ -1,8 +1,9 @@
 # Message Routing — Process Spec
 
-**Version:** 0.1 (draft)
-**Date:** 2026-06-14
+**Version:** 0.2 (draft)
+**Date:** 2026-06-29
 **Status:** Draft
+**Changes from v0.1:** Wallet-to-relay delivery updated — wallet now calls `POST /deliver/{uuid}` with the encrypted blob body rather than a bodyless `POST /notify/{uuid}`. Multi-device fan-out added: wallet stores UUID pools per device_key and delivers once per device on each message. Wallet message retention rule added: wallet retains messages until `DELETE /messages/{uuid}` is received from the relay. UUID re-registration retransmit trigger added.
 
 ---
 
@@ -150,6 +151,54 @@ Wallet service B
 ```
 
 If wallet service B does not hold `recipient_hash`, it returns `410 Gone` with the current `wallet_service_id` for that hash (if known). Wallet service A updates its local routing table and retries.
+
+### Relay Delivery and Multi-Device Fan-out
+
+After placing the message in the recipient card's inbound queue, wallet service B delivers the encrypted payload to the relay for device notification. The wallet service maintains a UUID pool per registered device, keyed by `device_key = hash(device_id || card_hash)` (opaque to the wallet; derived by the device):
+
+```
+card_hash → {
+  device_key_1: { delivery_uuids: [...], websocket_uuids: [...] },
+  device_key_2: { delivery_uuids: [...], websocket_uuids: [...] },
+  ...
+}
+```
+
+For each registered `device_key` bucket:
+
+1. Select the next delivery UUID from the bucket and remove it from the pool.
+2. Call the relay:
+   ```
+   POST /deliver/{uuid}
+   Body: { "blob": "<E2E encrypted payload, base64url>" }
+   ```
+3. On 200: UUID consumed; relay has accepted responsibility for delivery.
+4. On 404 or 410 (UUID unknown or already consumed): advance to the next UUID in the bucket and retry.
+5. On 5xx or network error: retry with exponential backoff using the same UUID.
+
+Fan-out is performed independently per device_key; failure for one device does not block delivery to others.
+
+### Wallet Message Retention
+
+Wallet service B retains each message in its inbound queue until it receives a clearance call from the relay:
+
+```
+DELETE /messages/{uuid}
+```
+
+The relay sends this call after confirmed device pickup, with a random delay of 0–6 hours (staggered wallet clearance). The wallet service maps the UUID to the card and removes the corresponding message from the queue.
+
+On receiving `DELETE /messages/{uuid}`:
+- 200: message cleared.
+- 404: UUID unknown (message already cleared or UUID never registered); discard silently.
+
+**Wallet services must not clear messages based solely on relay delivery** (i.e., the 200 response to `POST /deliver/{uuid}`). The relay may be restarted between delivery and pickup; retaining the message until the explicit `DELETE` ensures no message loss.
+
+### UUID Re-registration and Retransmission
+
+When the relay's Redis store is cleared (restart), devices re-register new UUID pools with the wallet service. When wallet service B receives a new UUID registration for a card (`POST /cards/{card_hash}/devices/{device_key}/uuids`), it checks whether any messages in the inbound queue remain uncleared for that card. If so, it immediately delivers those messages to the new UUIDs using the relay delivery flow above.
+
+This retransmission may cause the device to receive a duplicate of a message it already processed before the relay restart. Devices must deduplicate by message ID within the decrypted blob.
 
 ### Encryption Model
 

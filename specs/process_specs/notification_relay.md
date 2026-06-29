@@ -1,10 +1,9 @@
 # Notification Relay — Process Spec
 
-**Version:** 0.3 (draft)
-**Date:** 2026-06-28
+**Version:** 0.4 (draft)
+**Date:** 2026-06-29
 **Status:** Draft
-**Changes from v0.1:** Process 2 step 4 revised — UUID now transitions through an `in_flight` state before push dispatch rather than being marked `consumed` immediately. This prevents double-delivery under concurrent requests while preserving the ability to retry a UUID on APNs/FCM failure. Step numbering updated accordingly.
-**Changes from v0.2:** UUIDs are now untyped. A single pool is returned from registration; the device allocates UUIDs between push and WebSocket use. The relay stores both push_token and wallet_ws_url on every UUID and does not enforce which endpoint a UUID is presented to. UUID Pools section and Process 1 updated accordingly.
+**Changes from v0.3:** Relay upgraded from delivery trigger to message buffer. Wallet now sends the encrypted message blob to the relay (`POST /deliver/{uuid}`) rather than a bodyless trigger (`POST /notify/{uuid}`). Relay stores blobs in Redis and fans out to SSE (foreground), WebSocket (active chat), or silent push (backgrounded), in that priority order. GET /pending added for device catch-up on wake. Staggered wallet clearance: relay sends `DELETE /messages/{uuid}` to the wallet service after confirmed device pickup, with 0–6 hour random delay. Device credential added to registration. Multi-device support added: each device registers its UUID pool under a per-device-per-card key (`hash(device_id || card_hash)`); wallet fans out one delivery per device on each message.
 
 ---
 
@@ -12,12 +11,13 @@
 
 Card holders need to receive timely notifications when messages arrive for their cards. This creates a privacy challenge: a wallet service must be able to reach a specific device without knowing which cards that device holds.
 
-This spec defines a relay-based notification architecture with two delivery modes:
+This spec defines a relay-based notification architecture with three delivery modes:
 
+- **SSE** — low-latency server-sent event stream when the app is in the foreground but not in an active chat
+- **WebSocket** — bidirectional message delivery when the app is in an active chat session
 - **Push notifications** — silent wakeup delivered via APNs (iOS) or FCM (Android) when the app is backgrounded
-- **WebSocket** — low-latency bidirectional message delivery when the app is in the foreground (e.g., active chat)
 
-In both modes, the relay service sits between the wallet service and the device. The wallet service knows which relay endpoint to call for a given card, but not which device or user it maps to. The relay service knows which device to reach, but not which card triggered the delivery.
+In all modes, the relay service sits between the wallet service and the device. The wallet service knows which relay endpoint to call for a given card, but not which device or user it maps to. The relay service receives and stores encrypted message blobs, but does not know which card they belong to.
 
 ---
 
@@ -27,9 +27,9 @@ In both modes, the relay service sits between the wallet service and the device.
 |---|---|
 | **Holder** | Card owner whose device receives notifications |
 | **Device** | iOS or Android client holding the holder's cards |
-| **Wallet service** | Holds the card's message queue; initiates notification delivery |
-| **Relay service** | Bridges wallet service to device; holds UUID → delivery target mappings |
-| **APNs / FCM** | Platform push infrastructure; delivers silent push to the device |
+| **Wallet service** | Routes encrypted message blobs to the relay; retains messages until relay confirms delivery |
+| **Relay service** | Bridges wallet service to device; stores encrypted blobs in Redis until device pickup; sends staggered delete to wallet after delivery |
+| **APNs / FCM** | Platform push infrastructure; delivers silent push to the device when backgrounded |
 
 ---
 
@@ -39,20 +39,50 @@ The relay architecture separates knowledge across two parties who do not share s
 
 | Party | Knows | Does not know |
 |---|---|---|
-| Wallet service | Card hash → UUID(s) | Device identity, push token, which UUIDs belong to the same person |
-| Relay service | UUID → push token or WebSocket connection | Card hash, card identity, message content |
+| Wallet service | Card hash → device_key → UUID(s) | Device identity, push token, which device_keys or UUIDs belong to the same person |
+| Relay service | UUID → push token; push token → pending message blobs | Card hash, card identity, message content (blobs are E2E encrypted) |
 
 Neither party alone can link a card to a device. Correlation requires collusion between both.
 
 Within the wallet service, UUIDs registered for different cards are unlinkable provided registration sessions are kept separate (see Registration Privacy below).
 
+**Multi-device correlation:** When a card has multiple devices registered, the wallet service delivers to all devices in a loop. The relay receives these deliveries in rapid succession and can infer device co-ownership via timing. This is a documented, accepted exposure — the relay does not learn card identities or message content, and no artificial delay is introduced. See Multi-Device section below.
+
 ---
 
-## UUID Pools
+## UUID Pools and Device Credential
 
-The device maintains a single pool of single-use UUIDs per card. UUIDs are untyped — a UUID from the pool may be used for either a push notification or a WebSocket session. The device decides how to allocate UUIDs between the two delivery modes; the relay does not enforce a split.
+The device maintains a single pool of single-use UUIDs per card. UUIDs are untyped — a UUID from the pool may be used for message delivery (via `POST /deliver/{uuid}`) or for a WebSocket session (via `GET /ws/{uuid}`). The device decides how to allocate UUIDs between the two uses.
 
-UUIDs are generated by the relay service and returned to the device at registration time. Each UUID is valid for exactly one use — one push delivery or one WebSocket session — and is invalidated on use or on connection close.
+UUIDs are generated by the relay service and returned to the device at registration time. Each UUID is valid for exactly one use and is invalidated on use or on connection close.
+
+In addition to the UUID pool, each registration call returns a **device credential** — an opaque token that identifies the device to the relay for the lifetime of the UUID pool. The device uses this credential to authenticate `GET /sse` and `GET /pending` requests. The credential is distinct from the push token and from UUID values.
+
+---
+
+## Multi-Device Support
+
+A card holder may use multiple devices. Each device registers its own UUID pool with the wallet service under a stable per-device-per-card key:
+
+```
+device_key = hash(device_id || card_hash)
+```
+
+where `device_id` is a random identifier generated at first app install and stored in device secure storage (e.g., iOS Keychain, Android Keystore). The `device_id` never leaves the device; the `device_key` is derived fresh from it and is opaque to the wallet service.
+
+The wallet service stores UUID pools as a hash table keyed by `device_key`:
+
+```
+card_hash → {
+  device_key_1: { uuids: [...] },
+  device_key_2: { uuids: [...] },
+  ...
+}
+```
+
+On message arrival, the wallet service iterates all `device_key` buckets for the card and calls `POST /deliver/{uuid}` once per bucket, drawing one UUID from each. Each device independently receives and processes the message.
+
+A device deregisters its own bucket by calling `DELETE /cards/{card_hash}/devices/{device_key}`. Revocation of a lost or stolen device is a known limitation: without the lost device's `device_id`, no other device can compute its `device_key`. Device revocation flows are deferred to a future spec.
 
 ---
 
@@ -66,30 +96,26 @@ This flow runs when the device needs to replenish its UUID supply for a card.
 
 1. The device opens a connection to the relay service via an unlinkable session (see Registration Privacy below).
 2. The device calls `POST /register` with its current platform push token and a requested UUID count (1–100, default 10).
-3. The relay service generates a single pool of UUIDs for this registration, each mapped to both the push token and the wallet WebSocket URL (looked up from the app registry via the `app_id` in the request).
-4. The relay returns the UUID pool to the device. The relay stores for each UUID:
+3. The relay service generates a UUID pool and a **device credential** for this registration. Each UUID is mapped to the push token and wallet WebSocket URL (looked up from the app registry via `app_id`).
+4. The relay returns the UUID pool and device credential to the device. The relay stores for each UUID:
    ```
-   uuid → { app_id: "...", push_token: "...", wallet_ws_url: "...", status: "unused" }
+   uuid → { app_id, push_token, wallet_ws_url, device_credential, status: "unused" }
    ```
 5. The device stores locally, per card:
    ```
-   card_hash → { uuids: [...] }
+   card_hash → { uuids: [...], device_credential: "..." }
    ```
-   The device tracks internally which UUIDs it has allocated to push delivery vs. WebSocket use.
+   The device tracks internally which UUIDs it has allocated to delivery vs. WebSocket use.
 
 **Wallet registration:**
 
-6. In a separate, unlinkable session, the device registers the UUIDs with the wallet service for a specific card:
+6. In a separate, unlinkable session, the device registers the UUIDs with the wallet service for a specific card, supplying its `device_key`:
    ```
-   POST /cards/{card_hash}/notification-uuids
-   Body: { notification_uuids: [...], websocket_uuids: [...] }
+   POST /cards/{card_hash}/devices/{device_key}/uuids
+   Body: { delivery_uuids: [...], websocket_uuids: [...] }
    ```
-   The device splits its UUID pool here according to its local allocation. The wallet service has no knowledge of this split being device-side.
-7. The wallet service stores:
-   ```
-   card_hash → { notification_uuids: [...], websocket_uuids: [...] }
-   ```
-8. The wallet service has no knowledge of the relay service or the push token.
+7. The wallet service stores the UUIDs under the device_key bucket for that card.
+8. The wallet service has no knowledge of the relay service, the push token, or the device credential.
 
 ### Replenishment
 
@@ -99,28 +125,40 @@ Suggested threshold: replenish when 3 or fewer UUIDs remain in the pool.
 
 ---
 
-## Process 2: Push Notification Delivery
+## Process 2: Message Delivery
 
-This flow runs when a message arrives for a card and the app is backgrounded.
+This flow runs when a message arrives for a card. The delivery path depends on the device's current connection state at the relay.
 
 ### Steps
 
+**Wallet → relay:**
+
 1. A message arrives at the wallet service for `card_hash`.
-2. The wallet service selects the next unused notification UUID for that card and removes it from its pool.
-3. The wallet service calls the relay service:
-   ```
-   POST /notify/{uuid}
-   ```
-   No card identity, message content, or sender information is included.
-4. The relay service looks up the UUID and confirms it has status `unused`. It then atomically transitions the UUID to `in_flight` before dispatching — this prevents a race condition where two concurrent requests both observe `unused` and both attempt delivery.
-5. The relay service delivers a **silent push notification** to the device via APNs or FCM, including only the UUID in the payload:
+2. The wallet service iterates all registered `device_key` buckets for that card. For each bucket:
+   a. Select the next delivery UUID from the bucket and remove it from the pool.
+   b. Call the relay:
+      ```
+      POST /deliver/{uuid}
+      Body: { blob: "<E2E encrypted message, base64url>" }
+      ```
+   c. The relay transitions the UUID to `consumed`, stores the blob in the message store keyed by `push_token`, and proceeds with delivery (steps 3–6 below).
+3. The wallet service **retains** the message until it receives `DELETE /messages/{uuid}` from the relay (staggered clearance, Process 5). The wallet's copy is the source of truth for undelivered messages.
+
+**Relay → device:**
+
+4. The relay checks whether an SSE connection is open for the device's `push_token`:
+   - **SSE open:** stream `{ "uuid": "<uuid>", "blob": "<base64url>" }` to the device immediately. On acknowledgment (device calls `POST /ack` with the UUID), schedule a staggered delete to the wallet (Process 5) and remove the blob from the message store.
+   - **No SSE:** continue to step 5.
+
+5. The relay checks whether a WebSocket session is active for a UUID associated with the same `push_token`:
+   - **WebSocket active:** forward the blob through the open WebSocket session. On delivery, schedule staggered delete and remove from store.
+   - **No WebSocket:** continue to step 6.
+
+6. The relay dispatches a **silent push notification** to the device via APNs or FCM, including only the UUID in the payload:
    ```json
-   { "uuid": "<the notification uuid>" }
+   { "uuid": "<the delivery uuid>" }
    ```
-6. On successful delivery, the relay transitions the UUID from `in_flight` to `consumed` and returns 200 to the wallet service. On APNs/FCM failure, the relay transitions the UUID from `in_flight` back to `unused` and returns 502 — the UUID is not consumed and the wallet service may retry it or advance to the next UUID in its pool.
-7. The device receives the silent push. It looks up the UUID in its local store, identifies the corresponding card, and wakes the app.
-8. The app fetches and decrypts messages for that card from the wallet service, proving card ownership via normal authentication.
-9. The decrypted message is displayed to the holder. Message content never travels through the relay or the push payload.
+   The blob remains in the relay message store pending device pickup via `GET /pending`.
 
 ### What APNs / FCM Observe
 
@@ -133,42 +171,143 @@ No card identity, message content, or wallet service information is visible to t
 
 ---
 
-## Process 3: WebSocket Delivery
+## Process 3: WebSocket Delivery (Active Chat)
 
-This flow runs when the app is in the foreground and low-latency delivery is needed (e.g., active chat).
+This flow runs when the app is in an active chat session for a specific card.
 
 ### Steps
 
 **Session establishment:**
 
-1. When the app opens a chat session for a card, it selects the next unused WebSocket UUID for that card from its local pool and removes it.
+1. When the app opens a chat session for a card, it selects the next unused WebSocket UUID for that card and removes it from its local pool.
 2. The app opens a WebSocket connection to the relay service:
    ```
    wss://relay.example/ws/{uuid}
    ```
-3. The relay service looks up the UUID, confirms it has status `unused`, then marks it `active`.
-4. The relay service opens a second WebSocket connection to the wallet service, presenting the same UUID as its credential:
+3. The relay looks up the UUID, confirms `status == "unused"`, then marks it `active`.
+4. The relay opens a second WebSocket connection to the wallet service:
    ```
    wss://wallet.example/ws/{uuid}
    ```
-5. The wallet service verifies the UUID against its pool for the associated card and accepts the connection.
+5. The wallet service verifies the UUID and accepts the connection.
 6. The relay bridges the two connections: **device ↔ relay ↔ wallet service**. The wallet service's IP is hidden from the device; the device's IP is hidden from the wallet service.
 
 **Message flow:**
 
-7. Inbound messages (wallet → device): the wallet service writes to its WebSocket connection; the relay forwards to the device connection.
-8. Outbound messages (device → wallet): the device writes to its relay connection; the relay forwards to the wallet service connection.
+7. Inbound messages (wallet → device): wallet writes to its WebSocket; relay forwards to device.
+8. Outbound messages (device → wallet): device writes to relay; relay forwards to wallet.
 9. Message content is E2E encrypted and opaque to the relay.
 
 **Session teardown:**
 
 10. When the chat session ends or the app backgrounds, the device closes its WebSocket connection.
 11. The relay closes the wallet-side connection and marks the UUID consumed.
-12. If the session ends while messages are still in flight, the wallet service falls back to push notification delivery using a notification UUID for the same card.
+12. If the session ends while messages are still in the relay's pending store for this device, the relay will deliver them via SSE when the app returns to foreground, or via push if it backgrounds.
 
 ### Latency
 
-The relay adds one network hop per message direction. In practice this is 10–50 ms depending on relay geography, which is imperceptible for human chat. The persistent WebSocket means there is no per-message connection overhead — the relay forwards bytes between two open connections.
+The relay adds one network hop per message direction — 10–50 ms depending on relay geography, imperceptible for human chat. The persistent WebSocket means there is no per-message connection overhead.
+
+---
+
+## Process 4: Device-Level SSE (Foreground, Not in Active Chat)
+
+This flow runs when the app is open but the user is not in an active chat session. A single device-level SSE connection receives delivery events for all cards.
+
+### Steps
+
+**Connection establishment:**
+
+1. When the app enters the foreground, it opens an SSE connection to the relay:
+   ```
+   GET /sse
+   Authorization: Bearer {device_credential}
+   Accept: text/event-stream
+   ```
+2. The relay authenticates the device credential, resolves the associated `push_token`, and registers the connection in an in-memory SSE map.
+3. The relay streams a heartbeat comment (`:\n\n`) every 30 seconds to keep the connection alive through proxies.
+
+**Delivery:**
+
+4. When a blob arrives for this device (via `POST /deliver/{uuid}` while SSE is open), the relay streams:
+   ```
+   data: {"uuid": "<uuid>", "blob": "<base64url>"}
+   ```
+5. The device receives the event, reverse-maps the UUID to the corresponding card locally, decrypts the blob, and displays the message.
+6. The device acknowledges receipt:
+   ```
+   POST /ack
+   Authorization: Bearer {device_credential}
+   Body: { "uuids": ["<uuid>", ...] }
+   ```
+7. The relay schedules a staggered delete to the wallet service for each acknowledged UUID (Process 5) and removes the blobs from the pending store.
+
+**Connection lifecycle:**
+
+8. The SSE connection is closed when the app backgrounds. The relay removes it from the in-memory map.
+9. If blobs arrived while the connection was closed, they remain in the message store and are returned by `GET /pending` when the device comes back online.
+
+### Energy Considerations
+
+SSE maintains a persistent TCP connection that keeps the device radio active. It is used **only when the app is in the foreground**. When the app backgrounds, the OS closes the connection, and the relay falls back to silent push. This matches the battery optimization model of APNs and FCM: the OS-managed push connection handles background delivery; the app-managed SSE connection handles foreground delivery.
+
+---
+
+## Process 5: Device Catch-up via GET /pending
+
+This flow runs when the device comes online after being offline, when the app launches, or when a silent push wakes the app.
+
+### Steps
+
+1. The device calls:
+   ```
+   GET /pending
+   Authorization: Bearer {device_credential}
+   ```
+2. The relay resolves the `push_token` from the device credential, retrieves all stored blobs for that device from the message store, atomically clears the store, and returns:
+   ```json
+   { "messages": [{ "uuid": "<uuid>", "blob": "<base64url>" }, ...] }
+   ```
+3. The device reverse-maps each UUID to its card locally, decrypts each blob, and displays messages.
+4. The device acknowledges receipt:
+   ```
+   POST /ack
+   Authorization: Bearer {device_credential}
+   Body: { "uuids": ["<uuid>", ...] }
+   ```
+5. The relay schedules a staggered delete to the wallet service for each acknowledged UUID (Process 6).
+
+If no messages are pending, the relay returns `{ "messages": [] }`.
+
+---
+
+## Process 6: Staggered Wallet Clearance
+
+After confirmed device pickup (via SSE ack or GET /pending ack), the relay clears the wallet service's copy of each delivered message.
+
+### Steps
+
+1. On receipt of `POST /ack` with a list of UUIDs, the relay enqueues a delete job for each UUID:
+   ```
+   scheduled_at = now + random(0, MAX_DELETE_DELAY_SECONDS)
+   job = { wallet_url: record.wallet_ws_url, uuid }
+   ```
+   Jobs are stored in a Redis sorted set keyed by scheduled execution time.
+
+2. A background job polls the sorted set every 60 seconds. For each job with `scheduled_at ≤ now`:
+   ```
+   DELETE {wallet_url}/messages/{uuid}
+   ```
+
+3. On success (200 or 404): remove the job from the queue. A 404 means the wallet already cleared the message (e.g., via UUID expiry); this is not an error.
+
+4. On failure (5xx or network error): requeue the job with exponential backoff, capped at 24 hours.
+
+### Properties
+
+- Delete jobs are held in Redis (in-memory). Jobs lost to a relay restart are benign: the wallet retains the message and retransmits it to the new UUID on re-registration. The device will deduplicate the re-delivered message by message ID within the decrypted blob.
+- The 0–6 hour random delay decouples delivery timing from clearance timing, preventing the wallet service from inferring exact delivery time from the delete call.
+- The relay makes one outbound delete call per delivered message, to the `wallet_ws_url` stored in the UUID record at registration time.
 
 ---
 
@@ -182,6 +321,8 @@ The wallet service must never receive UUID registrations for multiple cards in a
 
 Similarly, relay registrations for different cards should use separate sessions with the relay service, so the relay cannot correlate multiple UUID pools to the same device via IP.
 
+Device credential registration with the relay must also use separate sessions per card, for the same reason.
+
 Clients behind NAT or shared IPs should treat this property as best-effort. Users with strong privacy requirements may route relay and wallet registration traffic through a VPN or anonymizing proxy.
 
 ---
@@ -190,23 +331,32 @@ Clients behind NAT or shared IPs should treat this property as best-effort. User
 
 | Scenario | Behavior |
 |---|---|
-| UUID pool exhausted at wallet service | Wallet service queues the message and delivers a push notification via a remaining UUID once the device replenishes; message is held until fetched |
-| Relay unreachable | Wallet service retries the `POST /notify/{uuid}` with exponential backoff; UUID is not consumed on failed delivery |
-| WebSocket connection dropped mid-session | Relay closes both sides; UUID is consumed; device falls back to push notification path |
-| Push token rotated by platform | Device re-registers with relay using new token and issues fresh UUIDs to all wallet services |
-| UUID rejected by relay (already used or unknown) | Wallet service discards UUID and retries with the next UUID in the pool |
+| UUID pool exhausted at wallet service | Wallet retains message; delivers to remaining device_key buckets; message is held until device replenishes and wallet retransmits |
+| Relay unreachable for `POST /deliver/{uuid}` | Wallet retries with exponential backoff using the same UUID; UUID not consumed until relay accepts |
+| SSE connection drops during delivery | Blob remains in relay message store; delivered via push or `GET /pending` on next wake |
+| WebSocket connection dropped mid-session | Relay closes both sides; UUID consumed; pending blobs in store delivered via SSE or push |
+| Relay restart (Redis cleared) | In-flight blobs lost; wallet retains messages; device re-registers UUIDs; wallet retransmits on re-registration; device deduplicates by message ID |
+| Staggered delete job lost to relay restart | Wallet retains message; retransmitted to new UUID on device re-registration; device deduplicates |
+| Push token rotated by platform | Device re-registers with relay using new token; relay issues new device credential; device issues fresh UUIDs to all wallet services |
+| UUID rejected by relay (already used or unknown) | Wallet discards UUID and retries with next UUID in the device_key bucket |
+| Wallet returns 404 on staggered delete | Relay discards the job silently; message was already cleared |
+| Device receives duplicate message (after relay restart) | Device deduplicates by message ID within the decrypted blob |
 
 ---
 
 ## Relay Service Trust Model
 
-The relay service is a trusted intermediary for delivery routing, not for message content. It observes:
+The relay service is a trusted intermediary for message delivery. It observes:
 
-- Which device tokens are active
+- Which device push tokens are registered
 - Which UUIDs have been used and when
-- Timing of message delivery events
+- Encrypted message blobs (E2E encrypted; content is unreadable without device keys)
+- Timing of message delivery events per device
+- Device co-ownership inference via timing (multiple concurrent `POST /deliver/{uuid}` calls for the same message arriving in rapid succession)
 
-It does not observe card identities, message content, sender identities, or which UUIDs are associated with which cards.
+It does not observe card identities, message content (blobs are E2E encrypted), sender identities, or which UUIDs map to which cards.
+
+The relay now holds encrypted message blobs at rest, in addition to routing metadata. This elevates its trust level relative to prior versions: a compromised relay additionally exposes stored ciphertext and message volume per device, though content remains unreadable.
 
 The relay service may be operated by the same party as the wallet service, a third party, or — for users with strong privacy requirements — self-hosted. The architecture does not require the relay and wallet service to be operated by different parties to preserve the primary privacy properties, because UUIDs are opaque to both sides by design. Separate operation provides defense-in-depth against log correlation.
 
@@ -214,6 +364,8 @@ The relay service may be operated by the same party as the wallet service, a thi
 
 ## Related Specs
 
-- `specs/process_specs/message_routing.md` — how messages are routed between wallet services and placed in the recipient card's queue
+- `specs/process_specs/message_routing.md` — how messages are routed between wallet services and placed in the recipient card's queue; wallet-to-relay delivery and fan-out
 - `specs/process_specs/wallet_backup_and_recovery.md` — device registration and key management
 - `specs/messaging_protocol.md` — `SignedMessageEnvelope` structure; E2E encryption model
+- `specs/object_specs/relay.md` — relay service API spec; endpoint definitions
+- `specs/object_specs/relay_data_model.md` — Redis key schema, message store, delete queue, UUID state machine

@@ -1,9 +1,9 @@
 # Notification Relay — Service Spec
 
-**Version:** 0.3 (draft)
-**Date:** 2026-06-28
+**Version:** 0.4 (draft)
+**Date:** 2026-06-29
 **Status:** Draft
-**Changes from v0.2:** UUIDs are no longer typed. `POST /register` returns a single `uuids` array instead of separate `notification_uuids` and `websocket_uuids` arrays. Any UUID may be used at either `/notify/{uuid}` or `/ws/{uuid}`. The `type` field is removed from UUID records. `WRONG_UUID_TYPE` error code removed. The device allocates UUIDs between push delivery and WebSocket use as it sees fit.
+**Changes from v0.3:** Relay upgraded from delivery trigger to message buffer. `POST /notify/{uuid}` replaced by `POST /deliver/{uuid}` (wallet-facing; carries encrypted blob). New device-facing endpoints: `GET /sse` (foreground event stream), `GET /pending` (catch-up on wake), `POST /ack` (delivery acknowledgment). Device credential authentication added to all device-facing endpoints — prevents push-token-only attackers from draining messages or falsely clearing them. Staggered wallet clearance via `POST /ack`. Message store keyed by `device_credential`, not `push_token`, for isolation. Multi-device fan-out handled at wallet; relay is unaware.
 
 ---
 
@@ -14,30 +14,37 @@
 3. [Actors](#3-actors)
 4. [Privacy Properties](#4-privacy-properties)
 5. [App Registry](#5-app-registry)
-6. [Endpoints](#6-endpoints)
-   - 6.1 [POST /register](#61-post-register)
-   - 6.2 [POST /notify/{uuid}](#62-post-notifyuuid)
-   - 6.3 [GET /ws/{uuid}](#63-get-wsuuid)
-   - 6.4 [GET /health](#64-get-health)
-7. [UUID Lifecycle](#7-uuid-lifecycle)
-8. [Re-registration on Store Reset](#8-re-registration-on-store-reset)
-9. [Error Codes](#9-error-codes)
-10. [Open Questions](#10-open-questions)
+6. [Authentication](#6-authentication)
+7. [Endpoints](#7-endpoints)
+   - 7.1 [POST /register](#71-post-register)
+   - 7.2 [POST /deliver/{uuid}](#72-post-deliveruuid)
+   - 7.3 [GET /ws/{uuid}](#73-get-wsuuid)
+   - 7.4 [GET /sse](#74-get-sse)
+   - 7.5 [GET /pending](#75-get-pending)
+   - 7.6 [POST /ack](#76-post-ack)
+   - 7.7 [GET /health](#77-get-health)
+   - 7.8 [POST /notify/{uuid} (deprecated)](#78-post-notifyuuid-deprecated)
+8. [UUID Lifecycle](#8-uuid-lifecycle)
+9. [Re-registration on Store Reset](#9-re-registration-on-store-reset)
+10. [Error Codes](#10-error-codes)
+11. [Open Questions](#11-open-questions)
 
 ---
 
 ## 1. Overview
 
-The notification relay is a stateless-by-design HTTP and WebSocket service that bridges wallet services to holder devices without allowing either party to identify the other. It supports two delivery modes:
+The notification relay is an HTTP and WebSocket service that bridges wallet services to holder devices without allowing either party to identify the other. It now operates as a **message buffer**: the wallet service deposits encrypted blobs at the relay, and the relay delivers them to the device via the highest-priority available channel.
 
-- **Push** — a silent wake-up delivered via APNs (iOS) or FCM (Android) when the device app is backgrounded
-- **WebSocket** — a low-latency bidirectional bridge when the app is in the foreground
+Delivery priority (highest to lowest):
 
-The relay stores a mapping from opaque single-use UUIDs to delivery targets (push tokens or WebSocket slots). It does not store card identities, message content, or any data that would allow it to correlate a UUID to a card or a device to a holder.
+1. **SSE** — device-level event stream, used when the app is in the foreground but not in active chat
+2. **WebSocket** — per-card bidirectional bridge, used when the app is in an active chat session
+3. **Silent push** — APNs/FCM wakeup, used when the app is backgrounded
+4. **`GET /pending`** — device pull on wake, after receiving a push or returning from offline
 
-UUID associations are held exclusively in RAM (Redis with no persistence). The relay never writes UUID-to-device mappings to disk in any form — no write-ahead log, no snapshot, no OS swap. See §4 for the full privacy model and §8 for the store-reset recovery flow.
+The relay stores a mapping from opaque single-use UUIDs to device credentials and push tokens. It also holds encrypted message blobs in RAM until the device picks them up. It does not store card identities, message content in readable form, or any data that would allow it to correlate a UUID to a card.
 
-The relay is a multi-app service: a single relay deployment serves multiple wallet service apps. Each app is identified by an `app_id` and has its own APNs or FCM credentials and wallet service WebSocket endpoint, registered in the relay's app registry (§5).
+UUID associations and message blobs are held exclusively in RAM (Redis with no persistence). The relay never writes UUID-to-device mappings or message blobs to disk. See §4 for the full privacy model and §9 for the store-reset recovery flow.
 
 ---
 
@@ -45,10 +52,10 @@ The relay is a multi-app service: a single relay deployment serves multiple wall
 
 | Spec | Relationship |
 |---|---|
-| `specs/process_specs/notification_relay.md` | Process-level spec this document implements. Defines the three delivery processes, UUID pools, and privacy properties. This document specifies the service that executes those processes. |
-| `specs/process_specs/message_routing.md` | Defines how wallet services route messages to recipient cards. The relay is the delivery bridge called by the wallet service after routing. |
-| `specs/process_specs/wallet_backup_and_recovery.md` | Defines device registration and key management. Replenishment of UUID pools is triggered by the device and is part of the wallet backup lifecycle. |
-| `specs/object_specs/relay_data_model.md` | Companion document specifying the Redis key schema, UUID state machine, SQLite device registry schema, and app registry config format. |
+| `specs/process_specs/notification_relay.md` | Process-level spec this document implements. Defines delivery processes, UUID pools, device credentials, multi-device, and privacy properties. |
+| `specs/process_specs/message_routing.md` | Defines how wallet services route messages to recipient cards and deliver blobs to the relay. |
+| `specs/process_specs/wallet_backup_and_recovery.md` | Device registration and key management; UUID pool replenishment lifecycle. |
+| `specs/object_specs/relay_data_model.md` | Redis key schema, message store, delete queue, device credential store, UUID state machine, SQLite device registry, and app registry config. |
 
 ---
 
@@ -56,131 +63,184 @@ The relay is a multi-app service: a single relay deployment serves multiple wall
 
 | Actor | Role |
 |---|---|
-| **Device** | iOS or Android client. Calls `POST /register` to obtain UUID pools. Opens WebSocket via `GET /ws/{uuid}`. Receives silent pushes triggered by `POST /notify/{uuid}`. |
-| **Wallet service** | Holds the card's message queue. Calls `POST /notify/{uuid}` to trigger a push. Accepts inbound WebSocket connections from the relay proxying a device session. |
-| **Relay service** | This service. Stores UUID → delivery target mappings in RAM. Never sees card identities or message content. |
-| **APNs / FCM** | Platform push infrastructure. Receives delivery requests from the relay and delivers silent pushes to the device. |
+| **Device** | iOS or Android client. Calls `POST /register` to obtain UUIDs and device credential. Opens SSE stream via `GET /sse`. Polls `GET /pending` on wake. Calls `POST /ack` to confirm receipt. Opens per-card WebSocket via `GET /ws/{uuid}`. |
+| **Wallet service** | Deposits encrypted blobs via `POST /deliver/{uuid}`. Retains messages until `DELETE /messages/{uuid}` arrives from the relay. |
+| **Relay service** | This service. Buffers blobs in RAM. Delivers via SSE, WebSocket, or silent push. Sends staggered deletes to wallet after device ack. |
+| **APNs / FCM** | Platform push infrastructure. Receives delivery requests from the relay; delivers silent pushes to backgrounded devices. |
 
 ---
 
 ## 4. Privacy Properties
 
-The relay is designed so that neither the relay nor the wallet service alone can link a card to a device. The knowledge split is:
-
 | Party | Knows | Does not know |
 |---|---|---|
-| Wallet service | Card hash → UUID(s) | Device identity, push token, which UUIDs belong to the same person |
-| Relay service | UUID → push token or WebSocket slot | Card hash, card identity, message content |
+| Wallet service | Card hash → device_key → UUID(s) | Device identity, push token, device credential, which device_keys belong to the same person |
+| Relay service | UUID → device credential + push token; device credential → pending blobs | Card hash, card identity, message content (blobs are E2E encrypted) |
 
-**UUID associations must never be written to disk.** The relay stores UUID records only in Redis with persistence explicitly disabled (`--save "" --appendonly no`). Redis runs in a separate container from the Node.js process. This ensures:
+UUID associations must never be written to disk. Redis runs with persistence explicitly disabled (`--save "" --appendonly no`).
 
-- Node.js restarts (deploys, crashes) do not wipe UUID state; Redis persists across them
-- Redis restarts (rarer: container upgrades, host reboots) do clear UUID state, triggering the re-registration flow (§8)
-
-The device registry (SQLite, §8) stores only push tokens and `app_id` — no UUID associations, no wallet service URLs, no card-linkable data. It exists solely to support re-registration notification after a Redis restart.
+The device registry (SQLite) stores only push tokens and `app_id` — no UUID associations, no device credentials, no card-linkable data.
 
 ---
 
 ## 5. App Registry
 
-The relay serves multiple apps. Each app is a distinct wallet service deployment identified by an `app_id` string. The app registry maps `app_id` to:
+The relay serves multiple apps. Each app is a distinct wallet service deployment identified by an `app_id`. The app registry maps `app_id` to:
 
 | Field | Description |
 |---|---|
 | `app_id` | Unique string identifier supplied by the device at registration |
 | `platform` | `"apns"` or `"fcm"` |
-| `wallet_ws_url` | Base WebSocket URL of the wallet service (`wss://...`). The relay connects to `{wallet_ws_url}/{uuid}` when bridging a device WebSocket session. |
-| `apns` | APNs credentials object (required if `platform == "apns"`): `key_file` (path to `.p8`), `key_id`, `team_id`, `bundle_id`, `sandbox` (boolean, default `true`) |
-| `fcm` | FCM credentials object (required if `platform == "fcm"`): `service_account_file` (path to service account JSON) |
+| `wallet_ws_url` | Base WebSocket URL of the wallet service. Used for WebSocket bridging and for staggered delete calls. |
+| `apns` | APNs credentials (required if `platform == "apns"`): `key_file`, `key_id`, `team_id`, `bundle_id`, `sandbox` |
+| `fcm` | FCM credentials (required if `platform == "fcm"`): `service_account_file` |
 
-The registry is loaded from a JSON config file at service startup (`APP_REGISTRY_PATH` env var). It does not change at runtime. Adding or removing an app requires a config update and service restart.
-
-If a device supplies an `app_id` that is not present in the registry, all requests referencing that `app_id` return `404 Unknown App`.
+Loaded from JSON at startup (`APP_REGISTRY_PATH`). Changes require a restart.
 
 ---
 
-## 6. Endpoints
+## 6. Authentication
 
-### 6.1 POST /register
+### 6.1 Device Credential
 
-Generates a device-specified number of single-use UUIDs in a single call. UUIDs are untyped — any UUID returned may be used at either `/notify/{uuid}` (push delivery, called by the wallet service) or `/ws/{uuid}` (WebSocket bridging, opened by the device). The device decides how to allocate UUIDs between these two uses and communicates that allocation to the wallet service separately.
+All device-facing endpoints except the bootstrap `POST /register` require a **device credential** in the `Authorization` header:
 
-**Privacy note:** Because all UUIDs from one call are associated with the same push token, the relay can infer that all UUIDs returned in a single registration belong to the same device. This is a deliberate tradeoff — batching reduces network overhead at the cost of the per-card session unlinkability described in `notification_relay.md §Registration Privacy`. Devices with strong privacy requirements may still make separate calls per card.
+```
+Authorization: Bearer {device_credential}
+```
+
+The device credential is an opaque random token issued by the relay at first registration and stored by the device in secure storage (iOS Keychain / Android Keystore). It authenticates the device for the lifetime of the UUID pool.
+
+**What it protects:**
+
+- `GET /sse`, `GET /pending`, `POST /ack`: Only the legitimate device (which holds the credential) can receive messages or trigger wallet clearance. An attacker who knows the push token but not the credential cannot drain the message store or falsely ack messages.
+- `POST /register` (replenishment): Only the device holding the existing credential can add UUIDs to its pool. A fresh `POST /register` without auth creates a new isolated credential — it cannot inject UUIDs into or access messages from an existing device's pool.
+
+**Message store isolation:** The message store is keyed by `device_credential`, not by `push_token`. Two `POST /register` calls with the same push token but no shared credential produce entirely isolated message stores. Wallet-originated blobs only arrive in the store associated with the credential whose UUIDs the wallet was given.
+
+### 6.2 Wallet Service Authentication
+
+`POST /deliver/{uuid}` is called by the wallet service. The UUID itself is the credential — it is a single-use secret known only to the wallet service (received from the device at UUID registration time). No additional authentication header is required; UUID possession is sufficient proof.
+
+The relay validates that the UUID exists, is in `unused` status, and atomically transitions it to `in_flight` before processing — preventing double-delivery if two wallet service instances race on the same UUID.
+
+### 6.3 Credential Lifecycle
+
+| Event | Credential behavior |
+|---|---|
+| First `POST /register` (no auth) | New credential issued; stored in Redis with 30-day TTL |
+| Replenishment `POST /register` (with auth) | Existing credential TTL refreshed; push_token updated if rotated |
+| Credential not presented on authenticated endpoint | 401 `MISSING_CREDENTIAL` |
+| Credential unknown or expired | 401 `INVALID_CREDENTIAL` |
+| Redis restart | All credentials lost; device must re-bootstrap; wallet re-registration triggered via push |
+
+---
+
+## 7. Endpoints
+
+### 7.1 POST /register
+
+Generates a pool of single-use UUIDs and (on first call) a device credential.
 
 #### Request
 
 ```
 POST /register
 Content-Type: application/json
+Authorization: Bearer {device_credential}   ← omit on first (bootstrap) call
 ```
 
 ```json
 {
-  "app_id":     "string — required. Must match a registered app in the app registry.",
-  "push_token": "string — required. Platform push token (APNs device token or FCM registration token). Opaque to the relay; passed through to APNs/FCM on delivery.",
-  "count":      "integer — optional. Number of UUIDs of each type to return. Min: 1, max: 100. Default: 10."
+  "app_id":     "string — required",
+  "push_token": "string — required",
+  "count":      "integer — optional, 1–100, default 10"
 }
 ```
 
-**Validation:**
-- `app_id`: required, non-empty string, must exist in the app registry
-- `push_token`: required, non-empty string; format is platform-specific and not validated by the relay
-- `count`: optional integer, 1–100 inclusive; defaults to 10 if absent; rejected with 400 if present but out of range
+#### Processing
+
+**Bootstrap (no `Authorization` header):**
+
+1. Validate `app_id` and `push_token`.
+2. Generate a new `device_credential` (cryptographically random, 32 bytes, hex or base64url encoded).
+3. Store `cred:{device_credential} → { push_token, app_id, created_at }` with TTL `UUID_TTL_SECONDS`.
+4. Generate `count` UUIDs, each stored as `uuid:{uuid} → { app_id, push_token, wallet_ws_url, device_credential, status: "unused" }` with TTL `UUID_TTL_SECONDS`.
+5. Upsert push token in SQLite device registry.
+6. Return UUIDs and device credential.
+
+**Replenishment (`Authorization: Bearer {credential}` present):**
+
+1. Validate credential against `cred:{credential}`. Return 401 if unknown or expired.
+2. Validate `app_id` and `push_token`.
+3. Update `cred:{credential}` with new `push_token` (if rotated) and refresh TTL.
+4. Generate `count` new UUIDs under the same credential.
+5. Upsert push token in SQLite device registry.
+6. Return only the new UUIDs (no credential in response — device already has it).
 
 #### Response — 200 OK
 
+Bootstrap:
+```json
+{
+  "uuids":             ["uuid-v4", "..."],
+  "device_credential": "opaque-token-string"
+}
+```
+
+Replenishment:
 ```json
 {
   "uuids": ["uuid-v4", "..."]
 }
 ```
 
-The array has length equal to `count` (default 10). All UUIDs are UUID v4 strings (RFC 4122 format, lowercase, hyphenated: `xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx`). The device allocates these UUIDs between push delivery and WebSocket use as needed.
-
-The relay stores each UUID in Redis with status `unused` and a TTL of 30 days.
-
-#### State effects
-
-- `count` new UUID records written to Redis, each with `status: "unused"` and TTL 30 days
-- Device push token upserted in SQLite device registry with current timestamp
-
 #### Error responses
 
 | Status | Code | Condition |
 |---|---|---|
-| 400 | `MISSING_FIELD` | `app_id` or `push_token` is absent or empty |
-| 400 | `INVALID_COUNT` | `count` is present but outside the range 1–100 |
-| 404 | `UNKNOWN_APP` | `app_id` not found in app registry |
+| 400 | `MISSING_FIELD` | `app_id` or `push_token` absent or empty |
+| 400 | `INVALID_COUNT` | `count` present but outside 1–100 |
+| 401 | `INVALID_CREDENTIAL` | `Authorization` header present but credential unknown or expired |
+| 404 | `UNKNOWN_APP` | `app_id` not in app registry |
 | 500 | `INTERNAL_ERROR` | Redis write failed |
 
 ---
 
-### 6.2 POST /notify/{uuid}
+### 7.2 POST /deliver/{uuid}
 
-Triggers a silent push notification to the device associated with the given UUID. Called by the wallet service when a message arrives for a card whose app is backgrounded.
+Accepts an encrypted message blob from the wallet service, stores it, and delivers to the device via the best available channel.
 
-No request body. The wallet service does not supply card identity, message content, or any other context — only the UUID.
+**Called by the wallet service.** No `Authorization` header — UUID possession is the credential.
 
 #### Request
 
 ```
-POST /notify/{uuid}
+POST /deliver/{uuid}
+Content-Type: application/json
 ```
 
-`uuid`: path parameter, UUID v4 format.
+```json
+{
+  "blob": "string — E2E encrypted message, base64url encoded"
+}
+```
 
 #### Processing
 
-1. Validate `uuid` format. Return 400 if not a valid UUID v4.
+1. Validate `uuid` format. Return 400 if not UUID v4.
 2. Look up UUID in Redis. Return 404 if not found.
-3. Check `status == "unused"`. Return 410 if status is `consumed`, `active`, or `in_flight`.
-4. Look up app config for `record.app_id`. Return 500 if app config is missing (config/Redis inconsistency).
-5. Atomically transition UUID status from `unused` to `in_flight`. If the transition fails (another caller already moved the UUID out of `unused`), return 410.
-6. Dispatch silent push to `record.push_token` via APNs or FCM (per app platform):
-   - APNs: `content-available: 1`, no `alert`, payload `{ "uuid": "<uuid>" }`
-   - FCM: data-only message (no `notification` block), data `{ "uuid": "<uuid>" }`
-7. On successful dispatch: transition UUID status from `in_flight` to `consumed`. Return 200.
-8. On push dispatch failure: transition UUID status from `in_flight` back to `unused`. Return 502. The wallet service may retry the same UUID or move to the next in its pool.
+3. Confirm `status == "unused"`. Return 410 if `consumed`, `active`, or `in_flight`.
+4. Atomically transition UUID `unused → in_flight`. Return 410 if transition fails (concurrent race).
+5. Store blob in message store: `RPUSH messages:{device_credential} <entry>` where entry includes `uuid`, `blob`, `wallet_url`, `received_at`.
+6. Transition UUID `in_flight → consumed`.
+7. Attempt immediate delivery (in order):
+   - If SSE connection open for this `device_credential`: stream `data: {"uuid":"<uuid>","blob":"<blob>"}`. Do not remove from message store yet — wait for `POST /ack`.
+   - Else if WebSocket session active: forward blob. Schedule staggered delete on delivery.
+   - Else: dispatch silent push via APNs/FCM with payload `{ "uuid": "<uuid>" }`.
+8. Return 200.
+
+On storage failure (Redis error): transition UUID `in_flight → unused` and return 500.
 
 #### Response — 200 OK
 
@@ -188,25 +248,25 @@ Empty body.
 
 #### State effects
 
-- UUID transitions `unused → in_flight` before dispatch (atomic; prevents double-delivery)
-- UUID transitions `in_flight → consumed` on successful dispatch
-- UUID transitions `in_flight → unused` on failed dispatch (wallet service may retry)
+- UUID: `unused → in_flight → consumed` (or rolls back to `unused` on storage failure)
+- Blob stored in `messages:{device_credential}`
+- Silent push dispatched if device not reachable via SSE or WebSocket
 
 #### Error responses
 
 | Status | Code | Condition |
 |---|---|---|
-| 400 | `INVALID_UUID` | `uuid` path param is not a valid UUID v4 |
+| 400 | `INVALID_UUID` | Path param not a valid UUID v4 |
+| 400 | `MISSING_FIELD` | `blob` absent or empty |
 | 404 | `UNKNOWN_UUID` | UUID not found in Redis |
-| 410 | `UUID_CONSUMED` | UUID found but status is `"consumed"`, `"active"`, or `"in_flight"` |
-| 502 | `PUSH_FAILED` | APNs or FCM returned an error; UUID not consumed |
-| 500 | `INTERNAL_ERROR` | Redis read/write failed |
+| 410 | `UUID_CONSUMED` | UUID already used or in use |
+| 500 | `INTERNAL_ERROR` | Redis failure |
 
 ---
 
-### 6.3 GET /ws/{uuid}
+### 7.3 GET /ws/{uuid}
 
-Upgrades the connection to a WebSocket and bridges the device to the wallet service. The relay opens a second outbound WebSocket connection to the wallet service, presenting the UUID as its credential, then forwards bytes between the two connections without inspection.
+Upgrades to a WebSocket and bridges the device to the wallet service. Unchanged from v0.3 except that the wallet service now handles both real-time chat messages (via the WebSocket) and queued delivery blobs (via `POST /deliver/{uuid}`).
 
 #### Upgrade request
 
@@ -216,58 +276,174 @@ Connection: Upgrade
 Upgrade: websocket
 ```
 
-`uuid`: path parameter, UUID v4 format.
-
 #### Connection establishment
 
-1. Validate `uuid` format. Close with code 4000 (`INVALID_UUID`) if not a valid UUID v4.
-2. Look up UUID in Redis. Close with code 4004 (`UNKNOWN_UUID`) if not found.
-3. Check `status == "unused"`. Close with code 4010 (`UUID_CONSUMED`) if status is `"consumed"`, `"active"`, or `"in_flight"`.
-4. Transition UUID status from `unused` to `active`.
-6. Open outbound WebSocket to the wallet service: `{app.wallet_ws_url}/{uuid}`. The wallet service validates the UUID against its own pool and accepts or rejects the connection.
-7. If the wallet service rejects the outbound connection: close the device connection with code 4002 (`WALLET_REJECTED`); transition UUID to `consumed`.
-8. Relay is now bridging: **device ↔ relay ↔ wallet service**.
+1. Validate UUID format. Close 4000 if invalid.
+2. Look up UUID. Close 4004 if not found.
+3. Confirm `status == "unused"`. Close 4010 if not.
+4. Transition `unused → active`.
+5. Open outbound WebSocket to `{app.wallet_ws_url}/{uuid}`.
+6. If wallet rejects: close device connection 4002; transition to `consumed`.
+7. Bridge: **device ↔ relay ↔ wallet service**.
 
 #### Message flow
 
-- **Device → wallet:** bytes received from the device WebSocket are forwarded to the wallet WebSocket without modification.
-- **Wallet → device:** bytes received from the wallet WebSocket are forwarded to the device WebSocket without modification.
-
-Message content is end-to-end encrypted and opaque to the relay.
+Bytes forwarded without modification in both directions. Content is E2E encrypted and opaque to the relay.
 
 #### Session teardown
 
-Any of the following closes both sides and marks the UUID consumed:
-
-- Device closes its connection (normal or abnormal)
-- Wallet service closes its connection (normal or abnormal)
-- Either side sends a WebSocket error frame
-- Network error on either leg
-
-On teardown: close the non-initiating side with code 1001 (Going Away), then transition UUID from `active` to `consumed`.
+Any close event (device, wallet, or network error) closes both sides and transitions UUID `active → consumed`.
 
 #### WebSocket close codes
 
 | Code | Name | Condition |
 |---|---|---|
-| 4000 | `INVALID_UUID` | Path param is not a valid UUID v4 |
-| 4002 | `WALLET_REJECTED` | Wallet service refused the outbound connection |
+| 4000 | `INVALID_UUID` | Path param not a valid UUID v4 |
+| 4002 | `WALLET_REJECTED` | Wallet refused outbound connection |
 | 4004 | `UNKNOWN_UUID` | UUID not found in Redis |
-| 4010 | `UUID_CONSUMED` | UUID status is `"consumed"`, `"active"`, or `"in_flight"` |
-| 1001 | `GOING_AWAY` | Other side disconnected; this side is being closed in response |
-| 1011 | `INTERNAL_ERROR` | Redis error during UUID transition |
-
-#### State effects
-
-- On connection accepted: UUID transitions from `unused` to `active`
-- On teardown (any cause): UUID transitions from `active` to `consumed`
-- On wallet rejection before bridge established: UUID transitions from `active` to `consumed` (UUID was already transitioned to `active` in step 4; wallet rejection is treated as an immediate teardown)
+| 4010 | `UUID_CONSUMED` | UUID already used or in-flight |
+| 1001 | `GOING_AWAY` | Other side disconnected |
+| 1011 | `INTERNAL_ERROR` | Redis error during transition |
 
 ---
 
-### 6.4 GET /health
+### 7.4 GET /sse
 
-Returns the operational status of the relay and its dependencies. Intended for Docker Compose `healthcheck` directives and load balancer probes.
+Opens a device-level Server-Sent Events stream. Receives delivery events for all of the device's cards in the foreground.
+
+**Called by the device.** Requires device credential.
+
+#### Request
+
+```
+GET /sse
+Authorization: Bearer {device_credential}
+Accept: text/event-stream
+```
+
+#### Processing
+
+1. Validate credential. Return 401 if missing or invalid.
+2. Resolve `device_credential → push_token`.
+3. Register connection in in-memory SSE map: `device_credential → SSEConnection`.
+4. Set response headers: `Content-Type: text/event-stream`, `Cache-Control: no-cache`, `Connection: keep-alive`.
+5. Send heartbeat comment every 30 seconds: `:\n\n`.
+6. On `POST /deliver/{uuid}` arriving for this `device_credential` while SSE is open: stream the event immediately (§7.2 step 7).
+7. On connection close (app backgrounds, network drop): remove from SSE map.
+
+#### Event format
+
+```
+data: {"uuid":"<uuid>","blob":"<base64url>"}
+
+```
+
+(One event per delivered message. Each event is followed by a blank line per SSE spec.)
+
+#### Response
+
+`200 OK` with `Content-Type: text/event-stream`. Connection held open until closed by client or server.
+
+#### Error responses
+
+| Status | Code | Condition |
+|---|---|---|
+| 401 | `MISSING_CREDENTIAL` | No `Authorization` header |
+| 401 | `INVALID_CREDENTIAL` | Credential unknown or expired |
+
+---
+
+### 7.5 GET /pending
+
+Returns all pending blobs for the device. Called on wake (after silent push or app launch).
+
+**Called by the device.** Requires device credential.
+
+#### Request
+
+```
+GET /pending
+Authorization: Bearer {device_credential}
+```
+
+#### Processing
+
+1. Validate credential. Return 401 if missing or invalid.
+2. Atomically read and clear `messages:{device_credential}` (Lua script: LRANGE then DEL).
+3. Return all entries.
+
+If no messages are pending, returns an empty array (not an error).
+
+#### Response — 200 OK
+
+```json
+{
+  "messages": [
+    { "uuid": "<uuid>", "blob": "<base64url>" },
+    ...
+  ]
+}
+```
+
+#### Error responses
+
+| Status | Code | Condition |
+|---|---|---|
+| 401 | `MISSING_CREDENTIAL` | No `Authorization` header |
+| 401 | `INVALID_CREDENTIAL` | Credential unknown or expired |
+| 500 | `INTERNAL_ERROR` | Redis failure |
+
+---
+
+### 7.6 POST /ack
+
+Acknowledges successful receipt of one or more delivered messages. Triggers staggered wallet clearance for each UUID.
+
+**Called by the device.** Requires device credential.
+
+#### Request
+
+```
+POST /ack
+Authorization: Bearer {device_credential}
+Content-Type: application/json
+```
+
+```json
+{
+  "uuids": ["<uuid>", "..."]
+}
+```
+
+#### Processing
+
+1. Validate credential. Return 401 if missing or invalid.
+2. For each UUID in `uuids`:
+   a. Look up UUID record to retrieve `wallet_ws_url`.
+   b. Compute `execute_at = now + random(0, MAX_DELETE_DELAY_SECONDS)`.
+   c. `ZADD pending_deletes <execute_at> <job_json>` where job includes `wallet_url`, `uuid`, `attempts: 0`.
+3. Return 200.
+
+UUIDs not found in Redis (expired or unknown) are silently skipped — they were already consumed and cleared.
+
+#### Response — 200 OK
+
+Empty body.
+
+#### Error responses
+
+| Status | Code | Condition |
+|---|---|---|
+| 401 | `MISSING_CREDENTIAL` | No `Authorization` header |
+| 401 | `INVALID_CREDENTIAL` | Credential unknown or expired |
+| 400 | `MISSING_FIELD` | `uuids` absent or empty array |
+| 500 | `INTERNAL_ERROR` | Redis failure |
+
+---
+
+### 7.7 GET /health
+
+Returns operational status of the relay and its dependencies.
 
 #### Request
 
@@ -291,21 +467,35 @@ No authentication required.
 
 ```json
 {
-  "status": "degraded",
-  "redis":  "ok" | "error",
-  "sqlite": "ok" | "error"
+  "status":  "degraded",
+  "redis":   "ok" | "error",
+  "sqlite":  "ok" | "error"
 }
 ```
 
-The relay returns 503 if either Redis or SQLite is unreachable. Each dependency reports independently, so a Redis failure does not mask a concurrent SQLite failure. The `message` field may be included under a failing dependency key with a brief error description.
-
-The health check does not perform a deep probe (no UUID round-trip, no push dispatch). It performs a Redis `PING` and a SQLite `SELECT 1` to confirm connectivity.
+The relay returns 503 if either dependency is unreachable. Each reports independently. The health check performs a Redis `PING` and a SQLite `SELECT 1` — no UUID round-trip, no push dispatch.
 
 ---
 
-## 7. UUID Lifecycle
+### 7.8 POST /notify/{uuid} (Deprecated)
 
-A UUID moves through the following states. All transitions are atomic (Lua script in Redis) to prevent race conditions under concurrent requests.
+This endpoint has been superseded by `POST /deliver/{uuid}` (§7.2). It accepted a bodyless trigger from the wallet service and dispatched a silent push without storing a blob.
+
+**All callers must migrate to `POST /deliver/{uuid}`.**
+
+#### Current behavior
+
+Returns `410 Gone` with error code `ENDPOINT_DEPRECATED` and a `Location` header pointing to `POST /deliver/{uuid}`.
+
+```json
+{ "error": "ENDPOINT_DEPRECATED", "message": "Use POST /deliver/{uuid}" }
+```
+
+This behavior will be removed in a future version.
+
+---
+
+## 8. UUID Lifecycle
 
 ```
              ┌─────────┐
@@ -314,8 +504,8 @@ A UUID moves through the following states. All transitions are atomic (Lua scrip
                   │
         ┌─────────┴──────────┐
         │                    │
-   push notify           websocket open
-   (§6.2 step 6)        (§6.3 step 5)
+   blob delivery         websocket open
+   (§7.2 step 4)        (§7.3 step 4)
         │                    │
         ▼                    ▼
   ┌───────────┐        ┌──────────┐
@@ -323,54 +513,34 @@ A UUID moves through the following states. All transitions are atomic (Lua scrip
   └─────┬─────┘        └────┬─────┘
         │                   │
    ┌────┴────┐          session close
-   │         │          (§6.3 teardown)
-success   failure            │
-   │         │               ▼
-   │         │         ┌──────────┐
-   │         └──────── │ consumed │
-   │       (→ unused)  └──────────┘
-   ▼
+   │         │          (§7.3 teardown)
+ stored   failed               │
+   │         │                 ▼
+   │         │           ┌──────────┐
+   │         └──────────▶│ consumed │
+   ▼          (→ unused) └──────────┘
 ┌──────────┐
-│ consumed │
-└──────────┘
+│ consumed │  ← blob stored in messages:{credential}
+└──────────┘     delivery to device tracked separately
 ```
 
-**Invalid transitions** (return error, do not change state):
-- `consumed` → any: return 410 / close code 4010
-- `in_flight` → any (via a concurrent second request): return 410
-- `active` → any (via a `/notify` call on a UUID currently bridging a WebSocket session): return 410
-
-**TTL expiry:** Redis auto-expires UUID keys after 30 days with no transition. No explicit cleanup is needed; the TTL covers the case of UUIDs never consumed (device uninstalled, wallet service never called).
-
-**Stuck `active` UUIDs:** On relay startup, any UUID found in `active` state (indicating an unclean shutdown mid-session) is transitioned to `consumed`. The count is logged as an operational signal.
+UUID `consumed` means the relay has accepted responsibility for the blob — not that the device has received it. Message lifecycle continues independently in the message store.
 
 ---
 
-## 8. Re-registration on Store Reset
+## 9. Re-registration on Store Reset
 
-When the Redis container restarts, all UUID state is lost. The relay detects this at startup by checking whether the Redis store is empty (no `uuid:*` keys). If empty, the relay sends a silent re-registration notification to all devices registered in the last 90 days via the SQLite device registry.
-
-**Re-registration push payload:**
+When Redis restarts, all UUID state and message blobs are lost. The relay detects this on startup by scanning for `uuid:*` keys. If the store is empty and the SQLite device registry is non-empty, the relay sends a re-registration push to all devices registered in the last 90 days:
 
 ```json
 { "type": "relay_reregistration_requested", "relay_id": "<RELAY_ID>" }
 ```
 
-This payload is delivered as a silent push (APNs `content-available: 1`, no `alert`; FCM data-only message). The device app must handle `relay_reregistration_requested` by triggering a background call to `POST /register` for each of its cards and re-registering the new UUID pools with the wallet service. No user-visible notification is shown.
-
-**Device registry:**
-
-The SQLite device registry stores `(push_token, app_id, last_registered_at)` only. It does not store UUID associations. Records are pruned weekly; any record with `last_registered_at` older than 90 days is deleted.
-
-A device is upserted into the registry on every `POST /register` call, refreshing its `last_registered_at` timestamp.
-
-**Re-registration notification failures** for individual devices (invalid push token, device uninstalled) are logged and skipped. They do not halt the startup sequence.
+The device handles this silent push by calling `POST /register` (replenishment if it has a stored credential, bootstrap if the credential was also lost) for each of its cards and re-registering new UUIDs with wallet services. The wallet service, on receiving new UUIDs, retransmits any messages it retained. The device deduplicates by message ID within the decrypted blob.
 
 ---
 
-## 9. Error Codes
-
-Structured error responses use the following JSON shape:
+## 10. Error Codes
 
 ```json
 { "error": "<CODE>", "message": "<human-readable detail>" }
@@ -379,24 +549,26 @@ Structured error responses use the following JSON shape:
 | Code | HTTP status | Meaning |
 |---|---|---|
 | `MISSING_FIELD` | 400 | Required request field absent or empty |
-| `INVALID_COUNT` | 400 | `count` field is present but outside the range 1–100 |
-| `INVALID_UUID` | 400 | Path parameter is not a valid UUID v4 |
-| `UNKNOWN_APP` | 404 | `app_id` not found in app registry |
+| `INVALID_COUNT` | 400 | `count` outside 1–100 |
+| `INVALID_UUID` | 400 | Path parameter not a valid UUID v4 |
+| `UNKNOWN_APP` | 404 | `app_id` not in app registry |
 | `UNKNOWN_UUID` | 404 | UUID not found in Redis |
-| `UUID_CONSUMED` | 410 | UUID has already been used, is in an active WebSocket session, or is currently in_flight |
-| `PUSH_FAILED` | 502 | APNs or FCM returned a delivery error |
-| `WALLET_REJECTED` | — | Wallet service rejected the outbound WebSocket (WebSocket close code 4002 only) |
-| `INTERNAL_ERROR` | 500 | Unexpected internal error (Redis failure, config inconsistency) |
+| `UUID_CONSUMED` | 410 | UUID already used, active, or in-flight |
+| `ENDPOINT_DEPRECATED` | 410 | `POST /notify/{uuid}` called; use `POST /deliver/{uuid}` |
+| `MISSING_CREDENTIAL` | 401 | `Authorization` header absent on authenticated endpoint |
+| `INVALID_CREDENTIAL` | 401 | Device credential unknown or expired |
+| `PUSH_FAILED` | 502 | APNs or FCM returned a delivery error (blob is retained in message store) |
+| `WALLET_REJECTED` | — | Wallet service rejected outbound WebSocket (close code 4002 only) |
+| `INTERNAL_ERROR` | 500 | Unexpected error (Redis failure, config inconsistency) |
 
 ---
 
-## 10. Open Questions
+## 11. Open Questions
 
-All open questions resolved. No blocking items remain.
+All prior open questions resolved. New items raised by v0.4:
 
-| ID | Resolution |
+| ID | Question |
 |---|---|
-| ~~OQ-RLY-1~~ | **Closed.** `POST /register` accepts a device-controlled `count` field (1–100, default 10). One call yields UUIDs for all of a device's cards. Privacy tradeoff documented in §6.1. |
-| ~~OQ-RLY-2~~ | **Closed — deferred.** Rate limiting is out of scope for initial implementation. Revisit before production deployment. |
-| ~~OQ-RLY-3~~ | **Closed.** APNs sandbox is the default per-app (`sandbox: true`). Configurable per-app in the app registry. |
-| ~~OQ-RLY-4~~ | **Closed.** `GET /health` endpoint added (§6.4). |
+| OQ-RLY-5 | Should `POST /ack` be implicit in `GET /pending` (relay schedules deletes immediately on pickup) or explicit (device must call `/ack` separately)? Explicit ack is safer (device confirms it has processed the messages before clearing) but adds a round trip. Implicit is simpler. Currently specced as explicit. |
+| OQ-RLY-6 | Device credential revocation for lost/stolen devices: no mechanism currently. Options include a relay-side credential invalidation endpoint (requires device to authenticate somehow) or expiry-only (30-day TTL). Deferred. |
+| OQ-RLY-7 | Rate limiting on `POST /register` bootstrap path (unauthenticated). Without rate limiting, an attacker can create unbounded device credentials and UUID records, filling Redis. Deferred to pre-production hardening. |

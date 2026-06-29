@@ -1,7 +1,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { handleRegister } from "./routes/register.js";
-import { handleNotify } from "./routes/notify.js";
+import { handleDeliver } from "./routes/deliver.js";
 import { handleHealth } from "./routes/health.js";
+import { handleSSE } from "./routes/sse.js";
+import { handlePending, handleAck } from "./routes/pending.js";
+import { sendJson } from "./utils/http.js";
 
 type Handler = (
   req: IncomingMessage,
@@ -16,11 +19,35 @@ interface Route {
   handler: Handler;
 }
 
+function handleNotifyDeprecated(
+  _req: IncomingMessage,
+  res: ServerResponse,
+  _params: Record<string, string>
+): void {
+  res.setHeader("Location", "/deliver/" + (_params["uuid"] ?? ""));
+  sendJson(res, 410, {
+    error: "ENDPOINT_DEPRECATED",
+    message: "POST /notify/{uuid} has been replaced by POST /deliver/{uuid}",
+  });
+}
+
 const routes: Route[] = [
   { method: "POST", pattern: /^\/register$/, paramNames: [], handler: handleRegister },
-  { method: "POST", pattern: /^\/notify\/([^/]+)$/, paramNames: ["uuid"], handler: handleNotify },
-  { method: "GET", pattern: /^\/health$/, paramNames: [], handler: handleHealth },
+  { method: "POST", pattern: /^\/deliver\/([^/]+)$/, paramNames: ["uuid"], handler: handleDeliver },
+  { method: "GET",  pattern: /^\/ws\/([^/]+)$/, paramNames: ["uuid"], handler: handleWs },
+  { method: "GET",  pattern: /^\/sse$/, paramNames: [], handler: handleSSE },
+  { method: "GET",  pattern: /^\/pending$/, paramNames: [], handler: handlePending },
+  { method: "POST", pattern: /^\/ack$/, paramNames: [], handler: handleAck },
+  { method: "GET",  pattern: /^\/health$/, paramNames: [], handler: handleHealth },
+  // Deprecated — kept for one version; returns 410
+  { method: "POST", pattern: /^\/notify\/([^/]+)$/, paramNames: ["uuid"], handler: handleNotifyDeprecated },
 ];
+
+// WebSocket upgrade is handled in server.ts before the HTTP router is reached.
+// This stub exists only so the route table is complete for documentation purposes.
+function handleWs(_req: IncomingMessage, res: ServerResponse, _params: Record<string, string>): void {
+  sendJson(res, 426, { error: "UPGRADE_REQUIRED", message: "This endpoint requires a WebSocket upgrade" });
+}
 
 export function router(req: IncomingMessage, res: ServerResponse): void {
   const url = new URL(req.url ?? "/", "http://localhost");

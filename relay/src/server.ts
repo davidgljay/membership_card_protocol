@@ -2,6 +2,8 @@ import http from "node:http";
 import { router } from "./router.js";
 import { loadAppRegistry } from "./utils/apps.js";
 import { runStartupChecks } from "./startup.js";
+import { stopWalletClearance } from "./utils/wallet_clearance.js";
+import { closeRedis } from "./utils/storage/redis.js";
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 
@@ -39,5 +41,16 @@ runStartupChecks()
     console.error("Startup failed:", err);
     process.exit(1);
   });
+
+async function shutdown(signal: string): Promise<void> {
+  console.log(`Received ${signal} — shutting down`);
+  server.close();
+  await stopWalletClearance(5000);
+  await closeRedis();
+  process.exit(0);
+}
+
+process.on("SIGTERM", () => { shutdown("SIGTERM").catch(console.error); });
+process.on("SIGINT",  () => { shutdown("SIGINT").catch(console.error); });
 
 export { server };
