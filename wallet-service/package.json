@@ -15,7 +15,8 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "migrate": "node-pg-migrate --migrations-dir server/db/migrations --envPath .env"
+    "migrate": "node-pg-migrate --migrations-dir server/db/migrations --envPath .env",
+    "smoke:federation": "node scripts/federation-smoke-test.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-kms": "^3.0.0",

@@ -8,8 +8,7 @@
 import { getPool } from '../../../db/client.js';
 import { findAccountByCardHash } from '../../../db/accounts.js';
 import { issueChallenge } from '../../../db/challenges.js';
-import { createKvStore } from '../../../utils/kv-store.js';
-import { checkAndIncrement } from '../../../utils/rate-limit.js';
+import { enforceRateLimit } from '../../../utils/enforce-rate-limit.js';
 import { kvKeys } from '../../../../src/kv.js';
 
 const RATE_LIMIT = 20;
@@ -22,17 +21,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: 'card_hash is required.' });
   }
 
-  const kv = createKvStore();
-  const allowed = await checkAndIncrement(
-    kv,
-    kvKeys.challengeRate('passkey_login', cardHash),
-    RATE_LIMIT,
-    RATE_WINDOW_SECONDS
-  );
-  if (!allowed) {
-    setResponseStatus(event, 429);
-    return { error: 'Too many login attempts. Try again later.' };
-  }
+  await enforceRateLimit(event, kvKeys.challengeRate('passkey_login', cardHash), RATE_LIMIT, RATE_WINDOW_SECONDS);
 
   const pool = getPool();
   const account = await findAccountByCardHash(pool, cardHash);

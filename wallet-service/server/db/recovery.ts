@@ -89,3 +89,11 @@ export async function releaseRecoveryWindow(pool: Pool, id: string): Promise<Rec
   );
   return rows[0] ?? null;
 }
+
+/** Operator visibility (strategic-plan.md §Goal 5) — every currently-pending window, no card_hash join (recovery_windows has none; card identity stays out of admin output by construction). */
+export async function listPendingRecoveryWindows(pool: Pool): Promise<RecoveryWindowRow[]> {
+  const { rows } = await pool.query<RecoveryWindowRow>(
+    `SELECT * FROM recovery_windows WHERE status = 'pending' ORDER BY expires_at`
+  );
+  return rows;
+}

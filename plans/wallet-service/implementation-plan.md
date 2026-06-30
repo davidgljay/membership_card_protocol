@@ -530,7 +530,7 @@ The unlinkability constraint this step originally called out still applies and i
   Response: 204 No Content
   ```
 
-  On receiving new UUIDs: check `message_queue` for uncleared messages for this card. If any exist, immediately re-encrypt and enqueue them for delivery to the new UUIDs for this subcard (retransmission after relay restart).
+  On receiving new UUIDs: check `message_queue` for uncleared messages for this subcard. If any exist, immediately redeliver them to the new UUIDs (no re-encryption — the payload was already encrypted to this exact subcard by the sender, per the Phase 4 architecture change; retransmission after relay restart is purely a re-delivery of the unchanged blob).
 
 - Who: Claude
 - Context needed: `specs/process_specs/notification_relay.md §Process 1 Steps 6–7`, `§UUID Pools and Device Credential`, `specs/process_specs/message_routing.md §UUID Re-registration and Retransmission`
@@ -568,15 +568,16 @@ The unlinkability constraint this step originally called out still applies and i
 
 **Step 6.1 — Rate limiting**
 - What: Apply rate limits to sensitive endpoints:
-  - `POST /accounts` — 5 per IP per hour
+  - `POST /accounts` — 5 per (hashed) IP per hour
   - `POST /accounts/{card_hash}/recovery` — 3 per card per 24 hours
-  - `POST /cards/{card_hash}/devices/{device_key}/uuids` — 100 UUIDs per device_key per 24 hours
   - `GET /accounts/{card_hash}/service-secret` — 10 per session token lifetime
-  - `POST /bindings/announce` — 100 per peer per minute
-  Implement using sliding window counters via Nitro's `storage` abstraction (same KV-backed driver as session revocation, Step 1.4 — no standalone Redis dependency). Return `429 Too Many Requests` with `Retry-After` header.
+  - `POST /bindings/announce` — 100 per (verified) peer per minute
+  Implemented with a sliding-window-counter algorithm (two fixed windows, weighted by overlap — not a naive fixed window, which would allow up to 2x the limit at window boundaries) on top of Nitro's `storage` abstraction (same KV-backed driver as session revocation, Step 1.4 — no standalone Redis dependency). Returns `429 Too Many Requests` with an accurate `Retry-After` header.
+
+  **No rate limit on `POST /cards/{card_hash}/subcards/{subcard_hash}/uuids`.** The original plan specified "100 UUIDs per device_key per 24 hours" (itself stale — `device_key` was removed from the routing layer in `message_routing.md` v0.3, before this endpoint existed). Removed entirely, not just renamed: each delivered message consumes one UUID from the pool, so capping registration directly caps message throughput for that subcard. 100/day is an unreasonable ceiling for an active chat-like subcard. The per-call cap of 100 UUIDs per registration request remains as a payload-size guard, not a throughput limit.
 - Who: Claude
 - Context needed: none
-- Done when: Each limit triggers correctly in load test; `Retry-After` header is accurate.
+- Done when: Each remaining limit triggers correctly in a live test; `Retry-After` header is accurate.
 
 **Step 6.2 — Audit logging**
 - What: Structured JSON logs (no plaintext key material) for:
@@ -603,14 +604,29 @@ The unlinkability constraint this step originally called out still applies and i
 - Context needed: `strategic-plan.md §Goal 3`, `strategic-plan.md §Goal 5`
 - Done when: Audit events appear in structured log output; grep on log output confirms zero plaintext key material; automated log-schema test asserts that no device IO endpoint emits IP, request body, or device-correlating fields; log schema documented.
 
+**Step 6.2a — Admin endpoints (gap found during Phase 6 milestone review)**
+- What: `strategic-plan.md §Goal 5` (operational transparency) specifies admin endpoints exposing the routing table, pending recovery windows with time remaining, held message counts per card, and UUID pool sizes per device — but this was never translated into an implementation-plan step across Phases 1-5. Caught while verifying Goal 5 for this milestone review; implemented here rather than left as a gap:
+  - `GET /bindings` (Step 4.1) already serves "current routing table" — no new endpoint needed, federation-facing and intentionally unauthenticated (peers need it for startup sync).
+  - `GET /admin/recovery-windows` — every pending window's `recovery_id`, `initiated_at`, `expires_at`, `seconds_remaining`. No `card_hash` (not joinable from `recovery_windows` without an extra lookup the endpoint doesn't do).
+  - `GET /admin/message-counts` — uncleared message count per `card_hash`. No `subcard_hash`, no payload.
+  - `GET /admin/uuid-pool-sizes` — available (unconsumed, unexpired) UUID count per `(card_hash, subcard_hash)`. The strategic plan's wording was "per device"; the wallet's only granularity is `subcard_hash`, never a device identity — exposing it standalone here is consistent with how it's treated everywhere else (the unlinkability constraint is about correlating it to a device/IP/session, not about hiding its existence).
+  - All three gated by a single shared bearer token (`ADMIN_API_KEY`), checked via `server/utils/admin-auth.ts` with a timing-safe comparison. Operator-only — not for end users or federation peers.
+- Who: Claude
+- Context needed: `strategic-plan.md §Goal 5`
+- Done when: All three endpoints return correct data; unauthenticated and wrong-key requests both return 401; no plaintext key material, subcard_hash-to-device correlation, or payload content in any response.
+
 **Step 6.3 — Federation smoke test**
 - What: Stand up two wallet service instances (two `node-server` preset processes — or two local `wrangler dev` instances for the Cloudflare preset — sharing a PostgreSQL instance). Register a card on instance A. Send a message from instance B. Confirm message appears in instance A's queue and is delivered to the relay. Test card migration announcement between instances.
+
+  Implemented as a permanent, repeatable script (`scripts/federation-smoke-test.mjs`, `pnpm run smoke:federation`) rather than one-off manual verification — Phase 4's milestone summary had flagged the lack of a repeatable harness as a gap. The script spins up two instances with separate databases, runs the full scenario, and tears everything down on exit (including a throwaway `wallet_service_federation_smoke_b` database).
 - Who: Claude + user validation
 - Context needed: `specs/process_specs/message_routing.md`, Phase 4 step outputs
 - Done when: Cross-instance message delivery works; `410 Gone` redirect works after migration announcement.
 
 **Step 6.4 — Load baseline**
 - What: Run a load test (k6 or autocannon) against the message delivery path: 100 concurrent clients each sending 10 messages/second for 60 seconds. Measure: p50/p95/p99 latency for `POST /messages` → relay delivery; memory and CPU under load; any `SecretsBackend` throttling events (relevant mainly if `SECRETS_BACKEND=kms`, which is subject to AWS KMS rate limits — the default `WebCryptoBackend` has no external rate limit).
+
+  Run at a scale appropriate to the development sandbox this was implemented in (single machine, local Docker Postgres, `node-server` preset — not a production deployment topology), not the full 100-connection/1000-req/s/60s target — see `plans/wallet-service/milestones/phase-6-summary.md` for the actual numbers and an explicit statement that this is not a substitute for load testing the real deployment target (Cloudflare Workers + Hyperdrive, or whatever production topology is chosen).
 - Who: Claude
 - Context needed: Phase 4 and 5 outputs
 - Done when: p99 `POST /messages` → relay delivery < 500ms at 1000 req/s; no `SecretsBackend` throttling; no memory leak over 60-second run.

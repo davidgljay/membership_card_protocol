@@ -9,6 +9,7 @@
 import { getPool } from '../../../db/client.js';
 import { findRecoveryWindowById, releaseRecoveryWindow } from '../../../db/recovery.js';
 import { findBackupRegistrationById } from '../../../db/backups.js';
+import { auditLog } from '../../../utils/audit-log.js';
 
 export default defineEventHandler(async (event) => {
   const recoveryId = getRouterParam(event, 'recovery_id');
@@ -51,7 +52,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 410, statusMessage: 'Recovery was cancelled.' });
   }
 
-  console.info(`[wallet-service] recovery key released recovery_id=${recoveryId}`);
+  auditLog('info', 'recovery_key_released', { recovery_id: recoveryId });
 
   return { wrapped_blob: backup.wrapped_blob, keyring_id: backup.keyring_id };
 });

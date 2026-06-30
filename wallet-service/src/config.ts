@@ -39,6 +39,8 @@ export interface WalletServiceConfig {
   PEER_LIST: PeerConfig[];
   /** Base URL for the relay's POST /deliver/{uuid} and message endpoints (Step 4.4). */
   RELAY_BASE_URL: string;
+  /** Bearer token gating the operator-facing /admin/* endpoints (strategic-plan.md §Goal 5: operational transparency). Not for end users or peers. */
+  ADMIN_API_KEY: string;
 }
 
 export interface PeerConfig {
@@ -122,6 +124,7 @@ export function loadConfig(): WalletServiceConfig {
     WALLET_SERVICE_PRIVATE_KEY: requireEnv('WALLET_SERVICE_PRIVATE_KEY'),
     PEER_LIST: parsePeerList(optionalEnv('PEER_LIST', '[]')),
     RELAY_BASE_URL: requireEnv('RELAY_BASE_URL'),
+    ADMIN_API_KEY: requireEnv('ADMIN_API_KEY'),
   };
 
   if (secretsBackend === 'webcrypto' && !config.WEBCRYPTO_MASTER_KEY) {

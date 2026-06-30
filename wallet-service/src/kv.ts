@@ -19,8 +19,14 @@ export const kvKeys = {
   sessionRevoked: (sessionTokenId: string) => `wallet:session:revoked:${sessionTokenId}`,
   /** Bulk-invalidation cutoff: tokens for this card_hash issued before this timestamp are rejected. */
   sessionMinIssuedAt: (cardHash: string) => `wallet:session:min-issued-at:${cardHash}`,
-  /** Step 2.3: caps GET /service-secret to 10 calls per session token lifetime. */
+  /** Step 2.3/6.1: caps GET /service-secret to 10 calls per session token lifetime. */
   serviceSecretCalls: (sessionTokenId: string) => `wallet:rate:service-secret:${sessionTokenId}`,
-  /** Step 2.1/2.2: rate-limits challenge issuance. */
+  /** Step 2.1/2.2/6.1: rate-limits challenge issuance. */
   challengeRate: (purpose: string, key: string) => `wallet:rate:challenge:${purpose}:${key}`,
+  /** Step 6.1: POST /accounts — 5 per (hashed) IP per hour. */
+  accountCreationRate: (hashedIp: string) => `wallet:rate:account-creation:${hashedIp}`,
+  /** Step 6.1: POST /accounts/{card_hash}/recovery — 3 per card per 24 hours. */
+  recoveryInitiationRate: (cardHash: string) => `wallet:rate:recovery-initiation:${cardHash}`,
+  /** Step 6.1: POST /bindings/announce — 100 per peer per minute. */
+  bindingAnnounceRate: (walletServiceId: string) => `wallet:rate:binding-announce:${walletServiceId}`,
 };

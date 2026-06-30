@@ -11,6 +11,7 @@ import { findRecoveryWindowById, cancelRecoveryWindow } from '../../../db/recove
 import { findBackupRegistrationById } from '../../../db/backups.js';
 import { verifyMasterCardSignature } from '../../../../src/auth/master-card-signature.js';
 import { fanOutRecoveryNotifications } from '../../../utils/notification-fanout.js';
+import { auditLog } from '../../../utils/audit-log.js';
 
 interface CancelBody {
   challenge?: string;
@@ -71,7 +72,7 @@ export default defineEventHandler(async (event) => {
 
   await fanOutRecoveryNotifications(pool, cancelled, backup, 'cancellation_confirmed');
 
-  console.info(`[wallet-service] recovery cancelled recovery_id=${recoveryId}`);
+  auditLog('info', 'recovery_cancelled', { recovery_id: recoveryId });
 
   return { cancelled: true };
 });

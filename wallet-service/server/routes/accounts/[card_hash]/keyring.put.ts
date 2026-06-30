@@ -18,6 +18,7 @@ import { keccak256OfBase64Url } from '../../../../src/crypto.js';
 import { getSecretsService } from '../../../utils/secrets.js';
 import { createKvStore } from '../../../utils/kv-store.js';
 import { replicateKeyringBlob, replicateKeyringDelete } from '../../../utils/federation-self.js';
+import { auditLog } from '../../../utils/audit-log.js';
 
 interface KeyringUpdateBody {
   challenge?: string;
@@ -64,7 +65,13 @@ export default defineEventHandler(async (event) => {
 
   const secretsService = getSecretsService();
   const serviceSecretPlain = crypto.getRandomValues(new Uint8Array(SERVICE_SECRET_BYTES));
-  const { ciphertext, dekEnc } = await secretsService.encryptSecret(Buffer.from(serviceSecretPlain));
+  let ciphertext: string, dekEnc: string;
+  try {
+    ({ ciphertext, dekEnc } = await secretsService.encryptSecret(Buffer.from(serviceSecretPlain)));
+  } catch (err) {
+    auditLog('error', 'secrets_backend_failure', { operation: 'encryptSecret', card_hash: cardHash, error: String(err) });
+    throw err;
+  }
 
   await insertKeyringBlob(pool, newKeyringId, cardHash, newEncryptedKeyringBlob);
   await updateServiceSecretAndKeyring(pool, cardHash, {
@@ -82,7 +89,8 @@ export default defineEventHandler(async (event) => {
   const kv = createKvStore();
   await invalidateSessionsForCard(cardHash, kv);
 
-  console.info(`[wallet-service] keyring rotated card_hash=${cardHash}`);
+  auditLog('info', 'keyring_rotated', { card_hash: cardHash });
+  auditLog('info', 'service_secret_created', { card_hash: cardHash });
 
   return {
     service_secret: Buffer.from(serviceSecretPlain).toString('base64url'),
