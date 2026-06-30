@@ -8,9 +8,9 @@
 
 ## Goals
 
-### 1. Resolve the four open spec questions before writing a line of code
+### 1. Resolve the four open spec questions before writing a line of code — **STALE, all four now closed differently in spec v0.3; see "Open Questions" section below**
 
-The press spec (`specs/object_specs/press.md`) has four explicit open questions (OQ-A1 through OQ-A4) that block specific functions. Two of them (OQ-A1, OQ-A3) block correct implementation of audit epoch management — a feature whose correctness matters for long-term auditability. The other two (OQ-A2, OQ-A4) affect the gas ledger and the serialization format used in every signed payload. Proceeding without resolving these risks building the wrong thing and having to rewrite significant sections.
+The press spec (`specs/object_specs/press.md`) originally had four explicit open questions (OQ-A1 through OQ-A4) that blocked specific functions. As of spec v0.3, all four are closed — notably, the audit epoch management feature that OQ-A1 and OQ-A3 were about no longer exists (replaced by direct auditor messaging). This goal and its rationale below are left as historical context; do not implement against them. See the "Open Questions" section for the current state and `specs/object_specs/press.md §9` for the authoritative list.
 
 ### 2. Build a correct, self-contained press container
 
@@ -22,7 +22,7 @@ The red-team findings (`red_teaming/`) identified the press key as the highest-v
 
 ### 4. Make the press operationally runnable by a non-cryptographer
 
-The design goal (per the project context) is operator-friendly self-hosted deployment, analogous to Mastodon or Synapse. A press operator should be able to deploy the container, configure it via env vars, and have it running with correct behavior — without needing to understand ML-DSA-44 or UMBRAL. This means clear startup validation, actionable error messages, and a `docker run` experience that fails loudly when misconfigured rather than silently producing bad state.
+The design goal (per the project context) is operator-friendly deployment, analogous to Mastodon or Synapse, adapted to the press's serverless architecture (`specs/object_specs/press.md §3.1`): the press is a [Nitro](https://nitro.unjs.io) application, built once and deployable to Cloudflare Workers (the default target), AWS Lambda, or a self-hosted Node process, with all durable state in an external KV store rather than a local database. A press operator should be able to configure the deployment via env vars and have it running with correct behavior — without needing to understand ML-DSA-44 or UMBRAL. This means clear startup validation, actionable error messages, and a deployment experience that fails loudly when misconfigured rather than silently producing bad state.
 
 ---
 
@@ -32,7 +32,7 @@ The design goal (per the project context) is operator-friendly self-hosted deplo
 
 OQ-A1 asks where auditor ML-KEM-768 public keys live. The `openAuditEpoch` function won't compile correctly without this — it has to encapsulate the AEK to auditor KEM keys it can't yet find. Building `openAuditEpoch` with a placeholder means testing a fictional interface and then rewriting when the answer lands.
 
-OQ-A3 (AEK recovery on press restart) has operational consequences: if the preferred path is "close and open a new epoch," that's a simple implementation; if it requires auditor coordination, the press needs an out-of-band recovery flow that is substantially more complex to build and test. This choice affects the SQLite schema, startup code, and operator documentation.
+OQ-A3 (AEK recovery on press restart) has operational consequences: if the preferred path is "close and open a new epoch," that's a simple implementation; if it requires auditor coordination, the press needs an out-of-band recovery flow that is substantially more complex to build and test. This choice affects the external KV store schema, startup/cold-start code, and operator documentation.
 
 OQ-A2 (app gas ledger) affects three functions: `checkAppGasBalance`, `registerSubCardOnChain`, and `processSubCardDeregistration`. Without knowing the funding mechanism, the gas ledger table can't be finalized.
 
@@ -44,22 +44,19 @@ The red-team plan (`plans/subcard_redteam_plan.md`, `red_teaming/`) established 
 
 ### Why operator experience is a first-class goal
 
-The press will be deployed by community organizations, mutual aid groups, and journalism outfits — not professional infrastructure teams. If the startup sequence doesn't catch a missing `W3UP_KEY` before the press silently attempts issuance requests and fails mid-flow with a cryptic error, an operator will lose trust in the system and not debug it. Startup validation, `GET /health` semantics, and the SQLite backup story need to be designed with the assumption that the operator has never read the spec.
+The press will be deployed by community organizations, mutual aid groups, and journalism outfits — not professional infrastructure teams. If the startup sequence doesn't catch a missing `W3UP_KEY` before the press silently attempts issuance requests and fails mid-flow with a cryptic error, an operator will lose trust in the system and not debug it. Startup validation, `GET /health` semantics, and the external KV store configuration (default: Cloudflare KV on the default Cloudflare deployment; operator-selectable for other presets) need to be designed with the assumption that the operator has never read the spec.
 
 ---
 
 ## Key Objectives
 
-### Goal 1: Spec open questions resolved
+### Goal 1: Spec open questions resolved — **STALE, see "Open Questions" section**
 
-- OQ-A1 answered: auditor KEM key storage location is specified in `protocol-objects.md` or as a new ADR; the press spec's `openAuditEpoch` function is updated with the definitive approach.
-- OQ-A2 answered: the app gas ledger mechanism (direct ETH transfer, signed credit request, or other) is specified; the SQLite schema gains the `app_gas_accounts` table.
-- OQ-A3 answered: the preferred AEK recovery path on press restart is documented in the spec; startup code implements it.
-- OQ-A4 answered: either RFC 8785 is confirmed (an ADR is created or ADR-010 is updated to "resolved: RFC 8785") or CBOR is chosen and the spec's serialization references are updated before implementation begins.
+These four bullets describe a resolution path (auditor KEM keys, SQLite gas table, AEK recovery) that spec v0.3 made moot by removing the audit-epoch/AEK mechanism and the SQLite model entirely. Left unedited as historical record; do not use as an implementation checklist.
 
-### Goal 2: Correct press container
+### Goal 2: Correct press deployment
 
-- All 26 functions defined in the press spec are implemented and pass their unit tests before the first container build.
+- All 26 functions defined in the press spec are implemented and pass their unit tests before the first deployment build (Cloudflare, Lambda, or Node).
 - The CID validation step (`pinToIPFS` → re-derive → compare) is tested with a deliberately wrong CID injected at the mock layer; the test confirms `P-10` is returned.
 - `updateCardHeadOnChain` handles the `STALE_PREV_CID` revert with one retry and surfaces `P-12` on second failure; this is covered by a test with a simulated concurrent writer.
 - All on-chain writes are signed with the secp256r1 key and verified to use the correct `sequence` value from the contract before submission.
@@ -73,39 +70,22 @@ The press will be deployed by community organizations, mutual aid groups, and jo
 
 ### Goal 4: Operational usability
 
-- The press validates all required env vars at startup and exits with a human-readable error if any are missing or malformed before opening the HTTP listener.
-- `GET /health` returns `200` only after the w3up space is confirmed reachable and the SQLite database has migrated successfully; otherwise `503`.
-- The `docker run` example in the press spec's §3.1 works end-to-end against a local test network (anvil + IPFS mock) with no manual steps beyond filling `press.env`.
-- Operator documentation covers: initial deployment, key rotation (both key types), SQLite backup and restore, and how to identify and recover from a failed audit epoch.
+- The press validates all required env vars at startup (cold start) and exits/fails loudly with a human-readable error if any are missing or malformed before serving requests.
+- `GET /health` returns `200` only after the w3up space is confirmed reachable and the external KV store is responsive; otherwise `503`.
+- The local dev workflow in the press spec's §3.1 (`nitro dev`, with `NITRO_PRESET` build variants for Cloudflare/Lambda/Node) works end-to-end against a local test network (anvil + IPFS mock) with no manual steps beyond filling `press.env`.
+- Operator documentation covers: initial deployment (default Cloudflare target, plus Lambda/Node alternatives), key rotation (both key types), external KV store configuration and backup, and how to identify and recover from a failed audit epoch.
 
 ---
 
-## Open Questions
+## Open Questions — STALE, see note
 
-These must be answered before the implementation plan is finalized and before code is written.
+**This entire section predates `specs/object_specs/press.md` v0.3 (dated 2026-06-25; this plan is dated 2026-06-20) and no longer reflects the current spec.** All four original questions are closed in the spec, with answers that don't match what's drafted below:
 
-**OQ-A1 — Auditor KEM key storage**
-Where does the auditor's ML-KEM-768 public key live? Options:
-- A dedicated `kem_pubkey` field in the auditor's `CardDocument` (requires protocol-objects spec update)
-- A separate KEM key document on IPFS, referenced from the auditor's card (requires resolver logic)
-- Derived from the ML-DSA-44 key (not recommended — different security properties)
+- **OQ-A1** (auditor KEM key storage) — closed. Auditor key distribution via ML-KEM is gone entirely; auditors are listed in `policy.auditors` and the press messages each one directly at issuance time over the normal routing layer. No KEM key storage question remains.
+- **OQ-A2** (app gas ledger mechanism) — closed. Apps pre-fund gas by sending ETH directly to the press's Arbitrum address with `app_card_address` in the transaction calldata (`§3.3`, `app_gas` KV namespace).
+- **OQ-A3** (AEK recovery on restart) — closed, and moot: **the audit epoch / AEK mechanism this question is about no longer exists.** It was replaced by the direct auditor messaging in OQ-A1's resolution. There is no AEK to recover.
+- **OQ-A4** (canonical serialization) — closed. ADR-010 is Accepted; RFC 8785 (JCS) is adopted.
 
-This determines what `openAuditEpoch` fetches and how it identifies the auditor's encapsulation key.
+The spec has also introduced three new open questions not reflected anywhere in this plan: **OQ-B1** (KV backend driver — operator-selected, storage-driver-agnostic), **OQ-B2** (reconciliation job catch-up scheduling for large deployments), and **OQ-B3** (verifier `RpcProvider` must walk the CID-linked log chain from the head, since the registry contract only stores the head CID).
 
-**OQ-A2 — App gas ledger mechanism**
-How do apps pre-fund their gas balance with the press? Options:
-- Direct ETH transfer to the press's Arbitrum address, with the press tracking balances by `app_card_address` in SQLite
-- A signed credit request (the governance body authorizes a credit; the press records it)
-- The press sponsors all sub-card operations and bills out-of-band
-
-This determines the `app_gas_accounts` SQLite table structure and whether the press needs an inbound ETH-tracking flow.
-
-**OQ-A3 — AEK recovery on press restart**
-If the press restarts unexpectedly during an open epoch, the AEK is lost from memory. Preferred recovery path:
-- Option A: Close the interrupted epoch immediately on restart and open a new one (simpler, loses some audit continuity for entries in the interrupted epoch that can't be re-encrypted)
-- Option B: Require auditor coordination to re-supply the AEK via decapsulation (operationally complex; needs a recovery endpoint and a ceremony)
-
-This affects startup code, the SQLite `audit_epochs` schema, and operator documentation.
-
-**OQ-A4 — Canonical serialization format**
-ADR-010 in `ARCHITECTURE.md` is listed as unresolved. This spec proceeds assuming RFC 8785 (JCS). Is RFC 8785 confirmed, or is CBOR still under consideration? This affects every signing function in the press and must be settled before implementation begins.
+See `specs/object_specs/press.md §9` for the authoritative, current open-question list. **This strategic plan needs a full resync against spec v0.3** — the deployment-target change made in this pass (Nitro/Cloudflare default) is a small piece of a much larger drift (audit-epoch removal, w3up→Piñata IPFS provider switch, SQLite→external-KV, verifier-package delegation). That resync is a separate, larger task from today's change.
