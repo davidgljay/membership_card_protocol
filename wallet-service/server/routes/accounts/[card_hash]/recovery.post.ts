@@ -11,6 +11,12 @@ import { findAccountByCardHash } from '../../../db/accounts.js';
 import { findBackupRegistrationById } from '../../../db/backups.js';
 import { findActiveRecoveryWindow, createRecoveryWindow } from '../../../db/recovery.js';
 import { fanOutRecoveryNotifications } from '../../../utils/notification-fanout.js';
+import { enforceRateLimit } from '../../../utils/enforce-rate-limit.js';
+import { kvKeys } from '../../../../src/kv.js';
+import { auditLog } from '../../../utils/audit-log.js';
+
+const RECOVERY_RATE_LIMIT = 3;
+const RECOVERY_RATE_WINDOW_SECONDS = 24 * 60 * 60;
 
 interface InitiateRecoveryBody {
   backup_id?: string;
@@ -27,6 +33,13 @@ export default defineEventHandler(async (event) => {
   if (!backupId) {
     throw createError({ statusCode: 400, statusMessage: 'backup_id is required.' });
   }
+
+  await enforceRateLimit(
+    event,
+    kvKeys.recoveryInitiationRate(cardHash),
+    RECOVERY_RATE_LIMIT,
+    RECOVERY_RATE_WINDOW_SECONDS
+  );
 
   const pool = getPool();
   const account = await findAccountByCardHash(pool, cardHash);
@@ -48,7 +61,7 @@ export default defineEventHandler(async (event) => {
   const recovery = await createRecoveryWindow(pool, backup.id);
   const notifiedChannels = await fanOutRecoveryNotifications(pool, recovery, backup, 'recovery_initiated');
 
-  console.info(`[wallet-service] recovery initiated card_hash=${cardHash} recovery_id=${recovery.id}`);
+  auditLog('info', 'recovery_initiated', { card_hash: cardHash, recovery_id: recovery.id });
 
   return {
     recovery_id: recovery.id,

@@ -72,3 +72,16 @@ export async function clearMessageByDeliveryUuid(pool: Pool, uuid: string): Prom
   );
   return (rowCount ?? 0) > 0;
 }
+
+export interface HeldMessageCount {
+  card_hash: string;
+  count: number;
+}
+
+/** Operator visibility (strategic-plan.md §Goal 5) — uncleared message counts per card. No subcard_hash, no payload, no device data. */
+export async function countHeldMessagesPerCard(pool: Pool): Promise<HeldMessageCount[]> {
+  const { rows } = await pool.query<{ card_hash: string; count: string }>(
+    `SELECT card_hash, count(*) FROM message_queue WHERE cleared = false GROUP BY card_hash ORDER BY card_hash`
+  );
+  return rows.map((r) => ({ card_hash: r.card_hash, count: Number(r.count) }));
+}

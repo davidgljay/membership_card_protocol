@@ -8,6 +8,7 @@ import { requireSessionTokenRaw, AuthError } from '../../../../utils/auth.js';
 import { getPool } from '../../../../db/client.js';
 import { findAccountByCardHash } from '../../../../db/accounts.js';
 import { createBackupRegistration, type BackupType, type NotificationChannels } from '../../../../db/backups.js';
+import { auditLog } from '../../../../utils/audit-log.js';
 
 interface CreateBackupBody {
   type?: BackupType;
@@ -76,7 +77,7 @@ export default defineEventHandler(async (event) => {
     cancellationPubkey,
   });
 
-  console.info(`[wallet-service] backup registration created card_hash=${cardHash} type=${type}`);
+  auditLog('info', 'backup_registration_created', { card_hash: cardHash, type, backup_id: backup.id });
 
   return { backup_id: backup.id };
 });

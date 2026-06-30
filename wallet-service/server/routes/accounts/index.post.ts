@@ -17,6 +17,13 @@ import { keccak256OfBase64Url } from '../../../src/crypto.js';
 import { getSecretsService } from '../../utils/secrets.js';
 import { loadConfig } from '../../../src/config.js';
 import { announceOwnCardRegistration, replicateKeyringBlob } from '../../utils/federation-self.js';
+import { enforceRateLimit } from '../../utils/enforce-rate-limit.js';
+import { kvKeys } from '../../../src/kv.js';
+import { hashIp } from '../../../src/crypto.js';
+import { auditLog } from '../../utils/audit-log.js';
+
+const ACCOUNT_CREATION_RATE_LIMIT = 5;
+const ACCOUNT_CREATION_RATE_WINDOW_SECONDS = 60 * 60;
 
 interface CreateAccountBody {
   challenge?: string;
@@ -31,6 +38,14 @@ interface CreateAccountBody {
 const SERVICE_SECRET_BYTES = 32;
 
 export default defineEventHandler(async (event) => {
+  const ip = getRequestIP(event, { xForwardedFor: true }) ?? 'unknown';
+  await enforceRateLimit(
+    event,
+    kvKeys.accountCreationRate(hashIp(ip)),
+    ACCOUNT_CREATION_RATE_LIMIT,
+    ACCOUNT_CREATION_RATE_WINDOW_SECONDS
+  );
+
   const body = await readBody<CreateAccountBody>(event);
   const {
     challenge,
@@ -80,7 +95,13 @@ export default defineEventHandler(async (event) => {
 
   const secretsService = getSecretsService();
   const serviceSecretPlain = crypto.getRandomValues(new Uint8Array(SERVICE_SECRET_BYTES));
-  const { ciphertext, dekEnc } = await secretsService.encryptSecret(Buffer.from(serviceSecretPlain));
+  let ciphertext: string, dekEnc: string;
+  try {
+    ({ ciphertext, dekEnc } = await secretsService.encryptSecret(Buffer.from(serviceSecretPlain)));
+  } catch (err) {
+    auditLog('error', 'secrets_backend_failure', { operation: 'encryptSecret', card_hash: cardHash, error: String(err) });
+    throw err;
+  }
 
   let account;
   try {
@@ -115,8 +136,9 @@ export default defineEventHandler(async (event) => {
   const config = loadConfig();
   const { token, payload } = issueSessionToken(cardHash, config.SESSION_TOKEN_SECRET);
 
-  // Log: account creation event only — no key material, no request/response body (Step 6.2 invariant).
-  console.info(`[wallet-service] account created card_hash=${cardHash}`);
+  // Audit log: no key material, no request/response body (Step 6.2 invariant).
+  auditLog('info', 'account_created', { card_hash: cardHash });
+  auditLog('info', 'service_secret_created', { card_hash: cardHash });
 
   return {
     service_secret: Buffer.from(serviceSecretPlain).toString('base64url'),
