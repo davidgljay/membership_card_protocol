@@ -1,9 +1,10 @@
 # Notification Relay — Process Spec
 
-**Version:** 0.6 (draft)
-**Date:** 2026-06-29
+**Version:** 0.7 (draft)
+**Date:** 2026-06-30
 **Status:** Draft
-**Changes from v0.5:** UUID pool model changed from device_key hash to per-subcard array. Multi-device support is now handled through subcards: each app instance on each device registers a distinct subcard, and the wallet delivers a separately re-encrypted blob per subcard. The `device_key` concept is removed from wallet-side UUID registration. UUIDs are a single untyped array per subcard (no delivery/websocket split at the wallet layer — the device allocates its UUID pool between delivery and WebSocket use internally). Wallet registration endpoint changes from `POST /cards/{card_hash}/devices/{device_key}/uuids` to `POST /cards/{card_hash}/subcards/{subcard_hash}/uuids`.
+**Changes from v0.6:** Removed UMBRAL proxy re-encryption from the wallet's message delivery path (see `process_specs/message_routing.md` v0.4). The sender now encrypts independently per subcard before the routing envelope reaches the wallet service; the wallet delivers each already-encrypted envelope to its target subcard's UUID pool without any transform step.
+**Changes from v0.5:** UUID pool model changed from device_key hash to per-subcard array. Multi-device support is now handled through subcards: each app instance on each device registers a distinct subcard, and the wallet delivers a separately-addressed blob per subcard. The `device_key` concept is removed from wallet-side UUID registration. UUIDs are a single untyped array per subcard (no delivery/websocket split at the wallet layer — the device allocates its UUID pool between delivery and WebSocket use internally). Wallet registration endpoint changes from `POST /cards/{card_hash}/devices/{device_key}/uuids` to `POST /cards/{card_hash}/subcards/{subcard_hash}/uuids`.
 
 ---
 
@@ -72,9 +73,9 @@ card_hash → {
 }
 ```
 
-where `subcard_hash = keccak256(subcard_pubkey)`. On message arrival, the wallet re-encrypts the payload once per subcard (via UMBRAL proxy re-encryption) and calls `POST /deliver/{uuid}` once per subcard, drawing one UUID from each pool. Each device independently receives and decrypts its own re-encrypted blob.
+where `subcard_hash = keccak256(subcard_pubkey)`. The sender encrypts independently to each registered subcard's public key before the message reaches the wallet service (`process_specs/message_routing.md §Sender-Side Fan-out` — no UMBRAL re-encryption at the wallet, as of v0.4). Each arriving routing envelope already carries one subcard's ciphertext; the wallet calls `POST /deliver/{uuid}` once per arriving envelope, drawing one UUID from that envelope's target subcard's pool. Each device independently receives and decrypts its own blob.
 
-An app instance on two physical devices requires two subcards — one per device. The wallet treats them identically: separate re-encryption keys, separate UUID pools, separate delivery.
+An app instance on two physical devices requires two subcards — one per device. The wallet treats them identically: separate UUID pools, separate delivery. There are no per-subcard re-encryption keys to manage.
 
 A device deregisters its subcard by calling `DELETE /cards/{card_hash}/subcards/{subcard_hash}`. Subcard revocation follows the standard sub-card revocation flow defined in `specs/process_specs/subcard_creation_policy.md`.
 
@@ -127,16 +128,16 @@ This flow runs when a message arrives for a card. The delivery path depends on t
 
 **Wallet → relay:**
 
-1. A message arrives at the wallet service for `card_hash`.
-2. The wallet service iterates all registered subcards for that card. For each subcard:
-   a. Re-encrypt the payload for this subcard (UMBRAL proxy re-encryption using the subcard's re-encryption key).
-   b. Select the next UUID from the subcard's pool and remove it from the pool.
-   c. Call the relay:
+1. A routing envelope arrives at the wallet service, already addressed to a specific `subcard_hash` and already encrypted to that subcard's key by the sender (`process_specs/message_routing.md §Sender-Side Fan-out`).
+2. The wallet service delivers it to that subcard:
+   a. Select the next UUID from the subcard's pool and remove it from the pool.
+   b. Call the relay:
       ```
       POST /deliver/{uuid}
-      Body: { blob: "<re-encrypted message blob, base64url>" }
+      Body: { blob: "<message blob, base64url, unchanged from the routing envelope>" }
       ```
-   d. The relay transitions the UUID to `consumed`, stores the blob in the message store keyed by `device_credential`, and proceeds with delivery (steps 3–6 below).
+   c. The relay transitions the UUID to `consumed`, stores the blob in the message store keyed by `device_credential`, and proceeds with delivery (steps 3–6 below).
+   For a card with multiple registered subcards, the sender already sent one independently-encrypted envelope per subcard — the wallet does not iterate or transform anything here; each envelope's delivery is independent.
 3. The wallet service **retains** the message until it receives `DELETE /messages/{uuid}` from the relay (staggered clearance, Process 5). The wallet's copy is the source of truth for undelivered messages.
 
 **Relay → device:**

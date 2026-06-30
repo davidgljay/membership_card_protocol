@@ -132,4 +132,4 @@ Messages sent to the old wallet service while the migration announcement is stil
 
 - `process_specs/message_routing.md` — `CardBindingAnnouncement` format; conflict resolution rules; `410 Gone` retry; startup sync
 - `specs/messaging_protocol.md` — `SignedMessageEnvelope`; message types
-- `ARCHITECTURE.md ADR-007` — transport layer; UMBRAL proxy re-encryption
+- `ARCHITECTURE.md ADR-007` — transport layer; sender-side per-subcard encryption

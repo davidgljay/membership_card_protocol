@@ -626,7 +626,7 @@ A structured error response to any message type that requires a reply.
 ## Related Specs
 
 - `process_specs/message_routing.md` — how wallet services route envelopes to the correct destination using card hashes; routing table maintenance; transport extensibility
-- `ARCHITECTURE.md ADR-007` — HTTPS transport layer, UMBRAL proxy re-encryption, OHTTP/Nym transport flags
+- `ARCHITECTURE.md ADR-007` — HTTPS transport layer, sender-side per-subcard encryption, OHTTP/Nym transport flags
 - `protocol-objects.md §5` — `SignedMessageEnvelope` object reference
 - `process_specs/card_offering_and_acceptance.md` — `card_offer` flow
 - `process_specs/card_updates.md` — `card_update_notification` source

@@ -15,7 +15,7 @@ The following open questions from the strategic plan are resolved here:
 | OQ-WS-1: `service_secret` delivery auth | **Resolved (CP-1).** No externally-issued registration token — there is no third party in the loop to issue one. Per `open_offer_acceptance_new_wallet.md` and `open_offer_acceptance_existing_wallet.md`, the wallet service is the sole, continuous driver of offer display, wallet creation, and claim submission; auth is bootstrapped in-flow instead: **new wallet** — `POST /accounts` is authenticated by the freshly-generated master card key signing a server-issued challenge (same challenge/response shape as recovery), proving control of the key being registered; the response includes a session token directly, so no separate login step is needed for the rest of that session. **Existing wallet** — the recipient already holds an account and must authenticate via a new WebAuthn passkey login (Step 2.1) before `GET /service-secret` (Step 2.3) will release the value needed to decrypt and update their keyring. At recovery re-registration (Phase 3), device signs a challenge with the recovered master card key; wallet issues a session token in response — unchanged. |
 | OQ-WS-2: WebSocket for relay bridging | **Resolved by relay spec change.** Wallet service no longer exposes a WebSocket endpoint. Relay's `GET /ws/{uuid}` is device-facing only. Outbound messages go device → wallet HTTPS directly. Wallet service is fully stateless with respect to persistent connections — this is what enables the Nitro/serverless deployment model below. |
 | OQ-WS-3: Keyring blob storage | **No IPFS.** Per `ARCHITECTURE.md` ADR-009-AMEND, the keyring blob is stored in traditional, deletable storage (`keyring_blobs` table) and replicated to every wallet service in the federation, keyed by `keyring_id = keccak256(encrypted_blob)`. Rotation triggers a synchronized delete of the superseded version across all federation members. See Step 4.1a. |
-| OQ-WS-4: UMBRAL re-encryption key storage | **Stored in plaintext, no encryption.** A re-encryption key `rk_{A→B}` is bound to a specific sub-card's public key and cannot re-encrypt to an arbitrary key — that would require the master secret key. Stolen re-encryption keys cannot decrypt messages alone; an attacker would also need the sub-card's private key (on-device). The only thing they reveal is sub-card topology (how many sub-cards a card has), which is already visible on the storage contract. The real risk in this area — a malicious sub-card key registered at setup time — is an authentication-layer problem, unaffected by how the key is stored. |
+| OQ-WS-4: UMBRAL re-encryption key storage | **Moot — architecture changed in Phase 4.** Originally resolved as "stored in plaintext, no encryption." Phase 4 replaced wallet-side UMBRAL re-encryption with sender-side per-sub-card encryption (`message_routing.md` v0.4): the sender resolves the recipient's current sub-card list from the storage contract and encrypts independently to each one, so the wallet service never holds re-encryption key material at all. This also avoided taking on the only available UMBRAL implementation's GPL-3.0 license. |
 | OQ-WS-5: Federation scope | Single wallet service at launch. Peer list, binding announcements, and startup sync are implemented but tested against a single-instance stub. Federation is validated in Phase 4. |
 | OQ-WS-6: Cancellation credential | Master card key. Holder signs a cancellation challenge with their master card key. The wallet service verifies the ML-DSA-44 signature against the master card's public key (already held from account registration). |
 
@@ -119,19 +119,13 @@ The wallet service must not be able to determine which cards are held on which d
   );
   CREATE INDEX ON uuid_pools(card_hash, subcard_hash, consumed);
 
-  -- Re-encryption keys (UMBRAL; one per card per sub-card)
-  -- Stored in plaintext per OQ-WS-4: a stolen key alone cannot decrypt anything
-  -- without the sub-card's private key, and the only exposure (sub-card count)
-  -- is already visible on the storage contract.
-  reencryption_keys (
-    id              UUID PRIMARY KEY,
-    card_hash       TEXT NOT NULL,
-    subcard_hash    TEXT NOT NULL,           -- keccak256(subcard_pubkey)
-    rekey           TEXT NOT NULL,           -- UMBRAL re-encryption key, plaintext, base64url
-    active          BOOLEAN DEFAULT TRUE,
-    registered_at   TIMESTAMPTZ DEFAULT now()
-  );
-  CREATE UNIQUE INDEX ON reencryption_keys(card_hash, subcard_hash) WHERE active = TRUE;
+  -- reencryption_keys (UMBRAL; one per card per sub-card) — DROPPED IN PHASE 4.
+  -- This table shipped with Phase 1 under the original UMBRAL re-encryption
+  -- design. Phase 4 replaced wallet-side re-encryption with sender-side
+  -- per-sub-card encryption (message_routing.md v0.4), so the wallet service
+  -- no longer holds any re-encryption key material — this table was dropped
+  -- via a Phase 4 migration. Left here, struck through in spirit, for the
+  -- historical record; see Phase 4 Step 4.3.
 
   -- Routing table (off-chain; card_hash → wallet service endpoint)
   routing_table (
@@ -441,7 +435,9 @@ Review the complete backup registration and cancellation flow with a security-fo
 
 ### Phase 4: Message Routing and Queue
 
-**Goal:** Wallet service accepts inbound routed messages, queues them per card, re-encrypts for registered sub-cards, and persists until cleared by relay.
+**Goal:** Wallet service accepts inbound routed messages, queues them per sub-card, and persists until cleared by relay.
+
+**Revised mid-phase:** Steps 4.3 and 4.4 originally specified UMBRAL proxy re-encryption at the wallet service. That was replaced with sender-side per-sub-card encryption (`process_specs/message_routing.md` v0.4) — the sender resolves the recipient's current sub-card list from the storage contract and sends one independently-encrypted routing envelope per sub-card, so the wallet service never re-encrypts anything and never holds re-encryption key material. This removed both a key-custody question and a dependency problem: the only available UMBRAL implementation (`@nucypher/umbral-pre`) is GPL-3.0-only, which would have been a real licensing blocker. See Steps 4.2-4.4 below for the resulting (simpler) design.
 
 ---
 
@@ -466,54 +462,38 @@ Review the complete backup registration and cancellation flow with a security-fo
 - Done when: Creating an account on instance A replicates the keyring blob to instance B within the same latency bound as a binding announcement; instance B's `GET /keyrings/{keyring_id}` serves the blob without instance A being reachable; rotating the keyring on instance A causes instance B to delete its replica of the previous `keyring_id`; a holder can complete recovery (Step 3.5 → `GET /keyrings/{keyring_id}`) against a wallet service that was never their primary.
 
 **Step 4.2 — Inbound message receipt**
-- What: `POST /messages` — accepts routed message envelopes from peer wallet services. Validates that `to` (card hash) is held by this wallet service. Stores payload in `message_queue`. Returns 202 Accepted. Returns 410 Gone with correct redirect if card has migrated.
+- What: `POST /messages` — accepts routed message envelopes from peer wallet services. Each envelope is already addressed to one specific sub-card and already encrypted to that sub-card's key by the sender (`message_routing.md` v0.4 §Sender-Side Fan-out) — the wallet service performs no cryptographic transform. Validates that `to` (card hash) is held by this wallet service. Stores payload in `message_queue`, scoped to `subcard_hash`. Returns 202 Accepted. Returns 410 Gone with correct redirect if card has migrated.
 
   ```
   POST /messages
   Body: {
-    to: "<card hash, hex>",
-    payload: "<ML-KEM encrypted SignedMessageEnvelope, base64url>"
+    to:           "<card hash, hex>",
+    subcard_hash: "<keccak256(subcard_pubkey), hex — which registered device this copy is for>",
+    payload:      "<ML-KEM encrypted SignedMessageEnvelope, base64url, encrypted to this subcard's key>"
   }
   Response: 202 Accepted
   ```
 
-  The payload is opaque — wallet service does not decrypt it. No sender information is stored or logged beyond what is in the routing header.
+  The payload is opaque — wallet service does not decrypt it and holds no key material that could. No sender information is stored or logged beyond what is in the routing header (`to`, `subcard_hash`).
 
 - Who: Claude
 - Context needed: `specs/process_specs/message_routing.md §Routing Envelope`, `§Delivery Flow`
-- Done when: Message stored in `message_queue` with correct `card_hash`; unknown card → 404; migrated card → 410 with redirect; payload stored as-is (no decryption attempt).
+- Done when: Message stored in `message_queue` with correct `card_hash` and `subcard_hash`; unknown card → 404; migrated card → 410 with redirect; payload stored as-is (no decryption attempt).
 
-**Step 4.3 — UMBRAL re-encryption and sub-card registration**
-- What: `POST /accounts/{card_hash}/subcards` — device registers a new sub-card and uploads its re-encryption key. Store in `reencryption_keys` in plaintext (no envelope encryption — see OQ-WS-4 resolution in the strategic plan). Broadcast updated `CardBindingAnnouncement` to peers.
+**Step 4.3 — Sub-card registration — RESOLVED, folded into Phase 5**
 
-  ```
-  POST /accounts/{card_hash}/subcards
-  Authorization: Bearer {session_token}
-  Body: {
-    subcard_hash: "<keccak256(subcard_pubkey), hex>",
-    reencryption_key: "<UMBRAL re-encryption key, base64url>"
-  }
-  Response: { subcard_id: "<UUID>" }
-  ```
+Originally specified as `POST /accounts/{card_hash}/subcards` registering a sub-card's UMBRAL re-encryption key. With re-encryption removed, there is nothing left for the wallet service to store about a sub-card beyond its UUID delivery pool — which Phase 5 Step 5.1 (`POST /cards/{card_hash}/subcards/{subcard_hash}/uuids`) already covers. No separate sub-card registration endpoint exists; a device becomes able to receive messages the moment it registers its first UUID batch.
 
-  **Sub-card verification:** Sub-cards are verified through the standard card verification process before registration. The wallet service does not implement a separate sub-card verification step — it accepts a sub-card registration only from a holder authenticated via session token, and the sub-card's legitimacy has been established through that verification flow. Sub-cards should be verified one at a time through an untraceable channel.
-
-  **Unlinkability constraint:** The wallet service MUST NOT be able to determine which cards are held on which devices. The `device_key` (used for UUID pool management) and the `subcard_hash` are both opaque — the wallet service stores them but must not log, correlate, or expose any data that would link a sub-card registration to a device identity. No IP address, session token lineage, timing correlation, or any other side channel should be recorded in a way that reconstructs this link.
-
-  When a message arrives in Step 4.4: read all active `reencryption_key` rows for the card directly (no decrypt step needed — they're stored in plaintext), apply UMBRAL re-encryption to the inbound payload, producing one ciphertext per active sub-card.
-
-- Who: Claude
-- Context needed: `specs/object_specs/relay.md §Actors`, `specs/process_specs/message_routing.md §Relay Delivery`, `strategic-plan.md §OQ-WS-4 resolved decision`
-- Done when: Sub-card registered; re-encryption key stored in `reencryption_keys.rekey`; UMBRAL re-encryption produces distinct ciphertexts per sub-card; no log output links subcard_hash to session_token or IP address.
+The unlinkability constraint this step originally called out still applies and is now enforced at Step 5.1 instead: the wallet service MUST NOT be able to determine which cards are held on which devices. `subcard_hash` is opaque — stored for UUID pool and message-queue routing, but never logged, correlated, or exposed in combination with any device-identifying signal (IP address, session token lineage, timing correlation).
 
 **Step 4.4 — Per-device delivery fan-out**
-- What: After inbound message receipt (Step 4.2), for each registered subcard in `reencryption_keys` for the card: re-encrypt the payload for that subcard (UMBRAL, using the plaintext `rekey` directly), then pop the next UUID from that subcard's pool in `uuid_pools`, call the relay `POST /deliver/{uuid}` with the re-encrypted blob. Use HTTP connection pool to relay. Retain message in `message_queue` until `DELETE /messages/{uuid}` is received. On 404 or 410 from relay: advance to the next UUID in that subcard's pool.
+- What: After inbound message receipt (Step 4.2), deliver the message to its target sub-card: pop the next UUID from that subcard's pool in `uuid_pools`, call the relay `POST /deliver/{uuid}` with the payload unchanged from the routing envelope (no re-encryption — it was already encrypted to this exact sub-card by the sender). Retain message in `message_queue` until `DELETE /messages/{uuid}` is received. On 404 or 410 from relay: advance to the next UUID in that subcard's pool. On 5xx/network error: advance to the next UUID rather than retrying the same one (a fresh UUID is cheap and plentiful; Phase 5's re-registration/retransmission path is the better fit for a sustained relay outage than burning through one sub-card's pool on retries).
 
-  Implement as a `MessageDeliveryWorker` that watches `message_queue` for new undelivered messages (via PostgreSQL `LISTEN/NOTIFY`).
+  Since each arriving envelope already names its one target sub-card (Step 4.2), there is no per-card fan-out loop at the wallet — "fan-out" happens at the sender, which already sent N independent envelopes for N sub-cards. Each delivery here is independent and synchronous within the `POST /messages` request handler; no background worker or `LISTEN/NOTIFY` polling is needed for this step (unlike Step 3.3's notification retries, a failed delivery here doesn't need scheduled retry — Phase 5's UUID re-registration path already re-delivers any uncleared message when a device comes back).
 
 - Who: Claude
 - Context needed: `specs/process_specs/message_routing.md §Relay Delivery and Multi-Device Fan-out`, `specs/process_specs/notification_relay.md §Process 2`, `specs/object_specs/relay.md §7.2`
-- Done when: End-to-end test: inbound message → re-encrypted ciphertext delivered to relay within 500ms; two registered device buckets receive independent deliveries; relay 404 → next UUID used; message retained in queue until DELETE arrives.
+- Done when: End-to-end test: inbound message → ciphertext delivered to relay within 500ms; two independently-addressed sub-card envelopes for the same card both deliver independently; relay 404/410 → next UUID used; message retained in queue until DELETE arrives.
 
 **Step 4.5 — Message clearance endpoint**
 - What: `DELETE /messages/{uuid}` — called by the relay (staggered, 0–6 hours after device pickup). Finds the message queue entry associated with this UUID and marks it cleared.
@@ -529,7 +509,7 @@ Review the complete backup registration and cancellation flow with a security-fo
 
 **⬥ Phase 4 Milestone Review**
 - Context needed: Step 4.1–4.5 outputs; `specs/process_specs/message_routing.md §What Wallet Services Observe`; `strategic-plan.md §Goal 3 Objectives` (privacy/unlinkability)
-- Done when: Privacy audit: confirm no logs link UUID to card_hash or device identity; routing table conflict resolution tested with out-of-order announcements; UMBRAL re-encryption validated against a test recipient; phase summary written to `plans/wallet-service/milestones/phase-4-summary.md`.
+- Done when: Privacy audit: confirm no logs link UUID, message content, or subcard_hash to a device identity; routing table conflict resolution tested with out-of-order announcements; phase summary written to `plans/wallet-service/milestones/phase-4-summary.md`.
 
 ---
 
@@ -557,7 +537,7 @@ Review the complete backup registration and cancellation flow with a security-fo
 - Done when: UUIDs stored with correct expiry; retransmission triggered on new registration when uncleared messages exist; device cannot look up another subcard's UUIDs.
 
 **Step 5.2 — UUID pool deregistration**
-- What: `DELETE /cards/{card_hash}/subcards/{subcard_hash}` — device removes its UUID pool for a subcard (e.g., on app uninstall or card removal). Marks all UUIDs for this subcard as consumed and removes the re-encryption key from `reencryption_keys`.
+- What: `DELETE /cards/{card_hash}/subcards/{subcard_hash}` — device removes its UUID pool for a subcard (e.g., on app uninstall or card removal). Marks all UUIDs for this subcard as consumed.
 
   ```
   DELETE /cards/{card_hash}/subcards/{subcard_hash}
@@ -566,7 +546,7 @@ Review the complete backup registration and cancellation flow with a security-fo
 
 - Who: Claude
 - Context needed: `specs/process_specs/notification_relay.md §Multi-Device Support`
-- Done when: UUID pool deleted; re-encryption key deactivated; subsequent message delivery skips this subcard; 404 if subcard not registered.
+- Done when: UUID pool deleted; subsequent message delivery to this subcard finds no UUIDs available; 404 if subcard not registered.
 
 **Step 5.3 — UUID expiry cleanup**
 - What: Background job runs nightly: delete `uuid_pools` records where `expires_at < now()` and `consumed = true`. Log count of pruned records per card (no subcard-level logging — aggregate only).

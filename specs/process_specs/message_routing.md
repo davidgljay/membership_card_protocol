@@ -1,9 +1,10 @@
 # Message Routing — Process Spec
 
-**Version:** 0.3 (draft)
-**Date:** 2026-06-29
+**Version:** 0.4 (draft)
+**Date:** 2026-06-30
 **Status:** Draft
-**Changes from v0.2:** Multi-device fan-out model changed from device_key hash to per-subcard pools. The `device_key` concept is removed from the routing layer. The wallet iterates registered subcards (not device_key buckets), re-encrypts per subcard via UMBRAL, and delivers one blob per subcard. UUID registration endpoint updated from `POST /cards/{card_hash}/devices/{device_key}/uuids` to `POST /cards/{card_hash}/subcards/{subcard_hash}/uuids`.
+**Changes from v0.3:** Replaced wallet-service UMBRAL proxy re-encryption with sender-side per-subcard encryption (see §Message Delivery). The wallet service no longer holds re-encryption key material or performs any ciphertext transform — the sender resolves the recipient's current sub-card list from the storage contract and sends one independently-encrypted routing envelope per sub-card. The routing envelope gains a `subcard_hash` field. `reencryption_keys` storage and the `POST /accounts/{card_hash}/subcards` re-encryption-key registration endpoint are removed; sub-card UUID pool registration (`POST /cards/{card_hash}/subcards/{subcard_hash}/uuids`) is unchanged and is now sufficient on its own for a device to begin receiving messages.
+**Changes from v0.2:** Multi-device fan-out model changed from device_key hash to per-subcard pools. The `device_key` concept is removed from the routing layer. UUID registration endpoint updated from `POST /cards/{card_hash}/devices/{device_key}/uuids` to `POST /cards/{card_hash}/subcards/{subcard_hash}/uuids`.
 
 ---
 
@@ -120,41 +121,54 @@ Because the routing table is maintained off-chain and replicated across wallet s
 
 ## Message Delivery
 
+**Changes from v0.3:** Per-device delivery no longer uses UMBRAL proxy re-encryption at the wallet service (the prior ADR-007 design). The wallet service does not hold any re-encryption key material and cannot transform ciphertext at all — it only ever stores and forwards opaque blobs. Instead, the **sender** encrypts independently to each of the recipient's currently-registered sub-card public keys (visible in the on-chain storage contract) and sends one routing envelope per sub-card. This trades a small amount of extra sender-side computation and wire traffic (proportional to device count, typically 2-5) for removing an entire cryptographic subsystem and its key-custody surface from the wallet service.
+
 ### Routing Envelope
 
 Messages between wallet services are wrapped in a **routing envelope** — a thin, partially-visible outer layer that carries only the information needed to deliver the payload. The inner payload is E2E encrypted and opaque to the routing layer.
 
 ```json
 {
-  "to":      "<card hash — on-chain registry address of recipient card>",
-  "payload": "<ML-KEM-encrypted SignedMessageEnvelope, base64url>"
+  "to":           "<card hash — on-chain registry address of recipient card>",
+  "subcard_hash": "<keccak256(subcard_pubkey) — which registered device this copy is for>",
+  "payload":      "<ML-KEM-encrypted SignedMessageEnvelope, base64url>"
 }
 ```
 
-`to` is visible to all wallet services that handle the envelope. `payload` is encrypted to the recipient card's ML-KEM public key (derived from the card's `recipient_pubkey` via HKDF) and is opaque to everyone except the recipient.
+`to` and `subcard_hash` are visible to all wallet services that handle the envelope. `payload` is encrypted to that specific sub-card's ML-KEM public key (derived from the sub-card's registered public key via HKDF) and is opaque to everyone except the device holding that sub-card's private key — including the wallet service, which cannot decrypt or transform it.
+
+### Sender-Side Fan-out
+
+Before sending, the sender's client resolves the recipient card's current sub-card list from the on-chain storage contract and constructs one routing envelope per registered sub-card, each encrypted independently to that sub-card's public key:
+
+```
+Sender's client
+  → resolve recipient_hash's registered sub-cards from the storage contract
+  → for each subcard_hash: encrypt SignedMessageEnvelope to that subcard's ML-KEM public key
+  → hand each { to: recipient_hash, subcard_hash, payload } envelope to the sender's wallet service
+```
+
+A sub-card registered after a message was sent will not retroactively receive that message — there is no re-encryption step that could deliver it after the fact. This is consistent with message history being ephemeral per-device rather than a durable, synced record (only keyring/card state is durably synced via the keyring blob).
 
 ### Delivery Flow
 
 ```
 Sender's wallet service (A)
   → look up routing_table[recipient_hash] → wallet_service_id B
-  → construct routing envelope: { to: recipient_hash, payload: E2E_encrypted }
-  → POST to wallet service B's endpoint
+  → POST each per-subcard routing envelope to wallet service B's endpoint
 
 Wallet service B
   → receive routing envelope
   → confirm recipient_hash matches a card it holds
-  → place encrypted payload in the recipient card's inbound queue
-  → re-encrypt payload for each of the recipient's registered sub-card devices
-    (UMBRAL proxy re-encryption, as in ADR-007)
+  → place the already-encrypted payload in that subcard's inbound queue
   → return 202 Accepted to wallet service A
 ```
 
-If wallet service B does not hold `recipient_hash`, it returns `410 Gone` with the current `wallet_service_id` for that hash (if known). Wallet service A updates its local routing table and retries.
+If wallet service B does not hold `recipient_hash`, it returns `410 Gone` with the current `wallet_service_id` for that hash (if known). Wallet service A updates its local routing table and retries — for every per-subcard envelope addressed to that card, since they are independent deliveries.
 
 ### Relay Delivery and Multi-Device Fan-out
 
-After placing the message in the recipient card's inbound queue, wallet service B delivers the encrypted payload to the relay for device notification. Multi-device support is handled through subcards: each app instance on each device holds its own subcard, and the wallet maintains a UUID pool per subcard:
+Each routing envelope arriving at wallet service B is already addressed to one specific sub-card and already encrypted to that sub-card's key — there is no transform step. The wallet maintains a UUID pool per subcard:
 
 ```
 card_hash → {
@@ -164,20 +178,19 @@ card_hash → {
 }
 ```
 
-For each registered subcard:
+For the envelope's `subcard_hash`:
 
-1. Re-encrypt the payload for this subcard using its stored UMBRAL re-encryption key, producing a ciphertext decryptable only by that subcard's private key.
-2. Select the next UUID from the subcard's pool and remove it from the pool.
-3. Call the relay:
+1. Select the next UUID from that subcard's pool and remove it from the pool.
+2. Call the relay:
    ```
    POST /deliver/{uuid}
-   Body: { "blob": "<re-encrypted payload, base64url>" }
+   Body: { "blob": "<payload, base64url, unchanged from the routing envelope>" }
    ```
-4. On 200: UUID consumed; relay has accepted responsibility for delivery.
-5. On 404 or 410 (UUID unknown or already consumed): advance to the next UUID in the pool and retry.
-6. On 5xx or network error: retry with exponential backoff using the same UUID.
+3. On 200: UUID consumed; relay has accepted responsibility for delivery.
+4. On 404 or 410 (UUID unknown or already consumed): advance to the next UUID in the pool and retry.
+5. On 5xx or network error: retry with exponential backoff using the same UUID.
 
-Fan-out is performed independently per subcard; failure for one does not block delivery to others.
+Since the sender already addressed each envelope to a specific sub-card, "fan-out" here means independent per-subcard *envelopes* arriving as independent deliveries — not a single inbound message transformed N ways at the wallet. Failure delivering one sub-card's envelope does not affect any other.
 
 ### Wallet Message Retention
 
@@ -187,7 +200,7 @@ Wallet service B retains each message in its inbound queue until it receives a c
 DELETE /messages/{uuid}
 ```
 
-The relay sends this call after confirmed device pickup, with a random delay of 0–6 hours (staggered wallet clearance). The wallet service maps the UUID to the card and removes the corresponding message from the queue.
+The relay sends this call after confirmed device pickup, with a random delay of 0–6 hours (staggered wallet clearance). The wallet service maps the UUID to the message it was delivered under and removes it from the queue.
 
 On receiving `DELETE /messages/{uuid}`:
 - 200: message cleared.
@@ -197,13 +210,13 @@ On receiving `DELETE /messages/{uuid}`:
 
 ### UUID Re-registration and Retransmission
 
-When the relay's Redis store is cleared (restart), devices re-register new UUID pools with the wallet service. When wallet service B receives a new UUID registration for a subcard (`POST /cards/{card_hash}/subcards/{subcard_hash}/uuids`), it checks whether any messages in the inbound queue remain uncleared for that card. If so, it immediately re-encrypts and delivers those messages to the new UUIDs for this subcard using the relay delivery flow above.
+When the relay's Redis store is cleared (restart), devices re-register new UUID pools with the wallet service. When wallet service B receives a new UUID registration for a subcard (`POST /cards/{card_hash}/subcards/{subcard_hash}/uuids`), it checks whether any messages in that subcard's inbound queue remain uncleared. If so, it immediately delivers those already-encrypted blobs to the new UUIDs for this subcard using the relay delivery flow above — no re-encryption is needed since the blob was never transformed at the wallet in the first place.
 
 This retransmission may cause the device to receive a duplicate of a message it already processed before the relay restart. Devices must deduplicate by message ID within the decrypted blob.
 
 ### Encryption Model
 
-The `payload` field is encrypted using the recipient card's ML-KEM public key. The encryption wraps the full `SignedMessageEnvelope` — including sender identity, message type, and content. Wallet service B never sees any of this; it handles only ciphertext.
+Each routing envelope's `payload` field is encrypted using the specific recipient sub-card's ML-KEM public key, by the sender, before the envelope ever reaches a wallet service. The encryption wraps the full `SignedMessageEnvelope` — including sender identity, message type, and content. No wallet service ever sees any of this, and — unlike the prior UMBRAL design — no wallet service ever holds key material capable of transforming the ciphertext either; it only stores and forwards opaque bytes.
 
 The sender's card identity, their signing sub-card, and the message content are all inside the encrypted payload. They are revealed only when the recipient's client decrypts the envelope.
 
@@ -216,12 +229,15 @@ A wallet service handling a routed message observes the following:
 | Observable | Receiving wallet service (B) sees |
 |---|---|
 | Recipient card hash | **Yes** — present in the routing header `to` field |
+| Recipient sub-card hash | **Yes** — present in the routing header `subcard_hash` field (which registered device this copy is for) |
 | Originating wallet service | **Yes** — implicit from the TLS connection / IP of the sending wallet service |
 | Sender card hash | **No** — inside the E2E encrypted payload |
 | Message type | **No** — inside the E2E encrypted payload |
 | Message content | **No** — inside the E2E encrypted payload |
 
 The originating wallet service being visible narrows the anonymity set for the sender: the recipient wallet service knows the message came from some card held by wallet service A. This is the residual metadata visible at this transport tier. Future transport upgrades (see below) can eliminate it.
+
+Visibility of `subcard_hash` is a deliberate trade from removing UMBRAL: the wallet service already stored `subcard_hash` for UUID pool routing in the prior design, but previously only encountered it after performing its own re-encryption — now it's visible directly in the inbound routing header instead. This does not on its own deanonymize a device; `subcard_hash` remains opaque and is still subject to the unlinkability constraint that no log, metric, or admin endpoint may correlate it to a device identity, IP, or session (implementation-plan.md §Step 4.3, §Step 6.2).
 
 ---
 
@@ -273,7 +289,7 @@ Full sender anonymity at the wallet-service level requires Nym transport (`0x04`
 
 ## Related Specs
 
-- `ARCHITECTURE.md ADR-007` — transport layer decisions; UMBRAL re-encryption; OHTTP
+- `ARCHITECTURE.md ADR-007` — transport layer decisions; sender-side per-subcard encryption; OHTTP
 - `specs/messaging_protocol.md` — `SignedMessageEnvelope` structure; message types; `recipients` and `senders` fields
 - `specs/object_specs/registry_contract.md` — on-chain card registry (note: routing state and the Wallet Service Registry are off-chain; see INC-35)
 - `specs/process_specs/card_offering_and_acceptance.md` — uses routing delivery (step 22: SCIP delivery to recipient wallet service)

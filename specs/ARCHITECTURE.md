@@ -227,9 +227,9 @@ Each press card carries two public keys:
 
 Governance keys follow the same pattern: secp256r1 for on-chain governance operations (stored in `GovernanceKeysets`), rotatable.
 
-### Proxy Re-encryption
+### Multi-Device Delivery
 
-The message server uses **UMBRAL proxy re-encryption** to transform inbound ciphertexts (encrypted to a master card public key) into per-device sub-card ciphertexts, without ever seeing plaintext. This enables multi-device delivery without the master key being online.
+**Revised — no longer UMBRAL-based; see ADR-007 §Message Server.** Multi-device delivery is achieved by the sender encrypting independently to each registered sub-card's public key, not by the message server transforming a single ciphertext via UMBRAL proxy re-encryption. This removes the need for the master key (or any re-encryption key derived from it) to be involved at delivery time at all — the message server never sees plaintext, and now never holds any key material either.
 
 ---
 
@@ -352,7 +352,7 @@ The protocol needs a reliable communication channel for message delivery between
 
 ### Decision
 
-Use **HTTPS** for all wallet-service-to-wallet-service and press-to-wallet-service communication. Each registered wallet service exposes a stable HTTPS endpoint. Messages are delivered as **routing envelopes** — a thin outer layer carrying only the recipient card hash and an E2E-encrypted payload. End-to-end encryption (ML-KEM + ML-DSA-44) ensures wallet services cannot read message content; sender identity is inside the encrypted payload and never visible to the routing layer.
+Use **HTTPS** for all wallet-service-to-wallet-service and press-to-wallet-service communication. Each registered wallet service exposes a stable HTTPS endpoint. Messages are delivered as **routing envelopes** — a thin outer layer carrying only the recipient card hash, the target sub-card hash, and an E2E-encrypted payload. End-to-end encryption (ML-KEM + ML-DSA-44) ensures wallet services cannot read message content; sender identity is inside the encrypted payload and never visible to the routing layer. The sender encrypts independently per recipient sub-card (see `process_specs/message_routing.md §Sender-Side Fan-out`) — wallet services never hold key material capable of transforming ciphertext, unlike the UMBRAL proxy re-encryption design this section originally specified (see "Message Server" below for the current model).
 
 OHTTP (Oblivious HTTP, RFC 9458) and the Nym mixnet are optional transport upgrades selectable per wallet service via `transport_flags` in the wallet service registry. They are not required for protocol conformance but provide stronger metadata privacy at the cost of latency. See `process_specs/message_routing.md §Transport Extensibility`.
 
@@ -370,15 +370,16 @@ See `process_specs/message_routing.md` for the full routing flow, routing envelo
 
 ### Message Server
 
-A **message server** (wallet service operator's own infrastructure) accepts inbound routing envelopes and queues them for offline devices:
+**Revised — no longer UMBRAL-based.** The original design in this section had the message server hold UMBRAL proxy re-encryption keys and transform inbound ciphertext per sub-card. That has been replaced: the sender now encrypts independently to each recipient sub-card's public key before the message ever reaches a wallet service (`process_specs/message_routing.md §Sender-Side Fan-out`), so the wallet service never holds any key material capable of acting on ciphertext at all — not even in a re-encryption-only capacity. This was a deliberate trade of a small amount of extra sender-side computation and wire traffic (one encryption and one routing envelope per registered device, typically 2-5) for removing an entire cryptographic subsystem — and its key-custody and dependency-licensing surface — from the wallet service.
+
+A **message server** (wallet service operator's own infrastructure) accepts inbound, already-encrypted routing envelopes and queues them for offline devices:
 
 1. Accepts HTTPS POST requests at the wallet service's registered endpoint.
-2. Holds **proxy re-encryption keys** (UMBRAL) for each active sub-card, generated at sub-card creation.
-3. Transforms inbound ciphertexts (encrypted to master card public key) into per-device sub-card ciphertexts — without seeing plaintext.
-4. Queues re-encrypted ciphertexts in a per-sub-card queue for device pickup.
-5. Authenticates devices via sub-card signature challenge before delivering queued messages.
+2. Stores each inbound, already-per-subcard-encrypted ciphertext as-is — no transform, no key material held for this purpose.
+3. Queues each ciphertext in its target sub-card's queue for device pickup.
+4. Authenticates devices via sub-card signature challenge before delivering queued messages.
 
-The message server observes: the recipient card hash (from the routing header) and the originating wallet service. It does not observe sender card identity or message content. Operators who wish to reduce metadata exposure can enable OHTTP or Nym transport in their wallet service registry entry.
+The message server observes: the recipient card hash and target sub-card hash (from the routing header) and the originating wallet service. It does not observe sender card identity or message content. Operators who wish to reduce metadata exposure can enable OHTTP or Nym transport in their wallet service registry entry.
 
 ---
 
@@ -515,12 +516,13 @@ The tradeoff is trust surface, not cost: replicating to every operator means eve
 │  - Signs offers (press sub-card)│  │  - HTTPS endpoint             │
 │  - Posts to IPFS + Arbitrum      │  │  - Local routing table       │
 │  - Logs issuance (encrypted)     │  │    { card_hash → wallet_svc }│
-│  - Routes SCIP to holder via     │  │  - UMBRAL proxy re-encryption│
-│    wallet service routing        │  │  - Per-device message queue  │
+│  - Routes SCIP to holder via     │  │  - No re-encryption key       │
+│    wallet service routing        │  │    material held at all       │
+│                                  │  │  - Per-subcard message queue │
 └──────────────────────────────────┘  └───────────────┬──────────────┘
                                                        │
                               HTTPS routing envelopes  │
-                        { to: card_hash, payload: E2E }│
+              { to: card_hash, subcard_hash, payload: E2E (per subcard) }
                           (optional: OHTTP / Nym)      │
                                                        │
 ┌──────────────────────────────────────────────────────▼──────────────┐

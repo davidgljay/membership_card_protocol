@@ -16,6 +16,7 @@ import { issueSessionToken } from '../../../src/auth/session-token.js';
 import { keccak256OfBase64Url } from '../../../src/crypto.js';
 import { getSecretsService } from '../../utils/secrets.js';
 import { loadConfig } from '../../../src/config.js';
+import { announceOwnCardRegistration, replicateKeyringBlob } from '../../utils/federation-self.js';
 
 interface CreateAccountBody {
   challenge?: string;
@@ -103,7 +104,13 @@ export default defineEventHandler(async (event) => {
   }
 
   await insertKeyringBlob(pool, keyringId, cardHash, encryptedKeyringBlob);
-  // Federation broadcast to peer wallet services (Step 4.1a) lands in Phase 4.
+  // This instance now holds the card — announce the binding and replicate
+  // the keyring blob to every configured peer (Step 4.1/4.1a). Best-effort;
+  // does not block or fail account creation if peers are unreachable.
+  await Promise.all([
+    announceOwnCardRegistration(cardHash),
+    replicateKeyringBlob(keyringId, cardHash, encryptedKeyringBlob),
+  ]);
 
   const config = loadConfig();
   const { token, payload } = issueSessionToken(cardHash, config.SESSION_TOKEN_SECRET);

@@ -32,9 +32,10 @@ export default defineNitroConfig({
   // 72-hour recovery window itself needs no sweep — expires_at is a
   // persisted DB column, checked lazily on GET /recovery/{id}/release
   // (Step 3.5) — only notification retries need a periodic sweep (Step
-  // 3.3). UUID pool and routing-nonce pruning land in Phase 5/4.
+  // 3.3). UUID pool pruning lands in Phase 5.
   scheduledTasks: {
     '*/5 * * * *': ['sweep-notification-retries'],
+    '0 3 * * 0': ['prune-routing-nonces'], // weekly, Sunday 03:00 (Step 4.1)
   },
   storage: {
     // Session tokens, rate-limit counters. Defaults to KV on the Cloudflare

@@ -29,6 +29,22 @@ export interface WalletServiceConfig {
   TWILIO_ACCOUNT_SID: string | undefined;
   TWILIO_AUTH_TOKEN: string | undefined;
   TWILIO_FROM_NUMBER: string | undefined;
+  /** This instance's own wallet service identity (Step 4.0/4.1) — the mutable pointer of its wallet service card, used as `wallet_service_id` in CardBindingAnnouncements and federation messages. */
+  WALLET_SERVICE_ID: string;
+  /** Base HTTPS URL peers should use to reach this instance — included in announcements so peers can route to it. */
+  WALLET_SERVICE_ENDPOINT: string;
+  /** ML-DSA-44 secret key (base64url) signing this instance's announcements and federation messages as the 'wallet_service' role. */
+  WALLET_SERVICE_PRIVATE_KEY: string;
+  /** Static peer list (Step 4.0, message_routing.md §Wallet Service Registry §Peer List) — JSON array of { wallet_service_id, endpoint, pubkey_hash }. Empty by default (single-instance per OQ-WS-5); federation is opt-in via config. */
+  PEER_LIST: PeerConfig[];
+  /** Base URL for the relay's POST /deliver/{uuid} and message endpoints (Step 4.4). */
+  RELAY_BASE_URL: string;
+}
+
+export interface PeerConfig {
+  wallet_service_id: string;
+  endpoint: string;
+  pubkey_hash: string;
 }
 
 function requireEnv(name: string): string {
@@ -42,6 +58,35 @@ function requireEnv(name: string): string {
 
 function optionalEnv(name: string, defaultValue: string): string {
   return process.env[name] ?? defaultValue;
+}
+
+function parsePeerList(raw: string): PeerConfig[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    console.error('Wallet service startup error: PEER_LIST is not valid JSON.');
+    process.exit(1);
+  }
+  if (!Array.isArray(parsed)) {
+    console.error('Wallet service startup error: PEER_LIST must be a JSON array.');
+    process.exit(1);
+  }
+  for (const entry of parsed) {
+    if (
+      typeof entry !== 'object' ||
+      entry === null ||
+      typeof entry.wallet_service_id !== 'string' ||
+      typeof entry.endpoint !== 'string' ||
+      typeof entry.pubkey_hash !== 'string'
+    ) {
+      console.error(
+        'Wallet service startup error: each PEER_LIST entry must have wallet_service_id, endpoint, and pubkey_hash strings.'
+      );
+      process.exit(1);
+    }
+  }
+  return parsed as PeerConfig[];
 }
 
 let cached: WalletServiceConfig | null = null;
@@ -72,6 +117,11 @@ export function loadConfig(): WalletServiceConfig {
     TWILIO_ACCOUNT_SID: process.env['TWILIO_ACCOUNT_SID'],
     TWILIO_AUTH_TOKEN: process.env['TWILIO_AUTH_TOKEN'],
     TWILIO_FROM_NUMBER: process.env['TWILIO_FROM_NUMBER'],
+    WALLET_SERVICE_ID: requireEnv('WALLET_SERVICE_ID'),
+    WALLET_SERVICE_ENDPOINT: requireEnv('WALLET_SERVICE_ENDPOINT'),
+    WALLET_SERVICE_PRIVATE_KEY: requireEnv('WALLET_SERVICE_PRIVATE_KEY'),
+    PEER_LIST: parsePeerList(optionalEnv('PEER_LIST', '[]')),
+    RELAY_BASE_URL: requireEnv('RELAY_BASE_URL'),
   };
 
   if (secretsBackend === 'webcrypto' && !config.WEBCRYPTO_MASTER_KEY) {

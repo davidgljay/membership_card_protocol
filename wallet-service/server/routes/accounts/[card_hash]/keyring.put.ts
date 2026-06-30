@@ -17,6 +17,7 @@ import { invalidateSessionsForCard } from '../../../../src/auth/session-token.js
 import { keccak256OfBase64Url } from '../../../../src/crypto.js';
 import { getSecretsService } from '../../../utils/secrets.js';
 import { createKvStore } from '../../../utils/kv-store.js';
+import { replicateKeyringBlob, replicateKeyringDelete } from '../../../utils/federation-self.js';
 
 interface KeyringUpdateBody {
   challenge?: string;
@@ -71,8 +72,12 @@ export default defineEventHandler(async (event) => {
     serviceSecretEnc: ciphertext,
     serviceSecretDekEnc: dekEnc,
   });
-  // Federation delete-broadcast for previousKeyringId (Step 4.1a) lands in Phase 4.
-  void previousKeyringId;
+  // Replicate the new blob and instruct peers to delete the superseded
+  // version (Step 4.1a). Best-effort; does not block or fail rotation.
+  await Promise.all([
+    replicateKeyringBlob(newKeyringId, cardHash, newEncryptedKeyringBlob),
+    replicateKeyringDelete(previousKeyringId),
+  ]);
 
   const kv = createKvStore();
   await invalidateSessionsForCard(cardHash, kv);
