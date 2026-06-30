@@ -1,10 +1,12 @@
 # Wallet Backup and Recovery — Process Spec
 
-**Version:** 0.2 (draft)  
-**Date:** 2026-06-14  
+**Version:** 0.3 (draft)  
+**Date:** 2026-06-29  
 **Status:** Draft  
 
 > **Terminology note.** This spec now uses "card" as the canonical term per the Naming Convention.
+
+**Changes from v0.2:** The keyring blob no longer lives on IPFS (see `ARCHITECTURE.md` ADR-009-AMEND). It is stored in traditional, deletable storage and replicated across every wallet service in the federation, identified by `keyring_id` (a content hash) instead of an IPFS CID. Rotation now triggers a synchronized delete of the superseded version across the federation, rather than relying on IPFS unpinning.
 
 ---
 
@@ -12,7 +14,18 @@
 
 A card holder's wallet contains the private keys for every card they control. Loss of the wallet means loss of access to all cards and any services authenticated with them. This spec covers four processes: initial wallet setup with backup registration, synced passkey recovery (default), YubiKey recovery (opt-in upgrade), and post-recovery re-registration.
 
-The security model: the wallet is encrypted on IPFS with a key that requires both a passkey (device-bound) and a service secret (held by the primary service). Neither alone is sufficient to decrypt. Recovery is enabled by a wrapped copy of the decryption key held at the backup service, unwrappable by a second credential the holder registers at setup.
+The security model: the wallet is encrypted with a key that requires both a passkey (device-bound) and a service secret (held by the primary service). Neither alone is sufficient to decrypt. The encrypted keyring is replicated across every wallet service in the federation (see "Keyring Storage and Replication" below), so recovery does not depend on any single operator remaining available. Recovery is enabled by a wrapped copy of the decryption key held at the backup service, unwrappable by a second credential the holder registers at setup.
+
+---
+
+## Keyring Storage and Replication
+
+The keyring blob (the append-only encrypted store of the holder's master card private keys, ADR-009) is stored using ordinary, deletable storage — not IPFS — at **every wallet service in the federation**:
+
+- The blob is identified by `keyring_id = keccak256(encrypted_blob)`, a content hash used as a lookup key and integrity check, not an IPFS CID.
+- Whenever a holder's primary service creates or updates the keyring (initial setup, or re-encryption after rotation/recovery), it stores the blob locally and broadcasts it — alongside its `keyring_id` — to every other wallet service in the federation, using the same broadcast channel already used for `CardBindingAnnouncement` fanout (`specs/process_specs/message_routing.md`). Each receiving operator stores its own copy, keyed by `keyring_id` and associated with the holder's `card_hash`.
+- When the keyring is replaced (re-encrypted under a new `decryption_key`, e.g. during post-recovery re-registration), the broadcast also instructs every federation member to **delete its copy of the previous `keyring_id`**. Unlike the prior IPFS-based design, this deletion is a deliberate, synchronized operation across the whole federation, not a best-effort unpin that other parties may have already cached around.
+- At recovery time, the holder's client may fetch the keyring blob by `keyring_id` from **any** reachable wallet service holding a replica — not necessarily the original primary service. This is what preserves the "recovery is independent of the primary service" property without using IPFS.
 
 **Recovery tiers:**
 
@@ -62,8 +75,8 @@ This flow runs when a new holder creates their first wallet, or when an existing
 5. The keyring is initialized as an append-only encrypted blob:
    - The blob contains the master card private key, keyed by card address.
    - The blob is encrypted with `decryption_key` (AES-GCM).
-   - The encrypted blob is posted to IPFS.
-   - The IPFS CID is stored by the primary service, associated with the holder's account.
+   - The primary service computes `keyring_id = keccak256(encrypted_blob)`, stores the blob, and broadcasts it to every other wallet service in the federation (see "Keyring Storage and Replication" above).
+   - `keyring_id` is stored by the primary service, associated with the holder's account.
 
 6. The master card private key is cleared from memory after the keyring is posted.
 
@@ -93,7 +106,7 @@ This flow runs when a new holder creates their first wallet, or when an existing
 
 13. The client sends the encrypted blob to the backup service:
     ```
-    { type: "synced_passkey", wrapped_decryption_key, keyring_cid, notification_channels, cancellation_credentials }
+    { type: "synced_passkey", wrapped_decryption_key, keyring_id, notification_channels, cancellation_credentials }
     ```
     The backup service stores the blob and returns a **backup registration confirmation**. The backup service never sees `decryption_key` in plaintext.
 
@@ -105,7 +118,7 @@ This flow runs when a new holder creates their first wallet, or when an existing
     - The client wraps `decryption_key`: `wrapped_decryption_key_yubikey = AES-GCM.Encrypt(yubikey_derived_key, decryption_key)`.
     - The client sends the encrypted blob to the backup service:
       ```
-      { type: "yubikey", wrapped_decryption_key, keyring_cid, notification_channels, cancellation_credentials }
+      { type: "yubikey", wrapped_decryption_key, keyring_id, notification_channels, cancellation_credentials }
       ```
     - The backup service stores this blob alongside (or instead of) the synced passkey blob.
 
@@ -154,12 +167,12 @@ This flow runs when the holder has lost their primary device and has a synced pa
 **Key release (after 72-hour window):**
 
 6. If no cancellation is received after 72 hours, the backup service releases:
-   - The CID of the encrypted keyring blob on IPFS.
+   - The `keyring_id` of the encrypted keyring blob.
    - The `wrapped_decryption_key_cloud` blob.
 
 **Decryption:**
 
-7. The holder's client fetches the encrypted keyring blob from IPFS using the released CID.
+7. The holder's client fetches the encrypted keyring blob by `keyring_id` from any reachable wallet service in the federation — the original primary service is not required, since the blob is replicated across all federation members (see "Keyring Storage and Replication").
 
 8. The app requests the synced passkey. The device prompts biometric auth (Face ID, Touch ID, fingerprint). On success, the synced passkey output unwraps `decryption_key`:
    ```
@@ -216,12 +229,12 @@ This flow runs when the holder has a YubiKey registered and prefers the higher-s
 **Key release (after 72-hour window):**
 
 5. If no cancellation is received after 72 hours, the backup service releases:
-   - The CID of the encrypted keyring blob on IPFS.
+   - The `keyring_id` of the encrypted keyring blob.
    - The `wrapped_decryption_key_yubikey` blob.
 
 **Decryption:**
 
-6. The holder's client fetches the encrypted keyring blob from IPFS using the released CID.
+6. The holder's client fetches the encrypted keyring blob by `keyring_id` from any reachable wallet service in the federation — the original primary service is not required.
 
 7. The holder presents the YubiKey (PIN required). The client sends the `wrapped_decryption_key_yubikey` to the YubiKey. The YubiKey decapsulates it locally and returns the `decryption_key`. The private key of the YubiKey never leaves the device.
 
@@ -241,7 +254,7 @@ After either recovery path, the holder re-establishes their wallet on a new prim
     - Creates a new device-bound passkey on the new device.
     - The new service generates a new `service_secret`.
     - A new `decryption_key` is derived from the new passkey and service secret.
-    - The keyring blob is re-encrypted with the new `decryption_key` and re-posted to IPFS.
+    - The keyring blob is re-encrypted with the new `decryption_key`, assigned a new `keyring_id`, and broadcast to every wallet service in the federation. The broadcast also instructs all federation members to delete their copy of the previous `keyring_id`.
 
 11. The holder registers new **device sub-cards** for their new device(s):
     - Generate a new device sub-card keypair in the new device's secure storage.
@@ -291,7 +304,7 @@ After either recovery path, the holder re-establishes their wallet on a new prim
 | Primary service unavailable during setup | Cannot complete wallet setup without a service secret; choose an available primary service |
 | Synced passkey unavailable (e.g., account switched) | Use YubiKey recovery path if registered; otherwise recover Apple/Google account first |
 | YubiKey PIN forgotten | YubiKey recovery is blocked; use synced passkey recovery path instead |
-| Keyring IPFS CID unavailable during recovery | Retry IPFS fetch; if permanently unavailable, the keyring blob must be re-derived from any surviving private key material (last resort manual recovery) |
+| Keyring blob unavailable from any federation member | Retry against other wallet services in the federation holding a replica; if no federation member has it (last resort), the keyring blob must be re-derived from any surviving private key material (manual recovery) |
 | Cancellation window expires and holder did not intend recovery | Holder must immediately rotate all card sub-cards that may have been exposed; treat master keys as compromised; issue successor cards as needed |
 | Recovery completed by attacker before holder notices | Holder must issue 910 (full wallet compromise suspected) revocations on all cards and work with each policy's issuer to obtain successor cards |
 

@@ -1,9 +1,9 @@
 # Card Protocol — Architecture Decision Record
 
-**Version:** 1.1  
-**Date:** 2026-06-14  
+**Version:** 1.2  
+**Date:** 2026-06-29  
 **Status:** Current  
-**Source:** Synthesized from `card_protocol_spec.md` (v0.3) and supporting raw notes. v1.1 adds ADR-012 (secp256r1 for on-chain verification; ML-DSA-44 retained for IPFS content signing) and closes OQ-2.  
+**Source:** Synthesized from `card_protocol_spec.md` (v0.3) and supporting raw notes. v1.1 adds ADR-012 (secp256r1 for on-chain verification; ML-DSA-44 retained for IPFS content signing) and closes OQ-2. v1.2 adds ADR-009-AMEND: the keyring blob moves off IPFS to traditional, deletable storage replicated across the wallet service federation.  
 
 ---
 
@@ -19,6 +19,7 @@
 8. [ADR-007: Transport Layer — HTTPS](#adr-007-transport-layer--https)
 9. [ADR-008: Annotation Layer — EAS on Arbitrum One](#adr-008-annotation-layer--eas-on-arbitrum-one)
 10. [ADR-009: Key Management — Two-Tier with YubiKey Recovery](#adr-009-key-management--two-tier-with-yubikey-recovery)
+10a. [ADR-009-AMEND: Keyring Blob Storage — Federation Replication, Not IPFS](#adr-009-amend-keyring-blob-storage--federation-replication-not-ipfs)
 11. [ADR-010: Canonical Serialization — RFC 8785 vs. CBOR](#adr-010-canonical-serialization--rfc-8785-vs-cbor)
 12. [ADR-011: On-Chain Press Authorization and Protocol Governance](#adr-011-on-chain-press-authorization-and-protocol-governance)
 13. [Component Map](#component-map)
@@ -96,11 +97,13 @@ Deploy a single registry contract on **Arbitrum One**, using the **RIP-7212 secp
 
 ### Context
 
-Card content, policy documents, and the keyring blob must be stored durably, be content-addressable, and be independently fetchable by any verifier without going through a centralized service.
+Card content and policy documents must be stored durably, be content-addressable, and be independently fetchable by any verifier without going through a centralized service.
 
 ### Decision
 
-Use **IPFS** for all off-chain content. The on-chain registry stores only CID pointers; content resolution is off-chain.
+Use **IPFS** for all off-chain content that benefits from public, trustless verifiability. The on-chain registry stores only CID pointers; content resolution is off-chain.
+
+**The keyring blob is explicitly excluded from this decision** — see ADR-009-AMEND below. It has no third-party verification requirement (it is only ever decrypted by its own holder), so IPFS's defining property (anyone can fetch and verify content against a public commitment) provides no benefit, while IPFS's append-only, pin-dependent persistence model is actively harmful for a value that changes on every card acceptance or key rotation.
 
 ### Rationale
 
@@ -111,7 +114,7 @@ Use **IPFS** for all off-chain content. The on-chain registry stores only CID po
 ### Consequences
 
 - Presses are responsible for pinning all content they upload to IPFS. A card whose content is no longer pinned is unresolvable by verifiers.
-- The keyring blob (§ADR-009) lives on IPFS and must be pinned by the primary service until the user recovers.
+- The keyring blob (§ADR-009-AMEND) does **not** use IPFS; it is replicated across the wallet service federation using traditional, deletable storage instead.
 - Filecoin integration (via pinning services) is the recommended long-term persistence path for high-value card data but is not required in v1.
 
 ---
@@ -422,7 +425,7 @@ A holder's private keys are the root of their identity. Loss means permanent los
 
 **Two-tier key architecture:**
 
-- **Master card key** — high-stakes key for creating sub-cards and key rotations. Stored in an **encrypted keyring blob on IPFS**, encrypted with a key derived from `passkey + service_secret`. Neither the passkey nor the service secret alone can decrypt it.
+- **Master card key** — high-stakes key for creating sub-cards and key rotations. Stored in an **encrypted keyring blob**, encrypted with a key derived from `passkey + service_secret`. Neither the passkey nor the service secret alone can decrypt it. See ADR-009-AMEND below for where the blob is stored.
 - **Sub-card keys** — day-to-day signing keys, one per device. Stored in **secure device storage** (Secure Enclave on Apple, TPM on others). All routine signing operations use sub-card keys; the master key is cold.
 
 **The keyring blob** is append-only: new keys are added; old keys are never removed from the blob, preserving recoverability after device loss.
@@ -431,16 +434,52 @@ A holder's private keys are the root of their identity. Loss means permanent los
 
 1. The holder registers with a backup service, presenting their YubiKey.
 2. The backup service stores an encrypted blob containing the keyring decryption key, wrapped under the YubiKey-derived key. The service never sees the decryption key in plaintext.
-3. On recovery: holder presents YubiKey → backup service issues a 72-hour cancellation window with multi-channel notifications → if no cancellation, releases the wrapped decryption key blob → YubiKey unwraps locally (PIN required) → holder decrypts keyring from IPFS and re-registers.
+3. On recovery: holder presents YubiKey → backup service issues a 72-hour cancellation window with multi-channel notifications → if no cancellation, releases the wrapped decryption key blob → YubiKey unwraps locally (PIN required) → holder fetches the keyring blob from any wallet service in the federation (see ADR-009-AMEND) and decrypts it, then re-registers.
 
 A stolen YubiKey cannot complete recovery if a valid cancellation is submitted before the 72-hour window closes.
 
 ### Consequences
 
-- Recovery is fully independent of the primary service — only the IPFS keyring blob and the YubiKey are required.
+- Recovery is fully independent of the primary service — only the keyring blob and the YubiKey (or synced passkey) are required. See ADR-009-AMEND for how blob availability is guaranteed without depending on the original primary service.
 - The YubiKey is a second factor and a recovery path, not an authentication factor for routine operations.
 - Social recovery (guardian quorum M-of-N) is explicitly deferred to a future version.
 - Seed-phrase key management is explicitly not supported as a first-class option.
+
+---
+
+## ADR-009-AMEND: Keyring Blob Storage — Federation Replication, Not IPFS
+
+**Status:** Accepted (amends ADR-009 and ADR-002)
+
+### Context
+
+ADR-009 originally specified the keyring blob be stored on IPFS (per ADR-002's general off-chain-content policy), pinned by the primary service. Two problems surfaced on review:
+
+1. **No benefit from IPFS's defining property.** IPFS's value is that *any* verifier can fetch content and cryptographically confirm it matches a public commitment, without trusting the publisher. The keyring blob has no such audience — it is encrypted ciphertext meaningful only to its own holder, who already receives the identifier directly from the backup service at recovery time. There is no third party who needs to independently verify or discover it.
+2. **IPFS's persistence model actively works against this content.** The keyring blob is append-only and is re-posted in full on every card acceptance and every key rotation (ADR-009). Each version becomes a new, immutable, content-addressed object. IPFS provides no way to guarantee deletion of a superseded version — "unpinning" only stops the *original* publisher from continuing to serve it; any other node that fetched and cached it while it was live may retain it indefinitely. This is a meaningful problem specifically for key material: a future compromise of `service_secret` would make every historically-cached version decryptable, not just the current one ("harvest now, decrypt later").
+
+The actual design goal the IPFS choice was serving — "recovery is fully independent of the primary service" (ADR-009 Consequences) — does not require IPFS. It only requires that the keyring blob remain fetchable from *somewhere other than the original primary*, in case that operator becomes unreachable, hostile, or is shut down. The wallet service federation (`specs/process_specs/message_routing.md`) already provides a structure for multiple independent operators to hold the same data.
+
+### Decision
+
+The keyring blob is stored using **traditional, deletable storage at every wallet service in the federation**, not IPFS:
+
+- The blob is identified by `keyring_id = keccak256(encrypted_blob)` — a content hash used as a lookup key, preserving the integrity-verification property of content-addressing without using IPFS as the storage layer.
+- On creation or rotation, the holder's primary service stores the blob and broadcasts it (alongside `keyring_id`) to every other wallet service in the federation, riding the same broadcast mechanism already used for `CardBindingAnnouncement` fanout. Each receiving operator stores its own copy, keyed by `keyring_id` and associated with the holder's `card_hash`.
+- On rotation, the new version is broadcast the same way, and the **previous `keyring_id` is explicitly marked for deletion** in the same broadcast. Every federation member deletes its copy of the superseded version. This is a deliberate, synchronized delete — not the best-effort, unpin-and-hope behavior IPFS offered.
+- Recovery proceeds exactly as before (ADR-009, Processes 2a/2b in `wallet_backup_and_recovery.md`): the backup service releases `keyring_id`, and the holder's client fetches the blob from *any* reachable wallet service that holds a replica — not necessarily the original primary.
+
+### Rationale for federation-wide (not primary+backup-only) replication
+
+Cost analysis: keyring blobs are small (an ML-DSA-44 secret key is ~2.5KB; even a holder with dozens of cards and rotations stays under ~1MB). At a federation of a few dozen operators and a million holders, full replication costs each operator single-digit GB and a few dollars a month — not a meaningful constraint at any federation size likely in the near term.
+
+The tradeoff is trust surface, not cost: replicating to every operator means every wallet service holds ciphertext for holders who never chose it, which is a broader exposure than the original primary+backup-only model, even though the content stays encrypted. This is accepted as the v1 default given the federation is expected to remain small, with the explicit understanding that **this should be revisited if the federation grows large** — at that point, replication should likely be capped to a fixed redundancy set (e.g., k operators per holder) rather than literal full-mesh replication, to avoid unbounded per-write fanout cost as federation size grows.
+
+### Consequences
+
+- `specs/process_specs/wallet_backup_and_recovery.md` is updated to remove all IPFS references for the keyring blob and describe the replication/deletion model above.
+- The wallet service implementation must store keyring blobs in its own database (or object storage) rather than treating them as IPFS-resident, and must implement the broadcast-and-delete propagation alongside its existing binding-announcement handling.
+- Filecoin/IPFS archival (ADR-002) remains appropriate for card documents and policy content, which retain a genuine third-party-verification requirement that the keyring blob never had.
 
 ---
 
@@ -463,10 +502,12 @@ A stolen YubiKey cannot complete recovery if a valid cancellation is submitted b
 ┌─────────────────────────────────────────────────────────────────────┐
 │                            IPFS                                      │
 │  ┌─────────────┐  ┌────────────────┐  ┌───────────────────────────┐ │
-│  │ Card logs  │  │ Policy cards  │  │ Keyring blobs / Annotation│ │
-│  │ (CID chain) │  │ (content addr) │  │ content                   │ │
+│  │ Card logs  │  │ Policy cards  │  │ Annotation content        │ │
+│  │ (CID chain) │  │ (content addr) │  │                           │ │
 │  └─────────────┘  └────────────────┘  └───────────────────────────┘ │
 └─────────────────────────────────────────────────────────────────────┘
+   Keyring blobs are NOT on IPFS — see ADR-009-AMEND. They are replicated
+   via traditional storage across the wallet service federation (below).
 
 ┌──────────────────────────────────┐  ┌──────────────────────────────┐
 │          Card Press             │  │   Wallet Service (message    │
@@ -484,7 +525,7 @@ A stolen YubiKey cannot complete recovery if a valid cancellation is submitted b
                                                        │
 ┌──────────────────────────────────────────────────────▼──────────────┐
 │                          Client (Holder)                              │
-│  - Keyring (encrypted, IPFS-backed)                                  │
+│  - Keyring (encrypted, replicated across wallet service federation) │
 │  - Sub-card keys in Secure Enclave / TPM                            │
 │  - Derives registry address as keccak256(public_key)                 │
 │  - Countersigns card offers                                         │
