@@ -22,12 +22,20 @@ export default defineNitroConfig({
     'pg-native': 'unenv/mock/empty',
   },
   routeRules: {},
-  // Scheduled sweep tasks (72-hour recovery window expiry, UUID pool and
-  // routing-nonce pruning — strategic-plan.md §Architectural Decision) are
-  // registered here once their server/tasks/*.ts handlers land in Phase 3+.
-  // No precise in-process timer is needed for the 72h window — expires_at
-  // is a persisted DB column, swept periodically.
-  scheduledTasks: {},
+  // Nitro's scheduledTasks feature requires this to actually register
+  // server/tasks/*.ts handlers — without it, tasks defined in the
+  // scheduledTasks map below silently never run.
+  experimental: {
+    tasks: true,
+  },
+  // Scheduled sweep tasks (strategic-plan.md §Architectural Decision). The
+  // 72-hour recovery window itself needs no sweep — expires_at is a
+  // persisted DB column, checked lazily on GET /recovery/{id}/release
+  // (Step 3.5) — only notification retries need a periodic sweep (Step
+  // 3.3). UUID pool and routing-nonce pruning land in Phase 5/4.
+  scheduledTasks: {
+    '*/5 * * * *': ['sweep-notification-retries'],
+  },
   storage: {
     // Session tokens, rate-limit counters. Defaults to KV on the Cloudflare
     // preset; falls back to a Postgres-backed driver on node-server/aws-lambda
