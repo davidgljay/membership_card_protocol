@@ -1,9 +1,9 @@
 # Notification Relay — Data Model Spec
 
-**Version:** 0.3 (draft)
+**Version:** 0.4 (draft)
 **Date:** 2026-06-29
 **Status:** Draft
-**Changes from v0.2:** `device_credential` field added to UUID records (issued per registration session; authenticates `GET /sse`, `GET /pending`, and `POST /ack`). New Redis sections: Message Store (`messages:{push_token}` list) and Pending Delete Queue (`pending_deletes` sorted set). UUID state machine note updated: UUIDs transition to `consumed` on relay receipt of blob, not on device pickup. New environment variables added.
+**Changes from v0.3:** `wallet_ws_url` field renamed to `wallet_base_url` in UUID records and app registry config; value changes from `wss://` to `https://`. `WALLET_REJECTED` close code (4002) removed — relay no longer opens outbound WebSocket to wallet service. `active` UUID state now represents a device WebSocket delivery channel, not a bidirectional relay-to-wallet bridge. App registry validation rule updated accordingly.
 
 ---
 
@@ -70,7 +70,7 @@ Each UUID key is a Redis hash with the following fields:
 |---|---|---|
 | `app_id` | string | App identifier; references the app registry |
 | `push_token` | string | Platform push token for the device |
-| `wallet_ws_url` | string | Base WebSocket URL of the wallet service; used when the UUID is presented to `/ws/{uuid}` or when sending staggered deletes |
+| `wallet_base_url` | string | Base HTTPS URL of the wallet service; used when sending staggered deletes (`DELETE {wallet_base_url}/messages/{uuid}`). Not used by the relay for any outbound connection to the wallet service. |
 | `device_credential` | string | Opaque token shared by all UUIDs in the same registration session; authenticates `GET /sse`, `GET /pending`, and `POST /ack` |
 | `status` | string | `"unused"`, `"in_flight"`, `"active"`, or `"consumed"` |
 | `created_at` | string | ISO 8601 UTC timestamp of UUID creation |
@@ -79,7 +79,7 @@ UUIDs are untyped — a UUID may be used at `POST /deliver/{uuid}` (message deli
 
 **`device_credential`:** All UUIDs returned in a single `POST /register` call share the same `device_credential` value. The relay can resolve `device_credential → push_token` by looking up any UUID that carries that credential. Credentials are opaque random tokens generated alongside the UUID pool; they carry no device-identifiable information beyond the push token association already present in the UUID record.
 
-**Why `wallet_ws_url` is stored per-UUID:** The app registry is mutable (reloaded on restart). Storing the wallet URL at registration time ensures that in-flight UUIDs always resolve to the correct endpoint, even if the app config changes between registration and use.
+**Why `wallet_base_url` is stored per-UUID:** The app registry is mutable (reloaded on restart). Storing the wallet URL at registration time ensures that in-flight UUIDs always resolve to the correct endpoint, even if the app config changes between registration and use.
 
 ### 2.3 TTL and Expiry
 
@@ -334,7 +334,7 @@ interface AppRegistryFile {
 interface AppConfig {
   app_id:        string;          // Required. Unique identifier used in API requests.
   platform:      "apns" | "fcm"; // Required. Determines which push provider to use.
-  wallet_ws_url: string;          // Required. Base wss:// URL; UUID is appended as path segment.
+  wallet_base_url: string;         // Required. Base https:// URL of the wallet service; used for staggered delete calls.
   apns?: {
     key_file:   string;             // Path to .p8 private key file
     key_id:     string;             // 10-character APNs key ID
@@ -356,7 +356,7 @@ interface AppConfig {
     {
       "app_id": "mutual-aid-wallet",
       "platform": "apns",
-      "wallet_ws_url": "wss://wallet.mutual-aid.example/ws",
+      "wallet_base_url": "https://wallet.mutual-aid.example",
       "apns": {
         "key_file": "/app/config/secrets/apns-key.p8",
         "key_id": "ABCD123456",
@@ -368,7 +368,7 @@ interface AppConfig {
     {
       "app_id": "mutual-aid-wallet-android",
       "platform": "fcm",
-      "wallet_ws_url": "wss://wallet.mutual-aid.example/ws",
+      "wallet_base_url": "https://wallet.mutual-aid.example",
       "fcm": {
         "service_account_file": "/app/config/secrets/fcm-service-account.json"
       }
@@ -385,7 +385,7 @@ The service validates the registry on startup and exits with a clear error messa
 
 - `app_id` must be unique across all entries
 - `platform` must be `"apns"` or `"fcm"`
-- `wallet_ws_url` must be a valid `wss://` URL
+- `wallet_base_url` must be a valid `https://` URL
 - If `platform == "apns"`: `apns` object must be present with all required fields (`key_file`, `key_id`, `team_id`, `bundle_id`); credential files must exist at the specified paths; `sandbox` defaults to `true` if absent
 - If `platform == "fcm"`: `fcm` object must be present; `service_account_file` must exist at the specified path
 - Cross-field: `apns` object present with `platform == "fcm"` is an error (and vice versa)
@@ -400,7 +400,7 @@ The service validates the registry on startup and exits with a clear error messa
 |---|---|
 | `unused` | UUID has been issued to a device; not yet presented to the relay for delivery |
 | `in_flight` | Push dispatch in progress after blob receipt. Transient — prevents double-delivery under concurrent `/deliver` requests. |
-| `active` | UUID is currently bridging a live device ↔ wallet WebSocket session. |
+| `active` | UUID is registered as a device WebSocket delivery channel (inbound delivery only; relay holds no outbound wallet connection). |
 | `consumed` | UUID has been permanently used (blob accepted, or WebSocket session closed). |
 
 `consumed` is a terminal state. `in_flight` is transient: it is resolved to `consumed` or `unused` within the same request lifecycle.
@@ -415,8 +415,7 @@ The service validates the registry on startup and exits with a clear error messa
 | `in_flight` | `consumed` | Blob stored successfully | `POST /deliver/{uuid}` |
 | `in_flight` | `unused` | Blob storage or push dispatch failed | `POST /deliver/{uuid}` |
 | `unused` | `active` | Device WebSocket connection accepted | `GET /ws/{uuid}` on open |
-| `unused` | `consumed` | Wallet service rejects outbound WebSocket | `GET /ws/{uuid}` on wallet rejection |
-| `active` | `consumed` | Session teardown (device close, wallet close, network error) | `GET /ws/{uuid}` on close |
+| `active` | `consumed` | Session teardown (device close or network error) | `GET /ws/{uuid}` on close |
 | `active` | `consumed` | Relay startup scan (unclean shutdown recovery) | Startup hook |
 | `in_flight` | `consumed` | Relay startup scan (crash during delivery) | Startup hook |
 | TTL expiry | key deleted | 30 days elapsed with no transition | Redis automatic |

@@ -1,9 +1,9 @@
 # Notification Relay — Service Spec
 
-**Version:** 0.4 (draft)
+**Version:** 0.6 (draft)
 **Date:** 2026-06-29
 **Status:** Draft
-**Changes from v0.3:** Relay upgraded from delivery trigger to message buffer. `POST /notify/{uuid}` replaced by `POST /deliver/{uuid}` (wallet-facing; carries encrypted blob). New device-facing endpoints: `GET /sse` (foreground event stream), `GET /pending` (catch-up on wake), `POST /ack` (delivery acknowledgment). Device credential authentication added to all device-facing endpoints — prevents push-token-only attackers from draining messages or falsely clearing them. Staggered wallet clearance via `POST /ack`. Message store keyed by `device_credential`, not `push_token`, for isolation. Multi-device fan-out handled at wallet; relay is unaware.
+**Changes from v0.5:** UUID pool model changed from device_key hash to per-subcard array. Privacy table updated: wallet service knows card_hash → subcard_hash → UUID(s), not card_hash → device_key → UUID(s). Multi-device fan-out is now handled through subcards; `device_key` concept removed from wallet-side UUID registration.
 
 ---
 
@@ -74,7 +74,7 @@ UUID associations and message blobs are held exclusively in RAM (Redis with no p
 
 | Party | Knows | Does not know |
 |---|---|---|
-| Wallet service | Card hash → device_key → UUID(s) | Device identity, push token, device credential, which device_keys belong to the same person |
+| Wallet service | Card hash → subcard_hash → UUID(s) | Device identity, push token, device credential, which subcards belong to the same physical device |
 | Relay service | UUID → device credential + push token; device credential → pending blobs | Card hash, card identity, message content (blobs are E2E encrypted) |
 
 UUID associations must never be written to disk. Redis runs with persistence explicitly disabled (`--save "" --appendonly no`).
@@ -91,7 +91,7 @@ The relay serves multiple apps. Each app is a distinct wallet service deployment
 |---|---|
 | `app_id` | Unique string identifier supplied by the device at registration |
 | `platform` | `"apns"` or `"fcm"` |
-| `wallet_ws_url` | Base WebSocket URL of the wallet service. Used for WebSocket bridging and for staggered delete calls. |
+| `wallet_base_url` | Base HTTPS URL of the wallet service. Used for staggered delete calls (`DELETE {wallet_base_url}/messages/{uuid}`). Outbound device messages go directly from device to this URL, not via the relay. |
 | `apns` | APNs credentials (required if `platform == "apns"`): `key_file`, `key_id`, `team_id`, `bundle_id`, `sandbox` |
 | `fcm` | FCM credentials (required if `platform == "fcm"`): `service_account_file` |
 
@@ -165,7 +165,7 @@ Authorization: Bearer {device_credential}   ← omit on first (bootstrap) call
 1. Validate `app_id` and `push_token`.
 2. Generate a new `device_credential` (cryptographically random, 32 bytes, hex or base64url encoded).
 3. Store `cred:{device_credential} → { push_token, app_id, created_at }` with TTL `UUID_TTL_SECONDS`.
-4. Generate `count` UUIDs, each stored as `uuid:{uuid} → { app_id, push_token, wallet_ws_url, device_credential, status: "unused" }` with TTL `UUID_TTL_SECONDS`.
+4. Generate `count` UUIDs, each stored as `uuid:{uuid} → { app_id, push_token, wallet_base_url, device_credential, status: "unused" }` with TTL `UUID_TTL_SECONDS`.
 5. Upsert push token in SQLite device registry.
 6. Return UUIDs and device credential.
 
@@ -266,7 +266,9 @@ Empty body.
 
 ### 7.3 GET /ws/{uuid}
 
-Upgrades to a WebSocket and bridges the device to the wallet service. Unchanged from v0.3 except that the wallet service now handles both real-time chat messages (via the WebSocket) and queued delivery blobs (via `POST /deliver/{uuid}`).
+Opens an inbound WebSocket delivery channel for the device. While this connection is open, the relay delivers incoming message blobs directly over the WebSocket rather than via silent push. Used when the app is in an active chat session.
+
+**Inbound only.** Outbound messages (device → wallet) are sent by the device directly to the wallet service HTTPS endpoint (`wallet_base_url`). The relay does not proxy outbound messages and does not open any connection to the wallet service on behalf of this endpoint.
 
 #### Upgrade request
 
@@ -279,30 +281,34 @@ Upgrade: websocket
 #### Connection establishment
 
 1. Validate UUID format. Close 4000 if invalid.
-2. Look up UUID. Close 4004 if not found.
+2. Look up UUID in Redis. Close 4004 if not found.
 3. Confirm `status == "unused"`. Close 4010 if not.
 4. Transition `unused → active`.
-5. Open outbound WebSocket to `{app.wallet_ws_url}/{uuid}`.
-6. If wallet rejects: close device connection 4002; transition to `consumed`.
-7. Bridge: **device ↔ relay ↔ wallet service**.
+5. Register the WebSocket connection in the in-memory delivery map: `device_credential → WSConnection`.
+6. Confirm connection to device (no outbound wallet connection is opened).
 
 #### Message flow
 
-Bytes forwarded without modification in both directions. Content is E2E encrypted and opaque to the relay.
+**Inbound (wallet → device):** When `POST /deliver/{uuid}` arrives for a device whose `device_credential` has an active WebSocket connection, the relay delivers the blob over the open WebSocket:
+
+```
+{"uuid": "<uuid>", "blob": "<base64url>"}
+```
+
+**Outbound (device → wallet):** The device sends outbound messages directly to the wallet service HTTPS endpoint. Any frames sent by the device over this WebSocket connection are ignored by the relay (the connection is delivery-only). The device is responsible for tracking the `wallet_base_url` for its wallet service.
 
 #### Session teardown
 
-Any close event (device, wallet, or network error) closes both sides and transitions UUID `active → consumed`.
+On device-side close or network error: transition UUID `active → consumed`. Remove from delivery map.
 
 #### WebSocket close codes
 
 | Code | Name | Condition |
 |---|---|---|
 | 4000 | `INVALID_UUID` | Path param not a valid UUID v4 |
-| 4002 | `WALLET_REJECTED` | Wallet refused outbound connection |
 | 4004 | `UNKNOWN_UUID` | UUID not found in Redis |
 | 4010 | `UUID_CONSUMED` | UUID already used or in-flight |
-| 1001 | `GOING_AWAY` | Other side disconnected |
+| 1001 | `GOING_AWAY` | Device disconnected |
 | 1011 | `INTERNAL_ERROR` | Redis error during transition |
 
 ---
@@ -419,7 +425,7 @@ Content-Type: application/json
 
 1. Validate credential. Return 401 if missing or invalid.
 2. For each UUID in `uuids`:
-   a. Look up UUID record to retrieve `wallet_ws_url`.
+   a. Look up UUID record to retrieve `wallet_base_url`.
    b. Compute `execute_at = now + random(0, MAX_DELETE_DELAY_SECONDS)`.
    c. `ZADD pending_deletes <execute_at> <job_json>` where job includes `wallet_url`, `uuid`, `attempts: 0`.
 3. Return 200.
@@ -509,9 +515,9 @@ This behavior will be removed in a future version.
         │                    │
         ▼                    ▼
   ┌───────────┐        ┌──────────┐
-  │ in_flight │        │  active  │ ← device ↔ relay ↔ wallet bridge open
-  └─────┬─────┘        └────┬─────┘
-        │                   │
+  │ in_flight │        │  active  │ ← device WebSocket delivery channel open
+  └─────┬─────┘        └────┬─────┘   (inbound delivery only; relay does not
+        │                   │          open any connection to wallet service)
    ┌────┴────┐          session close
    │         │          (§7.3 teardown)
  stored   failed               │
@@ -525,6 +531,8 @@ This behavior will be removed in a future version.
 ```
 
 UUID `consumed` means the relay has accepted responsibility for the blob — not that the device has received it. Message lifecycle continues independently in the message store.
+
+**Latency note (HTTPS delivery vs. prior WebSocket bridging):** The wallet service delivers message blobs to the relay via `POST /deliver/{uuid}` (HTTPS). With HTTP/2 or keep-alive connection pooling between wallet service and relay, the per-delivery overhead is the TCP round-trip plus relay processing — typically 5–20 ms on the same cloud provider or data center. This is undetectable for human chat (conversations typically have 200–2000 ms natural pacing). The wallet service should maintain a persistent HTTP connection pool to the relay to avoid per-message TCP handshake overhead.
 
 ---
 
@@ -558,7 +566,7 @@ The device handles this silent push by calling `POST /register` (replenishment i
 | `MISSING_CREDENTIAL` | 401 | `Authorization` header absent on authenticated endpoint |
 | `INVALID_CREDENTIAL` | 401 | Device credential unknown or expired |
 | `PUSH_FAILED` | 502 | APNs or FCM returned a delivery error (blob is retained in message store) |
-| `WALLET_REJECTED` | — | Wallet service rejected outbound WebSocket (close code 4002 only) |
+| `WALLET_REJECTED` | — | *(Removed in v0.5 — relay no longer opens outbound WebSocket to wallet)* |
 | `INTERNAL_ERROR` | 500 | Unexpected error (Redis failure, config inconsistency) |
 
 ---
