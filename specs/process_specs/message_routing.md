@@ -1,9 +1,9 @@
 # Message Routing — Process Spec
 
-**Version:** 0.2 (draft)
+**Version:** 0.3 (draft)
 **Date:** 2026-06-29
 **Status:** Draft
-**Changes from v0.1:** Wallet-to-relay delivery updated — wallet now calls `POST /deliver/{uuid}` with the encrypted blob body rather than a bodyless `POST /notify/{uuid}`. Multi-device fan-out added: wallet stores UUID pools per device_key and delivers once per device on each message. Wallet message retention rule added: wallet retains messages until `DELETE /messages/{uuid}` is received from the relay. UUID re-registration retransmit trigger added.
+**Changes from v0.2:** Multi-device fan-out model changed from device_key hash to per-subcard pools. The `device_key` concept is removed from the routing layer. The wallet iterates registered subcards (not device_key buckets), re-encrypts per subcard via UMBRAL, and delivers one blob per subcard. UUID registration endpoint updated from `POST /cards/{card_hash}/devices/{device_key}/uuids` to `POST /cards/{card_hash}/subcards/{subcard_hash}/uuids`.
 
 ---
 
@@ -154,29 +154,30 @@ If wallet service B does not hold `recipient_hash`, it returns `410 Gone` with t
 
 ### Relay Delivery and Multi-Device Fan-out
 
-After placing the message in the recipient card's inbound queue, wallet service B delivers the encrypted payload to the relay for device notification. The wallet service maintains a UUID pool per registered device, keyed by `device_key = hash(device_id || card_hash)` (opaque to the wallet; derived by the device):
+After placing the message in the recipient card's inbound queue, wallet service B delivers the encrypted payload to the relay for device notification. Multi-device support is handled through subcards: each app instance on each device holds its own subcard, and the wallet maintains a UUID pool per subcard:
 
 ```
 card_hash → {
-  device_key_1: { delivery_uuids: [...], websocket_uuids: [...] },
-  device_key_2: { delivery_uuids: [...], websocket_uuids: [...] },
+  subcard_hash_1: { uuids: [...] },
+  subcard_hash_2: { uuids: [...] },
   ...
 }
 ```
 
-For each registered `device_key` bucket:
+For each registered subcard:
 
-1. Select the next delivery UUID from the bucket and remove it from the pool.
-2. Call the relay:
+1. Re-encrypt the payload for this subcard using its stored UMBRAL re-encryption key, producing a ciphertext decryptable only by that subcard's private key.
+2. Select the next UUID from the subcard's pool and remove it from the pool.
+3. Call the relay:
    ```
    POST /deliver/{uuid}
-   Body: { "blob": "<E2E encrypted payload, base64url>" }
+   Body: { "blob": "<re-encrypted payload, base64url>" }
    ```
-3. On 200: UUID consumed; relay has accepted responsibility for delivery.
-4. On 404 or 410 (UUID unknown or already consumed): advance to the next UUID in the bucket and retry.
-5. On 5xx or network error: retry with exponential backoff using the same UUID.
+4. On 200: UUID consumed; relay has accepted responsibility for delivery.
+5. On 404 or 410 (UUID unknown or already consumed): advance to the next UUID in the pool and retry.
+6. On 5xx or network error: retry with exponential backoff using the same UUID.
 
-Fan-out is performed independently per device_key; failure for one device does not block delivery to others.
+Fan-out is performed independently per subcard; failure for one does not block delivery to others.
 
 ### Wallet Message Retention
 
@@ -196,7 +197,7 @@ On receiving `DELETE /messages/{uuid}`:
 
 ### UUID Re-registration and Retransmission
 
-When the relay's Redis store is cleared (restart), devices re-register new UUID pools with the wallet service. When wallet service B receives a new UUID registration for a card (`POST /cards/{card_hash}/devices/{device_key}/uuids`), it checks whether any messages in the inbound queue remain uncleared for that card. If so, it immediately delivers those messages to the new UUIDs using the relay delivery flow above.
+When the relay's Redis store is cleared (restart), devices re-register new UUID pools with the wallet service. When wallet service B receives a new UUID registration for a subcard (`POST /cards/{card_hash}/subcards/{subcard_hash}/uuids`), it checks whether any messages in the inbound queue remain uncleared for that card. If so, it immediately re-encrypts and delivers those messages to the new UUIDs for this subcard using the relay delivery flow above.
 
 This retransmission may cause the device to receive a duplicate of a message it already processed before the relay restart. Devices must deduplicate by message ID within the decrypted blob.
 
