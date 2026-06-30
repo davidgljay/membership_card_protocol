@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "nitro dev",
     "build": "nitro build",
+    "build:cloudflare": "NITRO_PRESET=cloudflare-module nitro build",
     "build:lambda": "NITRO_PRESET=aws-lambda nitro build",
     "build:node": "NITRO_PRESET=node-server nitro build",
     "start": "node .output/server/index.mjs",
