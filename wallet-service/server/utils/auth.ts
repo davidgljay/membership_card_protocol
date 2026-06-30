@@ -7,7 +7,7 @@
 
 import { loadConfig } from '../../src/config.js';
 import { verifySessionToken, type SessionTokenPayload } from '../../src/auth/session-token.js';
-import { createNitroKvStore } from './kv.js';
+import { createKvStore } from './kv-store.js';
 
 export class AuthError extends Error {
   constructor(
@@ -18,7 +18,13 @@ export class AuthError extends Error {
   }
 }
 
-export async function requireSessionToken(event: unknown): Promise<SessionTokenPayload> {
+export interface VerifiedSession {
+  token: string;
+  payload: SessionTokenPayload;
+}
+
+/** Returns both the verified payload and the raw token — callers that need a stable per-token rate-limit key (Step 2.3) require the latter. */
+export async function requireSessionTokenRaw(event: unknown): Promise<VerifiedSession> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const header = getHeader(event as any, 'authorization');
   if (!header?.startsWith('Bearer ')) {
@@ -26,10 +32,14 @@ export async function requireSessionToken(event: unknown): Promise<SessionTokenP
   }
   const token = header.slice('Bearer '.length);
   const config = loadConfig();
-  const kv = createNitroKvStore();
+  const kv = createKvStore();
   const result = await verifySessionToken(token, config.SESSION_TOKEN_SECRET, kv);
   if (!result.ok) {
     throw new AuthError(401, `Invalid session token: ${result.reason}.`);
   }
-  return result.payload;
+  return { token, payload: result.payload };
+}
+
+export async function requireSessionToken(event: unknown): Promise<SessionTokenPayload> {
+  return (await requireSessionTokenRaw(event)).payload;
 }

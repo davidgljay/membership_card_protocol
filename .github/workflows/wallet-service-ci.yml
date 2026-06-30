@@ -36,8 +36,10 @@ jobs:
       DATABASE_URL: postgres://wallet_service:wallet_service@localhost:5433/wallet_service
       SECRETS_BACKEND: webcrypto
       WEBCRYPTO_MASTER_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-      REGISTRATION_TOKEN_SECRET: ci-registration-secret
       SESSION_TOKEN_SECRET: ci-session-secret
+      KV_BACKEND: postgres
+      WEBAUTHN_RP_ID: localhost
+      WEBAUTHN_ORIGIN: http://localhost:3000
 
     steps:
       - uses: actions/checkout@v4

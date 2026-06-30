@@ -39,9 +39,14 @@ export function createNitroKvStore(): KvStore {
     },
 
     async increment(key: string, delta = 1): Promise<number> {
-      const current = (await getRaw<number>(key)) ?? 0;
+      // Preserve any existing expiry so a TTL set on the first call in a
+      // window survives subsequent increments within that window.
+      const existing = await s().getItem<Wrapped<number>>(key);
+      const expired = existing?.expiresAt !== null && existing?.expiresAt !== undefined && existing.expiresAt < Date.now();
+      const current = existing && !expired ? existing.value : 0;
       const next = current + delta;
-      await s().setItem(key, { value: next, expiresAt: null } as never);
+      const expiresAt = existing && !expired ? existing.expiresAt : null;
+      await s().setItem(key, { value: next, expiresAt } as never);
       return next;
     },
   };

@@ -17,5 +17,10 @@ export interface KvStore {
 
 export const kvKeys = {
   sessionRevoked: (sessionTokenId: string) => `wallet:session:revoked:${sessionTokenId}`,
-  registrationTokenUsed: (cardHash: string) => `wallet:reg-token:used:${cardHash}`,
+  /** Bulk-invalidation cutoff: tokens for this card_hash issued before this timestamp are rejected. */
+  sessionMinIssuedAt: (cardHash: string) => `wallet:session:min-issued-at:${cardHash}`,
+  /** Step 2.3: caps GET /service-secret to 10 calls per session token lifetime. */
+  serviceSecretCalls: (sessionTokenId: string) => `wallet:rate:service-secret:${sessionTokenId}`,
+  /** Step 2.1/2.2: rate-limits challenge issuance. */
+  challengeRate: (purpose: string, key: string) => `wallet:rate:challenge:${purpose}:${key}`,
 };

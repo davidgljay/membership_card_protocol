@@ -84,6 +84,14 @@ export async function verifySessionToken(
     return { ok: false, reason: 'revoked' };
   }
 
+  // Bulk invalidation cutoff (Step 2.4: keyring rotation invalidates every
+  // session token issued before the rotation, without needing to know
+  // their individual hashes).
+  const cutoff = await kv.getItem<number>(kvKeys.sessionMinIssuedAt(payload.card_hash));
+  if (cutoff !== null && payload.issued_at < cutoff) {
+    return { ok: false, reason: 'revoked' };
+  }
+
   return { ok: true, payload };
 }
 
@@ -91,4 +99,13 @@ export async function revokeSessionToken(token: string, kv: KvStore): Promise<vo
   // TTL matches the maximum remaining lifetime of any session token so the
   // revocation entry doesn't outlive tokens it could apply to.
   await kv.setItem(kvKeys.sessionRevoked(sessionTokenId(token)), true, SESSION_TTL_SECONDS);
+}
+
+/**
+ * Invalidates every session token previously issued for `cardHash`
+ * (implementation-plan.md §Step 2.4: keyring rotation invalidates old
+ * sessions). Tokens issued after this call remain valid.
+ */
+export async function invalidateSessionsForCard(cardHash: string, kv: KvStore): Promise<void> {
+  await kv.setItem(kvKeys.sessionMinIssuedAt(cardHash), Date.now(), SESSION_TTL_SECONDS);
 }

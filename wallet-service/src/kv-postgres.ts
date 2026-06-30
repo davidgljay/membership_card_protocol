@@ -39,9 +39,23 @@ export function createPostgresKvStore(pool: Pool): KvStore {
     },
 
     async increment(key: string, delta = 1): Promise<number> {
-      const current = (await this.getItem<number>(key)) ?? 0;
+      // Preserve any existing expiry so a TTL set on the first call in a
+      // window survives subsequent increments within that window.
+      const { rows } = await pool.query<{ value: number; expires_at: Date | null }>(
+        'SELECT value, expires_at FROM kv_store WHERE key = $1',
+        [key]
+      );
+      const row = rows[0];
+      const expired = row?.expires_at && row.expires_at.getTime() < Date.now();
+      const current = row && !expired ? row.value : 0;
       const next = current + delta;
-      await this.setItem(key, next);
+      const expiresAt = row && !expired ? row.expires_at : null;
+      await pool.query(
+        `INSERT INTO kv_store (key, value, expires_at)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (key) DO UPDATE SET value = $2, expires_at = $3`,
+        [key, JSON.stringify(next), expiresAt]
+      );
       return next;
     },
   };

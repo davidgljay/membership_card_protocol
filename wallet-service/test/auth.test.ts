@@ -6,6 +6,7 @@ import {
   verifySessionToken,
   revokeSessionToken,
   sessionTokenId,
+  invalidateSessionsForCard,
 } from '../src/auth/session-token.js';
 import { verifyMasterCardSignature, generateChallenge } from '../src/auth/master-card-signature.js';
 import { verifyPeerWalletSignature } from '../src/auth/peer-wallet-signature.js';
@@ -88,6 +89,34 @@ describe('sessionTokenAuth', () => {
     const id2 = sessionTokenId(token);
     expect(id1).toBe(id2);
     expect(id1).not.toContain(token);
+  });
+
+  it('invalidates all previously issued tokens for a card_hash after keyring rotation (Step 2.4)', async () => {
+    const kv = inMemoryKv();
+    const { token: oldToken } = issueSessionToken('0xcardhash', SECRET);
+
+    // tokens are millisecond-resolution; ensure the cutoff is strictly after issuance
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    await invalidateSessionsForCard('0xcardhash', kv);
+
+    const oldResult = await verifySessionToken(oldToken, SECRET, kv);
+    expect(oldResult.ok).toBe(false);
+    if (!oldResult.ok) expect(oldResult.reason).toBe('revoked');
+
+    // a token issued after the cutoff remains valid
+    const { token: newToken } = issueSessionToken('0xcardhash', SECRET);
+    const newResult = await verifySessionToken(newToken, SECRET, kv);
+    expect(newResult.ok).toBe(true);
+  });
+
+  it('does not affect tokens for a different card_hash', async () => {
+    const kv = inMemoryKv();
+    const { token } = issueSessionToken('0xother-card', SECRET);
+
+    await invalidateSessionsForCard('0xcardhash', kv);
+
+    const result = await verifySessionToken(token, SECRET, kv);
+    expect(result.ok).toBe(true);
   });
 });
 
