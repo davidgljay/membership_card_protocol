@@ -12,7 +12,7 @@ The following open questions from the strategic plan are resolved here:
 
 | Question | Decision |
 |---|---|
-| OQ-WS-1: `service_secret` delivery auth | Short-lived session token at setup (issued during card registration flow). At recovery re-registration, device signs a challenge with the recovered master card key; wallet issues session token in response. |
+| OQ-WS-1: `service_secret` delivery auth | **Resolved (CP-1).** No externally-issued registration token — there is no third party in the loop to issue one. Per `open_offer_acceptance_new_wallet.md` and `open_offer_acceptance_existing_wallet.md`, the wallet service is the sole, continuous driver of offer display, wallet creation, and claim submission; auth is bootstrapped in-flow instead: **new wallet** — `POST /accounts` is authenticated by the freshly-generated master card key signing a server-issued challenge (same challenge/response shape as recovery), proving control of the key being registered; the response includes a session token directly, so no separate login step is needed for the rest of that session. **Existing wallet** — the recipient already holds an account and must authenticate via a new WebAuthn passkey login (Step 2.1) before `GET /service-secret` (Step 2.3) will release the value needed to decrypt and update their keyring. At recovery re-registration (Phase 3), device signs a challenge with the recovered master card key; wallet issues a session token in response — unchanged. |
 | OQ-WS-2: WebSocket for relay bridging | **Resolved by relay spec change.** Wallet service no longer exposes a WebSocket endpoint. Relay's `GET /ws/{uuid}` is device-facing only. Outbound messages go device → wallet HTTPS directly. Wallet service is fully stateless with respect to persistent connections — this is what enables the Nitro/serverless deployment model below. |
 | OQ-WS-3: Keyring blob storage | **No IPFS.** Per `ARCHITECTURE.md` ADR-009-AMEND, the keyring blob is stored in traditional, deletable storage (`keyring_blobs` table) and replicated to every wallet service in the federation, keyed by `keyring_id = keccak256(encrypted_blob)`. Rotation triggers a synchronized delete of the superseded version across all federation members. See Step 4.1a. |
 | OQ-WS-4: UMBRAL re-encryption key storage | **Stored in plaintext, no encryption.** A re-encryption key `rk_{A→B}` is bound to a specific sub-card's public key and cannot re-encrypt to an arbitrary key — that would require the master secret key. Stolen re-encryption keys cannot decrypt messages alone; an attacker would also need the sub-card's private key (on-device). The only thing they reveal is sub-card topology (how many sub-cards a card has), which is already visible on the storage contract. The real risk in this area — a malicious sub-card key registered at setup time — is an authentication-layer problem, unaffected by how the key is stored. |
@@ -193,52 +193,91 @@ The wallet service must not be able to determine which cards are held on which d
 
 ### Phase 2: Keyring Custody (Primary Service)
 
-**Goal:** Holder accounts can be created, `service_secret` issued, keyring CID stored and updated. Session token authentication works end-to-end.
+**Goal:** Holder accounts can be created, `service_secret` issued, keyring CID stored and updated. Session token authentication works end-to-end for both acceptance paths — master-card-key signature at new-wallet creation, WebAuthn passkey login for existing wallets.
 
 ---
 
-**Step 2.1 — Session token issuance**
-- What: `POST /auth/session` — accepts a short-lived registration token (issued externally during card acceptance flow; see Clarification Checkpoint CP-1). Validates the token, returns a 15-minute session bearer token tied to the card hash. Session token stored via Nitro's `storage` abstraction with TTL (see Step 1.4).
+**Step 2.1 — WebAuthn passkey registration and login (CP-1 resolved — see below)**
+- What: Per `open_offer_acceptance_new_wallet.md` and `open_offer_acceptance_existing_wallet.md`, the wallet service is the sole, continuous driver of offer display, wallet creation, and claim submission — there is no third party that mints a registration token (see CP-1 resolution note below). Two distinct auth needs follow from the two specs:
+
+  - **New wallet:** no prior credential exists. `POST /accounts` (Step 2.2) is authenticated directly by the freshly-generated master card key signing a server-issued challenge — folded into Step 2.2, not a separate endpoint.
+  - **Existing wallet:** the recipient already has an account and must prove it via a WebAuthn login before the wallet service will release `service_secret` (Step 2.3) so they can decrypt and update their existing keyring (`open_offer_acceptance_existing_wallet.md` Step 6). This is a genuinely new endpoint, not previously in this plan.
+
+  `POST /auth/passkey/challenge` — issues a WebAuthn assertion challenge. Unauthenticated, identified by `card_hash`, rate-limited by `card_hash`.
 
   ```
-  POST /auth/session
-  Body: { registration_token: "<opaque>", card_hash: "<hex>" }
+  POST /auth/passkey/challenge
+  Body: { card_hash: "<hex>" }
+  Response: { challenge: "<32 random bytes, base64url>", credential_id: "<base64url>", expires_at: "<ISO8601>" }
+  ```
+
+  `POST /auth/passkey/login` — verifies a WebAuthn assertion against the credential public key stored for this account (see schema addendum below), issues a 15-minute session token (same shape as `issueSessionToken`, Step 1.4).
+
+  ```
+  POST /auth/passkey/login
+  Body: {
+    card_hash: "<hex>",
+    challenge: "<same value>",
+    assertion: "<WebAuthn AuthenticatorAssertionResponse, base64url-encoded per WebAuthn JSON serialization>"
+  }
   Response: { session_token: "<bearer>", expires_at: "<ISO8601>" }
   ```
 
-  Registration token format: HMAC-SHA256 of `{ card_hash, issued_at }` signed with a shared wallet service key. Issued by the card acceptance flow (press callback or out-of-band); validated here.
+  **Schema addendum (extends Step 1.2's `holder_accounts` table — add via a Phase 2 migration, not a Phase 1 retrofit):**
+
+  ```sql
+  ALTER TABLE holder_accounts
+    ADD COLUMN webauthn_credential_id TEXT NOT NULL,
+    ADD COLUMN webauthn_public_key    TEXT NOT NULL,  -- COSE public key, base64url
+    ADD COLUMN webauthn_sign_count    BIGINT NOT NULL DEFAULT 0;  -- replay protection per WebAuthn spec
+  CREATE UNIQUE INDEX ON holder_accounts(webauthn_credential_id);
+  ```
+
+  The credential is registered once, as part of `POST /accounts` (Step 2.2) for new wallets — there is no separate `POST /auth/passkey/register`, since passkey creation and account creation happen in the same call per `open_offer_acceptance_new_wallet.md` Step 6.
 
 - Who: Claude
-- Context needed: `specs/process_specs/open_offer_acceptance_new_wallet.md`, `specs/process_specs/open_offer_acceptance_existing_wallet.md`
-- Done when: Integration test: valid registration token → session token; expired registration token → 401; used registration token → 401 (single-use).
+- Context needed: `specs/process_specs/open_offer_acceptance_new_wallet.md`, `specs/process_specs/open_offer_acceptance_existing_wallet.md §Phase 2 Step 6`
+- Done when: Integration test: valid WebAuthn assertion → session token; signature count must increase monotonically (replay of a prior assertion → 401); expired challenge → 401; assertion for wrong `card_hash`'s credential → 401.
 
-**⚑ Clarification Checkpoint CP-1: Registration token issuance**
+**⚑ Clarification Checkpoint CP-1 — RESOLVED**
 
-Before implementing Step 2.1, confirm: who generates the registration token and when exactly in the card acceptance flow? Options: (a) the press issues it in the SCIP notification; (b) the wallet service has a separate unauthenticated bootstrap endpoint that is called as part of the card acceptance ceremony and rate-limited by card hash; (c) something else. **Do not proceed with session auth until this is decided.**
+There is no externally-issued registration token. The wallet service hosts and drives the entire offer-display → wallet-creation → claim-submission flow itself (confirmed against `open_offer_acceptance_new_wallet.md` and `open_offer_acceptance_existing_wallet.md`), so there's no third party to issue one. New-wallet account creation authenticates via the freshly-generated master card key (Step 2.2); existing-wallet re-authentication uses WebAuthn passkey login (Step 2.1, above).
 
 **Step 2.2 — Holder account creation and `service_secret` generation**
-- What: `POST /accounts` — creates a holder account. Generates a 256-bit `service_secret`, encrypts it via `SecretsService.encryptSecret` (Step 1.3), stores it in `holder_accounts`. Accepts the holder's encrypted keyring blob, computes `keyring_id = keccak256(encrypted_blob)`, stores it in `keyring_blobs`, and broadcasts it to every peer wallet service in the federation (see Step 4.1a). Per `ARCHITECTURE.md` ADR-009-AMEND, this is traditional storage, not IPFS — the wallet service never resolves a CID, it just stores and forwards the ciphertext it's given.
+- What: `POST /accounts/challenge` — issues a random challenge. Unauthenticated (there is no account yet to authenticate against), rate-limited by IP.
+
+  ```
+  POST /accounts/challenge
+  Response: { challenge: "<32 random bytes, base64url>", expires_at: "<ISO8601>" }
+  ```
+
+  `POST /accounts` — creates a holder account, authenticated by the master card key signing the challenge (proves control of the key being registered; mirrors the challenge/response shape already used for recovery and keyring rotation). Generates a 256-bit `service_secret`, encrypts it via `SecretsService.encryptSecret` (Step 1.3), stores it in `holder_accounts` along with the WebAuthn credential registered in the same call (Step 2.1 schema addendum). Accepts the holder's encrypted keyring blob, computes `keyring_id = keccak256(encrypted_blob)`, stores it in `keyring_blobs`, and broadcasts it to every peer wallet service in the federation (see Step 4.1a). Per `ARCHITECTURE.md` ADR-009-AMEND, this is traditional storage, not IPFS — the wallet service never resolves a CID, it just stores and forwards the ciphertext it's given.
 
   ```
   POST /accounts
-  Authorization: Bearer {session_token}
   Body: {
+    challenge: "<same value as /accounts/challenge>",
+    signature: "<ML-DSA-44 sig over challenge using the new master private key, base64url>",
     card_hash: "<hex>",
     master_pubkey: "<ML-DSA-44 pubkey, base64url>",
+    webauthn_credential_id: "<base64url>",
+    webauthn_public_key: "<COSE public key, base64url>",
     encrypted_keyring_blob: "<AES-GCM ciphertext, base64url>"
   }
   Response: {
     service_secret: "<256-bit value, base64url>",
     account_id: "<UUID>",
-    keyring_id: "<keccak256 hex>"
+    keyring_id: "<keccak256 hex>",
+    session_token: "<bearer>",
+    expires_at: "<ISO8601>"
   }
   ```
 
-  `service_secret` is returned in this response only. It is not stored in plaintext; the encrypted version in the database can only be decrypted via the configured `SecretsBackend`. Log: account creation (card_hash, timestamp) — no key material in logs.
+  The response includes a `session_token` directly — bootstrapped from the same in-flow signature check, so the rest of the wallet-creation flow (e.g. Step 3.1's optional YubiKey backup, offered in the same session per `open_offer_acceptance_new_wallet.md` Step 9) doesn't require a second login. `service_secret` is returned in this response only. It is not stored in plaintext; the encrypted version in the database can only be decrypted via the configured `SecretsBackend`. Log: account creation (card_hash, timestamp) — no key material in logs.
 
 - Who: Claude
-- Context needed: `specs/process_specs/wallet_backup_and_recovery.md §Process 1 Steps 3–4`, `strategic-plan.md §Goal 1`
-- Done when: `service_secret` returned in response is exactly 32 bytes; encrypted value in DB is different from plaintext; `decryptSecret` round-trip recovers the original value; test confirms no plaintext secrets appear in application logs.
+- Context needed: `specs/process_specs/open_offer_acceptance_new_wallet.md §Phase 2 Steps 6–10`, `specs/process_specs/wallet_backup_and_recovery.md §Process 1 Steps 3–4`, `strategic-plan.md §Goal 1`
+- Done when: `service_secret` returned in response is exactly 32 bytes; encrypted value in DB is different from plaintext; `decryptSecret` round-trip recovers the original value; valid challenge signature → account created + session token issued; invalid/missing signature → 401; expired challenge → 401; test confirms no plaintext secrets appear in application logs.
 
 **Step 2.3 — `service_secret` retrieval**
 - What: `GET /accounts/{card_hash}/service-secret` — authenticated with session token. Decrypts and returns `service_secret` for daily-use decryption key derivation. If `SecretsBackend=kms`, the decrypt call is logged by AWS automatically; the `WebCryptoBackend` default has no external audit log, so the application's own access log (Step 5.1) is the audit trail in that configuration.
@@ -276,8 +315,8 @@ Before implementing Step 2.1, confirm: who generates the registration token and 
 - Done when: Valid master card signature → new `service_secret` issued, keyring blob replaced under a new `keyring_id`, delete-previous-version broadcast sent; old session tokens for this card invalidated; invalid signature → 401.
 
 **⬥ Phase 2 Milestone Review**
-- Context needed: Step 2.1–2.4 outputs; `specs/process_specs/wallet_backup_and_recovery.md §Process 1 and §Process 3`; `plans/wallet-service/strategic-plan.md §Goal 1 Objectives`
-- Done when: End-to-end test covers: new account creation → service_secret retrieval → keyring update → new service_secret issued; for the `kms` backend, calls are confirmed auditable in AWS CloudTrail; no plaintext key material in logs; phase summary written to `plans/wallet-service/milestones/phase-2-summary.md`.
+- Context needed: Step 2.1–2.4 outputs; `specs/process_specs/open_offer_acceptance_new_wallet.md`, `specs/process_specs/open_offer_acceptance_existing_wallet.md`, `specs/process_specs/wallet_backup_and_recovery.md §Process 1 and §Process 3`; `plans/wallet-service/strategic-plan.md §Goal 1 Objectives`
+- Done when: End-to-end test covers both acceptance paths: (new wallet) challenge → signed account creation → session token issued in the same response → service_secret retrieval; (existing wallet) WebAuthn passkey login → session token → service_secret retrieval → keyring update; for the `kms` backend, calls are confirmed auditable in AWS CloudTrail; no plaintext key material in logs; phase summary written to `plans/wallet-service/milestones/phase-2-summary.md`.
 
 ---
 
@@ -610,9 +649,9 @@ Before any production deployment or real user data: conduct an independent revie
 
 | ID | Where | Trigger |
 |---|---|---|
-| CP-1 | Phase 2, Step 2.1 | Before implementing session auth: confirm registration token issuance flow. |
-| CP-2 | Phase 3, Step 3.5 | Before any real recovery data in production: security review of 72-hour window, cancellation, and key release. |
-| CP-3 | Phase 6, Step 6.4 | Before any production deployment or real user data: independent security review. |
+| CP-1 | Phase 2, Step 2.1 | **Resolved.** No external registration token exists; new-wallet auth is the master card key signing a challenge (Step 2.2), existing-wallet auth is WebAuthn passkey login (Step 2.1). Not a blocker for Phase 2 going forward. |
+| CP-2 | Phase 3, Step 3.5 | Not a development blocker — security review of the 72-hour window, cancellation, and key release will happen separately, before any real recovery data is stored in production. |
+| CP-3 | Phase 6, Step 6.4 | Confirmed as the pre-launch gate. Before any production deployment or real user data: independent security review. |
 
 ---
 
@@ -623,7 +662,7 @@ For a fresh agent starting any step, the minimum context to load is:
 | Phase | Minimum context |
 |---|---|
 | Phase 1 | `specs/ARCHITECTURE.md`, `specs/process_specs/wallet_backup_and_recovery.md`, `specs/process_specs/notification_relay.md`, `specs/process_specs/message_routing.md` |
-| Phase 2 | `plans/wallet-service/milestones/phase-1-summary.md`, `specs/process_specs/wallet_backup_and_recovery.md §Process 1 and 3`, `plans/wallet-service/strategic-plan.md §Goal 1` |
+| Phase 2 | `plans/wallet-service/milestones/phase-1-summary.md`, `specs/process_specs/open_offer_acceptance_new_wallet.md`, `specs/process_specs/open_offer_acceptance_existing_wallet.md`, `specs/process_specs/wallet_backup_and_recovery.md §Process 1 and 3`, `plans/wallet-service/strategic-plan.md §Goal 1` |
 | Phase 3 | `plans/wallet-service/milestones/phase-2-summary.md`, `specs/process_specs/wallet_backup_and_recovery.md §Process 2a, 2b, Security Properties`, `plans/wallet-service/strategic-plan.md §Goal 2` |
 | Phase 4 | `plans/wallet-service/milestones/phase-3-summary.md`, `specs/process_specs/message_routing.md`, `specs/object_specs/relay.md`, `plans/wallet-service/strategic-plan.md §Goals 3 and 4` |
 | Phase 5 | `plans/wallet-service/milestones/phase-4-summary.md`, `specs/process_specs/notification_relay.md §Process 1`, `specs/process_specs/message_routing.md §UUID Re-registration` |

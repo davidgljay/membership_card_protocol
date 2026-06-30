@@ -1,0 +1,19 @@
+{
+  "extends": "./.nitro/types/tsconfig.json",
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true
+  },
+  "include": [
+    ".nitro/types/nitro.d.ts",
+    "src/**/*",
+    "server/**/*",
+    "test/**/*",
+    "nitro.config.ts"
+  ],
+  "exclude": ["node_modules", ".output", "dist"]
+}

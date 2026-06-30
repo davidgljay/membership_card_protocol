@@ -1,0 +1,74 @@
+name: Wallet Service CI
+
+on:
+  push:
+    paths:
+      - 'wallet-service/**'
+      - '.github/workflows/wallet-service-ci.yml'
+  pull_request:
+    paths:
+      - 'wallet-service/**'
+      - '.github/workflows/wallet-service-ci.yml'
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: wallet-service
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: wallet_service
+          POSTGRES_PASSWORD: wallet_service
+          POSTGRES_DB: wallet_service
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://wallet_service:wallet_service@localhost:5433/wallet_service
+      SECRETS_BACKEND: webcrypto
+      WEBCRYPTO_MASTER_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+      REGISTRATION_TOKEN_SECRET: ci-registration-secret
+      SESSION_TOKEN_SECRET: ci-session-secret
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+          cache-dependency-path: wallet-service/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Run database migrations
+        run: pnpm exec node-pg-migrate up --migrations-dir server/db/migrations --database-url-var DATABASE_URL
+
+      - name: Test
+        run: pnpm run test
+
+      - name: Build (Cloudflare preset, default)
+        run: pnpm run build
+
+      - name: Build (Node preset, sanity check)
+        run: pnpm run build:node

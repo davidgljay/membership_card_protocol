@@ -1,0 +1,12 @@
+name = "wallet-service"
+main = ".output/server/index.mjs"
+compatibility_date = "2026-06-29"
+compatibility_flags = ["nodejs_compat"]
+
+# WALLET_KV binding backs the wallet-service Nitro storage mount (session
+# token revocation, rate-limit counters — see nitro.config.ts, src/kv.ts).
+# Operators provision their own KV namespace and set the id here or via
+# `wrangler kv namespace create`.
+[[kv_namespaces]]
+binding = "WALLET_KV"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"

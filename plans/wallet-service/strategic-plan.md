@@ -132,9 +132,9 @@ The wallet service holds two categories of server-side secret, and they do not w
 
 The following questions should be resolved before or during the implementation plan. Answers will shape Phase 1 scaffolding and Phase 2 key custody choices.
 
-**OQ-WS-1: `service_secret` delivery authentication**
+**OQ-WS-1: `service_secret` delivery authentication — RESOLVED**
 
-When a device needs `service_secret` (during key derivation at wallet setup, or during post-recovery re-registration), how does it prove to the wallet service that it has the right to receive this account's secret? The spec says routine operations use device sub-card keys for authentication, but at setup time the device sub-card may not yet exist. Candidate: holder authenticates via a signed challenge with the master card key or via their WebAuthn passkey directly. This must be resolved before implementing the keyring custody endpoints.
+Resolved (implementation-plan.md CP-1, Phase 2 Step 2.1/2.2): there is no external registration token, because there is no third party in the loop — `open_offer_acceptance_new_wallet.md` and `open_offer_acceptance_existing_wallet.md` both describe the wallet service as the sole, continuous driver of offer display, wallet creation, and claim submission. Two auth paths follow from those two specs: a **new** wallet authenticates `POST /accounts` by having the freshly-generated master card key sign a server-issued challenge, proving control of the key being registered, with a session token returned directly in that response; an **existing** wallet authenticates via a new WebAuthn passkey login endpoint before `service_secret` is released for keyring decryption/update. Post-recovery re-registration continues to use a master-card-key-signed challenge, unchanged.
 
 **OQ-WS-2: WebSocket endpoint for relay bridging — RESOLVED**
 

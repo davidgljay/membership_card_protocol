@@ -1,0 +1,42 @@
+{
+  "name": "@membership-card-protocol/wallet-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Card Protocol wallet service — keyring custody, recovery infrastructure, and message routing",
+  "scripts": {
+    "dev": "nitro dev",
+    "build": "nitro build",
+    "build:cloudflare": "NITRO_PRESET=cloudflare-module nitro build",
+    "build:lambda": "NITRO_PRESET=aws-lambda nitro build",
+    "build:node": "NITRO_PRESET=node-server nitro build",
+    "start": "node .output/server/index.mjs",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "migrate": "node-pg-migrate --migrations-dir server/db/migrations --envPath .env"
+  },
+  "dependencies": {
+    "@aws-sdk/client-kms": "^3.0.0",
+    "@noble/hashes": "^1.7.2",
+    "@noble/post-quantum": "^0.5.4",
+    "nitropack": "^2.11.0",
+    "pg": "^8.13.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.11.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint": "^9.0.0",
+    "node-pg-migrate": "^7.6.0",
+    "prettier": "^3.3.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=9"
+  }
+}
