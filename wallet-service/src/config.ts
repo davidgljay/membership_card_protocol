@@ -22,6 +22,13 @@ export interface WalletServiceConfig {
   WEBAUTHN_ORIGIN: string;
   PORT: number;
   LOG_LEVEL: 'debug' | 'info' | 'warn' | 'error';
+  /** SendGrid API key (Step 3.3). If unset, email notifications fall back to a console-logging provider — fine for local dev, not for production. */
+  SENDGRID_API_KEY: string | undefined;
+  SENDGRID_FROM_EMAIL: string | undefined;
+  /** Twilio credentials (Step 3.3). If unset, SMS notifications fall back to a console-logging provider. */
+  TWILIO_ACCOUNT_SID: string | undefined;
+  TWILIO_AUTH_TOKEN: string | undefined;
+  TWILIO_FROM_NUMBER: string | undefined;
 }
 
 function requireEnv(name: string): string {
@@ -60,6 +67,11 @@ export function loadConfig(): WalletServiceConfig {
     WEBAUTHN_ORIGIN: requireEnv('WEBAUTHN_ORIGIN'),
     PORT: Number(optionalEnv('PORT', '3000')),
     LOG_LEVEL: optionalEnv('LOG_LEVEL', 'info') as WalletServiceConfig['LOG_LEVEL'],
+    SENDGRID_API_KEY: process.env['SENDGRID_API_KEY'],
+    SENDGRID_FROM_EMAIL: process.env['SENDGRID_FROM_EMAIL'],
+    TWILIO_ACCOUNT_SID: process.env['TWILIO_ACCOUNT_SID'],
+    TWILIO_AUTH_TOKEN: process.env['TWILIO_AUTH_TOKEN'],
+    TWILIO_FROM_NUMBER: process.env['TWILIO_FROM_NUMBER'],
   };
 
   if (secretsBackend === 'webcrypto' && !config.WEBCRYPTO_MASTER_KEY) {
