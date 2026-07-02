@@ -143,4 +143,4 @@ When a device calls `POST /register`, it supplies its `app_id`, push token, and 
 | Deployment model? | Docker Compose: `relay` (plain Node.js + `ws`), `redis` (in-memory), `db` volume (SQLite) |
 | What if Redis restarts? | Device registry in SQLite; startup re-registration notification to all recently-seen devices |
 | Why not AOF/RDB persistence for Redis? | AOF logs UUID associations to disk; associations must exist only in RAM — persistence explicitly rejected on privacy grounds |
-| Why not serverless? | WebSocket connections require a long-running process; Lambda/Workers cannot support them |
+| ~~Why not serverless?~~ | **Superseded** — see [`relay-serverless-migration-strategic-plan.md`](./relay-serverless-migration-strategic-plan.md). The original conclusion was correct for Workers alone (Lambda/Workers cannot hold a persistent WebSocket process) but did not account for Cloudflare Durable Objects with the WebSocket Hibernation API, which is purpose-built for many long-lived, low-traffic, individually-addressable connections — exactly this relay's connection shape. |
