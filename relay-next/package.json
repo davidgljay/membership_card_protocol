@@ -18,7 +18,9 @@
     "nitropack": "^2.11.0"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260702.1",
     "@types/node": "^20.11.0",
+    "crossws": "^0.4.8",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4",
     "wrangler": "^3.90.0"

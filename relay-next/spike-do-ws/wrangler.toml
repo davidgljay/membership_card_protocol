@@ -1,0 +1,12 @@
+name = "relay-do-ws-spike"
+main = "worker.ts"
+compatibility_date = "2026-07-02"
+compatibility_flags = ["nodejs_compat"]
+
+[[durable_objects.bindings]]
+name = "UUID_CONNECTION"
+class_name = "UuidConnection"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["UuidConnection"]
