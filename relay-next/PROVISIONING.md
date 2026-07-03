@@ -25,6 +25,43 @@ Cloudflare KV is free at this scale, durable by platform default, and its
 native per-key TTL removes the separate weekly pruning job the old design
 needed. See `relay_data_model.md` §1 for the full comparison.
 
+**Changed 2026-07-03 — pre-deployment primary store is Upstash, not Redis
+Cloud, as a deliberate temporary trade-off.** Two real findings on the
+same day: (1) Redis Cloud's free tier does not support TLS at all —
+confirmed by testing, not just documentation — and `relay-next`'s Redis
+client hardcodes TLS as mandatory (no plaintext fallback exists in the
+code), so a free-tier Redis Cloud database cannot be connected to as
+built; (2) Upstash was re-confirmed to always persist data to durable
+block storage at every tier, with no way to disable it — this was already
+the reason Upstash was rejected for the *primary* store's role back when
+this architecture was designed (see "Why two different storage systems"
+below and `relay_data_model.md` §1). Faced with "Redis Cloud free tier
+can't do TLS" and "Upstash can never satisfy the no-persistence
+requirement," the user's explicit decision was:
+
+- **Pre-deployment / test phase: use Upstash.** TLS works out of the box
+  on Upstash's free tier (`rediss://`, no code changes needed — the
+  existing `REDIS_PRIMARY_URL` env var / secret plumbing is unchanged,
+  only the value changes), so this unblocks testing immediately. **This
+  is a knowing, temporary exception to the primary store's core privacy
+  invariant** — UUID-to-device-credential associations *will* be durably
+  written to Upstash's disk during this phase, which is exactly what the
+  primary store's persistence-off design exists to prevent. Acceptable
+  for pre-deployment testing with non-real data; not acceptable for any
+  deployment handling real users.
+- **Before production: switch to a paid Redis Cloud tier.** Paid tiers
+  support TLS (confirmed) and, unlike Upstash, support disabling
+  persistence entirely (RDB and AOF both off) — the combination the
+  primary store has always required. This is a `REDIS_PRIMARY_URL` value
+  swap only; no code or spec-model change needed at that point, since the
+  storage layer was built against the persistence-off, TLS-enforced
+  Redis Cloud design from the start.
+
+**Do not treat the pre-deployment Upstash phase as validating the
+storage layer's privacy properties.** It validates connectivity,
+protocol compatibility, and application logic — not the no-persistence
+invariant, which Upstash cannot satisfy at any tier.
+
 ---
 
 ## Why two different storage systems
@@ -53,25 +90,53 @@ work around for either store.
 
 ## Checklist
 
-### 1. Redis Cloud account / subscription (primary database only)
+### 1a. Pre-deployment: Upstash account / database (temporary, test-only)
+
+- [x] Redis Cloud free tier confirmed unusable as-is — **done 2026-07-03.**
+      No TLS support at any level below a paid plan; `relay-next`'s client
+      requires TLS unconditionally. See the 2026-07-03 note above.
+- [ ] Create an Upstash Redis database (free tier). Region: pick close to
+      the Cloudflare Workers edge locations this relay will run in, same
+      latency reasoning as the Redis Cloud guidance below.
+- [ ] Copy the `rediss://default:<password>@<endpoint>:6379` connection
+      string from the Upstash console. TLS is on by default — no toggle
+      needed, unlike Redis Cloud.
+- [ ] Use this value for `REDIS_PRIMARY_URL` everywhere the Redis Cloud
+      connection string would otherwise go (§4 "Secrets" below — the env
+      var name and every wiring point are unchanged).
+- [ ] **Do not run the `CONFIG GET save` / `CONFIG GET appendonly`
+      verification against Upstash and treat a "disabled" result as
+      meaningful** — Upstash always persists regardless of what these
+      report (if they even reflect real state on a managed proxy at all,
+      which is doubtful — see the 2026-07-03 note on Redis Cloud's own
+      `CONFIG GET` behavior returning empty/unreliable results for the
+      same reason). There is nothing to verify here because the answer is
+      already known: persistence is on, unconditionally.
+
+### 1b. Production (later): Redis Cloud account / subscription (paid tier, primary database only)
 
 - [ ] Confirm plan/tier with the user before creating anything (Clarification
-      Checkpoint in the implementation plan). The free tier's
-      persistence-off default is exactly what the primary database needs,
-      so free tier is viable for both test and — pending a decision on
-      throughput/support needs — potentially production too. Re-evaluate
-      for production based on latency/throughput requirements, not on a
-      persistence-setting mismatch (that concern no longer applies now that
-      only one Redis Cloud database is needed).
-- [ ] Verify the free tier's TLS support specifically (see §2's TLS
-      checklist item).
+      Checkpoint in the implementation plan) — needs a **paid** tier this
+      time, specifically for TLS support (confirmed unavailable on free
+      tier). Persistence-off is the default at every tier, paid included,
+      so that part of the requirement doesn't change.
+- [ ] Verify TLS is enabled and enforced once the paid database exists
+      (see §2's TLS checklist item) — don't assume it's on by default even
+      on a paid tier; the plan documents it as something to explicitly
+      enable either way.
 - [ ] Decide region/placement to minimize latency to the Cloudflare Workers
       edge locations this relay will run in (relay.md §8's latency note
       assumes "same cloud provider or data center" — Redis Cloud is not
       Cloudflare-hosted, so some added latency versus that assumption should
       be expected and is worth measuring once both are live).
+- [ ] When ready to cut over from the pre-deployment Upstash instance,
+      swap `REDIS_PRIMARY_URL` to the new Redis Cloud connection string
+      everywhere it's set (`.env`, `.dev.vars`, `wrangler secret`, the
+      GitHub Actions repo secret) — this is the point at which the
+      no-persistence invariant actually starts holding for real traffic,
+      not before.
 
-### 2. Primary database (persistence OFF)
+### 2. Redis Cloud paid-tier database configuration (persistence OFF) — for step 1b, once a paid plan exists
 
 - [ ] Create a new Redis Cloud database.
 - [ ] Explicitly disable **RDB snapshotting** (no snapshot schedule
@@ -81,18 +146,21 @@ work around for either store.
       connections) — Redis Cloud requires this to be turned on explicitly
       and it is mandatory once enabled (per the strategic plan's summary of
       Redis Cloud's TLS model).
-- [ ] After creation, connect and run:
-      ```
-      CONFIG GET save
-      CONFIG GET appendonly
-      ```
-      Confirm `save` returns an empty string and `appendonly` returns `no`.
-      This is the same verification the original relay's self-hosted Redis
-      used (`--save "" --appendonly no`) — Redis Cloud's managed console
-      may present these as toggles rather than raw config flags; use
-      whatever the console/API exposes, but verify via `CONFIG GET`
-      directly against the running instance, not just the console's stated
-      setting, before trusting it.
+- [ ] **Verify persistence via the console's "Data Persistence" field, not
+      `CONFIG GET`.** Tested directly against a real (free-tier) Redis
+      Cloud database on 2026-07-03: `CONFIG GET save` and `CONFIG GET
+      appendonly` both returned empty arrays — not the expected `["save",
+      ""]` / `["appendonly", "no"]` pairs. This is consistent with Redis
+      Cloud's managed proxy not exposing traditional `redis.conf`-style
+      persistence directives via `CONFIG GET` at all (persistence there is
+      a database-level setting, not a `CONFIG SET`-able directive) — an
+      empty result does not mean persistence is misconfigured, it means
+      this verification method doesn't apply to a managed instance. Check
+      the "Data Persistence" (or equivalently-named) field on the
+      database's configuration page in the Redis Cloud console instead,
+      and confirm it reads **None**. This applies to both the free tier
+      (§1a is now moot for TLS reasons, but the same `CONFIG GET`
+      limitation would have applied there too) and this paid tier.
 - [ ] Confirm a plaintext (non-TLS) connection attempt is rejected (this is
       also asserted by an automated test in Phase 2 step 2.1 — the manual
       check here is to catch a misconfiguration before that test exists).
@@ -158,8 +226,9 @@ work around for either store.
 ### 5. Post-provisioning verification (do once both are set up)
 
 - [ ] Connect to the primary Redis Cloud database from a local script or
-      `redis-cli` over TLS; confirm read/write works and `CONFIG GET save`
-      / `CONFIG GET appendonly` show disabled.
+      `redis-cli` over TLS; confirm read/write works. Confirm persistence
+      is off via the console's "Data Persistence" field (§2 — `CONFIG GET`
+      does not reflect this on a managed instance, confirmed 2026-07-03).
 - [ ] Confirm the KV namespace is reachable via `wrangler kv key
       put`/`get` against the created namespace.
 - [ ] Record actual latency from a Cloudflare Worker (or a location close
