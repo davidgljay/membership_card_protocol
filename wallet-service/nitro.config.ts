@@ -37,6 +37,7 @@ export default defineNitroConfig({
     '*/5 * * * *': ['sweep-notification-retries'],
     '0 3 * * 0': ['prune-routing-nonces'], // weekly, Sunday 03:00 (Step 4.1)
     '0 4 * * *': ['prune-expired-uuids'], // nightly, 04:00 (Step 5.3)
+    '0 * * * *': ['prune-subcard-uuid-registration-nonces'], // hourly (v0.8 UUID-registration replay window is 5 minutes)
   },
   storage: {
     // Session tokens, rate-limit counters. Defaults to KV on the Cloudflare

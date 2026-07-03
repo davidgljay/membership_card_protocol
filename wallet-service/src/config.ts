@@ -41,6 +41,12 @@ export interface WalletServiceConfig {
   RELAY_BASE_URL: string;
   /** Bearer token gating the operator-facing /admin/* endpoints (strategic-plan.md §Goal 5: operational transparency). Not for end users or peers. */
   ADMIN_API_KEY: string;
+  /** Arbitrum One JSON-RPC endpoint — used read-only to resolve subcard_hash -> SubCardEntry (sub_card_doc_cid) when verifying signed UUID-registration envelopes (notification_relay.md v0.8 §POST .../uuids). Same registry press/ writes to; wallet-service never submits transactions. */
+  ARBITRUM_RPC_URL: string;
+  /** Arbitrum One registry contract address (same contract press/ writes RegisterSubCard/SubCardEntry to — see specs/subcards.md §Step 5, specs/registry_contract.md). */
+  REGISTRY_CONTRACT_ADDRESS: string;
+  /** IPFS gateway base URL used to fetch SubCardDocument by sub_card_doc_cid. Defaults to the same Filebase gateway press/ uses (documents are pinned there), but any IPFS gateway serving the same CID works. */
+  IPFS_GATEWAY_URL: string;
 }
 
 export interface PeerConfig {
@@ -125,6 +131,9 @@ export function loadConfig(): WalletServiceConfig {
     PEER_LIST: parsePeerList(optionalEnv('PEER_LIST', '[]')),
     RELAY_BASE_URL: requireEnv('RELAY_BASE_URL'),
     ADMIN_API_KEY: requireEnv('ADMIN_API_KEY'),
+    ARBITRUM_RPC_URL: requireEnv('ARBITRUM_RPC_URL'),
+    REGISTRY_CONTRACT_ADDRESS: requireEnv('REGISTRY_CONTRACT_ADDRESS'),
+    IPFS_GATEWAY_URL: optionalEnv('IPFS_GATEWAY_URL', 'https://ipfs.filebase.io'),
   };
 
   if (secretsBackend === 'webcrypto' && !config.WEBCRYPTO_MASTER_KEY) {
