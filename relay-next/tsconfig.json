@@ -6,7 +6,8 @@
     "exactOptionalPropertyTypes": true,
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "types": ["@cloudflare/workers-types", "node", "@cloudflare/vitest-pool-workers"]
   },
   "include": [
     ".nitro/types/nitro.d.ts",

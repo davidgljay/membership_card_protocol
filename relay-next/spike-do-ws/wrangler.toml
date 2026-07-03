@@ -2,6 +2,7 @@ name = "relay-do-ws-spike"
 main = "worker.ts"
 compatibility_date = "2026-07-02"
 compatibility_flags = ["nodejs_compat"]
+workers_dev = true
 
 [[durable_objects.bindings]]
 name = "UUID_CONNECTION"

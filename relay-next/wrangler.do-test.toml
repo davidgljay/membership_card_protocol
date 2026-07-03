@@ -1,0 +1,45 @@
+# Test-scoped Wrangler config for @cloudflare/vitest-pool-workers
+# (vitest.workers.config.ts), covering ONLY the Durable Object connection
+# layer (server/do/uuid-connection.ts, server/do/device-channel.ts).
+#
+# WHY A SEPARATE CONFIG FROM THE REAL wrangler.toml:
+# The real wrangler.toml (relay-next/wrangler.toml) points `main` at
+# server/cloudflare-entry.ts, which imports Nitro's *build output*
+# (`../.output/server/index.mjs`) as a library dependency — that file does
+# not exist until `npm run build:cloudflare` has been run, and pulling it
+# into the Vitest Workers pool would mean every DO test run depends on a
+# fresh Nitro build being present and in sync. The real config also
+# declares a KV namespace binding with a live namespace id
+# (relay_data_model.md §5, PROVISIONING.md) and a 5-minute cron trigger
+# (`[triggers]`) for the reconciliation scan (relay_data_model.md §2.5) —
+# neither makes sense to spin up for a unit test of the DO connection
+# layer, and the KV id in particular refers to a real (non-test)
+# Cloudflare resource that should never be touched by `npm test`.
+#
+# This file instead points `main` directly at a tiny worker entry
+# (server/do/test-entry.ts) that does nothing but re-export the two DO
+# classes plus a passthrough fetch handler — enough for
+# `@cloudflare/vitest-pool-workers` to construct the `UUID_CONNECTION` /
+# `DEVICE_CHANNEL` bindings and hand back real `DurableObjectStub`s via
+# `env.UUID_CONNECTION.get(...)` / `env.DEVICE_CHANNEL.get(...)` in tests,
+# without needing Nitro's build output, KV, or cron at all. The DO class
+# *source* imported here (server/do/uuid-connection.ts,
+# server/do/device-channel.ts) is the exact same source deployed by the
+# real wrangler.toml — only the surrounding Worker entry point and binding
+# set differ.
+name = "mcard-relay-do-test"
+main = "server/do/test-entry.ts"
+compatibility_date = "2026-07-02"
+compatibility_flags = ["nodejs_compat"]
+
+[[durable_objects.bindings]]
+name = "UUID_CONNECTION"
+class_name = "UuidConnection"
+
+[[durable_objects.bindings]]
+name = "DEVICE_CHANNEL"
+class_name = "DeviceChannel"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["UuidConnection", "DeviceChannel"]

@@ -12,18 +12,21 @@
     "start": "node .output/server/index.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:do": "vitest run --config vitest.workers.config.ts"
   },
   "dependencies": {
     "nitropack": "^2.11.0"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.12.21",
     "@cloudflare/workers-types": "^4.20260702.1",
     "@types/node": "^20.11.0",
     "crossws": "^0.4.8",
+    "ioredis-mock": "^8.13.1",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4",
-    "wrangler": "^3.90.0"
+    "wrangler": "^4.107.0"
   },
   "engines": {
     "node": ">=22"
