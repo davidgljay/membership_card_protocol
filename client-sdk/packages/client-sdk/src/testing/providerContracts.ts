@@ -34,6 +34,24 @@ import type { MultiInstanceLock } from '../providers/MultiInstanceLock.js';
 
 export type ContractTests = Record<string, () => Promise<void>>;
 
+/**
+ * Byte-content equality for Uint8Arrays that may not share a JS realm.
+ *
+ * A provider under test may round-trip bytes through a storage layer
+ * (IndexedDB via fake-indexeddb, AsyncStorage, etc.) whose serialization
+ * path constructs its own `Uint8Array` instances via engine builtins (e.g.
+ * `structuredClone`) rather than whatever `Uint8Array` is current on
+ * `globalThis` — under a jsdom test environment in particular, that's a
+ * *different* `Uint8Array` constructor than the one test code sees.
+ * `assert.deepEqual` treats that prototype mismatch as inequality even
+ * when the bytes are identical, so contract assertions compare byte
+ * content directly instead of relying on typed-array identity.
+ */
+function assertBytesEqual(actual: Uint8Array | undefined, expected: Uint8Array): void {
+  assert.ok(actual !== undefined, 'expected bytes, got undefined');
+  assert.deepEqual(Array.from(actual), Array.from(expected));
+}
+
 export function storageProviderContractTests(factory: () => Promise<StorageProvider>): ContractTests {
   return {
     'returns undefined for a key that was never set': async () => {
@@ -44,13 +62,13 @@ export function storageProviderContractTests(factory: () => Promise<StorageProvi
       const provider = await factory();
       const value = new Uint8Array([1, 2, 3, 4]);
       await provider.set('k', value);
-      assert.deepEqual(await provider.get('k'), value);
+      assertBytesEqual(await provider.get('k'), value);
     },
     'set overwrites a previous value under the same key': async () => {
       const provider = await factory();
       await provider.set('k', new Uint8Array([1]));
       await provider.set('k', new Uint8Array([2]));
-      assert.deepEqual(await provider.get('k'), new Uint8Array([2]));
+      assertBytesEqual(await provider.get('k'), new Uint8Array([2]));
     },
     'delete removes a value': async () => {
       const provider = await factory();
@@ -72,7 +90,7 @@ export function secureKeyProviderContractTests(
     'generateKey returns a public key retrievable via getPublicKey': async () => {
       const provider = await factory();
       const publicKey = await provider.generateKey('key-1');
-      assert.deepEqual(await provider.getPublicKey('key-1'), publicKey);
+      assertBytesEqual(await provider.getPublicKey('key-1'), publicKey);
     },
     'sign produces a signature verifiable against the public key': async () => {
       const provider = await factory();
