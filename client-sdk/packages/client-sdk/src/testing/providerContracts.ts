@@ -58,13 +58,19 @@ export function storageProviderContractTests(factory: () => Promise<StorageProvi
       const provider = await factory();
       assert.equal(await provider.get('missing-key'), undefined);
     },
-    'set then get round-trips the exact bytes': async () => {
+    // Labels below deliberately avoid a leading "set "/"get " followed by
+    // another word — that exact pattern crashes
+    // @babel/plugin-transform-async-to-generator under
+    // @react-native/babel-preset (confirmed via minimal repro; not
+    // specific to this file's logic, just its string content). Harmless
+    // to word around since these are just test descriptions.
+    'stores then retrieves the exact bytes': async () => {
       const provider = await factory();
       const value = new Uint8Array([1, 2, 3, 4]);
       await provider.set('k', value);
       assertBytesEqual(await provider.get('k'), value);
     },
-    'set overwrites a previous value under the same key': async () => {
+    'overwrites a previous value under the same key': async () => {
       const provider = await factory();
       await provider.set('k', new Uint8Array([1]));
       await provider.set('k', new Uint8Array([2]));
