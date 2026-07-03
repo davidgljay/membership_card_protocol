@@ -29,8 +29,12 @@
     "build": "tsc --project tsconfig.json",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "test": "NODE_OPTIONS=--experimental-global-webcrypto vitest run",
+    "test:watch": "NODE_OPTIONS=--experimental-global-webcrypto vitest"
+  },
+  "dependencies": {
+    "@noble/hashes": "^1.7.2",
+    "@noble/post-quantum": "^0.5.4"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
