@@ -30,7 +30,7 @@
 // server/utils/redis/test-harness.ts would not work).
 //
 // wrangler config: points at wrangler.do-test.toml, a minimal test-scoped
-// config (NOT the real relay-next/wrangler.toml) — see that file's header
+// config (NOT the real relay/wrangler.toml) — see that file's header
 // comment for why (real config depends on Nitro build output, a live KV
 // namespace id, and a cron trigger, none of which make sense for a DO
 // unit-test environment).

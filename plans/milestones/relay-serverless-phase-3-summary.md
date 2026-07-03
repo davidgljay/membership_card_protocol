@@ -8,7 +8,7 @@
 ## Summary
 
 Phase 3 (Documentation & CI/CD) produced a top-level operational README for
-`relay-next/` (3.1) and a GitHub Actions deployment workflow that runs the
+`relay/` (3.1) and a GitHub Actions deployment workflow that runs the
 full test suite, validates required secrets, and only then deploys via
 `wrangler deploy` (3.2). The README consolidates provisioning steps
 (pointing to `PROVISIONING.md` as the authoritative source for Redis
@@ -28,7 +28,7 @@ validate-secrets]` graph is structurally correct — a real but weaker form
 of verification than a live run, stated plainly rather than conflated with
 the shell-logic test. Docker/Compose retirement (3.3) produced the required
 exact file list and rationale in a new pending-removal document but made
-no changes to `relay/` at all, per the plan's own Clarification Checkpoint
+no changes to `relay-old/` at all, per the plan's own Clarification Checkpoint
 requiring explicit user sign-off before deletion — this is deliberately
 incomplete, not an oversight.
 
@@ -38,7 +38,7 @@ incomplete, not an oversight.
 
 ### 3.1 — README: Complete
 
-Written to `relay-next/README.md` (did not exist before this session).
+Written to `relay/README.md` (did not exist before this session).
 Location and convention: matched the existing pattern of `relay/README.md`,
 `press/` (which has no top-level README of its own, but follows the same
 monorepo-service convention), and `wallet-service/`'s directory structure —
@@ -47,7 +47,7 @@ a top-level `README.md` inside the service's own directory, not a doc under
 
 Covers, per the task brief's explicit checklist:
 
-- **Redis Cloud provisioning:** links to `relay-next/PROVISIONING.md` as
+- **Redis Cloud provisioning:** links to `relay/PROVISIONING.md` as
   the explicitly-stated authoritative source, summarizing only the
   headline steps (persistence-off verification via `CONFIG GET`, TLS
   enforcement, secret storage) rather than forking a second copy that could
@@ -86,7 +86,7 @@ Covers, per the task brief's explicit checklist:
 
 The README closes with an explicit "What this document has not been
 validated against" section — no real Redis Cloud database connected, no
-real `wrangler deploy` of the actual `relay-next` Worker (as opposed to the
+real `wrangler deploy` of the actual `relay` Worker (as opposed to the
 Phase 1 spike) performed, and the document itself not yet followed
 end-to-end by anyone but its author. (Real DO hibernation-eviction timing,
 listed as unmeasured when this document was first drafted, was resolved
@@ -175,7 +175,7 @@ relay/docker-compose.yml
 relay/docker-compose.dev.yml
 ```
 
-No `.dockerignore` file exists anywhere under `relay/` (checked, none
+No `.dockerignore` file exists anywhere under `relay-old/` (checked, none
 found). No separate self-hosted-Redis container config file exists either
 — the `redis:7-alpine` image and its `--save "" --appendonly no
 --maxmemory-policy noeviction` flags are inlined directly in
@@ -191,10 +191,10 @@ The pending-removal document also flags, for completeness, that
 `relay/README.md` itself documents the Docker/Compose flow in detail and
 would need to be rewritten or removed alongside these three files if/when
 removal is confirmed — that rewrite is explicitly not attempted here,
-consistent with "do not touch anything else under `relay/` at all" from
+consistent with "do not touch anything else under `relay-old/` at all" from
 this task's constraints.
 
-Nothing else under `relay/` was read, modified, or otherwise touched
+Nothing else under `relay-old/` was read, modified, or otherwise touched
 beyond what was needed to produce this file list (a directory listing and
 a check for `.dockerignore`/redis-container-config files).
 
@@ -222,7 +222,7 @@ to done:
    layer (`redis/uuid-store.ts`, `message-store.ts`, `credential-store.ts`,
    `delete-queue.ts`, `reconciliation.ts`) has only ever been exercised
    against the hand-rolled RESP test server and `ioredis-mock`, never a
-   real managed Redis Cloud instance. `relay-next/PROVISIONING.md`'s
+   real managed Redis Cloud instance. `relay/PROVISIONING.md`'s
    primary-database checklist item is still unchecked. This is a
    prerequisite for trusting the storage layer beyond unit-test coverage.
 
@@ -237,7 +237,7 @@ to done:
    5-minute default is confirmed comfortably adequate (5 minutes vs. 30+
    confirmed-safe minutes) and was left unchanged. Full writeup:
    `specs/object_specs/relay_data_model.md` §2.5 (v0.7) and
-   `relay-next/spike-do-ws/README.md`.
+   `relay/spike-do-ws/README.md`.
 
 3. **Docker retirement confirmation (this phase's 3.3).** The exact file
    list is recorded in
@@ -247,10 +247,10 @@ to done:
    `relay/docker-compose.dev.yml` are removed, and before
    `relay/README.md`'s Docker-flow documentation is addressed.
 
-4. **A first real `wrangler deploy` of `relay-next` itself to a live
+4. **A first real `wrangler deploy` of `relay` itself to a live
    Cloudflare account.** Everything about Cloudflare provisioning in the
    README and the two deploy gotchas in its troubleshooting section come
-   from getting the Phase 1 *spike* deployed — the main `relay-next`
+   from getting the Phase 1 *spike* deployed — the main `relay`
    Worker (with its real KV binding, two DO classes, and cron trigger) has
    not yet gone through a first real deploy. There may be more to find
    once it does.

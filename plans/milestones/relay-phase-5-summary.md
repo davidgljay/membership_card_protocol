@@ -51,7 +51,7 @@ Also fixed: ioredis throws a `ReplyError` for Lua `{err = ...}` responses rather
 
 ## Phase 6: Documentation & Verification
 
-### Step 18: README (`relay/README.md`)
+### Step 18: README (`relay-old/README.md`)
 
 Covers: what the relay does, prerequisites, local dev quick start, production deployment, environment variables table, app registry config format (annotated), adding a new app, wallet service integration guide, privacy properties table, and how to run tests.
 

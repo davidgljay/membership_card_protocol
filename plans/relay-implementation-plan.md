@@ -175,7 +175,7 @@ The router is hand-rolled — approximately 30 lines. It matches `method + pathn
 
 ### Step 4: Set up Docker Compose
 
-**What:** Produce `relay/docker-compose.yml` and `relay/Dockerfile`.
+**What:** Produce `relay-old/docker-compose.yml` and `relay-old/Dockerfile`.
 
 `docker-compose.yml` services:
 - **`relay`** — builds from `./Dockerfile`; mounts `./config:/app/config` (app registry) and `db_data:/data` (SQLite); env vars from `.env`; depends on `redis`
@@ -187,7 +187,7 @@ The router is hand-rolled — approximately 30 lines. It matches `method + pathn
 - Sets `NODE_ENV=production`
 - Exposes port 3000
 
-`relay/docker-compose.dev.yml` (development override):
+`relay-old/docker-compose.dev.yml` (development override):
 - Mounts source and runs `tsx watch src/server.ts` for hot reload
 - Adds `redis-commander` or similar for Redis inspection during development
 
@@ -233,7 +233,7 @@ The router is hand-rolled — approximately 30 lines. It matches `method + pathn
 
 **Who:** Claude
 
-**Context needed:** `specs/object_specs/relay_data_model.md §App registry config schema`, `relay/config/apps.json` (example file created here with one stub app entry)
+**Context needed:** `specs/object_specs/relay_data_model.md §App registry config schema`, `relay-old/config/apps.json` (example file created here with one stub app entry)
 
 **Done when:** `getApp('unknown')` returns null. `getApp` with a valid `app_id` returns the full config object. Invalid `apps.json` (missing required field) causes process to exit with a clear error message on startup.
 
@@ -352,7 +352,7 @@ Implementation note: the HTTP server in `server.ts` handles the WebSocket upgrad
 
 **Who:** Claude
 
-**Context needed:** `specs/object_specs/relay.md §GET /ws/{uuid}`, `specs/object_specs/relay_data_model.md §UUID state machine`, `relay/src/utils/storage/redis.ts`, `ws` package docs
+**Context needed:** `specs/object_specs/relay.md §GET /ws/{uuid}`, `specs/object_specs/relay_data_model.md §UUID state machine`, `relay-old/src/utils/storage/redis.ts`, `ws` package docs
 
 **Done when:** With two local processes (a stub wallet service and a test client), messages flow bidirectionally through the relay. Closing the device connection closes the wallet socket. UUID status transitions to `consumed` after close. A second connection attempt with the same UUID is rejected.
 
@@ -472,7 +472,7 @@ Use Nitro's `scheduledTasks` (if available in the Node.js preset) or a simple `s
 
 ### Step 15: Unit tests — UUID lifecycle
 
-**What:** `relay/tests/unit/uuid-lifecycle.test.ts`
+**What:** `relay-old/tests/unit/uuid-lifecycle.test.ts`
 
 Test all state machine transitions:
 - `unused → consumed` (push delivery)
@@ -495,7 +495,7 @@ Uses real Redis (Docker); not mocked.
 
 ### Step 16: Integration tests — push delivery
 
-**What:** `relay/tests/integration/push-delivery.test.ts`
+**What:** `relay-old/tests/integration/push-delivery.test.ts`
 
 Test the full `POST /register` → `POST /notify/{uuid}` path with a mocked push dispatcher (replace `dispatchPush` with a stub that records calls).
 
@@ -517,7 +517,7 @@ Scenarios:
 
 ### Step 17: Integration tests — WebSocket bridge
 
-**What:** `relay/tests/integration/websocket-bridge.test.ts`
+**What:** `relay-old/tests/integration/websocket-bridge.test.ts`
 
 Spin up a stub wallet service (simple `ws` server) and test the full bridging path.
 
@@ -555,7 +555,7 @@ Scenarios:
 
 ### Step 18: Write README
 
-**What:** `relay/README.md` covering:
+**What:** `relay-old/README.md` covering:
 - What the relay does (one paragraph, referencing `notification_relay.md`)
 - Prerequisites (Docker, Node.js 20+)
 - Local development: `docker compose -f docker-compose.yml -f docker-compose.dev.yml up`

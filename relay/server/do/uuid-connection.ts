@@ -1,6 +1,6 @@
 // Durable Object: one instance per UUID, backing GET /ws/{uuid}
 // (relay.md §7.3, relay_data_model.md §10). Directly follows the proven
-// pattern from relay-next/spike-do-ws/durable-object.ts — raw Hibernation
+// pattern from relay/spike-do-ws/durable-object.ts — raw Hibernation
 // API (`acceptWebSocket`/`getWebSockets`/serializeAttachment), NOT Nitro's
 // `cloudflare-durable` preset (single fixed instance, can't address by
 // UUID) or crossws's adapter (export path dropped in the installed

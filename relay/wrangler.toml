@@ -11,7 +11,7 @@ id = "cdf75d4cac1b416d81a8ea508ce49bf5"
 
 # DO-backed connection layer — relay_data_model.md §10, Phase 2 step 2.4.
 # One instance per UUID (GET /ws/{uuid}) and one per device_credential
-# (GET /sse), matching relay-next/spike-do-ws's proven pattern.
+# (GET /sse), matching relay/spike-do-ws's proven pattern.
 [[durable_objects.bindings]]
 name = "UUID_CONNECTION"
 class_name = "UuidConnection"
@@ -27,7 +27,7 @@ new_sqlite_classes = ["UuidConnection", "DeviceChannel"]
 # Reconciliation scan + delete-queue job trigger — relay_data_model.md
 # §2.5, §4.4, §9 (RECONCILIATION_CRON_SCHEDULE). 5-minute default is an
 # explicitly-flagged PLACEHOLDER pending the real hibernation-eviction
-# timing test (relay-next/spike-do-ws/test-hibernation.mjs, run separately
+# timing test (relay/spike-do-ws/test-hibernation.mjs, run separately
 # against a real Cloudflare account) — see the Phase 2 milestone summary.
 [triggers]
 crons = ["*/5 * * * *"]

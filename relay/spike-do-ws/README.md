@@ -2,7 +2,7 @@
 
 This is a minimal, standalone spike for
 `plans/relay-serverless-migration-implementation-plan.md` step 1.2. It is
-**not** wired into the main `relay-next` Nitro app's route tree — see
+**not** wired into the main `relay` Nitro app's route tree — see
 "Why this is a separate worker" below for the reason.
 
 ## What this proves
@@ -70,11 +70,11 @@ the implementation plan told us to escalate rather than silently work
 around** — so both findings are documented here and in the Phase 1
 milestone summary rather than patched over.
 
-Wiring per-key DO resolution into the `relay-next` Nitro app's own
+Wiring per-key DO resolution into the `relay` Nitro app's own
 route/build pipeline (so `GET /ws/{uuid}` works as an ordinary Nitro
 route, indistinguishable from the other HTTP handlers) is Phase 2 scope,
 not Phase 1. It will require either Nitro adding a config hook for custom
-per-request DO instance resolution, or `relay-next`'s Cloudflare deploy
+per-request DO instance resolution, or `relay`'s Cloudflare deploy
 carrying a small amount of hand-rolled Worker-entry code (like this
 spike's `worker.ts`) alongside Nitro's generated output. Both are viable;
 deciding between them belongs to Phase 2 planning, not this spike.

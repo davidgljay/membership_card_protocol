@@ -1,5 +1,13 @@
-node_modules/
-dist/
+node_modules
+.output
+.output_*
+.nitro
+.wrangler
+dist
+*.log
 .env
-*.db
-config/secrets/
+.env.*
+.dev.vars
+.dev.vars.*
+.data
+

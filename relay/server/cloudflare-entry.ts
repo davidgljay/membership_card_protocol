@@ -2,7 +2,7 @@
 // under wrangler.toml, NOT Nitro's generated `.output/server/index.mjs`
 // used directly.
 //
-// WHY THIS EXISTS (same rationale as relay-next/spike-do-ws/README.md,
+// WHY THIS EXISTS (same rationale as relay/spike-do-ws/README.md,
 // carried into the real build for Phase 2): Nitro's built-in
 // `cloudflare-durable` preset hardcodes a single fixed Durable Object
 // instance name with no per-request resolution, so it cannot address one

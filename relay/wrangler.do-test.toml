@@ -3,7 +3,7 @@
 # layer (server/do/uuid-connection.ts, server/do/device-channel.ts).
 #
 # WHY A SEPARATE CONFIG FROM THE REAL wrangler.toml:
-# The real wrangler.toml (relay-next/wrangler.toml) points `main` at
+# The real wrangler.toml (relay/wrangler.toml) points `main` at
 # server/cloudflare-entry.ts, which imports Nitro's *build output*
 # (`../.output/server/index.mjs`) as a library dependency — that file does
 # not exist until `npm run build:cloudflare` has been run, and pulling it

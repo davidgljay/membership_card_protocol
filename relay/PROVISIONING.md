@@ -28,7 +28,7 @@ needed. See `relay_data_model.md` §1 for the full comparison.
 **Changed 2026-07-03 — pre-deployment primary store is Upstash, not Redis
 Cloud, as a deliberate temporary trade-off.** Two real findings on the
 same day: (1) Redis Cloud's free tier does not support TLS at all —
-confirmed by testing, not just documentation — and `relay-next`'s Redis
+confirmed by testing, not just documentation — and `relay`'s Redis
 client hardcodes TLS as mandatory (no plaintext fallback exists in the
 code), so a free-tier Redis Cloud database cannot be connected to as
 built; (2) Upstash was re-confirmed to always persist data to durable
@@ -93,7 +93,7 @@ work around for either store.
 ### 1a. Pre-deployment: Upstash account / database (temporary, test-only)
 
 - [x] Redis Cloud free tier confirmed unusable as-is — **done 2026-07-03.**
-      No TLS support at any level below a paid plan; `relay-next`'s client
+      No TLS support at any level below a paid plan; `relay`'s client
       requires TLS unconditionally. See the 2026-07-03 note above.
 - [ ] Create an Upstash Redis database (free tier). Region: pick close to
       the Cloudflare Workers edge locations this relay will run in, same
@@ -179,7 +179,7 @@ work around for either store.
       `storage()` code refers to — it doesn't have to match the namespace's
       display name; `mcard_relay` is fine as-is, no need to recreate it to
       match this document's earlier suggested name.)
-- [ ] Add the binding to `relay-next/wrangler.toml` (not yet created —
+- [ ] Add the binding to `relay/wrangler.toml` (not yet created —
       this happens once Phase 2 scaffolds the main Worker entry, not in
       `spike-do-ws/wrangler.toml`, which doesn't touch the device registry):
       ```toml
@@ -218,7 +218,7 @@ work around for either store.
 - [ ] Confirm the connection string is never written to a file tracked
       by git (`.env`, `.env.local`, `.dev.vars`, `wrangler.toml` `[vars]`,
       etc. — all already covered by `.gitignore` conventions used
-      elsewhere in this repo, e.g. `press/.gitignore`; `relay-next/.gitignore`
+      elsewhere in this repo, e.g. `press/.gitignore`; `relay/.gitignore`
       already excludes `.env*`). The KV namespace `id`/`preview_id` in
       `wrangler.toml` under `[[kv_namespaces]]` are not secrets (they're
       resource identifiers, not credentials) and are fine to commit.

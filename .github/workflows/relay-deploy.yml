@@ -10,7 +10,7 @@ on:
     branches:
       - main
     paths:
-      - 'relay-next/**'
+      - 'relay/**'
       - '.github/workflows/relay-deploy.yml'
 
 jobs:
@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: relay-next
+        working-directory: relay
 
     steps:
       - uses: actions/checkout@v4
@@ -28,7 +28,7 @@ jobs:
         with:
           node-version: '22'
           cache: 'npm'
-          cache-dependency-path: relay-next/package-lock.json
+          cache-dependency-path: relay/package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -61,14 +61,14 @@ jobs:
           # to re-run CI once per missing secret to discover the next one.
           #
           # Names are authoritative per relay_data_model.md §9 and
-          # relay-next/README.md §2.2. APNS_KEY_<APP_ID> /
+          # relay/README.md §2.2. APNS_KEY_<APP_ID> /
           # FCM_SERVICE_ACCOUNT_<APP_ID> are deliberately NOT checked here:
           # they are per-app, dynamically-named secrets (one pair per app_id
           # in the app registry), so a fixed list can't enumerate them ahead
           # of time. If APP_REGISTRY_JSON is present, deploy will still fail
           # at runtime for any app whose platform-specific credential secret
           # is missing -- that failure happens inside the deployed Worker,
-          # not in this job, and is a known gap (see relay-next/README.md's
+          # not in this job, and is a known gap (see relay/README.md's
           # "What this document has not been validated against").
           missing=()
 
@@ -87,7 +87,7 @@ jobs:
               echo "  - $name"
             done
             echo ""
-            echo "See relay-next/README.md section 2.2 ('Required secrets') for what each one is and how to obtain it."
+            echo "See relay/README.md section 2.2 ('Required secrets') for what each one is and how to obtain it."
             echo "Deploy will NOT be attempted until all required secrets are present."
             exit 1
           fi
@@ -102,7 +102,7 @@ jobs:
       - validate-secrets
     defaults:
       run:
-        working-directory: relay-next
+        working-directory: relay
     environment: production
 
     steps:
@@ -112,7 +112,7 @@ jobs:
         with:
           node-version: '22'
           cache: 'npm'
-          cache-dependency-path: relay-next/package-lock.json
+          cache-dependency-path: relay/package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -144,7 +144,7 @@ jobs:
           # `wrangler deploy` exits 0 even when the script uploads but is
           # attached to no route/workers.dev target ("No targets deployed
           # for ..." in its own output) -- a real, hard-won gotcha from this
-          # project's Phase 3 work (see relay-next/README.md's
+          # project's Phase 3 work (see relay/README.md's
           # troubleshooting section). The deploy step above would not have
           # failed CI in that case, so re-run wrangler deploy here and grep
           # its output specifically for that phrase to turn a silent no-op
@@ -152,6 +152,6 @@ jobs:
           output=$(npx wrangler deploy 2>&1) || true
           echo "$output"
           if echo "$output" | grep -qi "No targets deployed"; then
-            echo "::error::wrangler deploy uploaded the script but attached it to no target (workers.dev or routes). Check workers_dev/routes in wrangler.toml -- see relay-next/README.md troubleshooting section."
+            echo "::error::wrangler deploy uploaded the script but attached it to no target (workers.dev or routes). Check workers_dev/routes in wrangler.toml -- see relay/README.md troubleshooting section."
             exit 1
           fi
