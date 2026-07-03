@@ -13,3 +13,11 @@ export {
   type MlKem768Keypair,
   type MlKem768Encapsulation,
 } from './mlkem.js';
+export {
+  hpkeGenerateKeyConfig,
+  hpkeSeal,
+  hpkeOpen,
+  type HpkeKeyConfig,
+  type HpkeEncapsulatedRequest,
+  type HpkeEncapsulatedResponse,
+} from './hpke.js';

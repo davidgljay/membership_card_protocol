@@ -38,8 +38,10 @@
   "dependencies": {
     "@membership-card-protocol/verifier": "file:../../../membership_card_verifier/packages/verifier",
     "@membership-card-protocol/verifier-ipfs-provider": "file:../../../membership_card_verifier/packages/verifier-ipfs-provider",
+    "@noble/ciphers": "^1.0.0",
     "@noble/hashes": "^1.7.2",
-    "@noble/post-quantum": "^0.5.4"
+    "@noble/post-quantum": "^0.5.4",
+    "hpke-js": "^1.8.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
