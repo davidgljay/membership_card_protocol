@@ -1,9 +1,10 @@
 # Notification Relay — Data Model Spec
 
-**Version:** 0.6 (draft)
-**Date:** 2026-07-02
-**Status:** Draft — describes the target serverless architecture; not yet implemented (Phase 2 of `plans/relay-serverless-migration-implementation-plan.md`). This revision is itself a draft pending user review and approval — see that plan's step 1.4.
-**Amends:** v0.5 — the device registry (§5) moves from a second Redis Cloud database to **Cloudflare KV**, accessed through Nitro's `storage()` abstraction (revised decision #2 in `plans/relay-serverless-migration-implementation-plan.md`). Trigger for this change: the free Redis Cloud tier, used for the test deployment, turns out to disable persistence by default — which is exactly wrong for this specific store, and there was no actual technical reason it needed to be Redis at all (v0.5's stated rationale was "reuse the same client/Lua infrastructure as the primary store," not a property only Redis has). KV's native per-key TTL also removes the need for the separate weekly pruning job (old §5.3/§5.4). §1 (Overview table, topology diagram), §2.6 (empty-store detection flag location), §5 (rewritten), §9 (environment variables), and §10.4 (clarified scope of the disk-write prohibition) are updated accordingly.
+**Version:** 0.7 (draft)
+**Date:** 2026-07-03
+**Status:** Draft — describes the target serverless architecture. Phase 2 (Core Build) and Phase 3 (Documentation & CI/CD) of `plans/relay-serverless-migration-implementation-plan.md` are complete and committed as of this revision.
+**Amends:** v0.6 — §2.5 updated with a real hibernation-eviction test result run against a deployed Worker (2026-07-03): the reconciliation scan's 5-minute `RECONCILIATION_CRON_SCHEDULE` default is confirmed adequate and is no longer a placeholder, though the test could not cleanly isolate the exact eviction boundary due to an apparent client-side interruption late in the run — see §2.5 for the full honest accounting.
+**Amends (v0.5 → v0.6, carried forward):** the device registry (§5) moves from a second Redis Cloud database to **Cloudflare KV**, accessed through Nitro's `storage()` abstraction (revised decision #2 in `plans/relay-serverless-migration-implementation-plan.md`). Trigger for this change: the free Redis Cloud tier, used for the test deployment, turns out to disable persistence by default — which is exactly wrong for this specific store, and there was no actual technical reason it needed to be Redis at all (v0.5's stated rationale was "reuse the same client/Lua infrastructure as the primary store," not a property only Redis has). KV's native per-key TTL also removes the need for the separate weekly pruning job (old §5.3/§5.4). §1 (Overview table, topology diagram), §2.6 (empty-store detection flag location), §5 (rewritten), §9 (environment variables), and §10.4 (clarified scope of the disk-write prohibition) are updated accordingly.
 **Amends (v0.4 → v0.5, carried forward):** replaces the single self-hosted Redis + SQLite-on-Docker-volume topology with a Redis Cloud primary (persistence-off) and a Cloudflare Durable-Object-backed connection layer, per `plans/relay-serverless-migration-strategic-plan.md`. §2.4 (Atomic Transitions), §2.5–2.6 (startup scans), and §7 (UUID state machine) reflect the authority split between Redis Cloud and Durable Objects; §10 specifies exactly which system is authoritative for which piece of state.
 
 ---
@@ -184,11 +185,37 @@ before accepting requests — a natural fit for a single long-running
 Node.js process. Cloudflare Workers have no equivalent "process startup"
 moment: Workers are invoked per-request with no persistent lifecycle to
 hook a one-time scan into. This scan is instead invoked by a **Cloudflare
-Cron Trigger** on a short, fixed interval (proposed: every 5 minutes;
-final interval to be set in Phase 2 against real Durable Object eviction
-behavior once that's been observed against production Cloudflare
-infrastructure — see the Phase 1 milestone summary's note on what
-hibernation-eviction timing could not be verified locally).
+Cron Trigger** on a short, fixed interval (5 minutes — **confirmed
+adequate 2026-07-03** against a real deployed Worker, see below; this is
+no longer a placeholder pending real-infrastructure data).
+
+**Real hibernation-eviction test result (2026-07-03):** a single open
+WebSocket to a deployed Durable Object (`relay-next/spike-do-ws/`,
+`test-hibernation.mjs`) was left idle and probed at increasing intervals.
+It survived cleanly through 1, 2, 5, 10, 20, and 30 minutes idle (each
+probe confirmed a message actually arrived on the still-open socket, not
+just that the socket object was present). The run's later checkpoints are
+harder to interpret cleanly: the client process itself showed a ~6-minute
+scheduling gap around the 45-minute mark (that checkpoint fired at 51.2
+minutes of connection age instead of 45, consistent with the test client
+machine being suspended or heavily throttled around that time, not a
+server-side event) — it still passed once it ran. The socket then closed
+abnormally (code 1006, no clean close handshake) about one minute later,
+at 52.3 minutes. Because a client-side interruption (e.g. the client
+machine sleeping) would independently sever the underlying TCP connection
+regardless of what Cloudflare's own eviction policy does, this one run
+cannot cleanly distinguish "Cloudflare evicted the DO around 52 minutes"
+from "the test client's own disconnection caused the close" — both are
+consistent with the log. **What this run does establish without
+ambiguity: hibernation reliably holds a connection open for at least 30
+minutes of genuine idle time**, comfortably longer than the 5-minute
+reconciliation interval needs to be a safe backstop regardless of the
+exact upper bound. No change to `RECONCILIATION_CRON_SCHEDULE`'s 5-minute
+default is warranted by this data — if anything it confirms 5 minutes is
+conservative, not that it needs tuning tighter or looser. A longer,
+multi-run test (ideally from infrastructure that can't itself sleep mid-
+test) would be needed to pin down a precise eviction boundary, but no
+part of the current design depends on knowing that exact number.
 
 The scan itself is unchanged: a Redis `SCAN` cursor loop with pattern
 `uuid:*` (`COUNT` hint of 100, not `KEYS *`, to avoid blocking Redis) over

@@ -87,9 +87,10 @@ Covers, per the task brief's explicit checklist:
 The README closes with an explicit "What this document has not been
 validated against" section — no real Redis Cloud database connected, no
 real `wrangler deploy` of the actual `relay-next` Worker (as opposed to the
-Phase 1 spike) performed, real DO hibernation-eviction timing still
-unmeasured, and the document itself not yet followed end-to-end by anyone
-but its author. This matches the plan's own "done when" bar for 3.1
+Phase 1 spike) performed, and the document itself not yet followed
+end-to-end by anyone but its author. (Real DO hibernation-eviction timing,
+listed as unmeasured when this document was first drafted, was resolved
+2026-07-03 — see the update below.) This matches the plan's own "done when" bar for 3.1
 ("gets someone to a working deployment without needing to ask a question
 the document doesn't already answer") as an aspiration the document is
 written to meet, not as a claim that bar has been independently confirmed
@@ -225,16 +226,18 @@ to done:
    primary-database checklist item is still unchecked. This is a
    prerequisite for trusting the storage layer beyond unit-test coverage.
 
-2. **Real Cloudflare DO hibernation-eviction timing.** Still outstanding.
-   `relay-next/spike-do-ws/test-hibernation.mjs` exists and is designed to
-   run against a real deployed Worker over 30–120+ minute checkpoints — a
-   repo-wide search in this session (`find ... -iname "*hibernation*"`)
-   found only the script itself, no results log or report file anywhere in
-   the repository. `wrangler.toml`'s `RECONCILIATION_CRON_SCHEDULE` (and
-   the matching `[triggers]` cron expression) remain the 5-minute
-   placeholder default, with no empirical basis yet. This directly tunes a
-   production configuration value and should be resolved before the
-   placeholder is trusted at real scale.
+2. **Real Cloudflare DO hibernation-eviction timing — resolved 2026-07-03,
+   after this document was first drafted.** `test-hibernation.mjs` was run
+   against the real deployed spike Worker: confirmed clean survival through
+   30 minutes of genuine idle time; later checkpoints are confounded by an
+   apparent client-side interruption (a ~6-minute scheduling gap in the
+   test client, shortly before an abnormal-closure at ~52 minutes), so the
+   exact eviction boundary isn't cleanly pinned down — but nothing in the
+   design needs that exact number. `RECONCILIATION_CRON_SCHEDULE`'s
+   5-minute default is confirmed comfortably adequate (5 minutes vs. 30+
+   confirmed-safe minutes) and was left unchanged. Full writeup:
+   `specs/object_specs/relay_data_model.md` §2.5 (v0.7) and
+   `relay-next/spike-do-ws/README.md`.
 
 3. **Docker retirement confirmation (this phase's 3.3).** The exact file
    list is recorded in

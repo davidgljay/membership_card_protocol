@@ -114,8 +114,24 @@ See the Phase 1 milestone summary
 honest accounting. Short version: connection accept, message echo, and
 DO-instance persistence *across separate `wrangler dev` HTTP requests*
 were confirmed locally via Miniflare (see the manual test transcript in
-that summary). True hibernation-eviction timing under Cloudflare's real
-infrastructure, multi-colo behavior, and cost/billing behavior are
-production characteristics that cannot be verified against Miniflare and
-are not claimed as validated here — Miniflare simulates the API surface,
-not Cloudflare's actual eviction scheduler.
+that summary). Multi-colo behavior and cost/billing behavior remain
+unverified — Miniflare/local testing can't speak to either.
+
+**Update 2026-07-03 — real hibernation-eviction test run.** This spike
+was deployed to a real Cloudflare account and probed with
+`test-hibernation.mjs` (a single WebSocket left idle, checked at
+increasing intervals). Result: the connection survived cleanly through
+30 minutes of genuine idle time (each checkpoint confirmed a message
+actually arrived on the still-open socket). The run's later checkpoints
+are confounded by an apparent client-side interruption (the test
+machine's own process showed a ~6-minute scheduling gap right before the
+connection eventually closed at ~52 minutes with an abnormal-closure
+code), so this run cannot cleanly attribute that specific close to
+Cloudflare's eviction policy versus the test client itself dropping the
+connection. See `specs/object_specs/relay_data_model.md` §2.5 for the
+full writeup. Net effect: "at least 30 minutes, confirmed" is solid;
+pinning down an exact eviction boundary would need a longer, repeated
+test from infrastructure that can't itself sleep mid-test — not
+currently needed, since nothing in the design depends on that exact
+number, only on the reconciliation scan interval being comfortably
+shorter than it (5 minutes vs. 30+ confirmed minutes).

@@ -1,7 +1,7 @@
 # Relay Serverless Migration — Phase 2 Milestone Summary
 
 **Date:** 2026-07-02
-**Status:** Core build complete and committed (2.1–2.6, 2.8). One spec-vs-code divergence found and fixed during this review. Three items remain honestly open: Redis Cloud staging credentials, real Cloudflare DO hibernation-eviction timing, and a concurrently-running wallet-service security fix whose commit status is independent of this phase's work.
+**Status:** Core build complete and committed (2.1–2.6, 2.8). One spec-vs-code divergence found and fixed during this review. Real Cloudflare DO hibernation-eviction timing was resolved 2026-07-03 (see below). Two items remain honestly open: Redis Cloud staging credentials, and a wallet-service security fix (since landed separately at `ea7ce3b1`, `85bb3eea` — see the Phase 3 summary and later commits for its own status).
 
 ---
 
@@ -71,7 +71,7 @@ Still pending. `relay-next/PROVISIONING.md`'s checklist item for creating the pr
 
 ### Real Cloudflare DO hibernation-eviction timing
 
-Still outstanding. The Phase 1 spike's manual live-idle test script (`relay-next/spike-do-ws/test-hibernation.mjs`) exists and is designed to run against a real deployed Worker over 30–120+ minute checkpoints, but no report or log file from an actual run was found anywhere in the repository — it appears to remain a script that has not yet been executed against a live account, or if it was, no output was captured. `wrangler.toml`'s `RECONCILIATION_CRON_SCHEDULE` is still the 5-minute placeholder default, explicitly flagged in that file's own comment as pending real timing data (relay_data_model.md §2.5, §4.4, §9). This should be checked again before Phase 3, since it directly tunes a production configuration value that currently has no empirical basis.
+**Resolved 2026-07-03**, after this document was first drafted. `test-hibernation.mjs` was run against the real deployed spike Worker: the connection survived cleanly through 30 minutes of confirmed idle time (each checkpoint verified a message actually arrived on the still-open socket). The run's checkpoints past that point are confounded by an apparent client-side interruption (a ~6-minute scheduling gap in the test client itself, immediately preceding the eventual abnormal-closure at ~52 minutes) — so this run can't cleanly attribute that specific close to Cloudflare's eviction policy versus the test client dropping the connection. Full writeup in `specs/object_specs/relay_data_model.md` §2.5 (v0.7) and `relay-next/spike-do-ws/README.md`. Net conclusion: `RECONCILIATION_CRON_SCHEDULE`'s 5-minute default is confirmed adequate (comfortably shorter than the 30+ confirmed-safe minutes) and is no longer a placeholder — no config change was warranted by this result.
 
 ### `build:cloudflare` sandbox EPERM quirk
 
@@ -101,7 +101,7 @@ The "7 tsc --noEmit errors" tracked earlier in this phase were resolved incremen
 | 2.8 Phase 2 milestone review | This document |
 | SSE/WS delivery-branching fix (this review) | Done, committed (`b0bda1b0`) |
 | Redis Cloud staging validation | **Not done** — no real credentials provisioned |
-| Real DO hibernation-eviction timing | **Not done** — script exists, no live-run report found; 5-minute cron default remains a placeholder |
+| Real DO hibernation-eviction timing | **Done 2026-07-03** — confirmed safe through 30+ minutes idle; 5-minute cron default validated, not changed |
 
 ---
 
