@@ -1,0 +1,157 @@
+name: Relay Deploy
+
+# Production branch is `main` (confirmed via `git branch`/`git log` — this
+# repo has no separate release/production branch; the wallet-service CI
+# workflow (wallet-service-ci.yml) also treats pushes as the trigger signal
+# with no branch filter of its own, so this is consistent with existing
+# convention).
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'relay-next/**'
+      - '.github/workflows/relay-deploy.yml'
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: relay-next
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: relay-next/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test (plain-Node suite)
+        run: npm test
+
+      - name: Test (Durable Object suite, real workerd via vitest-pool-workers)
+        run: npm run test:do
+
+  validate-secrets:
+    name: Validate required secrets
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Check required secrets are present
+        env:
+          REDIS_PRIMARY_URL: ${{ secrets.REDIS_PRIMARY_URL }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          RELAY_ID: ${{ secrets.RELAY_ID }}
+          INTERNAL_API_SECRET: ${{ secrets.INTERNAL_API_SECRET }}
+          APP_REGISTRY_JSON: ${{ secrets.APP_REGISTRY_JSON }}
+        run: |
+          # Fails loudly and lists every missing secret in one pass (rather
+          # than stopping at the first) so a first-time setup doesn't have
+          # to re-run CI once per missing secret to discover the next one.
+          #
+          # Names are authoritative per relay_data_model.md §9 and
+          # relay-next/README.md §2.2. APNS_KEY_<APP_ID> /
+          # FCM_SERVICE_ACCOUNT_<APP_ID> are deliberately NOT checked here:
+          # they are per-app, dynamically-named secrets (one pair per app_id
+          # in the app registry), so a fixed list can't enumerate them ahead
+          # of time. If APP_REGISTRY_JSON is present, deploy will still fail
+          # at runtime for any app whose platform-specific credential secret
+          # is missing -- that failure happens inside the deployed Worker,
+          # not in this job, and is a known gap (see relay-next/README.md's
+          # "What this document has not been validated against").
+          missing=()
+
+          [ -z "$REDIS_PRIMARY_URL" ] && missing+=("REDIS_PRIMARY_URL")
+          [ -z "$CLOUDFLARE_API_TOKEN" ] && missing+=("CLOUDFLARE_API_TOKEN")
+          [ -z "$CLOUDFLARE_ACCOUNT_ID" ] && missing+=("CLOUDFLARE_ACCOUNT_ID")
+          [ -z "$RELAY_ID" ] && missing+=("RELAY_ID")
+          [ -z "$INTERNAL_API_SECRET" ] && missing+=("INTERNAL_API_SECRET")
+          [ -z "$APP_REGISTRY_JSON" ] && missing+=("APP_REGISTRY_JSON")
+
+          if [ ${#missing[@]} -ne 0 ]; then
+            echo "::error::Missing required secret(s) for relay deploy: ${missing[*]}"
+            echo ""
+            echo "The following required secrets are not configured in this repository's GitHub Actions secrets:"
+            for name in "${missing[@]}"; do
+              echo "  - $name"
+            done
+            echo ""
+            echo "See relay-next/README.md section 2.2 ('Required secrets') for what each one is and how to obtain it."
+            echo "Deploy will NOT be attempted until all required secrets are present."
+            exit 1
+          fi
+
+          echo "All required secrets are present."
+
+  deploy:
+    name: Deploy to Cloudflare
+    runs-on: ubuntu-latest
+    needs:
+      - test
+      - validate-secrets
+    defaults:
+      run:
+        working-directory: relay-next
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: relay-next/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (Cloudflare preset)
+        run: npm run build:cloudflare
+
+      - name: Set runtime secrets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          echo "${{ secrets.REDIS_PRIMARY_URL }}" | npx wrangler secret put REDIS_PRIMARY_URL
+          echo "${{ secrets.RELAY_ID }}" | npx wrangler secret put RELAY_ID
+          echo "${{ secrets.INTERNAL_API_SECRET }}" | npx wrangler secret put INTERNAL_API_SECRET
+          echo "${{ secrets.APP_REGISTRY_JSON }}" | npx wrangler secret put APP_REGISTRY_JSON
+
+      - name: Deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler deploy
+
+      - name: Warn if deploy attached to no target
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          # `wrangler deploy` exits 0 even when the script uploads but is
+          # attached to no route/workers.dev target ("No targets deployed
+          # for ..." in its own output) -- a real, hard-won gotcha from this
+          # project's Phase 3 work (see relay-next/README.md's
+          # troubleshooting section). The deploy step above would not have
+          # failed CI in that case, so re-run wrangler deploy here and grep
+          # its output specifically for that phrase to turn a silent no-op
+          # into a loud CI failure.
+          output=$(npx wrangler deploy 2>&1) || true
+          echo "$output"
+          if echo "$output" | grep -qi "No targets deployed"; then
+            echo "::error::wrangler deploy uploaded the script but attached it to no target (workers.dev or routes). Check workers_dev/routes in wrangler.toml -- see relay-next/README.md troubleshooting section."
+            exit 1
+          fi
