@@ -46,6 +46,9 @@ async function waitForHealth(baseUrl: string, timeoutMs: number): Promise<void> 
 
 export async function startHttpServerHarness(opts: {
   appRegistryFile: { apps: unknown[] };
+  obliviousTargetsFile?: { targets: unknown[] };
+  /** Extra PEM certs to trust in the child process (e.g. an oblivious-target stub's self-signed cert). */
+  extraCaCertPems?: string[];
 }): Promise<HttpServerHarness> {
   if (!existsSync(outputEntry)) {
     throw new Error(
@@ -58,6 +61,16 @@ export async function startHttpServerHarness(opts: {
   const tmpRoot = mkdtempSync(path.join(tmpdir(), 'relay-integration-'));
   const kvDir = path.join(tmpRoot, 'device-registry');
   const appRegistryPath = path.join(tmpRoot, 'app-registry.json');
+  // client-sdk implementation plan Step 1.4b: same node-server
+  // (filesystem path) vs. cloudflare (inline JSON) split as
+  // APP_REGISTRY_PATH/APP_REGISTRY_JSON — see
+  // server/utils/oblivious-targets.ts's loadObliviousTargets.
+  const obliviousTargetsPath = path.join(tmpRoot, 'oblivious-targets.json');
+  writeFileSync(
+    obliviousTargetsPath,
+    JSON.stringify(opts.obliviousTargetsFile ?? { targets: [] }),
+    'utf-8'
+  );
   // node-server reads APP_REGISTRY_PATH as a filesystem path
   // (app-registry.ts's loadAppRegistry) — unlike the cloudflare preset's
   // APP_REGISTRY_JSON inline-string path, since node-server genuinely has
@@ -76,7 +89,11 @@ export async function startHttpServerHarness(opts: {
   // do to trust an internal/private CA in a real deployment, not a
   // validation bypass.
   const caCertPath = path.join(tmpRoot, 'test-redis-ca.pem');
-  writeFileSync(caCertPath, redisServer.certPem, 'utf-8');
+  writeFileSync(
+    caCertPath,
+    [redisServer.certPem, ...(opts.extraCaCertPems ?? [])].join('\n'),
+    'utf-8'
+  );
 
   const child: ChildProcess = spawn(
     process.execPath,
@@ -95,6 +112,7 @@ export async function startHttpServerHarness(opts: {
         REDIS_PRIMARY_URL: `rediss://127.0.0.1:${redisServer.port}`,
         NODE_EXTRA_CA_CERTS: caCertPath,
         APP_REGISTRY_PATH: appRegistryPath,
+        OBLIVIOUS_TARGETS_PATH: obliviousTargetsPath,
         DEV_SCHEDULER_KV_DIR: kvDir,
         DISABLE_DEV_SCHEDULER: 'true', // integration tests trigger reconciliation explicitly, not on a timer
         RELAY_ID: 'test-relay',
