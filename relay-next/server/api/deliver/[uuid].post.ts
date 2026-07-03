@@ -12,16 +12,30 @@
 // Delivery priority per relay.md §7.2 step 7: SSE (device_credential-keyed
 // DeviceChannel DO) first, then WebSocket (uuid-keyed UuidConnection DO),
 // then silent push.
+//
+// Staggered-delete scheduling differs by channel (§7.2 step 7, verbatim):
+//   - SSE:  "Do not remove from message store yet — wait for POST /ack."
+//           No delete-queue enqueue happens here; server/api/ack.post.ts
+//           enqueues it once the device explicitly acks.
+//   - WS:   "forward blob. Schedule staggered delete on delivery."
+//           The delete-queue enqueue happens immediately, right here, as
+//           part of this same request — there is no separate ack step for
+//           the WS channel.
+// Both rules are implemented in do-client.ts's attemptLiveDelivery(), which
+// this handler delegates to so the branching logic has a single, tested
+// home (see server/do/live-delivery.do-test.ts).
 
 import { readBody, type H3Event } from 'h3';
 import { relayError } from '../../utils/http-errors';
 import { createRedisClientForRequest } from '../../utils/redis/client-factory';
 import { UuidStore } from '../../utils/redis/uuid-store';
 import { MessageStore } from '../../utils/redis/message-store';
+import { DeleteQueue } from '../../utils/redis/delete-queue';
 import { isValidUuidV4, nowIso } from '../../utils/ids';
-import { deliverToDeviceChannel, deliverToUuidConnection } from '../../utils/do-client';
+import { attemptLiveDelivery } from '../../utils/do-client';
 import { dispatchPush } from '../../utils/push/dispatch';
 import { loadAppRegistry } from '../../utils/app-registry';
+import { getEnvInt } from '../../utils/env';
 
 interface DeliverBody {
   blob?: string;
@@ -84,16 +98,18 @@ export default defineEventHandler(async (event: H3Event) => {
     }
 
     // Step 2 (DO check — happens ONLY after step 1 durably succeeded, per
-    // §10.3's explicit ordering): try SSE first, then WS, then push.
+    // §10.3's explicit ordering): try SSE first, then WS, then push. The
+    // WS branch additionally schedules the staggered delete immediately on
+    // delivery (§7.2 step 7); the SSE branch does not (waits for POST
+    // /ack instead) — see attemptLiveDelivery's doc comment in do-client.ts.
     const message = { uuid, blob: body.blob };
+    const maxDelaySeconds = getEnvInt(event, 'MAX_DELETE_DELAY_SECONDS', 21_600);
+    const deleteQueue = new DeleteQueue(redis, maxDelaySeconds);
 
-    const sseResult = await deliverToDeviceChannel(event, record.device_credential, message);
-    if (sseResult.delivered) {
-      return {};
-    }
-
-    const wsResult = await deliverToUuidConnection(event, uuid, message);
-    if (wsResult.delivered) {
+    const liveResult = await attemptLiveDelivery(event, uuid, record, message, async () => {
+      await deleteQueue.enqueue(record.wallet_base_url, uuid, Math.floor(Date.now() / 1000));
+    });
+    if (liveResult.delivered) {
       return {};
     }
 

@@ -15,6 +15,7 @@
 // socket could exist).
 
 import type { H3Event } from 'h3';
+import type { UuidRecord } from './redis/uuid-store';
 
 interface CloudflareDoEnv {
   UUID_CONNECTION?: { idFromName(name: string): unknown; get(id: unknown): { fetch(req: Request): Promise<Response> } };
@@ -76,4 +77,57 @@ export async function deliverToDeviceChannel(
     })
   );
   return { delivered: res.ok };
+}
+
+export type LiveDeliveryOutcome =
+  | { channel: 'sse'; delivered: true }
+  | { channel: 'ws'; delivered: true }
+  | { channel: 'none'; delivered: false };
+
+/**
+ * Attempts live delivery via the two Durable-Object-backed channels, in
+ * the priority order relay.md §7.2 step 7 specifies (SSE, then WebSocket),
+ * and applies that same step's differing staggered-delete-scheduling rule
+ * for each channel:
+ *
+ *   - SSE: "Do not remove from message store yet — wait for POST /ack."
+ *     i.e. the staggered delete-queue enqueue must NOT happen here; it
+ *     happens later, only if/when the device calls POST /ack (relay.md
+ *     §7.6, implemented in server/api/ack.post.ts).
+ *   - WebSocket: "forward blob. Schedule staggered delete on delivery."
+ *     i.e. the staggered delete-queue enqueue MUST happen here,
+ *     immediately, as part of this same delivery — there is no separate
+ *     ack step for the WS channel.
+ *
+ * `enqueueDelete` is injected (rather than this function constructing its
+ * own DeleteQueue) so callers can supply the real Redis-backed queue in
+ * production (server/api/deliver/[uuid].post.ts) while tests can supply a
+ * spy — see server/do/live-delivery.do-test.ts, which asserts against real
+ * DO stubs (workerd) that the WS branch calls this callback and the SSE
+ * branch does not, rather than only unit-testing the branch condition in
+ * isolation.
+ */
+export async function attemptLiveDelivery(
+  event: H3Event,
+  uuid: string,
+  record: Pick<UuidRecord, 'device_credential' | 'wallet_base_url'>,
+  message: { uuid: string; blob: string },
+  enqueueDelete: () => Promise<void>
+): Promise<LiveDeliveryOutcome> {
+  const sseResult = await deliverToDeviceChannel(event, record.device_credential, message);
+  if (sseResult.delivered) {
+    // relay.md §7.2 step 7, SSE branch: no delete-queue enqueue here.
+    // Staggered wallet clearance waits for POST /ack.
+    return { channel: 'sse', delivered: true };
+  }
+
+  const wsResult = await deliverToUuidConnection(event, uuid, message);
+  if (wsResult.delivered) {
+    // relay.md §7.2 step 7, WebSocket branch: "Schedule staggered delete
+    // on delivery" — enqueue immediately, unlike the SSE branch above.
+    await enqueueDelete();
+    return { channel: 'ws', delivered: true };
+  }
+
+  return { channel: 'none', delivered: false };
 }
