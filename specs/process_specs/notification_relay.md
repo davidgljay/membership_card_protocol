@@ -1,8 +1,9 @@
 # Notification Relay — Process Spec
 
-**Version:** 0.8 (draft)
-**Date:** 2026-07-02
+**Version:** 0.9 (draft)
+**Date:** 2026-07-03
 **Status:** Draft
+**Changes from v0.8:** `DELETE /cards/{card_hash}/subcards/{subcard_hash}` (wallet-service-local deregistration) previously had zero authentication — anything that knew a `card_hash`/`subcard_hash` pair could wipe a legitimate device's UUID pool. It now requires the same category of signed envelope as UUID registration, proving control of the subcard's private key (§Multi-Device Support "Deregistration"). Also, a v0.8 implementation of UUID-registration verification had additionally rejected registration when the sub-card's on-chain `SubCardEntry.active` flag was `false`; this spec now states explicitly that registration (and deregistration) eligibility must never depend on that flag — on-chain revocation (`subcard_creation_policy.md`'s 8xx/9xx flow) and wallet-service-local deregistration are different mechanisms serving different purposes, and conflating them would make a merely locally-deregistered (e.g. reinstalled-app) sub-card unable to resume receiving messages. See §Multi-Device Support "Deregistration" for the full statement of this distinction.
 **Changes from v0.7:** Process 1 (UUID Registration) step 6 previously registered a subcard's UUID pool with the wallet service via an unauthenticated `{ uuids: [...] }` body — anything that knew a `card_hash`/`subcard_hash` pair could apparently register UUIDs against it without proving control of the corresponding private key. The wallet registration call now requires a signed envelope proving subcard ownership (§Process 1, "Wallet registration"). Registration Privacy is also clarified to name Tor (or another anonymizing transport) as the expected mechanism for wallet registration sessions, rather than an opt-in upgrade for "users with strong privacy requirements" only — and explicitly restates, since it came up during spec review, that this remains a **per-card** session even when a device holds multiple cards: batching multiple cards' registrations into a single session or message was considered and rejected, because it would let a wallet service that happens to service more than one of a device's cards directly infer their co-ownership from the message content — a correlation that anonymizing transport does not prevent, since it hides the sender's network identity, not the payload's contents.
 **Changes from v0.6:** Removed UMBRAL proxy re-encryption from the wallet's message delivery path (see `process_specs/message_routing.md` v0.4). The sender now encrypts independently per subcard before the routing envelope reaches the wallet service; the wallet delivers each already-encrypted envelope to its target subcard's UUID pool without any transform step.
 **Changes from v0.5:** UUID pool model changed from device_key hash to per-subcard array. Multi-device support is now handled through subcards: each app instance on each device registers a distinct subcard, and the wallet delivers a separately-addressed blob per subcard. The `device_key` concept is removed from wallet-side UUID registration. UUIDs are a single untyped array per subcard (no delivery/websocket split at the wallet layer — the device allocates its UUID pool between delivery and WebSocket use internally). Wallet registration endpoint changes from `POST /cards/{card_hash}/devices/{device_key}/uuids` to `POST /cards/{card_hash}/subcards/{subcard_hash}/uuids`.
@@ -78,7 +79,46 @@ where `subcard_hash = keccak256(subcard_pubkey)`. The sender encrypts independen
 
 An app instance on two physical devices requires two subcards — one per device. The wallet treats them identically: separate UUID pools, separate delivery. There are no per-subcard re-encryption keys to manage.
 
-A device deregisters its subcard by calling `DELETE /cards/{card_hash}/subcards/{subcard_hash}`. Subcard revocation follows the standard sub-card revocation flow defined in `specs/process_specs/subcard_creation_policy.md`.
+### Deregistration
+
+A device deregisters its subcard's UUID pool from a wallet-service instance by calling `DELETE /cards/{card_hash}/subcards/{subcard_hash}`. This is a wallet-service-local bookkeeping action — it consumes every UUID currently registered for the subcard at that wallet service (app uninstall, device cleanup, key rotation, etc.). It is a **different mechanism, at a different layer, from on-chain sub-card revocation**, and the two must not be conflated:
+
+| | Wallet-service-local deregistration (this endpoint) | On-chain sub-card revocation |
+|---|---|---|
+| What it is | Emptying this wallet-service instance's UUID pool for the subcard | An 8xx/9xx revocation log entry, per `specs/process_specs/subcard_creation_policy.md` |
+| Who can do it | Whoever holds the subcard's private key (proven by the signed envelope below) | The user or application (8xx) or the trust-and-safety governance body (9xx), per `subcard_creation_policy.md` |
+| Effect on `SubCardEntry.active` | None — never read, never written | Sets it to `false` |
+| Effect on message deliverability | None beyond emptying this wallet service's pool — the subcard can re-register UUIDs at any time and resume normal delivery | The subcard is no longer a trusted identity in the protocol; this is a governance/trust decision, not a wallet-service delivery decision |
+| Reversible? | Yes, trivially — the device just registers new UUIDs (§Process 1) | Governed by `subcard_creation_policy.md`; not a wallet-service concern |
+
+**Deregistration must not affect message deliverability, and must not depend on or set any on-chain active/revocation flag.** A deregistered-then-re-registering subcard is fully functional: it can call `POST .../uuids` again immediately after `DELETE .../subcards/{subcard_hash}` and will receive messages normally. Symmetrically, UUID *registration* eligibility (§Process 1 step 7) never consults `SubCardEntry.active` either — a subcard that is genuinely revoked on-chain can still resolve its public key and register/deregister UUIDs at the wallet-service layer; the wallet service is not the enforcement point for on-chain revocation, and treating it as one would make a merely locally-deregistered (e.g. app-reinstalled) device indistinguishable from a genuinely revoked one, silently bricking the former.
+
+The request is a signed envelope, structurally identical to UUID registration (§Process 1 step 6) minus the `uuids` field, since deregistration carries no UUID list:
+
+```
+DELETE /cards/{card_hash}/subcards/{subcard_hash}
+Body:
+{
+  "payload": {
+    "card_hash":    "<on-chain registry address of the card — must match the path parameter>",
+    "subcard_hash": "<keccak256(subcard_pubkey) — must match the path parameter>",
+    "timestamp":    "<ISO 8601>",
+    "nonce":        "<32-byte random value, base64url — replay prevention>"
+  },
+  "signature": "<ML-DSA-44 signature over canonical RFC 8785 JSON of payload, signed by the subcard's private key, base64url>"
+}
+```
+
+Verification mirrors §Process 1 step 7 exactly:
+
+1. `payload.card_hash` and `payload.subcard_hash` must match the request path parameters.
+2. `payload.timestamp` must be within 5 minutes of the wallet service's current time (same window as UUID registration).
+3. The wallet service resolves `subcard_hash`'s registered public key from the subcard's on-chain registration (registry contract read → `sub_card_doc_cid` → IPFS fetch → `SubCardDocument.recipient_pubkey`, per `specs/subcards.md` §Step 5) — **without regard to `SubCardEntry.active`**.
+4. `keccak256(subcard_pubkey) == subcard_hash`.
+5. The ML-DSA-44 signature over the payload is valid.
+6. `payload.nonce` has not been used before for this `subcard_hash` (replay protection).
+
+If all checks pass, the wallet service marks every UUID currently registered for the subcard consumed and returns `204`. If any check fails, the request is rejected (400/401/403 depending on which check failed) and no UUIDs are consumed. A `404` is returned if this subcard was never registered with this wallet service at all.
 
 ---
 

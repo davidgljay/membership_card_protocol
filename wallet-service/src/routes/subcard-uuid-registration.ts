@@ -1,7 +1,7 @@
 /**
  * Request-orchestration logic for POST
  * /cards/{card_hash}/subcards/{subcard_hash}/uuids
- * (notification_relay.md v0.8 §Process 1 steps 6-8; security-audit
+ * (notification_relay.md v0.9 §Process 1 steps 6-8; security-audit
  * finding (a), implementation-plan.md §Step 2.7).
  *
  * Factored out of server/routes/.../uuids.post.ts so it's testable without
@@ -12,14 +12,19 @@
  * getRouterParam/readBody/etc., which aren't available under plain
  * vitest). The route handler is now a thin H3 adapter around
  * handleUuidRegistration below.
+ *
+ * See ../routes/subcard-deregistration.ts for the sibling DELETE flow,
+ * which shares this module's nonce table (server/db/subcard-action-nonces.ts,
+ * scoped by an `action` column) and the same resolveSubcardPubkey
+ * (../auth/subcard-uuid-signature.ts) — see that module's doc comment for
+ * why neither flow gates on SubCardEntry.active.
  */
 
 import type { Pool } from 'pg';
-import type { Hex } from 'viem';
 import { registerUuids } from '../../server/db/uuid-pools.js';
 import { findUnclearedMessagesForSubcard } from '../../server/db/messages.js';
 import { deliverMessage } from '../../server/utils/message-delivery.js';
-import { recordSubcardUuidNonceIfNew } from '../../server/db/subcard-uuid-nonces.js';
+import { recordSubcardActionNonceIfNew } from '../../server/db/subcard-action-nonces.js';
 import type { WalletServiceConfig } from '../config.js';
 import { verifyUuidRegistrationEnvelope, type UuidRegistrationEnvelope } from '../auth/subcard-uuid-signature.js';
 import type { SubcardRegistryClient } from '../chain/subcard-registry.js';
@@ -74,7 +79,7 @@ export type UuidRegistrationOutcome =
   | { ok: false; statusCode: 400 | 401 | 403; statusMessage: string };
 
 /**
- * Runs every check from notification_relay.md v0.8 §Process 1 steps 6-8
+ * Runs every check from notification_relay.md v0.9 §Process 1 steps 6-8
  * and, if they all pass, performs the original registration +
  * retransmission behavior. Pure of any H3/Nitro dependency — takes an
  * already-resolved Pool/config/registryClient so tests can inject
@@ -134,10 +139,10 @@ export async function handleUuidRegistration(params: {
     return { ok: false, statusCode: 401, statusMessage: `Invalid signed envelope: ${verification.reason}.` };
   }
 
-  // Replay protection: nonce, scoped per subcard_hash. Checked only after
-  // signature verification succeeds, so an attacker without a valid
-  // signature can't burn a legitimate future nonce via probing.
-  const nonceIsNew = await recordSubcardUuidNonceIfNew(pool, subcardHashParam as Hex, envelope.payload.nonce);
+  // Replay protection: nonce, scoped per (subcard_hash, action). Checked
+  // only after signature verification succeeds, so an attacker without a
+  // valid signature can't burn a legitimate future nonce via probing.
+  const nonceIsNew = await recordSubcardActionNonceIfNew(pool, subcardHashParam, 'register', envelope.payload.nonce);
   if (!nonceIsNew) {
     return { ok: false, statusCode: 401, statusMessage: 'nonce has already been used for this sub-card.' };
   }

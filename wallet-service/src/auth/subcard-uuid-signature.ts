@@ -1,8 +1,11 @@
 /**
- * Signed-envelope verification for POST
- * /cards/{card_hash}/subcards/{subcard_hash}/uuids
- * (notification_relay.md v0.8 §Process 1 steps 6-8; specs/subcards.md
- * §Step 5 for the on-chain/IPFS resolution chain).
+ * Signed-envelope verification for the two sub-card lifecycle endpoints
+ * that require proof of sub-card key control:
+ *   - POST   /cards/{card_hash}/subcards/{subcard_hash}/uuids   (registration)
+ *   - DELETE /cards/{card_hash}/subcards/{subcard_hash}         (deregistration)
+ * (notification_relay.md v0.9 §Process 1 steps 6-8, §Multi-Device Support
+ * "Deregistration"; specs/subcards.md §Step 5 for the on-chain/IPFS
+ * resolution chain).
  *
  * Structurally the same shape as verifyPeerWalletSignature
  * (../auth/peer-wallet-signature.ts) and binding.ts's cardholder check:
@@ -21,6 +24,13 @@
  * it's what actually ties the resolved key back to the hash the caller
  * claimed authority over, the same way the on-request pubkey is checked
  * in the peer/cardholder flows.
+ *
+ * resolveSubcardPubkey is shared by both registration and deregistration
+ * verification (verifyUuidRegistrationEnvelope below and
+ * verifySubcardDeregistrationEnvelope in
+ * ../auth/subcard-deregistration-signature.ts) — the pubkey-resolution
+ * and binding-check logic is identical for both; only the payload shape
+ * and what happens after verification succeeds differ.
  */
 
 import { ml_dsa44 } from '@noble/post-quantum/ml-dsa.js';
@@ -51,16 +61,46 @@ export type ResolveSubcardPubkeyResult =
 /**
  * Resolves subcard_hash's registered public key via the Arbitrum registry
  * and IPFS (specs/subcards.md §Step 5). Does NOT check
- * keccak256(pubkey) == subcard_hash — that's verifyUuidRegistrationEnvelope's
- * job, kept separate so resolution failures and binding-mismatch failures
- * are distinguishable if a caller wants to (the route handler currently
- * folds both into the same rejection, per notification_relay.md v0.8).
+ * keccak256(pubkey) == subcard_hash — that's the caller's job (see
+ * verifyUuidRegistrationEnvelope below and
+ * verifySubcardDeregistrationEnvelope in
+ * ../auth/subcard-deregistration-signature.ts), kept separate so
+ * resolution failures and binding-mismatch failures are distinguishable
+ * if a caller wants to (both current callers fold both into the same
+ * rejection, per notification_relay.md v0.9).
  *
- * Rejects entries with active === false (deregistered sub-cards). The v0.8
- * spec text doesn't explicitly enumerate this as a rejection condition for
- * this endpoint, but registering UUIDs for a sub-card the chain says has
- * been deregistered is never correct — see the report for this as a
- * documented judgment call.
+ * Deliberately does NOT check SubCardEntry.active. An earlier version of
+ * this function rejected resolution when active === false, on the theory
+ * that a "deregistered" sub-card shouldn't be able to register UUIDs.
+ * That conflated two unrelated things:
+ *
+ *   - SubCardEntry.active (this field): an on-chain, cryptographic
+ *     revocation state, set only via the 8xx/9xx sub-card revocation flow
+ *     defined in specs/process_specs/subcard_creation_policy.md. It
+ *     answers "is this sub-card still a trusted, unrevoked identity in
+ *     the protocol?" — a governance/trust question.
+ *   - Wallet-service-local "deregistration" (DELETE
+ *     /cards/{card_hash}/subcards/{subcard_hash}): purely this
+ *     wallet-service instance's own UUID-pool bookkeeping (app uninstall,
+ *     device cleanup, or an authenticated request from the sub-card's own
+ *     holder). It never touches the chain and never sets `active` —
+ *     see ../routes/subcard-deregistration.ts.
+ *
+ * A sub-card can be wallet-service-deregistered (its UUID pool here is
+ * empty/consumed) while remaining fully `active` on-chain — that's the
+ * expected, common case, and message deliverability must be recoverable
+ * from it: the device re-registers UUIDs the next time it needs delivery,
+ * exactly as if it had never registered before (notification_relay.md
+ * v0.9 §Multi-Device Support "Deregistration"). Gating UUID registration
+ * on `active` would have made that recovery impossible to distinguish
+ * from genuine on-chain revocation, silently bricking any subcard whose
+ * device merely uninstalled and reinstalled the app. UUID-registration
+ * (and deregistration) eligibility is therefore keyed only on "does a
+ * valid signature resolve to the sub-card's on-chain public key" — never
+ * on `active`/revocation state. Nothing downstream of resolution
+ * currently inspects `active`, by design; a caller wanting to treat
+ * genuinely on-chain-revoked sub-cards differently would need its own
+ * explicit check against the resolved `SubCardEntry`, not a change here.
  */
 export async function resolveSubcardPubkey(
   config: WalletServiceConfig,
@@ -72,10 +112,6 @@ export async function resolveSubcardPubkey(
     entry = await registryClient.getSubCardEntry(subcardHash as Hex);
   } catch (err) {
     return { ok: false, reason: `on-chain lookup failed: ${String(err)}` };
-  }
-
-  if (!entry.active) {
-    return { ok: false, reason: 'sub-card is deregistered (SubCardEntry.active is false)' };
   }
 
   const cid = cidBytesToString(entry.sub_card_doc_cid);
@@ -96,9 +132,10 @@ export async function resolveSubcardPubkey(
 export type VerifyUuidEnvelopeResult = { ok: true } | { ok: false; reason: string };
 
 /**
- * Full verification per notification_relay.md v0.8 step 7: resolves the
- * sub-card's public key, confirms keccak256(subcard_pubkey) == subcard_hash,
- * and verifies the ML-DSA-44 signature over canonicalize(payload).
+ * Full verification per notification_relay.md v0.9 §Process 1 step 7:
+ * resolves the sub-card's public key, confirms
+ * keccak256(subcard_pubkey) == subcard_hash, and verifies the ML-DSA-44
+ * signature over canonicalize(payload).
  *
  * Does NOT check timestamp/nonce replay or path/payload param matching —
  * those are the route handler's job (server/routes/.../uuids.post.ts),

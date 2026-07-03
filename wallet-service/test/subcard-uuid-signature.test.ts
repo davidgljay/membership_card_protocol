@@ -78,14 +78,24 @@ describe('resolveSubcardPubkey', () => {
     vi.unstubAllGlobals();
   });
 
-  it('rejects a deregistered (inactive) sub-card', async () => {
+  it('resolves an on-chain-deregistered (inactive) sub-card just like an active one -- resolution does not gate on SubCardEntry.active', async () => {
+    // Correction to ea7ce3b1: on-chain `active` is a cryptographic
+    // revocation flag (subcard_creation_policy.md's 8xx/9xx flow), not a
+    // proxy for wallet-service-local UUID-pool bookkeeping. A subcard
+    // that is inactive on-chain must still be able to resolve its pubkey
+    // (and, at the route-handler layer, still be able to register/
+    // deregister UUIDs given a valid signature) -- see resolveSubcardPubkey's
+    // doc comment in src/auth/subcard-uuid-signature.ts.
     const sc = subcardKeys();
     const cid = new TextEncoder().encode('bafyTestCid');
     const registryClient = makeRegistryClient({ sub_card_doc_cid: cid, active: false });
     mockIpfsFetch(sc.pubkeyB64);
 
     const result = await resolveSubcardPubkey(CONFIG, sc.subcardHash, registryClient);
-    expect(result.ok).toBe(false);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.pubkeyB64).toBe(sc.pubkeyB64);
+    }
     vi.unstubAllGlobals();
   });
 
@@ -103,6 +113,24 @@ describe('verifyUuidRegistrationEnvelope', () => {
     const sc = subcardKeys();
     const cid = new TextEncoder().encode('bafyTestCid');
     const registryClient = makeRegistryClient({ sub_card_doc_cid: cid });
+    mockIpfsFetch(sc.pubkeyB64);
+
+    const payload = buildPayload({ subcard_hash: sc.subcardHash });
+    const envelope: UuidRegistrationEnvelope = { payload, signature: sign(payload, sc.secretKey) };
+
+    const result = await verifyUuidRegistrationEnvelope(CONFIG, envelope, registryClient);
+    expect(result.ok).toBe(true);
+    vi.unstubAllGlobals();
+  });
+
+  it('accepts a validly signed envelope for a sub-card that is inactive (deregistered) on-chain', async () => {
+    // Full-pipeline version of the resolveSubcardPubkey test above: a
+    // valid signature from an on-chain-inactive sub-card must still pass
+    // verification end to end. UUID registration eligibility depends only
+    // on proving key control, never on SubCardEntry.active.
+    const sc = subcardKeys();
+    const cid = new TextEncoder().encode('bafyTestCid');
+    const registryClient = makeRegistryClient({ sub_card_doc_cid: cid, active: false });
     mockIpfsFetch(sc.pubkeyB64);
 
     const payload = buildPayload({ subcard_hash: sc.subcardHash });

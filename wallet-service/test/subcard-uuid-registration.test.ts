@@ -112,6 +112,39 @@ describe('handleUuidRegistration (notification_relay.md v0.8 §POST .../uuids)',
     vi.unstubAllGlobals();
   });
 
+  it('accepts a validly signed request for a subcard that is inactive (deregistered) on-chain', async () => {
+    // Correction to ea7ce3b1: registration eligibility must not depend on
+    // SubCardEntry.active. A deregistered subcard (on-chain revocation,
+    // subcard_creation_policy.md's 8xx/9xx flow) is a different concept
+    // from wallet-service-local deregistration (DELETE .../subcards/{hash})
+    // and must still be able to register UUIDs given a valid signature --
+    // see resolveSubcardPubkey's doc comment in
+    // src/auth/subcard-uuid-signature.ts.
+    const sc = subcardKeys();
+    const cardHash = '0xtest-' + crypto.randomUUID();
+    const registryClient = makeRegistryClient(sc.pubkeyB64, { active: false });
+    const payload = buildPayload(cardHash, sc.subcardHash);
+    const rawBody = envelopeFor(payload, sc.secretKey);
+
+    const outcome = await handleUuidRegistration({
+      pool,
+      config: CONFIG,
+      cardHashParam: cardHash,
+      subcardHashParam: sc.subcardHash,
+      rawBody,
+      registryClient,
+    });
+
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(outcome.registeredCount).toBe(1);
+    }
+
+    const { rows } = await pool.query('SELECT uuid FROM uuid_pools WHERE card_hash = $1', [cardHash]);
+    expect(rows).toHaveLength(1);
+    vi.unstubAllGlobals();
+  });
+
   it('rejects a request with no signature field at all (old bare-array shape)', async () => {
     const sc = subcardKeys();
     const cardHash = '0xtest-' + crypto.randomUUID();
