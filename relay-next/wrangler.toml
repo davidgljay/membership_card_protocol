@@ -1,0 +1,40 @@
+name = "mcard-relay"
+main = "server/cloudflare-entry.ts"
+compatibility_date = "2026-07-02"
+compatibility_flags = ["nodejs_compat"]
+
+# Device registry — relay_data_model.md §5. Provisioned per PROVISIONING.md
+# §3 (binding name and namespace id already created — see that file).
+[[kv_namespaces]]
+binding = "mcard_relay"
+id = "cdf75d4cac1b416d81a8ea508ce49bf5"
+
+# DO-backed connection layer — relay_data_model.md §10, Phase 2 step 2.4.
+# One instance per UUID (GET /ws/{uuid}) and one per device_credential
+# (GET /sse), matching relay-next/spike-do-ws's proven pattern.
+[[durable_objects.bindings]]
+name = "UUID_CONNECTION"
+class_name = "UuidConnection"
+
+[[durable_objects.bindings]]
+name = "DEVICE_CHANNEL"
+class_name = "DeviceChannel"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["UuidConnection", "DeviceChannel"]
+
+# Reconciliation scan + delete-queue job trigger — relay_data_model.md
+# §2.5, §4.4, §9 (RECONCILIATION_CRON_SCHEDULE). 5-minute default is an
+# explicitly-flagged PLACEHOLDER pending the real hibernation-eviction
+# timing test (relay-next/spike-do-ws/test-hibernation.mjs, run separately
+# against a real Cloudflare account) — see the Phase 2 milestone summary.
+[triggers]
+crons = ["*/5 * * * *"]
+
+# Secrets (REDIS_PRIMARY_URL, APNS_KEY_<app_id>, FCM_SERVICE_ACCOUNT_<app_id>,
+# INTERNAL_API_SECRET, RELAY_ID) are wired via `wrangler secret put` per
+# PROVISIONING.md / the Phase 3 README — never committed here. Non-secret
+# vars (APP_REGISTRY_JSON — see server/utils/app-registry.ts's flagged
+# provisional-choice note) are set the same way for now, pending that gap's
+# resolution.
