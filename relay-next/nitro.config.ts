@@ -1,5 +1,12 @@
 import { defineNitroConfig } from 'nitropack/config';
 
+// Runtime preset detection for the storage() mount below. NITRO_PRESET is
+// the same env var package.json's build:cloudflare / build:node scripts set
+// (see comment below); default matches this file's own `preset` field.
+const isCloudflarePreset = (process.env.NITRO_PRESET ?? 'cloudflare-module').startsWith(
+  'cloudflare'
+);
+
 export default defineNitroConfig({
   // Default deployment target is Cloudflare Workers using the *module*
   // worker format (`cloudflare-module`, Nitro's stdName `cloudflare_workers`),
@@ -16,4 +23,28 @@ export default defineNitroConfig({
   srcDir: 'server',
   compatibilityDate: '2026-07-02',
   routeRules: {},
+
+  // Device registry storage mount (relay_data_model.md §5, Phase 2 step
+  // 2.2). Under `cloudflare`/`cloudflare-module`: unstorage's
+  // cloudflare-kv-binding driver, reading the `mcard_relay` binding
+  // (PROVISIONING.md — binding name/namespace id already provisioned).
+  // Under `node-server`: an unstorage `fs-lite` driver rooted at
+  // `.data/device-registry` for local dev persistence across restarts, with
+  // no Redis Cloud or Cloudflare credentials required for this store at all
+  // (§5's stated portability benefit). Tests construct their own in-memory
+  // `memory` driver directly rather than going through this mount — see
+  // server/utils/kv/device-registry.test.ts.
+  storage: isCloudflarePreset
+    ? {
+        device_registry: {
+          driver: 'cloudflare-kv-binding',
+          binding: 'mcard_relay',
+        },
+      }
+    : {
+        device_registry: {
+          driver: 'fs-lite',
+          base: './.data/device-registry',
+        },
+      },
 });
