@@ -1,7 +1,9 @@
 # Docker/Compose Retirement — Pending File List (Phase 3.3)
 
-**Status:** Proposed, NOT executed. No files listed below have been deleted
-or modified as part of this document being written.
+**Status:** Executed 2026-07-03, per the user's explicit confirmation. All
+three files listed below have been removed. `relay/README.md` has been
+rewritten to point to `relay-next/` as the supported deployment path,
+per the "What retiring these files would also require" section below.
 
 Per the implementation plan's explicit Clarification Checkpoint
 (`plans/relay-serverless-migration-implementation-plan.md`, "Before
