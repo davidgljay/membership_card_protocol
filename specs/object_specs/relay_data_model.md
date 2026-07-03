@@ -1,9 +1,10 @@
 # Notification Relay — Data Model Spec
 
-**Version:** 0.5 (draft)
+**Version:** 0.6 (draft)
 **Date:** 2026-07-02
 **Status:** Draft — describes the target serverless architecture; not yet implemented (Phase 2 of `plans/relay-serverless-migration-implementation-plan.md`). This revision is itself a draft pending user review and approval — see that plan's step 1.4.
-**Amends:** v0.4 — replaces the single self-hosted Redis + SQLite-on-Docker-volume topology with two Redis Cloud databases (one persistence-off, one persistence-on) and a Cloudflare Durable-Object-backed connection layer, per `plans/relay-serverless-migration-strategic-plan.md`. §1 (Overview), §2.4 (Atomic Transitions), §2.5–2.6 (startup scans), §5 (SQLite device registry — now Redis-backed), and §7 (UUID state machine) are updated to reflect the new authority split between Redis Cloud and Durable Objects. A new §10 specifies exactly which system is authoritative for which piece of state, since Phase 1 review found this needed to be explicit rather than left implicit. The Docker Compose topology diagram is replaced by §1.1's serverless topology diagram.
+**Amends:** v0.5 — the device registry (§5) moves from a second Redis Cloud database to **Cloudflare KV**, accessed through Nitro's `storage()` abstraction (revised decision #2 in `plans/relay-serverless-migration-implementation-plan.md`). Trigger for this change: the free Redis Cloud tier, used for the test deployment, turns out to disable persistence by default — which is exactly wrong for this specific store, and there was no actual technical reason it needed to be Redis at all (v0.5's stated rationale was "reuse the same client/Lua infrastructure as the primary store," not a property only Redis has). KV's native per-key TTL also removes the need for the separate weekly pruning job (old §5.3/§5.4). §1 (Overview table, topology diagram), §2.6 (empty-store detection flag location), §5 (rewritten), §9 (environment variables), and §10.4 (clarified scope of the disk-write prohibition) are updated accordingly.
+**Amends (v0.4 → v0.5, carried forward):** replaces the single self-hosted Redis + SQLite-on-Docker-volume topology with a Redis Cloud primary (persistence-off) and a Cloudflare Durable-Object-backed connection layer, per `plans/relay-serverless-migration-strategic-plan.md`. §2.4 (Atomic Transitions), §2.5–2.6 (startup scans), and §7 (UUID state machine) reflect the authority split between Redis Cloud and Durable Objects; §10 specifies exactly which system is authoritative for which piece of state.
 
 ---
 
@@ -20,10 +21,11 @@
    - 2.6 [Empty-Store Detection](#26-empty-store-detection)
 3. [Redis Cloud (Primary) — Message Store](#3-redis-cloud-primary--message-store)
 4. [Redis Cloud (Primary) — Pending Delete Queue](#4-redis-cloud-primary--pending-delete-queue)
-5. [Redis Cloud (Secondary) — Device Registry](#5-redis-cloud-secondary--device-registry)
+5. [Cloudflare KV — Device Registry](#5-cloudflare-kv--device-registry)
    - 5.1 [Key Schema](#51-key-schema)
-   - 5.2 [Operations](#52-operations)
-   - 5.3 [Pruning](#53-pruning)
+   - 5.2 [Fields](#52-fields)
+   - 5.3 [Operations](#53-operations)
+   - 5.4 [Retention](#54-retention)
 6. [App Registry Config](#6-app-registry-config)
    - 6.1 [JSON Schema](#61-json-schema)
    - 6.2 [Example](#62-example)
@@ -45,12 +47,14 @@ The relay uses **three** storage/state systems with deliberately different durab
 | Store | Technology | Durability | Data stored | Why |
 |---|---|---|---|---|
 | Primary Redis Cloud database | Redis Cloud, RDB and AOF both explicitly disabled | RAM only — cleared on database restart | UUID records (`uuid:*`), device credentials (`cred:*`), message blobs (`messages:*`), pending delete queue (`pending_deletes`) | UUID and credential associations must never touch disk (unchanged invariant from v0.4 — see `plans/relay-strategic-plan.md`) |
-| Secondary Redis Cloud database | Redis Cloud, persistence **enabled** | Durable — survives primary database resets | Device registry: push token → app, last seen | Required for re-registration notification after the primary database resets. Replaces the SQLite-on-Docker-volume store from v0.4 — see §5. |
+| Cloudflare KV (device registry) | Cloudflare KV, accessed via Nitro's `storage()` abstraction | Durable — platform default; survives primary database resets | Device registry: push token → app, last seen, with a native per-key TTL (90 days) | Required for re-registration notification after the primary database resets. Replaces the second Redis Cloud database from v0.5 (which itself replaced the SQLite-on-Docker-volume store from v0.4) — see §5. |
 | Durable Object (live connections only) | Cloudflare Durable Objects, one instance per connection key, in-memory instance state and `WebSocket.serializeAttachment` only — **never DO storage** | Ephemeral — gone on hibernation-context loss beyond what `serializeAttachment` preserves, and gone entirely on eviction with no reconnect | Which specific edge location currently holds an open `GET /ws/{uuid}` or `GET /sse` socket, for as long as that socket is open | Durable Object *storage* is SQLite-backed and disk-resident with point-in-time recovery on by default — using it for UUID/credential-linked data would violate the same invariant Redis persistence-off protects. In-memory DO state carries no such risk because it is never written to disk by the platform. See §10 for the precise authority split this creates. |
 
 A fourth data source — the **app registry** — is a JSON config file loaded at startup. It is not a database; it is static configuration. Unchanged from v0.4.
 
-**Why two Redis Cloud databases instead of one:** identical reasoning to v0.4's Redis/SQLite split, just on a different pair of technologies. The device registry must survive a reset that the UUID/message/credential data must not survive; no single database configuration can have both properties. Redis Cloud was chosen over Upstash specifically because Upstash always persists to disk regardless of configuration, which would violate the primary database's requirement outright (see `plans/relay-serverless-migration-strategic-plan.md` §Rationale).
+**Why the device registry is Cloudflare KV, not a second Redis Cloud database (changed in v0.6):** v0.5 put the device registry on a second Redis Cloud database mainly to reuse the same client and Lua-script infrastructure as the primary store — not because Redis has a property this specific store actually needs. The device registry's access pattern (upsert by key, list current entries, expire after 90 days) has no requirement for Redis's data structures (Lua CAS scripts, sorted sets) the way the UUID store does. Two things motivated revisiting it: (1) the free Redis Cloud tier — used for the test deployment — disables persistence by default, which defeats the one property this store exists for, and can't be worked around without paying for a tier that was otherwise only needed for production; (2) Cloudflare KV supports per-key TTL natively (`relay-next` uses unstorage's `cloudflare-kv-binding` driver, `ttl` option), which lets §5.3/§5.4's old prune-by-timestamp-index job be deleted entirely rather than ported — expired entries just stop existing. KV is free at this scale (100k reads/day, 1k writes/day, 1GB storage) and durable by default, so both the free-tier testing gap and the manual pruning logic disappear at once. This does not weaken the portability goal (Goal 3, strategic plan): Nitro's `storage()` abstraction is the point of using it here — the `node-server` preset can back the same calls with a different unstorage driver (filesystem or in-memory) for local development, without needing Redis Cloud credentials for this store at all.
+
+**Why the primary store is still Redis Cloud, not also moved off it:** the primary store's access pattern genuinely needs Redis — atomic CAS transitions via Lua `EVAL` (§2.4) for concurrent `/deliver` requests, and a sorted-set-equivalent for the delete queue (§4). Redis Cloud was chosen over Upstash specifically because Upstash always persists to disk regardless of configuration, which would violate the primary database's requirement outright (see `plans/relay-serverless-migration-strategic-plan.md` §Rationale). That reasoning is unaffected by the device-registry change above — it applies only to the store that actually needs Redis's specific capabilities.
 
 ### 1.1 Topology
 
@@ -68,17 +72,17 @@ Replaces the v0.4 Docker Compose topology diagram (previously in `plans/relay-st
                     ┌───────────────┼────────────────────┐
                     │               │                    │
                     ▼               ▼                    ▼
-        ┌───────────────────┐ ┌───────────────┐  ┌──────────────────┐
-        │ Redis Cloud        │ │ Redis Cloud    │  │ Durable Objects   │
-        │ PRIMARY            │ │ SECONDARY      │  │ (Cloudflare-native)│
-        │ persistence: OFF   │ │ persistence: ON│  │                    │
-        │                     │ │                │  │ One instance per   │
-        │ uuid:*              │ │ device_registry│  │ UUID (WS) or       │
-        │ cred:*              │ │ (push_token,   │  │ device_credential  │
-        │ messages:*          │ │  app_id,       │  │ (SSE).             │
-        │ pending_deletes     │ │  last_seen)    │  │                    │
-        └───────────────────┘ └───────────────┘  │ In-memory / socket │
-                                                    │ attachment only —  │
+        ┌───────────────────┐ ┌────────────────┐ ┌──────────────────┐
+        │ Redis Cloud        │ │ Cloudflare KV   │ │ Durable Objects   │
+        │ PRIMARY            │ │ (device registry)│ │ (Cloudflare-native)│
+        │ persistence: OFF   │ │ durable by      │ │                    │
+        │                     │ │ platform default│ │ One instance per   │
+        │ uuid:*              │ │                 │ │ UUID (WS) or       │
+        │ cred:*              │ │ registry:{push_ │ │ device_credential  │
+        │ messages:*          │ │ token} → app_id,│ │ (SSE).             │
+        │ pending_deletes     │ │ last_registered,│ │                    │
+        │                     │ │ TTL 90 days     │ │ In-memory / socket │
+        └───────────────────┘ └────────────────┘ │ attachment only —  │
                                                     │ never DO storage.  │
                                                     └─────────┬──────────┘
                                                               │
@@ -98,10 +102,10 @@ Key differences from the v0.4 Docker Compose topology this replaces:
 
 - There is no single always-on Node.js process. The stateless HTTP handlers
   run as Cloudflare Workers, invoked per-request.
-- The single self-hosted Redis container becomes two managed Redis Cloud
-  databases with different persistence settings (§1's table).
-- The SQLite-on-Docker-volume device registry becomes the secondary Redis
-  Cloud database (§5).
+- The single self-hosted Redis container becomes a single managed Redis
+  Cloud database, persistence explicitly disabled (§1's table).
+- The SQLite-on-Docker-volume device registry becomes Cloudflare KV,
+  accessed via Nitro's `storage()` abstraction (§5).
 - The in-process `Map`-based WS/SSE connection tracking
   (`relay/src/routes/ws.ts`'s `activePeers`, `relay/src/utils/sse_connections.ts`)
   becomes per-connection Durable Object instances. This is not merely a
@@ -231,15 +235,16 @@ architecture, briefly empty-looking any time the cron interval fires
 during a lull with zero currently-outstanding UUIDs — **this is not the
 same condition as "the database was reset."** To avoid spuriously sending
 re-registration notifications in either case, the check must also confirm
-the secondary (device registry) database is non-empty AND that this is
+the Cloudflare KV device registry is non-empty AND that this is
 the first time the check has observed an empty primary database since the
 last time it observed a non-empty one (i.e., detect a transition from
 non-empty → empty, not merely "empty right now"). The simplest
 implementation: store a single `primary_db_was_empty` boolean-equivalent
-flag in the **secondary** database (persistence-on, so the flag itself
-survives primary resets) and only fire the re-registration flow on the
-false → true transition of that flag, resetting it to false as soon as
-any UUID write succeeds again. This is a behavioral change from v0.4
+flag as a **Cloudflare KV** entry (durable by platform default, so the
+flag itself survives primary resets — same store as §5, distinct key) and
+only fire the re-registration flow on the false → true transition of that
+flag, resetting it to false as soon as any UUID write succeeds again. This
+is a behavioral change from v0.4
 (which only had one "empty at startup" moment to consider, since startup
 was infrequent) and needs unit test coverage in Phase 2 for exactly this
 false-positive case: cron fires while zero UUIDs happen to be outstanding,
@@ -251,13 +256,15 @@ but the database was never actually reset.
 
 ### 3.1 Key Schema
 
+**Corrected during Phase 1 review — this subsection previously said `messages:{push_token}`, which contradicted §8.4 (Device Credential Store) later in this same document, and contradicted the actual behavior of the current implementation (`relay/src/utils/storage/redis.ts`'s `storeMessage(credential, ...)`). Push-token-keying would also have broken the isolation guarantee §8.1 claims — see that section's threat model. The key is, and has always been in the running code, `device_credential`-keyed.**
+
 Pending message blobs are stored as a Redis list under the key:
 
 ```
-messages:{push_token}
+messages:{device_credential}
 ```
 
-where `{push_token}` is the platform push token for the device. Each list entry is a JSON-encoded object:
+where `{device_credential}` is the opaque credential issued at registration (§8) — not the push token. Keying by credential, rather than push token, is what makes the isolation property in §8.1 hold: two `POST /register` calls that happen to share a push token but produce different credentials get entirely separate message stores, so an attacker who has learned a device's push token cannot drain its pending messages without also possessing its credential. Each list entry is a JSON-encoded object:
 
 ```json
 {
@@ -273,9 +280,11 @@ where `{push_token}` is the platform push token for the device. Each list entry 
 **Store a message (on `POST /deliver/{uuid}`):**
 
 ```
-RPUSH messages:{push_token} <json entry>
-EXPIRE messages:{push_token} <UUID_TTL_SECONDS>  -- refreshed on each push
+RPUSH messages:{device_credential} <json entry>
+EXPIRE messages:{device_credential} <UUID_TTL_SECONDS>  -- refreshed on each push
 ```
+
+The handler resolves `uuid → device_credential` from the UUID record (§2.2) before this write — the wallet service supplies only the UUID; the relay is what maps it to the correct credential-keyed store.
 
 **Retrieve and clear (on `GET /pending`):**
 
@@ -294,11 +303,11 @@ Not performed individually. The message store is cleared atomically on `GET /pen
 
 ### 3.3 TTL
 
-The `messages:{push_token}` key TTL is reset to `UUID_TTL_SECONDS` (default 30 days) on each `RPUSH`. A device that is offline for more than 30 days after its last received message will have its pending blobs expired by Redis. On next wake, the device calls `GET /pending`, receives an empty list, and fetches messages via re-registration and wallet retransmission.
+The `messages:{device_credential}` key TTL is reset to `UUID_TTL_SECONDS` (default 30 days) on each `RPUSH`. A device that is offline for more than 30 days after its last received message will have its pending blobs expired by Redis. On next wake, the device calls `GET /pending`, receives an empty list, and fetches messages via re-registration and wallet retransmission.
 
 ### 3.4 Privacy Note
 
-The message store key includes the push token in plaintext. This is consistent with the relay's existing storage of push tokens in UUID records; the relay already associates push tokens with delivery events. The message store does not add new push-token-linked data beyond what is already present in the UUID store.
+The message store key includes the device credential, not the push token — see §8.1's threat model for why this distinction matters (push-token-keying would let anyone who learns a device's push token drain its message store; credential-keying requires possessing the credential itself, which is never transmitted alongside the push token). This is consistent with the relay's existing use of `device_credential` as the isolation boundary for all authenticated device-facing endpoints (§6.1, §8). The message store does not add any push-token-linked data beyond what is already present in the UUID store (§2.2, which does store `push_token` per UUID for push dispatch purposes).
 
 ---
 
@@ -395,111 +404,116 @@ shutdown hook.
 
 ---
 
-## 5. Redis Cloud (Secondary) — Device Registry
+## 5. Cloudflare KV — Device Registry
 
-**Changed from v0.4:** this store was SQLite on a Docker volume. It is now a
-second Redis Cloud database, provisioned with persistence **enabled**
-(unlike the primary database — see §1's table and
-`relay-next/PROVISIONING.md` for the exact provisioning checklist). The
-schema below is the Redis-hash equivalent of the old SQLite table; the
-operations are the same operations, translated to Redis commands. The
-durability requirement — survive a primary-database reset — is unchanged;
-only the technology changed, because a Cloudflare Workers deployment has
-no local disk to put a SQLite file on.
+**Changed from v0.5:** this store was a second Redis Cloud database,
+persistence enabled. It is now **Cloudflare KV**, accessed through Nitro's
+`storage()` abstraction (the `cloudflare-kv-binding` unstorage driver under
+the `cloudflare` preset; a filesystem or in-memory unstorage driver under
+`node-server` for local development — see §9's note on portability). Two
+things motivated this change, detailed in §1: the free Redis Cloud tier
+used for test deployment disables persistence by default (defeating the
+one property this store exists for), and KV's native per-key TTL removes
+the need for a separate pruning job entirely (old §5.3/§5.4 — see §5.3
+below). The durability requirement — survive a primary-database reset — is
+unchanged; only the technology and the pruning mechanism changed.
 
 ### 5.1 Key Schema
 
-Each device is stored as a Redis hash under the key:
+Each device is stored as a single KV entry under the key:
 
 ```
 registry:{push_token}
 ```
 
-A secondary sorted set indexes devices by registration recency, replacing
-the SQLite `idx_last_registered` index (Redis has no secondary index on
-hash fields; a sorted set is the standard substitute):
-
-```
-registry_index   -- ZSET; member = push_token, score = last_registered_at (unix seconds)
-```
+Unlike Redis, KV has no secondary-index or sorted-set primitive, and none
+is needed here: instead of a separate recency index queried by score
+range, entries carry their own TTL and simply cease to exist once expired
+(§5.3). The "query for re-registration" operation becomes "list current
+keys," since anything still present is by construction within the
+retention window.
 
 ### 5.2 Fields
 
-Each `registry:{push_token}` hash has:
+Each `registry:{push_token}` entry's value is a JSON-encoded object:
 
-| Field | Type | Description |
-|---|---|---|
-| `app_id` | string | App identifier |
-| `last_registered_at` | string | ISO 8601 UTC timestamp, e.g. `"2026-06-28T14:23:00Z"` |
+```json
+{
+  "app_id": "<app identifier>",
+  "last_registered_at": "<ISO 8601 UTC timestamp, e.g. 2026-06-28T14:23:00Z>"
+}
+```
 
-`push_token` is the key, not a field (matching the old schema's use of
-`push_token` as the SQLite primary key). No UUID associations are stored
-here — same invariant as v0.4: this store's only purpose is holding enough
-information to send a re-registration push after the primary database
-resets.
+`push_token` is the key, not a field (unchanged from v0.5's schema). No
+UUID associations are stored here — same invariant as v0.4/v0.5: this
+store's only purpose is holding enough information to send a
+re-registration push after the primary database resets.
 
 ### 5.3 Operations
 
 **Upsert on registration:**
 
-```
-HSET registry:{push_token} app_id "<app_id>" last_registered_at "<iso8601>"
-ZADD registry_index <unix_ts> {push_token}
+```ts
+await storage.setItem(
+  `registry:${pushToken}`,
+  { app_id: appId, last_registered_at: new Date().toISOString() },
+  { ttl: DEVICE_REGISTRY_RETENTION_DAYS * 86400 }
+);
 ```
 
 Called once per `POST /register` request (both bootstrap and
 replenishment paths), after UUID records are written to the primary
-database. Both commands should be issued as a single Redis transaction
-(`MULTI`/`EXEC` or a pipelined call) so the hash and index member cannot
-diverge under a concurrent write.
+database. The `ttl` option maps to Cloudflare KV's `expirationTtl`
+(minimum 60 seconds; the 90-day default is far above that floor). Because
+each upsert re-sets the TTL from that write's timestamp, a device that
+re-registers periodically never expires — the same effect v0.5's
+recency-indexed prune achieved, now a direct consequence of the storage
+primitive rather than a separately-run job.
 
 **Query for re-registration:**
 
-```
-ZRANGEBYSCORE registry_index <cutoff_unix_ts> +inf
+```ts
+const keys = await storage.getKeys('registry:');
+const devices = await Promise.all(keys.map((k) => storage.getItem(k)));
 ```
 
-where `cutoff_unix_ts = now - 90 days`. Returns the set of `push_token`s
-registered within the last 90 days; for each, `HGETALL registry:{push_token}`
-retrieves `app_id`. Called on startup when the primary database is found
-empty (see §2.6) and this registry is non-empty.
+Returns every currently-live device registry entry — anything expired per
+its TTL is already gone, so no cutoff-timestamp filtering is needed.
+Cloudflare's underlying `list()` operation returns up to 1000 keys per
+call and is cursor-paginated for registries larger than that; `storage()`
+callers should page through the full key set rather than assume a single
+call is exhaustive once the registry grows past 1000 devices. Called when
+the primary database is found empty (see §2.6).
+
+**No separate prune operation.** v0.5's weekly `ZRANGEBYSCORE`-based
+pruning job is deleted, not ported — KV's `expirationTtl` is enforced by
+the platform per entry, so there is nothing left for application code to
+do. The 90-day threshold itself (§5.4) is unchanged; only its enforcement
+mechanism moved from "a weekly scan deletes old rows" to "each entry
+carries its own expiry, set at write time."
 
 **Note on "startup" in a Workers deployment:** unlike the v0.4 long-running
 Node.js process, there is no single process "startup" moment in a
 Cloudflare Workers deployment — Workers are invoked per-request with no
 persistent process lifecycle. The empty-primary-database check and
-re-registration trigger (§2.6) must instead run as a scheduled task
-(Cloudflare Cron Trigger) that periodically checks primary-database
-health/emptiness, rather than a one-time startup hook. This is a Phase 2
-implementation detail (decision #3 in
+re-registration trigger (§2.6) instead run as a scheduled task (Cloudflare
+Cron Trigger) that periodically checks primary-database health/emptiness,
+rather than a one-time startup hook. This is a Phase 2 implementation
+detail (decision #3 in
 `plans/relay-serverless-migration-implementation-plan.md`: business logic
-stays portable/Redis-based, the *trigger* invoking it is necessarily
-platform-native) — noted here because it changes when this query actually
-runs, which is data-model-relevant.
+stays portable, the *trigger* invoking it is necessarily platform-native)
+— noted here because it changes when this query actually runs, which is
+data-model-relevant.
 
-**Prune old records:**
+### 5.4 Retention
 
-```
-ZRANGEBYSCORE registry_index -inf <cutoff_unix_ts>   -- read expired members
--- for each push_token found:
-DEL registry:{push_token}
-ZREM registry_index {push_token}
-```
-
-Run weekly on a randomized schedule (± up to 1 hour jitter to avoid
-thundering herd across instances) — same cadence as v0.4, now invoked via
-Cloudflare Cron Trigger rather than a Node.js `setInterval`-style timer
-(same platform-native-trigger note as above).
-
-### 5.4 Pruning
-
-Unchanged from v0.4: records older than **90 days** are deleted. The
-90-day threshold balances two concerns:
+Unchanged from v0.4/v0.5: records older than **90 days** since last
+registration are gone. The 90-day threshold balances two concerns:
 
 - **Too short:** legitimate users who are dormant (travel, infrequent use) are pruned and do not receive re-registration notifications after a primary-database reset
 - **Too long:** the device registry grows without bound; stale push tokens accumulate for uninstalled apps
 
-90 days covers nearly all real-world dormancy patterns while keeping the registry lean. Pruning runs weekly; between runs, a small number of records older than 90 days may remain — this is acceptable.
+90 days covers nearly all real-world dormancy patterns while keeping the registry lean. Enforcement is now exact and immediate (platform TTL expiry) rather than a weekly scan with up to a week of drift, which was v0.5's stated acceptable imprecision — this is a strict improvement, not a behavior change requiring new tolerance.
 
 ---
 
@@ -720,22 +734,34 @@ This ensures that blobs delivered to a UUID are only accessible to the device th
 
 ## 9. Environment Variables
 
-**Changed from v0.4:** `REDIS_URL` and `DB_PATH` are replaced by two Redis
-Cloud connection strings (see `relay-next/PROVISIONING.md` for the
-provisioning steps that produce these values). `PORT` is removed — a
-Cloudflare Workers deployment does not bind a listening port the way a
-Node.js process does; the `node-server` Nitro preset (used for local
-development and for the non-Cloudflare portability target — see
-`plans/relay-serverless-migration-strategic-plan.md` Goal 3) still uses a
-port, but that is a Nitro/Node runtime concern, not part of this data
-model's environment contract. `DELETE_JOB_POLL_INTERVAL_MS` is replaced by
-a Cloudflare Cron Trigger schedule expression rather than a millisecond
-poll interval, consistent with §2.5/§7.2's platform-native-trigger notes.
+**Changed from v0.4:** `REDIS_URL` and `DB_PATH` are replaced by one Redis
+Cloud connection string plus a Cloudflare KV binding (see
+`relay-next/PROVISIONING.md` for the provisioning steps that produce
+these). `PORT` is removed — a Cloudflare Workers deployment does not bind
+a listening port the way a Node.js process does; the `node-server` Nitro
+preset (used for local development and for the non-Cloudflare portability
+target — see `plans/relay-serverless-migration-strategic-plan.md` Goal 3)
+still uses a port, but that is a Nitro/Node runtime concern, not part of
+this data model's environment contract. `DELETE_JOB_POLL_INTERVAL_MS` is
+replaced by a Cloudflare Cron Trigger schedule expression rather than a
+millisecond poll interval, consistent with §2.5/§7.2's platform-native-
+trigger notes.
+
+**Changed from v0.5:** `REDIS_REGISTRY_URL` is removed — the device
+registry (§5) moved to Cloudflare KV, which is not addressed by a
+connection-string env var the way Redis is. Under the `cloudflare`
+preset, the KV namespace is wired as a binding in `wrangler.toml`
+(conventionally named `DEVICE_REGISTRY`) rather than an environment
+variable — Nitro's `storage()` picks it up via that binding automatically
+when configured with the `cloudflare-kv-binding` driver. Under
+`node-server`, `storage()` is instead configured with a different
+unstorage driver (filesystem or in-memory) directly in `nitro.config.ts`,
+requiring no env var either — this is the portability benefit noted in §1:
+local development needs no Redis Cloud credentials for this store at all.
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `REDIS_PRIMARY_URL` | Yes | — | Connection string (TLS, `rediss://`) for the persistence-off Redis Cloud database — UUIDs, credentials, messages, delete queue |
-| `REDIS_REGISTRY_URL` | Yes | — | Connection string (TLS, `rediss://`) for the persistence-on Redis Cloud database — device registry |
 | `APP_REGISTRY_PATH` | Yes | — | Path to the app registry JSON config file. On Cloudflare, this is expected to be bundled at build time or loaded from a KV/Workers-static-asset equivalent — Phase 2 implementation detail; the app registry's *content* and *validation rules* (§6) are unchanged. |
 | `RELAY_ID` | Yes | — | Unique identifier for this relay deployment, included in re-registration push payloads |
 | `UUID_TTL_SECONDS` | No | `2592000` | TTL for UUID records and device credentials in the primary Redis Cloud database (default 30 days) |
@@ -872,3 +898,13 @@ persistence-off configuration exists to prevent. In-memory Durable Object
 instance fields and `WebSocket.serializeAttachment`/`deserializeAttachment`
 are the only DO-side state permitted, because both are RAM-scoped by the
 platform and never written to disk.
+
+**This does not conflict with §5's use of Cloudflare KV for the device
+registry.** The prohibition above is scoped to UUID- and
+`device_credential`-linked data specifically — the privacy-critical
+associations Redis's persistence-off configuration protects. The device
+registry has never stored UUID associations or device credentials (§5.2:
+only `push_token`, `app_id`, `last_registered_at`); it is explicitly meant
+to be durable, which is the entire reason it lives outside the primary
+Redis Cloud database in the first place (§1). Writing it to KV is the
+store doing its intended job, not an exception to this invariant.

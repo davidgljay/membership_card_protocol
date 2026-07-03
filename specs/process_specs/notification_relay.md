@@ -1,8 +1,9 @@
 # Notification Relay — Process Spec
 
-**Version:** 0.7 (draft)
-**Date:** 2026-06-30
+**Version:** 0.8 (draft)
+**Date:** 2026-07-02
 **Status:** Draft
+**Changes from v0.7:** Process 1 (UUID Registration) step 6 previously registered a subcard's UUID pool with the wallet service via an unauthenticated `{ uuids: [...] }` body — anything that knew a `card_hash`/`subcard_hash` pair could apparently register UUIDs against it without proving control of the corresponding private key. The wallet registration call now requires a signed envelope proving subcard ownership (§Process 1, "Wallet registration"). Registration Privacy is also clarified to name Tor (or another anonymizing transport) as the expected mechanism for wallet registration sessions, rather than an opt-in upgrade for "users with strong privacy requirements" only — and explicitly restates, since it came up during spec review, that this remains a **per-card** session even when a device holds multiple cards: batching multiple cards' registrations into a single session or message was considered and rejected, because it would let a wallet service that happens to service more than one of a device's cards directly infer their co-ownership from the message content — a correlation that anonymizing transport does not prevent, since it hides the sender's network identity, not the payload's contents.
 **Changes from v0.6:** Removed UMBRAL proxy re-encryption from the wallet's message delivery path (see `process_specs/message_routing.md` v0.4). The sender now encrypts independently per subcard before the routing envelope reaches the wallet service; the wallet delivers each already-encrypted envelope to its target subcard's UUID pool without any transform step.
 **Changes from v0.5:** UUID pool model changed from device_key hash to per-subcard array. Multi-device support is now handled through subcards: each app instance on each device registers a distinct subcard, and the wallet delivers a separately-addressed blob per subcard. The `device_key` concept is removed from wallet-side UUID registration. UUIDs are a single untyped array per subcard (no delivery/websocket split at the wallet layer — the device allocates its UUID pool between delivery and WebSocket use internally). Wallet registration endpoint changes from `POST /cards/{card_hash}/devices/{device_key}/uuids` to `POST /cards/{card_hash}/subcards/{subcard_hash}/uuids`.
 
@@ -96,7 +97,7 @@ This flow runs when the device needs to replenish its UUID supply for a card.
    ```
    uuid → { app_id, push_token, wallet_ws_url, device_credential, status: "unused" }
    ```
-5. The device stores locally, per card:
+5. If this registration call's UUID pool is meant to cover more than one of the device's active cards, the device divides the returned UUIDs among them locally — this is a bookkeeping decision inside the device only; it does not change how the UUIDs are registered with wallet services (see step 6). The device stores locally, per card:
    ```
    card_hash → { uuids: [...], device_credential: "..." }
    ```
@@ -104,12 +105,26 @@ This flow runs when the device needs to replenish its UUID supply for a card.
 
 **Wallet registration:**
 
-6. In a separate, unlinkable session, the device registers the UUIDs with the wallet service for its specific subcard:
+6. For **each card separately** — in its own session, staggered in time from any other card's registration (§Registration Privacy) — the device registers that card's allocated UUIDs with its wallet service. The registration is a signed envelope proving control of the subcard the UUIDs are being registered for, not a bare list:
    ```
    POST /cards/{card_hash}/subcards/{subcard_hash}/uuids
-   Body: { uuids: [...] }
+   Body:
+   {
+     "payload": {
+       "card_hash":    "<on-chain registry address of the card>",
+       "subcard_hash": "<keccak256(subcard_pubkey) — must match the path parameter>",
+       "uuids":        ["<uuid-v4>", "..."],
+       "timestamp":    "<ISO 8601>",
+       "nonce":        "<32-byte random value, base64url — replay prevention>"
+     },
+     "signature": "<ML-DSA-44 signature over canonical RFC 8785 JSON of payload, signed by the subcard's private key, base64url>"
+   }
    ```
-7. The wallet service stores the UUIDs in the subcard's pool for that card.
+   This session is conducted over Tor (or another anonymizing transport) — see §Registration Privacy for why this is the expected mechanism here, not an optional upgrade.
+
+   Even when a single relay registration call (steps 1–5) covered multiple cards, **each card's wallet registration is still its own separate signed envelope in its own separate session** — the division in step 5 is a local allocation, not a batching of the wallet-facing registration call. Sending more than one card's UUIDs to a wallet service in one message or session is not permitted (§Registration Privacy).
+
+7. The wallet service resolves `subcard_hash`'s registered public key (from the subcard's on-chain registration, per `specs/process_specs/subcard_creation_policy.md`), confirms `keccak256(subcard_pubkey) == subcard_hash`, and verifies the signature over the payload. It rejects the registration (and does not store any UUIDs) if the signature is missing, invalid, does not match the claimed `subcard_hash`, or if `payload.card_hash`/`payload.subcard_hash` do not match the request path. On success, the wallet service stores the UUIDs in the subcard's pool for that card.
 8. The wallet service has no knowledge of the relay service, the push token, or the device credential.
 
 ### Replenishment
@@ -322,7 +337,9 @@ Similarly, relay registrations for different cards should use separate sessions 
 
 Device credential registration with the relay must also use separate sessions per card, for the same reason.
 
-Clients behind NAT or shared IPs should treat this property as best-effort. Users with strong privacy requirements may route relay and wallet registration traffic through a VPN or anonymizing proxy.
+**Transport:** wallet registration sessions (§Process 1, step 6) are conducted over Tor or another anonymizing transport by default — this is the expected mechanism, not an opt-in reserved for "users with strong privacy requirements." Clients behind NAT or shared IPs, or otherwise unable to route through Tor, should treat session-separation as best-effort in that specific case, but should not treat anonymizing transport itself as optional without a concrete reason.
+
+**Transport anonymity and content-level correlation are different protections, and this section's per-card separation requirement exists because of the second one.** Tor (or any anonymizing transport) hides which network identity sent a registration — it does nothing to stop a wallet service from reading co-ownership directly out of a message's *contents*. A single signed envelope listing multiple `card_hash` values together, even sent over Tor, tells the receiving wallet service those cards are held by the same device just as plainly as an unencrypted one would. This is why batching multiple cards' UUID registrations into one session or message is not permitted regardless of transport (see §Process 1 step 6) — anonymizing transport and per-card session separation address different halves of the correlation problem, and dropping either one reopens the co-ownership inference this section exists to prevent.
 
 ---
 
@@ -337,7 +354,7 @@ Clients behind NAT or shared IPs should treat this property as best-effort. User
 | Relay restart (Redis cleared) | In-flight blobs lost; wallet retains messages; device re-registers UUIDs; wallet retransmits on re-registration; device deduplicates by message ID |
 | Staggered delete job lost to relay restart | Wallet retains message; retransmitted to new UUID on device re-registration; device deduplicates |
 | Push token rotated by platform | Device re-registers with relay using new token; relay issues new device credential; device issues fresh UUIDs to all wallet services |
-| UUID rejected by relay (already used or unknown) | Wallet discards UUID and retries with next UUID in the device_key bucket |
+| UUID rejected by relay (already used or unknown) | Wallet discards UUID and retries with next UUID in the subcard's UUID pool |
 | Wallet returns 404 on staggered delete | Relay discards the job silently; message was already cleared |
 | Device receives duplicate message (after relay restart) | Device deduplicates by message ID within the decrypted blob |
 

@@ -1,9 +1,10 @@
 # Notification Relay — Service Spec
 
-**Version:** 0.7 (draft)
+**Version:** 0.8 (draft)
 **Date:** 2026-07-02
 **Status:** Draft — describes the target serverless architecture; not yet implemented (Phase 2 of `plans/relay-serverless-migration-implementation-plan.md`). This revision is itself a draft pending user review and approval — see that plan's step 1.4.
-**Amends:** v0.6 — §7.3 (`GET /ws/{uuid}`) and §7.4 (`GET /sse`) updated to describe a Cloudflare Durable-Object-backed connection model (one Durable Object instance per UUID for WS, one per `device_credential` for SSE) replacing the in-process `Map`-based connection tracking (`activePeers` in `relay/src/routes/ws.ts`, the module-level `Map` in `relay/src/utils/sse_connections.ts`). §9 (re-registration on store reset) updated for the two-Redis-Cloud-database split and the loss of a single-process "startup" moment. §5 (App Registry) startup-loading note qualified for the same reason. Full authoritative detail on which system (Redis Cloud vs. Durable Object) owns which piece of state lives in `specs/object_specs/relay_data_model.md` §10 — this document defers to that one rather than duplicating it. See `plans/relay-serverless-migration-strategic-plan.md` and its companion implementation plan for the full rationale.
+**Amends:** v0.7 — the device registry moves from a second Redis Cloud database to **Cloudflare KV** (via Nitro's `storage()` abstraction), per revised decision #2 in `plans/relay-serverless-migration-implementation-plan.md`. §9 (re-registration on store reset) updated accordingly. §2 and §4 also corrected: they still referred to the device registry as SQLite, a stale holdover from v0.4 that v0.6/v0.7's amendments missed. Full authoritative detail lives in `specs/object_specs/relay_data_model.md` §5 and §10.4 — this document defers to that one rather than duplicating it.
+**Amends (v0.6 → v0.7, carried forward):** §7.3 (`GET /ws/{uuid}`) and §7.4 (`GET /sse`) describe a Cloudflare Durable-Object-backed connection model (one Durable Object instance per UUID for WS, one per `device_credential` for SSE) replacing the in-process `Map`-based connection tracking (`activePeers` in `relay/src/routes/ws.ts`, the module-level `Map` in `relay/src/utils/sse_connections.ts`). §5 (App Registry) startup-loading note qualified for the loss of a single-process "startup" moment. See `plans/relay-serverless-migration-strategic-plan.md` and its companion implementation plan for the full rationale.
 
 ---
 
@@ -55,7 +56,7 @@ UUID associations and message blobs are held exclusively in RAM (Redis with no p
 | `specs/process_specs/notification_relay.md` | Process-level spec this document implements. Defines delivery processes, UUID pools, device credentials, multi-device, and privacy properties. |
 | `specs/process_specs/message_routing.md` | Defines how wallet services route messages to recipient cards and deliver blobs to the relay. |
 | `specs/process_specs/wallet_backup_and_recovery.md` | Device registration and key management; UUID pool replenishment lifecycle. |
-| `specs/object_specs/relay_data_model.md` | Redis key schema, message store, delete queue, device credential store, UUID state machine, SQLite device registry, and app registry config. |
+| `specs/object_specs/relay_data_model.md` | Redis key schema, message store, delete queue, device credential store, UUID state machine, Cloudflare-KV-backed device registry, and app registry config. |
 
 ---
 
@@ -79,7 +80,7 @@ UUID associations and message blobs are held exclusively in RAM (Redis with no p
 
 UUID associations must never be written to disk. Redis runs with persistence explicitly disabled (`--save "" --appendonly no`).
 
-The device registry (SQLite) stores only push tokens and `app_id` — no UUID associations, no device credentials, no card-linkable data.
+The device registry (Cloudflare KV) stores only push tokens and `app_id` — no UUID associations, no device credentials, no card-linkable data.
 
 ---
 
@@ -166,7 +167,7 @@ Authorization: Bearer {device_credential}   ← omit on first (bootstrap) call
 2. Generate a new `device_credential` (cryptographically random, 32 bytes, hex or base64url encoded).
 3. Store `cred:{device_credential} → { push_token, app_id, created_at }` with TTL `UUID_TTL_SECONDS`.
 4. Generate `count` UUIDs, each stored as `uuid:{uuid} → { app_id, push_token, wallet_base_url, device_credential, status: "unused" }` with TTL `UUID_TTL_SECONDS`.
-5. Upsert push token in SQLite device registry.
+5. Upsert push token in the Cloudflare KV device registry.
 6. Return UUIDs and device credential.
 
 **Replenishment (`Authorization: Bearer {credential}` present):**
@@ -175,7 +176,7 @@ Authorization: Bearer {device_credential}   ← omit on first (bootstrap) call
 2. Validate `app_id` and `push_token`.
 3. Update `cred:{credential}` with new `push_token` (if rotated) and refresh TTL.
 4. Generate `count` new UUIDs under the same credential.
-5. Upsert push token in SQLite device registry.
+5. Upsert push token in the Cloudflare KV device registry.
 6. Return only the new UUIDs (no credential in response — device already has it).
 
 #### Response — 200 OK
@@ -608,31 +609,30 @@ UUID `consumed` means the relay has accepted responsibility for the blob — not
 
 ## 9. Re-registration on Store Reset
 
-**Changed from v0.6:** "Redis restarts" now specifically means the
-**primary** Redis Cloud database (persistence off) resets — the secondary
-database (device registry, persistence on) is not expected to reset under
-normal operation, which is the whole reason the device registry lives
-there rather than in the primary database (`relay_data_model.md` §1, §5).
-When the primary database resets, all UUID state and message blobs are
-lost, exactly as in v0.6.
+**Changed from v0.7:** the device registry is no longer a second Redis
+Cloud database — it is Cloudflare KV, accessed via Nitro's `storage()`
+abstraction (`relay_data_model.md` §5, §1). "Redis restarts" still means
+only the **primary** Redis Cloud database (persistence off) resetting; KV
+is durable by platform default and is not expected to reset under normal
+operation, which is the whole reason the device registry lives there
+rather than in the primary database. When the primary database resets,
+all UUID state and message blobs are lost, exactly as in v0.7.
 
-**Detection mechanism changed:** v0.6 detected this "on startup," which
-assumed a single long-running process with a startup moment. Cloudflare
-Workers have no such moment (each invocation is independent — see
-`relay_data_model.md` §2.6 and §5.2's notes on this). Detection is instead
-performed by a periodic Cloudflare Cron Trigger that scans for `uuid:*`
-keys in the primary database (same scan, `relay_data_model.md` §2.5–§2.6),
-on the schedule `RECONCILIATION_CRON_SCHEDULE` (default every 5 minutes).
-Because this check now runs repeatedly rather than once, it must also
+**Detection mechanism unchanged from v0.7:** performed by a periodic
+Cloudflare Cron Trigger that scans for `uuid:*` keys in the primary
+database (`relay_data_model.md` §2.5–§2.6), on the schedule
+`RECONCILIATION_CRON_SCHEDULE` (default every 5 minutes). This check must
 distinguish "database was actually reset" from "database happens to be
 momentarily empty because there are no outstanding UUIDs right now" — see
 `relay_data_model.md` §2.6 for the false-positive-avoidance mechanism this
-requires (a transition-detecting flag stored in the secondary database,
-not a bare emptiness check).
+requires (a transition-detecting flag, now stored as a KV entry rather
+than in a second Redis database — same logic, different store).
 
-If the primary database is confirmed reset (per that mechanism) and the
-device registry (secondary database) is non-empty, the relay sends a
-re-registration push to all devices registered in the last 90 days:
+If the primary database is confirmed reset (per that mechanism), the
+relay lists the current contents of the KV device registry (all entries
+present are, by construction, within the retention window — see
+`relay_data_model.md` §5's note on TTL-based expiry replacing the old
+prune-by-timestamp query) and sends a re-registration push to each:
 
 ```json
 { "type": "relay_reregistration_requested", "relay_id": "<RELAY_ID>" }
