@@ -89,8 +89,11 @@ describe('audit log schema — device IO endpoints', () => {
 
 describe('audit log schema — required structured events exist', () => {
   const requiredEvents = [
-    ['server/routes/accounts/index.post.ts', 'service_secret_created'],
-    ['server/routes/accounts/index.post.ts', 'account_created'],
+    // Logic for POST /accounts lives in src/routes/accounts-create.ts as
+    // of client-sdk implementation plan Step 1.4c (the route file is now a
+    // thin H3 adapter, callable identically from the OHTTP gateway).
+    ['src/routes/accounts-create.ts', 'service_secret_created'],
+    ['src/routes/accounts-create.ts', 'account_created'],
     ['server/routes/accounts/[card_hash]/service-secret.get.ts', 'service_secret_accessed'],
     ['server/routes/accounts/[card_hash]/backups/index.post.ts', 'backup_registration_created'],
     ['server/routes/accounts/[card_hash]/recovery.post.ts', 'recovery_initiated'],

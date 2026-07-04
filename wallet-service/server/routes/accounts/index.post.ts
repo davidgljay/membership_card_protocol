@@ -5,146 +5,31 @@
  * by the freshly-generated master card key signing the challenge from
  * POST /accounts/challenge — proves control of the key being registered.
  * No external registration token; see strategic-plan.md OQ-WS-1.
+ *
+ * Thin H3 adapter — all logic lives in
+ * ../../../src/routes/accounts-create.ts (client-sdk implementation plan
+ * Step 1.4c), callable identically from here and from the OHTTP gateway
+ * (server/routes/ohttp/gateway.post.ts).
  */
 
 import { getPool } from '../../db/client.js';
-import { findAccountByCardHash, createAccount } from '../../db/accounts.js';
-import { insertKeyringBlob } from '../../db/keyrings.js';
-import { consumeChallenge } from '../../db/challenges.js';
-import { verifyMasterCardSignature } from '../../../src/auth/master-card-signature.js';
-import { issueSessionToken } from '../../../src/auth/session-token.js';
-import { keccak256OfBase64Url } from '../../../src/crypto.js';
-import { getSecretsService } from '../../utils/secrets.js';
-import { loadConfig } from '../../../src/config.js';
-import { announceOwnCardRegistration, replicateKeyringBlob } from '../../utils/federation-self.js';
-import { enforceRateLimit } from '../../utils/enforce-rate-limit.js';
-import { kvKeys } from '../../../src/kv.js';
-import { hashIp } from '../../../src/crypto.js';
-import { auditLog } from '../../utils/audit-log.js';
-
-const ACCOUNT_CREATION_RATE_LIMIT = 5;
-const ACCOUNT_CREATION_RATE_WINDOW_SECONDS = 60 * 60;
-
-interface CreateAccountBody {
-  challenge?: string;
-  signature?: string;
-  card_hash?: string;
-  master_pubkey?: string;
-  webauthn_credential_id?: string;
-  webauthn_public_key?: string;
-  encrypted_keyring_blob?: string;
-}
-
-const SERVICE_SECRET_BYTES = 32;
+import {
+  handleAccountsCreate,
+  type RawCreateAccountBody,
+} from '../../../src/routes/accounts-create.js';
 
 export default defineEventHandler(async (event) => {
   const ip = getRequestIP(event, { xForwardedFor: true }) ?? 'unknown';
-  await enforceRateLimit(
-    event,
-    kvKeys.accountCreationRate(hashIp(ip)),
-    ACCOUNT_CREATION_RATE_LIMIT,
-    ACCOUNT_CREATION_RATE_WINDOW_SECONDS
-  );
+  const rawBody = await readBody<RawCreateAccountBody>(event);
+  const outcome = await handleAccountsCreate({ pool: getPool(), ip, rawBody });
 
-  const body = await readBody<CreateAccountBody>(event);
-  const {
-    challenge,
-    signature,
-    card_hash: cardHash,
-    master_pubkey: masterPubkey,
-    webauthn_credential_id: webauthnCredentialId,
-    webauthn_public_key: webauthnPublicKey,
-    encrypted_keyring_blob: encryptedKeyringBlob,
-  } = body ?? {};
-
-  if (
-    !challenge ||
-    !signature ||
-    !cardHash ||
-    !masterPubkey ||
-    !webauthnCredentialId ||
-    !webauthnPublicKey ||
-    !encryptedKeyringBlob
-  ) {
-    throw createError({
-      statusCode: 400,
-      statusMessage:
-        'challenge, signature, card_hash, master_pubkey, webauthn_credential_id, webauthn_public_key, and encrypted_keyring_blob are all required.',
-    });
-  }
-
-  const pool = getPool();
-
-  const consumed = await consumeChallenge(pool, 'account_creation', null, challenge);
-  if (!consumed) {
-    throw createError({ statusCode: 401, statusMessage: 'Invalid or expired challenge.' });
-  }
-
-  const challengeBytes = new Uint8Array(Buffer.from(challenge, 'base64url'));
-  const validSignature = verifyMasterCardSignature(challengeBytes, signature, masterPubkey);
-  if (!validSignature) {
-    throw createError({ statusCode: 401, statusMessage: 'Invalid master card key signature.' });
-  }
-
-  const existing = await findAccountByCardHash(pool, cardHash);
-  if (existing) {
-    throw createError({ statusCode: 409, statusMessage: 'An account already exists for this card_hash.' });
-  }
-
-  const keyringId = keccak256OfBase64Url(encryptedKeyringBlob);
-
-  const secretsService = getSecretsService();
-  const serviceSecretPlain = crypto.getRandomValues(new Uint8Array(SERVICE_SECRET_BYTES));
-  let ciphertext: string, dekEnc: string;
-  try {
-    ({ ciphertext, dekEnc } = await secretsService.encryptSecret(Buffer.from(serviceSecretPlain)));
-  } catch (err) {
-    auditLog('error', 'secrets_backend_failure', { operation: 'encryptSecret', card_hash: cardHash, error: String(err) });
-    throw err;
-  }
-
-  let account;
-  try {
-    account = await createAccount(pool, {
-      cardHash,
-      masterPubkey,
-      keyringId,
-      serviceSecretEnc: ciphertext,
-      serviceSecretDekEnc: dekEnc,
-      webauthnCredentialId,
-      webauthnPublicKey,
-    });
-  } catch (err) {
-    if (err instanceof Error && 'code' in err && err.code === '23505') {
-      // Unique violation — either card_hash (race with the check above) or
-      // webauthn_credential_id (a credential id collision, vanishingly
-      // unlikely for a properly random WebAuthn credential).
-      throw createError({ statusCode: 409, statusMessage: 'Account or credential already registered.' });
+  if (!outcome.ok) {
+    if (outcome.retryAfterSeconds !== undefined) {
+      setResponseHeader(event, 'Retry-After', outcome.retryAfterSeconds);
     }
-    throw err;
+    throw createError({ statusCode: outcome.statusCode, statusMessage: outcome.statusMessage });
   }
 
-  await insertKeyringBlob(pool, keyringId, cardHash, encryptedKeyringBlob);
-  // This instance now holds the card — announce the binding and replicate
-  // the keyring blob to every configured peer (Step 4.1/4.1a). Best-effort;
-  // does not block or fail account creation if peers are unreachable.
-  await Promise.all([
-    announceOwnCardRegistration(cardHash),
-    replicateKeyringBlob(keyringId, cardHash, encryptedKeyringBlob),
-  ]);
-
-  const config = loadConfig();
-  const { token, payload } = issueSessionToken(cardHash, config.SESSION_TOKEN_SECRET);
-
-  // Audit log: no key material, no request/response body (Step 6.2 invariant).
-  auditLog('info', 'account_created', { card_hash: cardHash });
-  auditLog('info', 'service_secret_created', { card_hash: cardHash });
-
-  return {
-    service_secret: Buffer.from(serviceSecretPlain).toString('base64url'),
-    account_id: account.id,
-    keyring_id: keyringId,
-    session_token: token,
-    expires_at: new Date(payload.expires_at).toISOString(),
-  };
+  const { ok: _ok, ...body } = outcome;
+  return body;
 });

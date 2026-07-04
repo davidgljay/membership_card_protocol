@@ -4,23 +4,24 @@
  * Rate-limited by (hashed) IP — supplementary to the explicit 5/IP/hour
  * limit on POST /accounts itself; this bounds challenge issuance, the
  * cheaper of the two calls, at the same rate.
+ *
+ * Thin H3 adapter — all logic lives in
+ * ../../../src/routes/accounts-challenge.ts (client-sdk implementation
+ * plan Step 1.4c), callable identically from here and from the OHTTP
+ * gateway (server/routes/ohttp/gateway.post.ts).
  */
 
 import { getPool } from '../../db/client.js';
-import { issueChallenge } from '../../db/challenges.js';
-import { enforceRateLimit } from '../../utils/enforce-rate-limit.js';
-import { kvKeys } from '../../../src/kv.js';
-import { hashIp } from '../../../src/crypto.js';
-
-const RATE_LIMIT = 5;
-const RATE_WINDOW_SECONDS = 60 * 60;
+import { handleAccountsChallenge } from '../../../src/routes/accounts-challenge.js';
 
 export default defineEventHandler(async (event) => {
   const ip = getRequestIP(event, { xForwardedFor: true }) ?? 'unknown';
-  await enforceRateLimit(event, kvKeys.accountCreationRate(hashIp(ip)), RATE_LIMIT, RATE_WINDOW_SECONDS);
+  const outcome = await handleAccountsChallenge({ pool: getPool(), ip });
 
-  const pool = getPool();
-  const { challenge, expiresAt } = await issueChallenge(pool, 'account_creation', null);
+  if (!outcome.ok) {
+    setResponseHeader(event, 'Retry-After', outcome.retryAfterSeconds);
+    throw createError({ statusCode: outcome.statusCode, statusMessage: outcome.statusMessage });
+  }
 
-  return { challenge, expires_at: expiresAt.toISOString() };
+  return { challenge: outcome.challenge, expires_at: outcome.expires_at };
 });
