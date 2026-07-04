@@ -44,3 +44,12 @@ export {
   type AcceptOpenOfferForExistingWalletResult,
   type AcceptedOpenOfferForExistingWallet,
 } from './existingWalletOpenOfferAcceptance.js';
+export {
+  acceptTargetedOffer,
+  forwardCountersignedTargetedOffer,
+  type AcceptTargetedOfferOptions,
+  type TargetedOfferAcceptanceResult,
+  type AcceptedTargetedOffer,
+  type ForwardTargetedOfferOptions,
+  type ForwardTargetedOfferResult,
+} from './targetedOfferAcceptance.js';
