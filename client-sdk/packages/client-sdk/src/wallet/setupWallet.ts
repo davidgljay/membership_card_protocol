@@ -2,7 +2,7 @@ import { randomBytes } from '@noble/hashes/utils.js';
 import { mlDsa44GenerateKeypair, mlDsa44Sign } from '../crypto/mldsa.js';
 import { keccak256 } from '../crypto/hashes.js';
 import { bytesToBase64Url, base64UrlToBytes } from '../util/base64url.js';
-import { deriveDecryptionKey, devicePasskeyOutputFromRegistration, syncedPasskeyOutputFromPrf } from './kdf.js';
+import { deriveDecryptionKey, passkeyOutputFromPrf } from './kdf.js';
 import { encryptKeyring, computeKeyringId } from './keyring.js';
 import { requestJson } from './httpJson.js';
 import {
@@ -214,7 +214,19 @@ export async function setupWallet(options: WalletSetupOptions): Promise<WalletSe
     const accountsChallengeBytes = base64UrlToBytes(accountsChallenge.challenge);
 
     const registration = await passkeyProvider.register(accountsChallengeBytes);
-    const devicePasskeyOutput = devicePasskeyOutputFromRegistration(registration.attestationObject);
+    // CP-1 finding: device_passkey_output must NOT be derived from
+    // `attestationObject` — those exact bytes are submitted below as
+    // `webauthn_public_key`, so a KDF input derived from them would let the
+    // wallet service (which already holds `service_secret`) recompute
+    // `decryption_key` on its own. `prfOutput` is never transmitted
+    // anywhere by this SDK. See `kdf.ts`'s `passkeyOutputFromPrf` doc and
+    // `plans/client-sdk/milestones/cp1-security-review.md`.
+    if (!registration.prfOutput) {
+      throw new Error(
+        'setupWallet: device-bound passkey registration did not return a PRF output; device_passkey_output cannot be derived securely (see CP-1 security review).'
+      );
+    }
+    const devicePasskeyOutput = passkeyOutputFromPrf(registration.prfOutput);
 
     // Master key signs the wallet-service challenge, proving control of the
     // newly generated master key (`plans/wallet-service/
@@ -335,7 +347,7 @@ export async function setupWallet(options: WalletSetupOptions): Promise<WalletSe
     // WebAuthn PRF extension's evaluated output (`prfOutput`, added to
     // `PasskeyProvider` in Step 2.4 for exactly this reason): a deterministic,
     // credential-bound secret available from both `register()` and `assert()`
-    // for the same credential. See `kdf.ts`'s `syncedPasskeyOutputFromPrf`. ---
+    // for the same credential. See `kdf.ts`'s `passkeyOutputFromPrf`. ---
     const syncedPasskeyChallenge = randomBytes(32);
     const syncedPasskeyRegistration = await passkeyProvider.register(syncedPasskeyChallenge);
     if (!syncedPasskeyRegistration.prfOutput) {
@@ -344,7 +356,7 @@ export async function setupWallet(options: WalletSetupOptions): Promise<WalletSe
           'later (recovery can only assert() against this credential, never register() it again).'
       );
     }
-    const syncedPasskeyOutput = syncedPasskeyOutputFromPrf(syncedPasskeyRegistration.prfOutput);
+    const syncedPasskeyOutput = passkeyOutputFromPrf(syncedPasskeyRegistration.prfOutput);
 
     const syncedPasskeyBackup = await registerBackup({
       transport,

@@ -2,7 +2,7 @@ import { mlDsa44Sign, mlDsa44GetPublicKey } from '../crypto/mldsa.js';
 import { keccak256 } from '../crypto/hashes.js';
 import { randomBytes } from '@noble/hashes/utils.js';
 import { bytesToBase64Url, base64UrlToBytes } from '../util/base64url.js';
-import { deriveDecryptionKey, devicePasskeyOutputFromRegistration, syncedPasskeyOutputFromPrf } from './kdf.js';
+import { deriveDecryptionKey, passkeyOutputFromPrf } from './kdf.js';
 import { encryptKeyring, decryptKeyring, computeKeyringId } from './keyring.js';
 import { unwrapDecryptionKey } from './backupRegistration.js';
 import { requestJson } from './httpJson.js';
@@ -291,21 +291,21 @@ export async function recoverWallet(options: RecoverWalletOptions): Promise<Reco
   if (method === 'synced_passkey') {
     // The synced passkey syncs to this (new) device via iCloud Keychain /
     // Google Password Manager — it is asserted against, never registered
-    // again (see `kdf.ts`'s `syncedPasskeyOutputFromPrf` doc for why this
-    // matters: `attestationObject` isn't reproducible from an assertion,
-    // which is exactly why `backupRegistration.ts`'s wrap step requires a
-    // PRF output instead). No `credentialId` is supplied — per
-    // `PasskeyProvider.assert()`'s own doc, omitting it lets the platform's
-    // passkey UI resolve which credential to use, which is sufficient here
-    // since the synced passkey is the only credential registered for this
-    // purpose at this origin.
+    // again (see `kdf.ts`'s `passkeyOutputFromPrf` doc for why this matters:
+    // `attestationObject` isn't reproducible from an assertion, which is
+    // exactly why `backupRegistration.ts`'s wrap step requires a PRF output
+    // instead). No `credentialId` is supplied — per `PasskeyProvider.
+    // assert()`'s own doc, omitting it lets the platform's passkey UI
+    // resolve which credential to use, which is sufficient here since the
+    // synced passkey is the only credential registered for this purpose at
+    // this origin.
     const assertion = await passkeyProvider.assert(randomBytes(32));
     if (!assertion.prfOutput) {
       throw new Error(
         'recoverWallet: synced-passkey assertion did not return a PRF output; cannot reconstruct the wrapping key.'
       );
     }
-    wrappingKey = syncedPasskeyOutputFromPrf(assertion.prfOutput);
+    wrappingKey = passkeyOutputFromPrf(assertion.prfOutput);
   } else {
     if (!yubiKeyProvider || !yubiKeyPin) {
       throw new Error('recoverWallet: yubiKeyProvider and yubiKeyPin are required when method is "yubikey".');
@@ -365,7 +365,14 @@ export async function recoverWallet(options: RecoverWalletOptions): Promise<Reco
     // comment on this flag for why it exists. ---
     const newPasskeyChallenge = randomBytes(32);
     const newPasskeyRegistration = await passkeyProvider.register(newPasskeyChallenge);
-    const devicePasskeyOutput = devicePasskeyOutputFromRegistration(newPasskeyRegistration.attestationObject);
+    // CP-1 finding: derive from prfOutput, not attestationObject — see
+    // setupWallet.ts's identical fix and kdf.ts's passkeyOutputFromPrf doc.
+    if (!newPasskeyRegistration.prfOutput) {
+      throw new Error(
+        'recoverWallet: new device-bound passkey registration did not return a PRF output; device_passkey_output cannot be derived securely (see CP-1 security review).'
+      );
+    }
+    const devicePasskeyOutput = passkeyOutputFromPrf(newPasskeyRegistration.prfOutput);
 
     const provisionalBlob = encryptKeyring(entries, devicePasskeyOutput);
     const provisionalChallenge = await requestJson<KeyringChallengeResponseBody>(

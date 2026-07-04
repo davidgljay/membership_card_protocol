@@ -8,7 +8,7 @@ import {
   recoverWallet,
 } from '../../src/wallet/recovery.js';
 import { decryptKeyring } from '../../src/wallet/keyring.js';
-import { deriveDecryptionKey, devicePasskeyOutputFromRegistration } from '../../src/wallet/kdf.js';
+import { deriveDecryptionKey, passkeyOutputFromPrf } from '../../src/wallet/kdf.js';
 import type { WalletAppCardIdentity, RegisterSubCardFn, SignedSubCardDocument } from '../../src/wallet/deviceSubCard.js';
 import type { NotificationChannels } from '../../src/wallet/backupRegistration.js';
 import { bytesToBase64Url, base64UrlToBytes } from '../../src/util/base64url.js';
@@ -101,7 +101,16 @@ function makeFakePasskeyProvider(
     register: vi.fn(async (_challenge: Uint8Array) => {
       registerCallCount += 1;
       if (registerCallCount === 1) {
-        return { credentialId, attestationObject, clientDataJSON: new TextEncoder().encode('fake-client-data') };
+        // CP-1 fix: prfOutput (reusing attestationObject's own bytes as the
+        // fake's PRF output keeps every reconstruction below numerically
+        // identical to before the rename — see setupWallet.test.ts's fake
+        // for the full explanation).
+        return {
+          credentialId,
+          attestationObject,
+          clientDataJSON: new TextEncoder().encode('fake-client-data'),
+          prfOutput: attestationObject,
+        };
       }
       return {
         credentialId: new TextEncoder().encode(`synced-credential-${registerCallCount}`),
@@ -123,7 +132,12 @@ function makeFakePasskeyProvider(
 /** A fake PasskeyProvider for a brand-new device during re-registration — device-bound only, no synced-passkey call expected. */
 function makeFakeNewDevicePasskeyProvider(attestationObject: Uint8Array, credentialId: Uint8Array): PasskeyProvider {
   return {
-    register: vi.fn(async () => ({ credentialId, attestationObject, clientDataJSON: new TextEncoder().encode('x') })),
+    register: vi.fn(async () => ({
+      credentialId,
+      attestationObject,
+      clientDataJSON: new TextEncoder().encode('x'),
+      prfOutput: attestationObject,
+    })),
     assert: vi.fn(),
   };
 }
@@ -365,7 +379,7 @@ describe('recovery (Step 2.4)', () => {
     // derivation `setupWallet.test.ts`'s first test already relies on) to
     // recover the master key and sign the cancellation.
     const attestationObject = new TextEncoder().encode('device-bound-attestation');
-    const devicePasskeyOutput = devicePasskeyOutputFromRegistration(attestationObject);
+    const devicePasskeyOutput = passkeyOutputFromPrf(attestationObject);
     const account = state.accounts.get(result.cardHash)!;
     const decryptionKey = deriveDecryptionKey(devicePasskeyOutput, account.serviceSecret);
     const storedBlob = state.keyringBlobsById.get(account.keyringId)!;
@@ -430,7 +444,7 @@ describe('recovery (Step 2.4)', () => {
     // Decrypt manually first (mirroring what recoverWallet does internally)
     // purely to assert the bit-for-bit match the "Done when" criteria asks
     // for, independent of recoverWallet's own re-encryption.
-    const wrappingKeyForAssertion = (await import('../../src/wallet/kdf.js')).syncedPasskeyOutputFromPrf(
+    const wrappingKeyForAssertion = (await import('../../src/wallet/kdf.js')).passkeyOutputFromPrf(
       syncedPasskeyPrfOutput
     );
     const { unwrapDecryptionKey } = await import('../../src/wallet/backupRegistration.js');
@@ -439,7 +453,7 @@ describe('recovery (Step 2.4)', () => {
 
     const originalAccount = state.accounts.get(cardHash)!;
     const originalDecryptionKey = deriveDecryptionKey(
-      devicePasskeyOutputFromRegistration(new TextEncoder().encode('device-bound-attestation')),
+      passkeyOutputFromPrf(new TextEncoder().encode('device-bound-attestation')),
       originalAccount.serviceSecret
     );
     // Note: by this point in the real flow the original account's
@@ -486,7 +500,7 @@ describe('recovery (Step 2.4)', () => {
     // The new authoritative account state decrypts to the same entries the
     // pre-re-encryption snapshot above already confirmed matched bit-for-bit.
     const newAccount = state.accounts.get(cardHash)!;
-    const newDevicePasskeyOutput = devicePasskeyOutputFromRegistration(newDeviceAttestation);
+    const newDevicePasskeyOutput = passkeyOutputFromPrf(newDeviceAttestation);
     const newDecryptionKey = deriveDecryptionKey(newDevicePasskeyOutput, newAccount.serviceSecret);
     const finalEntries = decryptKeyring(base64UrlToBytes(state.keyringBlobsById.get(newAccount.keyringId)!), newDecryptionKey);
     expect(finalEntries).toEqual(originalEntries);

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { deriveDecryptionKey, devicePasskeyOutputFromRegistration } from '../../src/wallet/kdf.js';
+import { deriveDecryptionKey, passkeyOutputFromPrf } from '../../src/wallet/kdf.js';
 
 describe('deriveDecryptionKey', () => {
   it('matches a fixed test vector (device_passkey_output = 0x01*32, service_secret = 0x02*32)', () => {
@@ -49,21 +49,24 @@ describe('deriveDecryptionKey', () => {
   });
 });
 
-describe('devicePasskeyOutputFromRegistration', () => {
-  it('matches a fixed test vector for a known attestationObject', () => {
+describe('passkeyOutputFromPrf', () => {
+  it('matches a fixed test vector for a known PRF output', () => {
     // keccak256("fixed-attestation-object-for-test-vector"), verified
-    // independently against @noble/hashes' keccak_256 directly.
-    const attestationObject = new TextEncoder().encode('fixed-attestation-object-for-test-vector');
-    const output = devicePasskeyOutputFromRegistration(attestationObject);
+    // independently against @noble/hashes' keccak_256 directly. (The
+    // fixture string predates the CP-1 rename from attestationObject to
+    // prfOutput as this function's input — kept as-is since the operation,
+    // keccak256 of whatever bytes are passed in, is unchanged.)
+    const prfOutput = new TextEncoder().encode('fixed-attestation-object-for-test-vector');
+    const output = passkeyOutputFromPrf(prfOutput);
     expect(Buffer.from(output).toString('hex')).toBe(
       'f5eaf5094a2ee6565db839b97553a0840eace2d59df345f1b21eae811b7d87e4'
     );
   });
 
-  it('is deterministic and differs across distinct attestation objects', () => {
-    const a = devicePasskeyOutputFromRegistration(new TextEncoder().encode('a'));
-    const b = devicePasskeyOutputFromRegistration(new TextEncoder().encode('b'));
+  it('is deterministic and differs across distinct PRF outputs', () => {
+    const a = passkeyOutputFromPrf(new TextEncoder().encode('a'));
+    const b = passkeyOutputFromPrf(new TextEncoder().encode('b'));
     expect(a).not.toEqual(b);
-    expect(devicePasskeyOutputFromRegistration(new TextEncoder().encode('a'))).toEqual(a);
+    expect(passkeyOutputFromPrf(new TextEncoder().encode('a'))).toEqual(a);
   });
 });

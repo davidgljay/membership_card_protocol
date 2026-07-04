@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { setupWallet } from '../../src/wallet/setupWallet.js';
 import { decryptKeyring } from '../../src/wallet/keyring.js';
-import { deriveDecryptionKey } from '../../src/wallet/kdf.js';
+import { deriveDecryptionKey, passkeyOutputFromPrf } from '../../src/wallet/kdf.js';
 import { unwrapDecryptionKey } from '../../src/wallet/backupRegistration.js';
 import type { WalletAppCardIdentity, RegisterSubCardFn, SignedSubCardDocument } from '../../src/wallet/deviceSubCard.js';
 import type { NotificationChannels } from '../../src/wallet/backupRegistration.js';
@@ -38,12 +38,16 @@ const DEFAULT_SYNCED_PASSKEY_PRF_OUTPUT = new TextEncoder().encode('fixed-synced
 /**
  * A fake PasskeyProvider with deterministic registration output. The first
  * `register()` call (the device-bound passkey, Step 2) returns
- * `attestationObject`/`credentialId` exactly as given, so existing tests can
- * recompute `devicePasskeyOutput` independently. Subsequent `register()`
+ * `attestationObject`/`credentialId` exactly as given, plus `prfOutput`
+ * (CP-1 fix: `device_passkey_output` is now derived from `prfOutput`, not
+ * `attestationObject` — reusing `attestationObject`'s own bytes as the fake
+ * `prfOutput` here keeps every existing test's reconstruction numerically
+ * identical, since `passkeyOutputFromPrf` is `keccak256` of whatever's
+ * passed in, same as the superseded function was). Subsequent `register()`
  * calls (the synced-passkey backup registration, Step 11) return a
  * distinct-but-still-deterministic attestation plus a fixed `prfOutput`
  * (required for the wrap to be recoverable — see `kdf.ts`'s
- * `syncedPasskeyOutputFromPrf`). `assert()` returns that same `prfOutput`,
+ * `passkeyOutputFromPrf`). `assert()` returns that same synced `prfOutput`,
  * standing in for the real WebAuthn PRF extension's property that the same
  * credential yields the same output from either ceremony, including on a
  * different (recovering) device sharing the synced credential.
@@ -51,14 +55,20 @@ const DEFAULT_SYNCED_PASSKEY_PRF_OUTPUT = new TextEncoder().encode('fixed-synced
 function makeFakePasskeyProvider(
   attestationObject: Uint8Array,
   credentialId: Uint8Array,
-  syncedPasskeyPrfOutput: Uint8Array = DEFAULT_SYNCED_PASSKEY_PRF_OUTPUT
+  syncedPasskeyPrfOutput: Uint8Array = DEFAULT_SYNCED_PASSKEY_PRF_OUTPUT,
+  devicePrfOutput: Uint8Array = attestationObject
 ): PasskeyProvider {
   let registerCallCount = 0;
   return {
     register: vi.fn(async (_challenge: Uint8Array) => {
       registerCallCount += 1;
       if (registerCallCount === 1) {
-        return { credentialId, attestationObject, clientDataJSON: new TextEncoder().encode('fake-client-data') };
+        return {
+          credentialId,
+          attestationObject,
+          clientDataJSON: new TextEncoder().encode('fake-client-data'),
+          prfOutput: devicePrfOutput,
+        };
       }
       return {
         credentialId: new TextEncoder().encode(`synced-credential-${registerCallCount}`),
@@ -290,8 +300,8 @@ describe('setupWallet', () => {
     // key.
     // devicePasskeyOutput is derived from the fixed attestationObject, so
     // it's fully reproducible here without needing setupWallet to expose it.
-    const { devicePasskeyOutputFromRegistration } = await import('../../src/wallet/kdf.js');
-    const devicePasskeyOutput = devicePasskeyOutputFromRegistration(attestationObject);
+    const { passkeyOutputFromPrf } = await import('../../src/wallet/kdf.js');
+    const devicePasskeyOutput = passkeyOutputFromPrf(attestationObject);
     const decryptionKey = deriveDecryptionKey(devicePasskeyOutput, fixedServiceSecret);
     const entries = decryptKeyring(stored!, decryptionKey);
     expect(entries).toHaveLength(1);
@@ -332,6 +342,67 @@ describe('setupWallet', () => {
       // Raw-byte containment check too (in case of non-UTF8-safe encoding).
       expect(containsBytes(value, fixedServiceSecret)).toBe(false);
     }
+  });
+
+  it('CP-1 regression: the wallet service cannot derive decryption_key from webauthn_public_key + service_secret alone', async () => {
+    // Simulates a colluding/breached wallet service: it holds everything
+    // POST /accounts's body gives it (including webauthn_public_key, the
+    // raw attestationObject) plus service_secret (which it generates
+    // itself) — but NOT prfOutput, which this SDK never transmits. Before
+    // the CP-1 fix, device_passkey_output was keccak256(attestationObject)
+    // — exactly what the server could compute unaided. This test uses a
+    // devicePrfOutput distinct from attestationObject (as a real WebAuthn
+    // PRF output would be) and confirms the server's best-effort
+    // reconstruction fails to decrypt the stored keyring.
+    const attestationObject = new TextEncoder().encode('cp1-attestation-object-sent-to-server');
+    const credentialId = new TextEncoder().encode('cp1-credential-id');
+    const devicePrfOutput = new TextEncoder().encode('cp1-prf-output-never-sent-to-server');
+    const fixedServiceSecret = new Uint8Array(32).fill(77);
+
+    const passkeyProvider = makeFakePasskeyProvider(
+      attestationObject,
+      credentialId,
+      DEFAULT_SYNCED_PASSKEY_PRF_OUTPUT,
+      devicePrfOutput
+    );
+    const storageProvider = makeFakeStorageProvider();
+    const secureKeyProvider = makeFakeSecureKeyProvider();
+    const walletAppCard = makeFakeWalletAppCard();
+    const registerSubCard = makeFakeRegisterSubCard();
+    const { transport, state } = makeStubWalletService({ fixedServiceSecret });
+
+    const result = await setupWallet({
+      passkeyProvider,
+      storageProvider,
+      transport,
+      secureKeyProvider,
+      walletAppCard,
+      registerSubCard: registerSubCard.fn,
+      capabilities: CAPABILITIES,
+      notificationChannels: NOTIFICATION_CHANNELS,
+    });
+
+    // Everything the server actually received/generated: webauthn_public_key
+    // (== attestationObject) from the account-creation body, plus
+    // service_secret (which the stub, like the real server, generates
+    // itself).
+    const serverKnownAttestationObject = base64UrlToBytes(
+      (state.lastAccountsCreateBody!.webauthn_public_key as string)
+    );
+    expect(serverKnownAttestationObject).toEqual(attestationObject);
+    const serverReconstructedDevicePasskeyOutput = passkeyOutputFromPrf(serverKnownAttestationObject);
+    const serverReconstructedDecryptionKey = deriveDecryptionKey(
+      serverReconstructedDevicePasskeyOutput,
+      fixedServiceSecret
+    );
+
+    const stored = storageProvider.store.get('keyring')!;
+    expect(() => decryptKeyring(stored, serverReconstructedDecryptionKey)).toThrow();
+
+    // Meanwhile the real decryption_key (derived from the never-transmitted
+    // prfOutput) does decrypt it.
+    const realDecryptionKey = deriveDecryptionKey(passkeyOutputFromPrf(devicePrfOutput), fixedServiceSecret);
+    expect(decryptKeyring(stored, realDecryptionKey)[0]!.cardAddress).toBe(result.cardHash);
   });
 
   it('does not expose the master private key on the returned result object', async () => {
@@ -506,7 +577,7 @@ describe('setupWallet', () => {
       // wrapped_blob is opaque ciphertext, distinct from decryption_key's
       // own bytes.
       const decryptionKey = deriveDecryptionKey(
-        (await import('../../src/wallet/kdf.js')).devicePasskeyOutputFromRegistration(attestationObject),
+        (await import('../../src/wallet/kdf.js')).passkeyOutputFromPrf(attestationObject),
         fixedServiceSecret
       );
       const wrappedBlob = base64UrlToBytes(registration.body.wrapped_blob as string);
@@ -517,7 +588,7 @@ describe('setupWallet', () => {
       // proving the round trip is genuinely reproducible (e.g. by a later
       // assert() against the same credential, as recovery does), not
       // coincidental.
-      const syncedPasskeyOutput = (await import('../../src/wallet/kdf.js')).syncedPasskeyOutputFromPrf(
+      const syncedPasskeyOutput = (await import('../../src/wallet/kdf.js')).passkeyOutputFromPrf(
         DEFAULT_SYNCED_PASSKEY_PRF_OUTPUT
       );
       const unwrapped = unwrapDecryptionKey(wrappedBlob, syncedPasskeyOutput);
@@ -562,7 +633,7 @@ describe('setupWallet', () => {
       expect(yubiKeyRegistration!.authorization).toBe(`Bearer ${result.sessionToken}`);
 
       const decryptionKey = deriveDecryptionKey(
-        (await import('../../src/wallet/kdf.js')).devicePasskeyOutputFromRegistration(attestationObject),
+        (await import('../../src/wallet/kdf.js')).passkeyOutputFromPrf(attestationObject),
         fixedServiceSecret
       );
       const wrappedBlob = base64UrlToBytes(yubiKeyRegistration!.body.wrapped_blob as string);

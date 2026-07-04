@@ -48,49 +48,34 @@ export function deriveDecryptionKey(
 }
 
 /**
- * Derive `device_passkey_output` from a `PasskeyProvider.register()` result.
+ * Derive a passkey's device-bound secret output from its WebAuthn PRF
+ * extension output (`providers/PasskeyProvider.ts`'s `prfOutput` field) —
+ * used both for the device-bound passkey's `device_passkey_output` (Step
+ * 2.1, `setupWallet.ts`/`recovery.ts`'s re-registration) and the
+ * synced-passkey backup wrapping key (Step 2.4, `backupRegistration.ts`/
+ * `recovery.ts`). Both are the exact same operation — a deterministic,
+ * credential-bound secret, hashed with keccak256 purely for a fixed-length,
+ * domain-separated output — so one function covers both call sites.
  *
- * Judgment call: the `PasskeyProvider` interface (Step 1.2) exposes no
- * WebAuthn PRF-extension output or other explicit secret derived from the
- * authenticator — `register()` returns only `credentialId`,
- * `attestationObject`, and `clientDataJSON` (see
- * `providers/PasskeyProvider.ts`), and the spec's Step 2 creates the
- * device-bound passkey without a subsequent `assert()` call before Step 4's
- * KDF. Of the fields available at registration, `attestationObject` is the
- * one that is both device-bound (produced by this device's authenticator,
- * not just echoed input) and unique per credential (it embeds the
- * authenticator's attestation over the newly generated credential public
- * key) — `clientDataJSON` is mostly caller-supplied/echoed data (the
- * challenge, origin) and `credentialId` alone is a public identifier, not
- * secret material. Hashing `attestationObject` with keccak256 (the SDK's
- * existing general-purpose hash, per `crypto/hashes.ts`) yields a
- * fixed-length, device/credential-bound value to feed into the KDF as
- * `device_passkey_output`.
+ * CP-1 finding (superseded design, kept here as the historical record of
+ * *why* this isn't derived from `attestationObject`, which an earlier
+ * version of this function did): `attestationObject` is also the value
+ * `setupWallet.ts` sends to the wallet service as `webauthn_public_key`
+ * (needed there for future WebAuthn login verification, unrelated to this
+ * KDF). Deriving a secret KDF input from a value the server also receives
+ * meant the server alone — already holding `service_secret` — could
+ * recompute `decryption_key` without the device ever being involved again,
+ * collapsing the "neither factor alone suffices" security property this
+ * whole module exists to provide. `prfOutput` has no such problem: it is
+ * never transmitted anywhere by this SDK. It also solves the synced-passkey
+ * recovery problem `attestationObject` couldn't: recovery can only
+ * `assert()` against a synced credential, never `register()` it again, and
+ * `attestationObject` is registration-ceremony-specific — not a reproducible
+ * function of the credential alone — while the PRF extension yields the
+ * same output from either ceremony, on any device sharing the credential.
  */
-export function devicePasskeyOutputFromRegistration(attestationObject: Uint8Array): Uint8Array {
+export function passkeyOutputFromPrf(prfOutput: Uint8Array): Uint8Array {
   // Uses the raw hash (not `keccak256` from `crypto/hashes.ts`, which
   // returns a hex string) so the KDF receives raw bytes directly.
-  return keccak_256(attestationObject);
-}
-
-/**
- * Derive the synced-passkey backup wrapping key from a WebAuthn PRF
- * extension output (Step 2.4, `wallet/backupRegistration.ts` /
- * `wallet/recovery.ts`).
- *
- * Judgment call: unlike the device-bound passkey above,
- * `synced_passkey_output` must be re-derivable on a *different* device
- * during recovery, where only `PasskeyProvider.assert()` (never
- * `register()`) is available for a synced credential —
- * `devicePasskeyOutputFromRegistration`'s `attestationObject` hash cannot
- * satisfy this, since `attestationObject` is produced once, at registration,
- * and is not a reproducible function of the credential alone. The WebAuthn
- * PRF extension is designed exactly for this case: it returns a
- * deterministic, credential-bound secret from both `register()` and
- * `assert()` for the same credential (see `providers/PasskeyProvider.ts`'s
- * `prfOutput` field). Hashed with keccak256 here purely for a fixed-length,
- * domain-separated output, matching this file's other derivation.
- */
-export function syncedPasskeyOutputFromPrf(prfOutput: Uint8Array): Uint8Array {
   return keccak_256(prfOutput);
 }

@@ -1,5 +1,5 @@
 export { setupWallet, type WalletSetupOptions, type WalletSetupResult } from './setupWallet.js';
-export { deriveDecryptionKey, devicePasskeyOutputFromRegistration, syncedPasskeyOutputFromPrf } from './kdf.js';
+export { deriveDecryptionKey, passkeyOutputFromPrf } from './kdf.js';
 export {
   encryptKeyring,
   decryptKeyring,
