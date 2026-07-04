@@ -1,0 +1,71 @@
+name: Client SDK CI
+
+on:
+  push:
+    paths:
+      - 'client-sdk/**'
+      - 'membership_card_verifier/**'
+      - 'specs/serialization-conformance.json'
+      - '.github/workflows/client-sdk-ci.yml'
+  pull_request:
+    paths:
+      - 'client-sdk/**'
+      - 'membership_card_verifier/**'
+      - 'specs/serialization-conformance.json'
+      - '.github/workflows/client-sdk-ci.yml'
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+          cache-dependency-path: |
+            client-sdk/pnpm-lock.yaml
+            membership_card_verifier/pnpm-lock.yaml
+
+      # client-sdk's package.json depends on
+      # @membership-card-protocol/{verifier,verifier-ipfs-provider} via
+      # file: references (neither is published to npm yet — see the "//"
+      # TODO in client-sdk/packages/client-sdk/package.json). Those
+      # packages must be installed and built here first so their dist/
+      # output exists before client-sdk's own install/build runs.
+      - name: Install and build membership_card_verifier (client-sdk's file: dependency)
+        working-directory: membership_card_verifier
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run build
+
+      - name: Install client-sdk workspace dependencies
+        working-directory: client-sdk
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        working-directory: client-sdk
+        run: pnpm -r lint
+
+      - name: Typecheck
+        working-directory: client-sdk
+        run: pnpm -r typecheck
+
+      # NODE_OPTIONS matches packages/client-sdk's own test script — see
+      # that package's package.json for why (@noble/post-quantum needs
+      # globalThis.crypto on Node versions where it isn't already global).
+      - name: Test (client-sdk core + web, Vitest; client-sdk-rn, Jest + RN preset)
+        working-directory: client-sdk
+        env:
+          NODE_OPTIONS: --experimental-global-webcrypto
+        run: pnpm -r test
+
+      - name: Build
+        working-directory: client-sdk
+        run: pnpm -r build

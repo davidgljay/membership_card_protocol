@@ -20,14 +20,6 @@ export default {
       '<rootDir>/../../../membership_card_verifier/packages/verifier/src/index.ts',
     '^@membership-card-protocol/verifier-ipfs-provider$':
       '<rootDir>/../../../membership_card_verifier/packages/verifier-ipfs-provider/src/index.ts',
-    // The verifier package's own @noble/* deps live in
-    // membership_card_verifier's separate, non-hoisted pnpm store
-    // (.pnpm/@noble+post-quantum@.../node_modules/@noble/...), which the
-    // transformIgnorePatterns allow-list below can't match (it only checks
-    // the segment immediately after "node_modules/", not pnpm's nested
-    // virtual store layout). Redirect to this workspace's own hoisted,
-    // already-working @noble/* install instead.
-    '^@noble/(.*)$': '<rootDir>/../../node_modules/@noble/$1',
     // Source uses NodeNext/bundler-style relative imports ending in `.js`
     // (pointing at the `.ts` source file, per TS convention for ESM
     // output). Jest's CJS-style resolver doesn't do that remapping itself.
@@ -36,8 +28,21 @@ export default {
   // The react-native preset's default only spares react-native-prefixed
   // packages from the "don't transform node_modules" rule. @noble/* ships
   // ESM-only, so it needs the same exemption or Jest's CJS require() chokes
-  // on its `import` statements.
+  // on its `import` statements — including verifier's own copy, which pnpm
+  // resolves through its separate, non-hoisted `.pnpm/@noble+curves@<ver>/
+  // node_modules/@noble/...` virtual-store layout. A single combined
+  // pattern handles both shapes (hoisted `node_modules/@noble/...` and
+  // nested `.pnpm/@noble+.../node_modules/@noble/...`) — tried a
+  // moduleNameMapper redirect to this workspace's own hoisted @noble/*
+  // install first, but that broke verifier's `@noble/curves` import: this
+  // workspace's hoisted copy is a newer major version (2.x, pulled in by
+  // hpke-js) that dropped the `p256` entry point verifier's crypto.ts
+  // needs (`^1.9.0`) — redirecting silently served the wrong version
+  // instead of failing loudly. Letting Jest resolve @noble/curves the
+  // normal way from whichever file imports it (verifier's own
+  // node_modules symlink, correctly pinned to ^1.9.0) and simply not
+  // skipping transformation is the actual fix.
   transformIgnorePatterns: [
-    'node_modules/(?!((jest-)?react-native|@react-native(-community)?|@noble)/)',
+    'node_modules/(?!(jest-)?react-native|@react-native(-community)?|@noble|\\.pnpm/@noble)',
   ],
 };
