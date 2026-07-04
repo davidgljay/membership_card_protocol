@@ -1,5 +1,5 @@
 export { setupWallet, type WalletSetupOptions, type WalletSetupResult } from './setupWallet.js';
-export { deriveDecryptionKey, devicePasskeyOutputFromRegistration } from './kdf.js';
+export { deriveDecryptionKey, devicePasskeyOutputFromRegistration, syncedPasskeyOutputFromPrf } from './kdf.js';
 export {
   encryptKeyring,
   decryptKeyring,
@@ -25,3 +25,16 @@ export {
   type RegisterBackupOptions,
   type BackupRegistrationResult,
 } from './backupRegistration.js';
+export {
+  initiateRecovery,
+  cancelRecovery,
+  releaseRecoveryKey,
+  fetchKeyringBlob,
+  recoverWallet,
+  type RecoveryMethod,
+  type InitiateRecoveryResult,
+  type CancelRecoveryResult,
+  type ReleaseRecoveryKeyOutcome,
+  type RecoverWalletOptions,
+  type RecoverWalletResult,
+} from './recovery.js';

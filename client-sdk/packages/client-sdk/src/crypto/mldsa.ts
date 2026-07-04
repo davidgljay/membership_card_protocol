@@ -34,6 +34,20 @@ export function mlDsa44Sign(secretKey: Uint8Array, message: Uint8Array): Uint8Ar
 }
 
 /**
+ * Recover the public key belonging to an ML-DSA-44 secret key.
+ *
+ * Used by recovery (`wallet/recovery.ts`, Step 2.4) to reconstruct
+ * `masterPublicKey` from the master private key recovered out of the
+ * decrypted keyring — `wallet/keyring.ts`'s `KeyringEntry` stores only
+ * `privateKey`, not the corresponding public key, since Step 2.1 never
+ * needed it (the public key was already in scope, freshly generated,
+ * throughout `setupWallet`).
+ */
+export function mlDsa44GetPublicKey(secretKey: Uint8Array): Uint8Array {
+  return ml_dsa44.getPublicKey(secretKey);
+}
+
+/**
  * Verify an ML-DSA-44 signature.
  *
  * NOTE: `@noble/post-quantum` has no independent security audit at time of

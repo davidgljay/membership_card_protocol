@@ -33,29 +33,47 @@ function readJsonBody(options: RequestOptions): Record<string, unknown> {
   return JSON.parse(new TextDecoder().decode(options.body)) as Record<string, unknown>;
 }
 
+const DEFAULT_SYNCED_PASSKEY_PRF_OUTPUT = new TextEncoder().encode('fixed-synced-passkey-prf-output');
+
 /**
  * A fake PasskeyProvider with deterministic registration output. The first
  * `register()` call (the device-bound passkey, Step 2) returns
  * `attestationObject`/`credentialId` exactly as given, so existing tests can
- * recompute `devicePasskeyOutput` independently. Subsequent calls (the
- * synced-passkey backup registration, Step 11) return a distinct-but-still-
- * deterministic attestation, standing in for a genuinely separate credential.
+ * recompute `devicePasskeyOutput` independently. Subsequent `register()`
+ * calls (the synced-passkey backup registration, Step 11) return a
+ * distinct-but-still-deterministic attestation plus a fixed `prfOutput`
+ * (required for the wrap to be recoverable — see `kdf.ts`'s
+ * `syncedPasskeyOutputFromPrf`). `assert()` returns that same `prfOutput`,
+ * standing in for the real WebAuthn PRF extension's property that the same
+ * credential yields the same output from either ceremony, including on a
+ * different (recovering) device sharing the synced credential.
  */
-function makeFakePasskeyProvider(attestationObject: Uint8Array, credentialId: Uint8Array): PasskeyProvider {
-  let callCount = 0;
+function makeFakePasskeyProvider(
+  attestationObject: Uint8Array,
+  credentialId: Uint8Array,
+  syncedPasskeyPrfOutput: Uint8Array = DEFAULT_SYNCED_PASSKEY_PRF_OUTPUT
+): PasskeyProvider {
+  let registerCallCount = 0;
   return {
     register: vi.fn(async (_challenge: Uint8Array) => {
-      callCount += 1;
-      if (callCount === 1) {
+      registerCallCount += 1;
+      if (registerCallCount === 1) {
         return { credentialId, attestationObject, clientDataJSON: new TextEncoder().encode('fake-client-data') };
       }
       return {
-        credentialId: new TextEncoder().encode(`synced-credential-${callCount}`),
-        attestationObject: new TextEncoder().encode(`synced-attestation-${callCount}`),
+        credentialId: new TextEncoder().encode(`synced-credential-${registerCallCount}`),
+        attestationObject: new TextEncoder().encode(`synced-attestation-${registerCallCount}`),
         clientDataJSON: new TextEncoder().encode('fake-client-data'),
+        prfOutput: syncedPasskeyPrfOutput,
       };
     }),
-    assert: vi.fn(),
+    assert: vi.fn(async (_challenge: Uint8Array, _credentialId?: Uint8Array) => ({
+      credentialId,
+      authenticatorData: new TextEncoder().encode('fake-authenticator-data'),
+      clientDataJSON: new TextEncoder().encode('fake-client-data'),
+      signature: new TextEncoder().encode('fake-signature'),
+      prfOutput: syncedPasskeyPrfOutput,
+    })),
   };
 }
 
@@ -494,11 +512,13 @@ describe('setupWallet', () => {
       const wrappedBlob = base64UrlToBytes(registration.body.wrapped_blob as string);
       expect(containsBytes(wrappedBlob, decryptionKey)).toBe(false);
 
-      // But it unwraps back to decryption_key using the synced-passkey
+      // But it unwraps back to decryption_key using the synced-passkey PRF
       // output the fake PasskeyProvider's second register() call produced —
-      // proving the round trip is genuinely reproducible, not coincidental.
-      const syncedPasskeyOutput = (await import('../../src/wallet/kdf.js')).devicePasskeyOutputFromRegistration(
-        new TextEncoder().encode('synced-attestation-2')
+      // proving the round trip is genuinely reproducible (e.g. by a later
+      // assert() against the same credential, as recovery does), not
+      // coincidental.
+      const syncedPasskeyOutput = (await import('../../src/wallet/kdf.js')).syncedPasskeyOutputFromPrf(
+        DEFAULT_SYNCED_PASSKEY_PRF_OUTPUT
       );
       const unwrapped = unwrapDecryptionKey(wrappedBlob, syncedPasskeyOutput);
       expect(unwrapped).toEqual(decryptionKey);

@@ -24,6 +24,17 @@ export interface PasskeyProvider {
     credentialId: Uint8Array;
     attestationObject: Uint8Array;
     clientDataJSON: Uint8Array;
+    /**
+     * WebAuthn PRF extension output, if the platform authenticator supports
+     * it (added Step 2.4, `wallet/recovery.ts`) — a deterministic,
+     * credential-bound secret, unlike `attestationObject` (which is
+     * ceremony-specific and never reproducible from a later `assert()`).
+     * Required for a synced-passkey backup registration
+     * (`wallet/backupRegistration.ts`) to be recoverable later, since
+     * recovery can only `assert()` against a synced credential, never
+     * `register()` it again.
+     */
+    prfOutput?: Uint8Array;
   }>;
 
   /**
@@ -43,5 +54,7 @@ export interface PasskeyProvider {
     authenticatorData: Uint8Array;
     clientDataJSON: Uint8Array;
     signature: Uint8Array;
+    /** Same WebAuthn PRF extension output as `register()`'s, for the same credential — see that field's doc. */
+    prfOutput?: Uint8Array;
   }>;
 }

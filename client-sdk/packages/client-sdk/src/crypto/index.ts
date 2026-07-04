@@ -4,6 +4,7 @@ export {
   mlDsa44GenerateKeypair,
   mlDsa44Sign,
   mlDsa44Verify,
+  mlDsa44GetPublicKey,
   type MlDsa44Keypair,
 } from './mldsa.js';
 export {

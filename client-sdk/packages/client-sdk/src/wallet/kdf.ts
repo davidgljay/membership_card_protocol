@@ -72,3 +72,25 @@ export function devicePasskeyOutputFromRegistration(attestationObject: Uint8Arra
   // returns a hex string) so the KDF receives raw bytes directly.
   return keccak_256(attestationObject);
 }
+
+/**
+ * Derive the synced-passkey backup wrapping key from a WebAuthn PRF
+ * extension output (Step 2.4, `wallet/backupRegistration.ts` /
+ * `wallet/recovery.ts`).
+ *
+ * Judgment call: unlike the device-bound passkey above,
+ * `synced_passkey_output` must be re-derivable on a *different* device
+ * during recovery, where only `PasskeyProvider.assert()` (never
+ * `register()`) is available for a synced credential —
+ * `devicePasskeyOutputFromRegistration`'s `attestationObject` hash cannot
+ * satisfy this, since `attestationObject` is produced once, at registration,
+ * and is not a reproducible function of the credential alone. The WebAuthn
+ * PRF extension is designed exactly for this case: it returns a
+ * deterministic, credential-bound secret from both `register()` and
+ * `assert()` for the same credential (see `providers/PasskeyProvider.ts`'s
+ * `prfOutput` field). Hashed with keccak256 here purely for a fixed-length,
+ * domain-separated output, matching this file's other derivation.
+ */
+export function syncedPasskeyOutputFromPrf(prfOutput: Uint8Array): Uint8Array {
+  return keccak_256(prfOutput);
+}

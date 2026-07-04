@@ -2,8 +2,9 @@ import { randomBytes } from '@noble/hashes/utils.js';
 import { mlDsa44GenerateKeypair, mlDsa44Sign } from '../crypto/mldsa.js';
 import { keccak256 } from '../crypto/hashes.js';
 import { bytesToBase64Url, base64UrlToBytes } from '../util/base64url.js';
-import { deriveDecryptionKey, devicePasskeyOutputFromRegistration } from './kdf.js';
+import { deriveDecryptionKey, devicePasskeyOutputFromRegistration, syncedPasskeyOutputFromPrf } from './kdf.js';
 import { encryptKeyring, computeKeyringId } from './keyring.js';
+import { requestJson } from './httpJson.js';
 import {
   registerDeviceSubCard,
   type WalletAppCardIdentity,
@@ -65,11 +66,27 @@ import type { YubiKeyProvider } from '../providers/YubiKeyProvider.js';
  *      /accounts/{card_hash}/keyring/challenge` + `PUT
  *      /accounts/{card_hash}/keyring` (Step 2.4's keyring-rotation
  *      endpoint — authenticated the same way, by the master key signing a
- *      challenge, which this function still holds at this point). The
- *      final `keyring_id` and `service_secret` returned by step 2 are what
- *      this function reports and uses — the provisional blob and its
- *      `keyring_id` from step 1 are immediately superseded server-side and
- *      never referenced again.
+ *      challenge, which this function still holds at this point), passing
+ *      `rotate_service_secret: false`. The final `keyring_id` this call
+ *      returns is what this function reports; `service_secret` is
+ *      unchanged from step 1 (the same value already used to derive
+ *      `decryption_key` above) — the provisional blob and its `keyring_id`
+ *      from step 1 are immediately superseded server-side and never
+ *      referenced again.
+ *
+ * Why `rotate_service_secret: false` matters (found while building Step
+ * 2.4's recovery flow): this endpoint previously rotated `service_secret`
+ * unconditionally on every call. Since the client cannot know a secret
+ * before a call that mints it, and the endpoint always minted a *different*
+ * one than whatever the client had just encrypted with, no finite chain of
+ * calls to it could ever leave the stored blob's true encryption secret
+ * matching what `GET /accounts/{card_hash}/service-secret` would later
+ * return — a structural bug, not a client-side mistake, fixed by adding
+ * this flag (`wallet-service` `keyring.put.ts`'s doc comment has the full
+ * account). This function's step 2 call is exactly the case the flag
+ * exists for: it installs a blob already encrypted under the *current*
+ * (step 1's) secret, so the server must not mint a different one out from
+ * under it.
  *
  * This keeps `decryption_key` — the value the spec is explicit that
  * "neither `device_passkey_output` alone nor `service_secret` alone can
@@ -162,28 +179,6 @@ interface KeyringChallengeResponseBody {
 interface KeyringUpdateResponseBody {
   service_secret: string;
   keyring_id: string;
-}
-
-async function requestJson<T>(
-  transport: ObliviousProtocolTransport,
-  method: 'GET' | 'POST' | 'PUT' | 'DELETE',
-  path: string,
-  body?: unknown
-): Promise<T> {
-  const response = await transport.request(
-    { kind: 'wallet_service' },
-    {
-      method,
-      path,
-      ...(body !== undefined
-        ? { body: new TextEncoder().encode(JSON.stringify(body)), headers: { 'content-type': 'application/json' } }
-        : {}),
-    }
-  );
-  if (response.status < 200 || response.status >= 300) {
-    throw new Error(`setupWallet: ${method} ${path} returned status ${response.status}`);
-  }
-  return JSON.parse(new TextDecoder().decode(response.body)) as T;
 }
 
 export async function setupWallet(options: WalletSetupOptions): Promise<WalletSetupResult> {
@@ -295,6 +290,7 @@ export async function setupWallet(options: WalletSetupOptions): Promise<WalletSe
         challenge: keyringChallenge.challenge,
         signature: bytesToBase64Url(keyringSignature),
         new_encrypted_keyring_blob: bytesToBase64Url(finalKeyringBlob),
+        rotate_service_secret: false,
       }
     );
 
@@ -322,19 +318,33 @@ export async function setupWallet(options: WalletSetupOptions): Promise<WalletSe
     // above) from a synced one — synced-vs-device-bound is a platform
     // authenticator attachment setting, not something this SDK's interface
     // models. This calls `register()` a second time for a separate
-    // credential and reuses `devicePasskeyOutputFromRegistration`'s
-    // derivation unchanged (the operation is identical; only which
-    // credential produced `attestationObject` differs). The challenge here
-    // is generated locally rather than fetched from the wallet service:
-    // unlike Step 2's device passkey, this credential is never submitted to
-    // or verified by the wallet service (only the resulting wrapped blob
-    // is) — the wallet service already established WebAuthn/attestation
-    // material at account creation, and `devicePasskeyOutputFromRegistration`
-    // hashes only `attestationObject`, which is device/authenticator-
-    // produced regardless of who issued the challenge. ---
+    // credential. The challenge here is generated locally rather than
+    // fetched from the wallet service: unlike Step 2's device passkey, this
+    // credential is never submitted to or verified by the wallet service
+    // (only the resulting wrapped blob is).
+    //
+    // Unlike the device-bound passkey (which derives its wrapping input from
+    // `attestationObject`, since it is only ever used again within this same
+    // `setupWallet` call), this wrapping key MUST be re-derivable later, on
+    // a different device, during recovery (`recovery.ts`, Step 2.4,
+    // `wallet_backup_and_recovery.md §Process 2a` Step 8) — after the
+    // credential syncs via iCloud Keychain / Google Password Manager, the
+    // recovering client can only `assert()` against it, never `register()`
+    // it again, and a WebAuthn `attestationObject` is registration-ceremony-
+    // specific and not reproducible from an assertion. This requires the
+    // WebAuthn PRF extension's evaluated output (`prfOutput`, added to
+    // `PasskeyProvider` in Step 2.4 for exactly this reason): a deterministic,
+    // credential-bound secret available from both `register()` and `assert()`
+    // for the same credential. See `kdf.ts`'s `syncedPasskeyOutputFromPrf`. ---
     const syncedPasskeyChallenge = randomBytes(32);
     const syncedPasskeyRegistration = await passkeyProvider.register(syncedPasskeyChallenge);
-    const syncedPasskeyOutput = devicePasskeyOutputFromRegistration(syncedPasskeyRegistration.attestationObject);
+    if (!syncedPasskeyRegistration.prfOutput) {
+      throw new Error(
+        'setupWallet: synced-passkey registration did not return a PRF output; this backup would be unrecoverable ' +
+          'later (recovery can only assert() against this credential, never register() it again).'
+      );
+    }
+    const syncedPasskeyOutput = syncedPasskeyOutputFromPrf(syncedPasskeyRegistration.prfOutput);
 
     const syncedPasskeyBackup = await registerBackup({
       transport,
