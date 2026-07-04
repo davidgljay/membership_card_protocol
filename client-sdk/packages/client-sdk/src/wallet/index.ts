@@ -38,3 +38,11 @@ export {
   type RecoverWalletOptions,
   type RecoverWalletResult,
 } from './recovery.js';
+export {
+  deregisterSubCard,
+  deregisterSubCardsAfterRecovery,
+  type DeregisterSubCardOptions,
+  type DeregisterSubCardResult,
+  type PreviouslyActiveSubCard,
+  type SubCardDeregistrationOutcome,
+} from './subCardDeregistration.js';

@@ -12,6 +12,11 @@ import {
   type RegisterSubCardFn,
   type SignedSubCardDocument,
 } from './deviceSubCard.js';
+import {
+  deregisterSubCardsAfterRecovery,
+  type PreviouslyActiveSubCard,
+  type SubCardDeregistrationOutcome,
+} from './subCardDeregistration.js';
 import type { PasskeyProvider } from '../providers/PasskeyProvider.js';
 import type { StorageProvider } from '../providers/StorageProvider.js';
 import type { SecureKeyProvider } from '../providers/SecureKeyProvider.js';
@@ -20,8 +25,9 @@ import type { YubiKeyProvider } from '../providers/YubiKeyProvider.js';
 
 /**
  * Recovery (`wallet_backup_and_recovery.md §Process 2a` synced-passkey,
- * §Process 2b` YubiKey) and post-recovery re-registration (`§Process 3`) —
- * Step 2.4.
+ * §Process 2b` YubiKey), post-recovery re-registration (`§Process 3`) —
+ * Step 2.4 — and post-recovery sub-card deregistration
+ * (`subcards.md §Deregistration After Key Recovery`) — Step 2.5.
  *
  * Three independent, separately callable primitives cover initiation and
  * the cancellation window (`initiateRecovery`, `cancelRecovery`,
@@ -33,9 +39,16 @@ import type { YubiKeyProvider } from '../providers/YubiKeyProvider.js';
  * an already-released `wrappedBlob`/`keyringId` (obtained by polling
  * `releaseRecoveryKey` beforehand — polling/backoff is the caller's
  * concern, not this module's) and performs unwrap → fetch → decrypt →
- * re-register → device-sub-card-reissue as one continuous flow, exactly as
- * `wallet_backup_and_recovery.md` describes Steps 6–11 with no natural
- * break point.
+ * deregister previously-active sub-cards → re-register → device-sub-card-
+ * reissue as one continuous flow, exactly as `wallet_backup_and_recovery.md`
+ * describes Steps 6–11 with no natural break point.
+ *
+ * Step 2.5's batch deregistration (`subCardDeregistration.ts`) is folded
+ * into this same function, right after the master key is recovered and
+ * before re-registration, rather than exposed as a separately callable
+ * step: it needs `masterSecretKey` (the only valid signer,
+ * `subcards.md §Authorization for Deregistration`), which — like
+ * `decryptionKey` — never crosses this function's return boundary.
  */
 
 export type RecoveryMethod = 'synced_passkey' | 'yubikey';
@@ -218,6 +231,14 @@ export interface RecoverWalletOptions {
   yubiKeyPin?: string;
   storageKey?: string;
   subCardKeyId?: string;
+  /**
+   * Sub-cards active before the simulated loss (Step 2.5,
+   * `subcards.md §Deregistration After Key Recovery`) — supplied by the
+   * caller (e.g. its own cached card list), since neither the recovered
+   * keyring nor anything else this SDK persists tracks sub-card issuance.
+   * Omit to skip batch deregistration entirely.
+   */
+  previouslyActiveSubCards?: PreviouslyActiveSubCard[];
 }
 
 export interface RecoverWalletResult {
@@ -231,6 +252,8 @@ export interface RecoverWalletResult {
   subCardKeyId: string;
   subCardDocument: SignedSubCardDocument;
   subCardRegistered: boolean;
+  /** Per-sub-card outcomes from Step 2.5's batch deregistration; present only if `previouslyActiveSubCards` was supplied. */
+  subCardDeregistrations?: SubCardDeregistrationOutcome[];
 }
 
 /**
@@ -258,6 +281,7 @@ export async function recoverWallet(options: RecoverWalletOptions): Promise<Reco
     keyringId,
     yubiKeyProvider,
     yubiKeyPin,
+    previouslyActiveSubCards,
   } = options;
   const storageKey = options.storageKey ?? 'keyring';
 
@@ -309,6 +333,21 @@ export async function recoverWallet(options: RecoverWalletOptions): Promise<Reco
   }
 
   try {
+    // --- Step 2.5: batch-deregister sub-cards active before the loss,
+    // signed by the freshly recovered master key — before re-registration,
+    // matching `subcards.md`'s own ordering ("the holder should deregister
+    // all existing sub-cards" as the first post-recovery action, ahead of
+    // "each app should be prompted to re-request"). Skipped entirely if the
+    // caller didn't supply a list. ---
+    let subCardDeregistrations: SubCardDeregistrationOutcome[] | undefined;
+    if (previouslyActiveSubCards && previouslyActiveSubCards.length > 0) {
+      subCardDeregistrations = await deregisterSubCardsAfterRecovery(
+        transport,
+        masterSecretKey,
+        previouslyActiveSubCards
+      );
+    }
+
     // --- Process 3, Step 10: re-registration. New device-bound passkey,
     // new decryption_key, new keyring_id — the same provisional/final
     // two-step bootstrap `setupWallet.ts` uses for the analogous problem
@@ -400,6 +439,7 @@ export async function recoverWallet(options: RecoverWalletOptions): Promise<Reco
       subCardKeyId: deviceSubCard.subCardKeyId,
       subCardDocument: deviceSubCard.document,
       subCardRegistered: deviceSubCard.registered,
+      ...(subCardDeregistrations ? { subCardDeregistrations } : {}),
     };
   } finally {
     if (masterSecretKey) {

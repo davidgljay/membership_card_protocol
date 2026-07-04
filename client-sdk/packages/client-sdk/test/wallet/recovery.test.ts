@@ -14,6 +14,7 @@ import type { NotificationChannels } from '../../src/wallet/backupRegistration.j
 import { bytesToBase64Url, base64UrlToBytes } from '../../src/util/base64url.js';
 import { keccak256 } from '../../src/crypto/hashes.js';
 import { mlDsa44GenerateKeypair, mlDsa44Sign, mlDsa44Verify } from '../../src/crypto/mldsa.js';
+import { canonicalize } from '../../src/crypto/canonicalize.js';
 import type { PasskeyProvider } from '../../src/providers/PasskeyProvider.js';
 import type { StorageProvider } from '../../src/providers/StorageProvider.js';
 import type { SecureKeyProvider } from '../../src/providers/SecureKeyProvider.js';
@@ -157,6 +158,7 @@ function makeStubWalletService() {
     backupIdCounter: 0,
     recoveryIdCounter: 0,
     challengeCounter: 0,
+    subCardDeregistrations: [] as Array<{ baseUrl: string; body: Record<string, unknown> }>,
   };
 
   /** Test-only shortcut standing in for the real 72-hour wall-clock wait. */
@@ -172,8 +174,21 @@ function makeStubWalletService() {
 
   const transport: ObliviousProtocolTransport = {
     request: vi.fn(async (destination: ObliviousDestination, requestOptions: RequestOptions) => {
-      expect(destination).toEqual({ kind: 'wallet_service' });
       const { method, path } = requestOptions;
+
+      // A stub press (§Step 2.5) — a distinct destination kind sharing
+      // this same transport, exactly as recoverWallet's own deregistration
+      // step calls it.
+      if (destination.kind === 'press') {
+        if (method === 'POST' && path === '/sub-card/deregister') {
+          const body = readJsonBody(requestOptions);
+          state.subCardDeregistrations.push({ baseUrl: destination.baseUrl, body });
+          return jsonResponse(200, { tx_hash: `tx-${state.subCardDeregistrations.length}` });
+        }
+        throw new Error(`stub press: unhandled ${method} ${path}`);
+      }
+
+      expect(destination).toEqual({ kind: 'wallet_service' });
 
       if (method === 'POST' && path === '/accounts/challenge') {
         return jsonResponse(200, { challenge: nextChallenge(), expires_at: new Date(Date.now() + 300_000).toISOString() });
@@ -549,5 +564,96 @@ describe('recovery (Step 2.4)', () => {
         keyringId: 'nonexistent-keyring-id',
       })
     ).rejects.toThrow();
+  });
+
+  describe('post-recovery sub-card deregistration batch (Step 2.5)', () => {
+    it('deregisters every previously-active sub-card, signed by the recovered primary key, against each one\'s own stub press', async () => {
+      const { result: originalSetup, transport, state, forceExpire } = await performSetup();
+      const { cardHash, syncedPasskeyBackupId } = originalSetup;
+
+      const initiation = await initiateRecovery(transport, cardHash, syncedPasskeyBackupId);
+      forceExpire(initiation.recoveryId);
+      const released = await releaseRecoveryKey(transport, initiation.recoveryId);
+      if (released.status !== 'released') throw new Error('unreachable');
+
+      // Two other apps' sub-cards, active before the simulated loss —
+      // sourced by the caller (e.g. its own cached card list), per
+      // recovery.ts's doc comment on `previouslyActiveSubCards`.
+      const appASubCard = mlDsa44GenerateKeypair();
+      const appBSubCard = mlDsa44GenerateKeypair();
+
+      const syncedPasskeyPrfOutput = new TextEncoder().encode('fixed-synced-prf-output');
+      const newDevicePasskeyProvider = makeFakePasskeyProvider(
+        new TextEncoder().encode('step25-new-device-attestation'),
+        new TextEncoder().encode('step25-new-device-credential'),
+        syncedPasskeyPrfOutput
+      );
+
+      const recovered = await recoverWallet({
+        transport,
+        storageProvider: makeFakeStorageProvider(),
+        secureKeyProvider: makeFakeSecureKeyProvider(),
+        passkeyProvider: newDevicePasskeyProvider,
+        walletAppCard: makeFakeWalletAppCard(),
+        registerSubCard: makeFakeRegisterSubCard().fn,
+        capabilities: CAPABILITIES,
+        cardHash,
+        method: 'synced_passkey',
+        wrappedBlob: released.wrappedBlob,
+        keyringId: released.keyringId,
+        previouslyActiveSubCards: [
+          { subCardPublicKey: appASubCard.publicKey, press: { baseUrl: 'https://press-a.example' } },
+          { subCardPublicKey: appBSubCard.publicKey, press: { baseUrl: 'https://press-b.example' } },
+        ],
+      });
+
+      expect(recovered.subCardDeregistrations).toHaveLength(2);
+      expect(recovered.subCardDeregistrations!.every((o) => o.deregistered)).toBe(true);
+      expect(recovered.subCardDeregistrations![0]!.subCardAddress).toBe(keccak256(appASubCard.publicKey));
+      expect(recovered.subCardDeregistrations![1]!.subCardAddress).toBe(keccak256(appBSubCard.publicKey));
+
+      // Confirmed against the stub press: each request landed at the
+      // correct press, and each signature verifies against the RECOVERED
+      // master public key — never a sub-card key.
+      expect(state.subCardDeregistrations).toHaveLength(2);
+      const [reqA, reqB] = state.subCardDeregistrations;
+      expect(reqA!.baseUrl).toBe('https://press-a.example');
+      expect(reqB!.baseUrl).toBe('https://press-b.example');
+
+      for (const req of state.subCardDeregistrations) {
+        const sigPayload = req.body.sig_payload as { op: string; sub_card_address: string };
+        expect(sigPayload.op).toBe('deregister_sub_card');
+        const signature = base64UrlToBytes(req.body.master_signature as string);
+        expect(mlDsa44Verify(recovered.masterPublicKey, canonicalize(sigPayload), signature)).toBe(true);
+      }
+    });
+
+    it('omits subCardDeregistrations entirely when no previously-active sub-cards are supplied', async () => {
+      const { result: originalSetup, transport, forceExpire } = await performSetup();
+      const initiation = await initiateRecovery(transport, originalSetup.cardHash, originalSetup.syncedPasskeyBackupId);
+      forceExpire(initiation.recoveryId);
+      const released = await releaseRecoveryKey(transport, initiation.recoveryId);
+      if (released.status !== 'released') throw new Error('unreachable');
+
+      const recovered = await recoverWallet({
+        transport,
+        storageProvider: makeFakeStorageProvider(),
+        secureKeyProvider: makeFakeSecureKeyProvider(),
+        passkeyProvider: makeFakePasskeyProvider(
+          new TextEncoder().encode('no-subcards-new-device-attestation'),
+          new TextEncoder().encode('no-subcards-new-device-credential'),
+          new TextEncoder().encode('fixed-synced-prf-output')
+        ),
+        walletAppCard: makeFakeWalletAppCard(),
+        registerSubCard: makeFakeRegisterSubCard().fn,
+        capabilities: CAPABILITIES,
+        cardHash: originalSetup.cardHash,
+        method: 'synced_passkey',
+        wrappedBlob: released.wrappedBlob,
+        keyringId: released.keyringId,
+      });
+
+      expect(recovered.subCardDeregistrations).toBeUndefined();
+    });
   });
 });
