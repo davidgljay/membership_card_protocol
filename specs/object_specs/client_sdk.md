@@ -42,7 +42,7 @@
    - 9.1 [Requester-Side Request](#91-requester-side-request-implemented)
    - 9.2 [Wallet-Side Validation](#92-wallet-side-validation-implemented)
    - 9.3 [Consent and Countersigning](#93-consent-and-countersigning-implemented)
-   - 9.4 [Press Submission and Revocation](#94-press-submission-and-revocation-planned)
+   - 9.4 [Press Submission and Revocation](#94-press-submission-and-revocation-implemented)
    - 9.5 [Deregistration](#95-deregistration-implemented-ahead-of-schedule)
 10. [Messaging and UUID/Relay Management (Planned)](#10-messaging-and-uuidrelay-management-planned)
 11. [Cross-Platform Hardening and Documentation (Planned)](#11-cross-platform-hardening-and-documentation-planned)
@@ -412,9 +412,29 @@ function countersignSubCardRequest(options: CountersignSubCardRequestOptions): P
 
 `registerSubCard: RegisterSubCardFn` (reused from §7.4) is, as there, an injected stub standing in for §9.4's real press-submission primitive.
 
-### 9.4 Press Submission and Revocation (Planned)
+### 9.4 Press Submission and Revocation (Implemented)
 
-Implementation-plan Step 4.4, not yet built. Will submit the completed `SubCardDocument` to a press (`POST /sub-card/register`, `press.md §5.4 processSubCardRegistration`) and implement 8xx revocation (user-initiated, code 801; app-initiated, code 811) via the general card-update-intent flow (`POST /update`) — not deregistration, which is already built (§9.5). The strategic plan's explicit scope exclusion: this package will never expose an API capable of constructing a 9xx sub-card revocation.
+`subcards/pressSubmission.ts`:
+
+```ts
+function submitSubCardRegistration(document: SignedSubCardDocument, options: SubmitSubCardRegistrationOptions): Promise<SubCardRegistrationResult>;
+function createPressSubCardRegistrar(options: SubmitSubCardRegistrationOptions): RegisterSubCardFn;
+```
+
+`POST /sub-card/register` (`press.md §5.4 processSubCardRegistration`), via `ObliviousProtocolTransport`. `createPressSubCardRegistrar` adapts the richer result to the exact `RegisterSubCardFn` shape §7.4's `registerDeviceSubCard` and §9.3's `countersignSubCardRequest` already expected as an injected stub — this is the real implementation both were built ahead of, swallowing a failed submission into `{ registered: false }` rather than throwing, since both callers treat that as a normal outcome to report.
+
+`subcards/revocation.ts`:
+
+```ts
+type SubCardRevocationCode = 800 | 801 | 810 | 811;
+function revokeSubCard(options: RevokeSubCardOptions): Promise<RevokeSubCardResult>;
+```
+
+8xx revocation (`subcard_creation_policy.md §Revocation — 8xx`; `card_updates.md`) via the general card-update-intent flow, `POST /update` — not a sub-card-specific endpoint. User-initiated (code 801) is signed by the wallet's own device sub-card (§7.4's routine-signing key); app-initiated (code 811) is signed by the requesting app's own installation card — both expressed as an `UpdateIntentSigner` (`{ cardPointer, sign }`; `WalletAppCardIdentity` already satisfies this shape structurally), since the press resolves the signer's actual public key itself from `updater_card` (`press.md §5.3`), so this function never needs it directly.
+
+**Structural 9xx exclusion** (the strategic plan's explicit scope requirement): `SubCardRevocationCode` is a literal union of exactly `800 | 801 | 810 | 811` — there is no value of that type naming a 9xx code, so no caller can construct one through this function's type signature even by mistake. Re-checked at runtime too (a thrown error if a caller bypasses TypeScript), confirmed by a test that force-casts a 9xx value past the type system and asserts `transport.request` is never called.
+
+Deregistration is already built — see §9.5, not duplicated here.
 
 ### 9.5 Deregistration (Implemented, Ahead of Schedule)
 
@@ -495,12 +515,12 @@ Established across §8 and reused wherever new verification/acceptance-style fun
 | 4 | 4.1 Requester-side sub-card request | **Done** |
 | 4 | 4.2 Wallet-side inbound validation | **Done** |
 | 4 | 4.3 Consent structure + countersigning | **Done** |
-| 4 | 4.4 Press submission + 8xx revocation | **Not started** (deregistration half already done, §9.5) |
+| 4 | 4.4 Press submission + 8xx revocation | **Done** |
 | 4 | Milestone review | **Not started** |
 | 5 | 5.1–5.6 (messaging, UUID/relay management) | **Not started** |
 | 6 | 6.1–6.3 + CP-2 (cross-platform hardening, docs, pre-production review) | **Not started** |
 
-As of this writing: 197 tests pass in the `client-sdk` core package (24 in `client-sdk-web`, 21 in `client-sdk-rn`); build/typecheck/lint clean across the whole workspace.
+As of this writing: 205 tests pass in the `client-sdk` core package (24 in `client-sdk-web`, 21 in `client-sdk-rn`); build/typecheck/lint clean across the whole workspace.
 
 ---
 

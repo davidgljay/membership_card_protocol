@@ -24,3 +24,16 @@ export {
   type CountersignSubCardRequestOptions,
   type CountersignSubCardRequestOutcome,
 } from './countersign.js';
+export {
+  submitSubCardRegistration,
+  createPressSubCardRegistrar,
+  type SubmitSubCardRegistrationOptions,
+  type SubCardRegistrationResult,
+} from './pressSubmission.js';
+export {
+  revokeSubCard,
+  type SubCardRevocationCode,
+  type UpdateIntentSigner,
+  type RevokeSubCardOptions,
+  type RevokeSubCardResult,
+} from './revocation.js';
