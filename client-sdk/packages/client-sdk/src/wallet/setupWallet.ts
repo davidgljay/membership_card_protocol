@@ -3,15 +3,34 @@ import { keccak256 } from '../crypto/hashes.js';
 import { bytesToBase64Url, base64UrlToBytes } from '../util/base64url.js';
 import { deriveDecryptionKey, devicePasskeyOutputFromRegistration } from './kdf.js';
 import { encryptKeyring, computeKeyringId } from './keyring.js';
+import {
+  registerDeviceSubCard,
+  type WalletAppCardIdentity,
+  type RegisterSubCardFn,
+  type SignedSubCardDocument,
+} from './deviceSubCard.js';
 import type { PasskeyProvider } from '../providers/PasskeyProvider.js';
 import type { StorageProvider } from '../providers/StorageProvider.js';
+import type { SecureKeyProvider } from '../providers/SecureKeyProvider.js';
 import type { ObliviousProtocolTransport } from '../providers/ObliviousProtocolTransport.js';
 
 /**
  * Initial wallet setup (`wallet_backup_and_recovery.md §Process 1`, Steps
- * 1–6): generate the master ML-DSA-44 keypair, create the device-bound
+ * 1–9): generate the master ML-DSA-44 keypair, create the device-bound
  * passkey, exchange with the wallet service to obtain `service_secret`,
- * derive `decryption_key`, and initialize + persist the encrypted keyring.
+ * derive `decryption_key`, initialize + persist the encrypted keyring, and
+ * generate + register the device sub-card (Steps 7–9, `deviceSubCard.ts`)
+ * that all routine signing operations use from this point on (Step 10).
+ *
+ * Steps 7–9 are performed inline here, in the same function, rather than
+ * as a separately callable step: `decryption_key` and the master private
+ * key are local variables scoped to this function's body specifically so
+ * neither is ever exposed via any SDK-facing return value (see the
+ * "Security-critical structural note" below) — splitting device sub-card
+ * registration into its own public entry point would force one of them to
+ * cross a function boundary the caller can observe. `wallet_backup_and_
+ * recovery.md §Process 1` presents Steps 1–10 as one continuous flow with
+ * no natural break point, which this mirrors.
  *
  * ## Ordering judgment call: the `POST /accounts` bootstrap problem
  *
@@ -64,8 +83,17 @@ export interface WalletSetupOptions {
   passkeyProvider: PasskeyProvider;
   storageProvider: StorageProvider;
   transport: ObliviousProtocolTransport;
+  secureKeyProvider: SecureKeyProvider;
+  /** The wallet software's own governance-certified app identity (see `deviceSubCard.ts`'s doc — injected/stubbed pending Phase 4). */
+  walletAppCard: WalletAppCardIdentity;
+  /** Stands in for Phase 4 Step 4.4's press-submission flow (see `deviceSubCard.ts`'s doc — injected/stubbed pending Phase 4). */
+  registerSubCard: RegisterSubCardFn;
+  /** Whitelist of message-type strings the device sub-card may sign. */
+  capabilities: string[];
   /** Storage key the encrypted keyring blob is cached under locally. Defaults to `'keyring'`. */
   storageKey?: string;
+  /** `SecureKeyProvider` key identifier for the device sub-card. Defaults to `'device-sub-card'`. */
+  subCardKeyId?: string;
 }
 
 export interface WalletSetupResult {
@@ -79,6 +107,14 @@ export interface WalletSetupResult {
   expiresAt: string;
   /** WebAuthn credential ID for the device-bound passkey created in Step 2. Public identifier, not secret. */
   passkeyCredentialId: Uint8Array;
+  /** Raw ML-DSA-44 public key of the device sub-card generated in Step 7. Public; safe to expose. Routine signing uses `secureKeyProvider.sign(subCardKeyId, ...)`, never the master key. */
+  subCardPublicKey: Uint8Array;
+  /** `SecureKeyProvider` key identifier the device sub-card was generated under. */
+  subCardKeyId: string;
+  /** The signed `SubCardDocument` submitted for on-chain registration. */
+  subCardDocument: SignedSubCardDocument;
+  /** Whether `registerSubCard` (Step 9) reported the registration as accepted. */
+  subCardRegistered: boolean;
 }
 
 interface AccountsChallengeResponseBody {
@@ -127,7 +163,8 @@ async function requestJson<T>(
 }
 
 export async function setupWallet(options: WalletSetupOptions): Promise<WalletSetupResult> {
-  const { passkeyProvider, storageProvider, transport } = options;
+  const { passkeyProvider, storageProvider, transport, secureKeyProvider, walletAppCard, registerSubCard, capabilities } =
+    options;
   const storageKey = options.storageKey ?? 'keyring';
 
   // --- Step 1: generate the master ML-DSA-44 keypair (spec Step 1).
@@ -240,6 +277,24 @@ export async function setupWallet(options: WalletSetupOptions): Promise<WalletSe
     // StorageProvider. ---
     await storageProvider.set(storageKey, finalKeyringBlob);
 
+    // --- Steps 7–9: device sub-card generation and registration
+    // (`deviceSubCard.ts`). Uses `masterSecretKey` while it's still in
+    // scope, before the `finally` block below clears it — matching Step
+    // 8's "accessed from the keyring... cleared after signing" (the key
+    // never left this function's scope in the first place, so "accessed
+    // from the keyring" is satisfied by construction rather than by an
+    // actual decrypt-from-storage round trip). ---
+    const deviceSubCard = await registerDeviceSubCard({
+      secureKeyProvider,
+      cardHash,
+      masterPublicKey,
+      masterSecretKey,
+      walletAppCard,
+      registerSubCard,
+      capabilities,
+      ...(options.subCardKeyId ? { subCardKeyId: options.subCardKeyId } : {}),
+    });
+
     return {
       cardHash,
       masterPublicKey,
@@ -248,6 +303,10 @@ export async function setupWallet(options: WalletSetupOptions): Promise<WalletSe
       sessionToken: accountsCreateResponse.session_token,
       expiresAt: accountsCreateResponse.expires_at,
       passkeyCredentialId: registration.credentialId,
+      subCardPublicKey: deviceSubCard.subCardPublicKey,
+      subCardKeyId: deviceSubCard.subCardKeyId,
+      subCardDocument: deviceSubCard.document,
+      subCardRegistered: deviceSubCard.registered,
     };
   } finally {
     // --- Step 6: clear the master private key from memory after the

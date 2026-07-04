@@ -2,10 +2,14 @@ import { describe, it, expect, vi } from 'vitest';
 import { setupWallet } from '../../src/wallet/setupWallet.js';
 import { decryptKeyring } from '../../src/wallet/keyring.js';
 import { deriveDecryptionKey } from '../../src/wallet/kdf.js';
+import type { WalletAppCardIdentity, RegisterSubCardFn, SignedSubCardDocument } from '../../src/wallet/deviceSubCard.js';
 import { bytesToBase64Url, base64UrlToBytes } from '../../src/util/base64url.js';
 import { keccak256 } from '../../src/crypto/hashes.js';
+import { mlDsa44GenerateKeypair, mlDsa44Sign, mlDsa44Verify } from '../../src/crypto/mldsa.js';
+import { canonicalize } from '../../src/crypto/canonicalize.js';
 import type { PasskeyProvider } from '../../src/providers/PasskeyProvider.js';
 import type { StorageProvider } from '../../src/providers/StorageProvider.js';
+import type { SecureKeyProvider } from '../../src/providers/SecureKeyProvider.js';
 import type {
   ObliviousProtocolTransport,
   ObliviousDestination,
@@ -51,6 +55,52 @@ function makeFakeStorageProvider(): StorageProvider & { store: Map<string, Uint8
     }),
   };
 }
+
+/** A fake SecureKeyProvider — an in-memory, non-persistent stand-in for the real hardware-backed default implementations. */
+function makeFakeSecureKeyProvider(): SecureKeyProvider & {
+  keys: Map<string, { publicKey: Uint8Array; secretKey: Uint8Array }>;
+} {
+  const keys = new Map<string, { publicKey: Uint8Array; secretKey: Uint8Array }>();
+  return {
+    keys,
+    generateKey: vi.fn(async (keyId: string) => {
+      const keypair = mlDsa44GenerateKeypair();
+      keys.set(keyId, keypair);
+      return keypair.publicKey;
+    }),
+    sign: vi.fn(async (keyId: string, message: Uint8Array) => {
+      const keypair = keys.get(keyId);
+      if (!keypair) throw new Error(`no key for keyId ${keyId}`);
+      return mlDsa44Sign(keypair.secretKey, message);
+    }),
+    getPublicKey: vi.fn(async (keyId: string) => keys.get(keyId)?.publicKey),
+    delete: vi.fn(async (keyId: string) => {
+      keys.delete(keyId);
+    }),
+  };
+}
+
+/** A fake wallet app card identity (stands in for the wallet's real, governance-certified app card — see deviceSubCard.ts's doc). */
+function makeFakeWalletAppCard(): WalletAppCardIdentity {
+  const keypair = mlDsa44GenerateKeypair();
+  return {
+    cardPointer: 'fake-wallet-app-card-pointer',
+    publicKey: keypair.publicKey,
+    sign: (message: Uint8Array) => mlDsa44Sign(keypair.secretKey, message),
+  };
+}
+
+/** A fake test registry standing in for Phase 4's real press-submission flow. */
+function makeFakeRegisterSubCard(): { fn: RegisterSubCardFn; documents: SignedSubCardDocument[] } {
+  const documents: SignedSubCardDocument[] = [];
+  const fn: RegisterSubCardFn = vi.fn(async (doc: SignedSubCardDocument) => {
+    documents.push(doc);
+    return { registered: true };
+  });
+  return { fn, documents };
+}
+
+const CAPABILITIES = ['auth_response', 'card_offer_accepted'];
 
 /**
  * A stubbed wallet service, wired to a fake `ObliviousProtocolTransport`,
@@ -128,17 +178,35 @@ function makeStubWalletService(options: { fixedServiceSecret: Uint8Array }) {
   return { transport, state };
 }
 
+/** Assembles the common set of fixtures every test below needs. */
+function makeFixtures(fixedServiceSecret: Uint8Array, attestationObject: Uint8Array, credentialId: Uint8Array) {
+  const passkeyProvider = makeFakePasskeyProvider(attestationObject, credentialId);
+  const storageProvider = makeFakeStorageProvider();
+  const secureKeyProvider = makeFakeSecureKeyProvider();
+  const walletAppCard = makeFakeWalletAppCard();
+  const registerSubCard = makeFakeRegisterSubCard();
+  const { transport, state } = makeStubWalletService({ fixedServiceSecret });
+  return { passkeyProvider, storageProvider, secureKeyProvider, walletAppCard, registerSubCard, transport, state };
+}
+
 describe('setupWallet', () => {
   it('drives full setup against a stubbed wallet service and writes the keyring to StorageProvider', async () => {
     const attestationObject = new TextEncoder().encode('fixed-attestation-object-bytes');
     const credentialId = new TextEncoder().encode('fixed-credential-id');
     const fixedServiceSecret = new Uint8Array(32).fill(7);
 
-    const passkeyProvider = makeFakePasskeyProvider(attestationObject, credentialId);
-    const storageProvider = makeFakeStorageProvider();
-    const { transport, state } = makeStubWalletService({ fixedServiceSecret });
+    const { passkeyProvider, storageProvider, secureKeyProvider, walletAppCard, registerSubCard, transport, state } =
+      makeFixtures(fixedServiceSecret, attestationObject, credentialId);
 
-    const result = await setupWallet({ passkeyProvider, storageProvider, transport });
+    const result = await setupWallet({
+      passkeyProvider,
+      storageProvider,
+      transport,
+      secureKeyProvider,
+      walletAppCard,
+      registerSubCard: registerSubCard.fn,
+      capabilities: CAPABILITIES,
+    });
 
     // The flow completed and returned the expected public fields.
     expect(result.cardHash).toMatch(/^[0-9a-f]+$/);
@@ -192,11 +260,18 @@ describe('setupWallet', () => {
     const credentialId = new TextEncoder().encode('another-credential-id');
     const fixedServiceSecret = new Uint8Array(32).fill(42);
 
-    const passkeyProvider = makeFakePasskeyProvider(attestationObject, credentialId);
-    const storageProvider = makeFakeStorageProvider();
-    const { transport } = makeStubWalletService({ fixedServiceSecret });
+    const { passkeyProvider, storageProvider, secureKeyProvider, walletAppCard, registerSubCard, transport } =
+      makeFixtures(fixedServiceSecret, attestationObject, credentialId);
 
-    await setupWallet({ passkeyProvider, storageProvider, transport });
+    await setupWallet({
+      passkeyProvider,
+      storageProvider,
+      transport,
+      secureKeyProvider,
+      walletAppCard,
+      registerSubCard: registerSubCard.fn,
+      capabilities: CAPABILITIES,
+    });
 
     // Nothing written to storage contains the service_secret bytes (as a
     // base64url substring or raw bytes) — the only persisted artifact is
@@ -215,19 +290,28 @@ describe('setupWallet', () => {
     const credentialId = new TextEncoder().encode('yet-another-credential-id');
     const fixedServiceSecret = new Uint8Array(32).fill(99);
 
-    const passkeyProvider = makeFakePasskeyProvider(attestationObject, credentialId);
-    const storageProvider = makeFakeStorageProvider();
-    const { transport } = makeStubWalletService({ fixedServiceSecret });
+    const { passkeyProvider, storageProvider, secureKeyProvider, walletAppCard, registerSubCard, transport } =
+      makeFixtures(fixedServiceSecret, attestationObject, credentialId);
 
-    const result = await setupWallet({ passkeyProvider, storageProvider, transport });
+    const result = await setupWallet({
+      passkeyProvider,
+      storageProvider,
+      transport,
+      secureKeyProvider,
+      walletAppCard,
+      registerSubCard: registerSubCard.fn,
+      capabilities: CAPABILITIES,
+    });
 
     // Structural check: enumerate every own-property of the result and
     // confirm none of them is (or contains, for nested values) more bytes
-    // than the known-public fields should carry. Concretely: the only
-    // Uint8Array-valued fields on WalletSetupResult are `masterPublicKey`
-    // (public by design) and `passkeyCredentialId` (a public identifier) —
-    // there is no field carrying secret key material.
-    const allowedBinaryFields = new Set(['masterPublicKey', 'passkeyCredentialId']);
+    // than the known-public fields should carry. The only Uint8Array-valued
+    // fields on WalletSetupResult are `masterPublicKey`, `passkeyCredentialId`,
+    // and `subCardPublicKey` — all public by design — plus `subCardDocument`,
+    // a plain object of base64url strings, not raw bytes, so it's excluded
+    // from this Uint8Array-specific check entirely (it's covered separately
+    // below and by the "no plaintext service_secret" test's shape).
+    const allowedBinaryFields = new Set(['masterPublicKey', 'passkeyCredentialId', 'subCardPublicKey']);
     for (const [key, value] of Object.entries(result)) {
       if (value instanceof Uint8Array) {
         expect(allowedBinaryFields.has(key)).toBe(true);
@@ -239,6 +323,96 @@ describe('setupWallet', () => {
     const walletModule = await import('../../src/wallet/index.js');
     expect(Object.keys(walletModule)).not.toContain('masterSecretKey');
     expect(Object.keys(walletModule)).not.toContain('getMasterPrivateKey');
+  });
+
+  describe('device sub-card generation and registration (Step 2.2)', () => {
+    it('generates a device sub-card via SecureKeyProvider and registers it against the test registry', async () => {
+      const attestationObject = new TextEncoder().encode('sub-card-attestation-object');
+      const credentialId = new TextEncoder().encode('sub-card-credential-id');
+      const fixedServiceSecret = new Uint8Array(32).fill(11);
+
+      const { passkeyProvider, storageProvider, secureKeyProvider, walletAppCard, registerSubCard, transport } =
+        makeFixtures(fixedServiceSecret, attestationObject, credentialId);
+
+      const result = await setupWallet({
+        passkeyProvider,
+        storageProvider,
+        transport,
+        secureKeyProvider,
+        walletAppCard,
+        registerSubCard: registerSubCard.fn,
+        capabilities: CAPABILITIES,
+      });
+
+      // A sub-card key was generated under SecureKeyProvider (non-exportable
+      // by construction — only sign()/getPublicKey() expose anything about
+      // it) and reported back.
+      expect(secureKeyProvider.generateKey).toHaveBeenCalledTimes(1);
+      expect(result.subCardKeyId).toBeTruthy();
+      expect(await secureKeyProvider.getPublicKey(result.subCardKeyId)).toEqual(result.subCardPublicKey);
+
+      // It was submitted to (and accepted by) the test registry exactly once.
+      expect(registerSubCard.fn).toHaveBeenCalledTimes(1);
+      expect(result.subCardRegistered).toBe(true);
+      expect(registerSubCard.documents).toHaveLength(1);
+      const doc = registerSubCard.documents[0]!;
+
+      // The document's fields are correctly wired.
+      expect(doc.holder_primary_card).toBe(result.cardHash);
+      expect(doc.holder_primary_card_pubkey).toBe(bytesToBase64Url(result.masterPublicKey));
+      expect(doc.app_card).toBe(walletAppCard.cardPointer);
+      expect(doc.app_card_pubkey).toBe(bytesToBase64Url(walletAppCard.publicKey));
+      expect(doc.capabilities).toEqual(CAPABILITIES);
+      expect(doc.recipient_pubkey).toBe(bytesToBase64Url(result.subCardPublicKey));
+      expect(doc.attestation_level).toBe('T1');
+      expect(doc).toBe(result.subCardDocument);
+
+      // Both signatures actually verify.
+      const { app_signature: appSig, holder_signature: holderSig, ...withoutSignatures } = doc;
+      expect(
+        mlDsa44Verify(walletAppCard.publicKey, canonicalize(withoutSignatures), base64UrlToBytes(appSig))
+      ).toBe(true);
+      const withAppSignature = { ...withoutSignatures, app_signature: appSig };
+      expect(
+        mlDsa44Verify(result.masterPublicKey, canonicalize(withAppSignature), base64UrlToBytes(holderSig))
+      ).toBe(true);
+    });
+
+    it('routine signing after setup uses the device sub-card key, not the master key', async () => {
+      const attestationObject = new TextEncoder().encode('routine-signing-attestation-object');
+      const credentialId = new TextEncoder().encode('routine-signing-credential-id');
+      const fixedServiceSecret = new Uint8Array(32).fill(13);
+
+      const { passkeyProvider, storageProvider, secureKeyProvider, walletAppCard, registerSubCard, transport } =
+        makeFixtures(fixedServiceSecret, attestationObject, credentialId);
+
+      const result = await setupWallet({
+        passkeyProvider,
+        storageProvider,
+        transport,
+        secureKeyProvider,
+        walletAppCard,
+        registerSubCard: registerSubCard.fn,
+        capabilities: CAPABILITIES,
+      });
+
+      // A "routine operation" (e.g. signing a message) after setup goes
+      // through secureKeyProvider.sign(subCardKeyId, ...) — the only key
+      // material this test's harness has any access to at all, since the
+      // master key was cleared inside setupWallet before returning
+      // (already proven by the "does not expose the master private key"
+      // test above; this test is about which key routine signing *uses*,
+      // not just which key is hidden).
+      const message = new TextEncoder().encode('routine operation payload');
+      const signature = await secureKeyProvider.sign(result.subCardKeyId, message);
+      expect(mlDsa44Verify(result.subCardPublicKey, message, signature)).toBe(true);
+
+      // Exactly one key was ever generated via SecureKeyProvider (the
+      // device sub-card) — no other signing key exists for "routine
+      // operations" to have used instead.
+      expect(secureKeyProvider.keys.size).toBe(1);
+      expect(secureKeyProvider.keys.has(result.subCardKeyId)).toBe(true);
+    });
   });
 });
 
