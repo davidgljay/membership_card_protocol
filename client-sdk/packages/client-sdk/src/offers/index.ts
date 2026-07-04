@@ -21,3 +21,13 @@ export {
   type TargetedOfferReviewResult,
   type OpenOfferReviewResult,
 } from './offerVerification.js';
+export {
+  acceptTargetedOfferAndCountersign,
+  acceptOpenOfferAndCountersign,
+  type KeyringWriteOptions,
+  type CountersignedTargetedOffer,
+  type AcceptTargetedOfferResult,
+  type OpenOfferClaimPayload,
+  type OpenOfferClaimSubmission,
+  type AcceptOpenOfferResult,
+} from './countersign.js';
