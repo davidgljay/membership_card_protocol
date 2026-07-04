@@ -370,7 +370,7 @@ Unlike the open-offer paths, the recipient never talks to the press directly for
 
 ## 9. Sub-Cards
 
-*(Module: `subcards/` for the general/requester-side flow; `wallet/deviceSubCard.ts` and `wallet/subCardDeregistration.ts` for the wallet's own self-signing and deregistration cases, per §7.4/§7.7. Status varies by sub-section.)*
+*(Implemented — Phase 4, all sub-sections. Module: `subcards/` for the general/requester-side flow; `wallet/deviceSubCard.ts` and `wallet/subCardDeregistration.ts` for the wallet's own self-signing and deregistration cases, per §7.4/§7.7. A full request → validate → consent → countersign → register → revoke loop passes end-to-end against a stub press/registry; see `plans/client-sdk/milestones/phase-4-summary.md`.)*
 
 ### 9.1 Requester-Side Request (Implemented)
 
@@ -516,11 +516,11 @@ Established across §8 and reused wherever new verification/acceptance-style fun
 | 4 | 4.2 Wallet-side inbound validation | **Done** |
 | 4 | 4.3 Consent structure + countersigning | **Done** |
 | 4 | 4.4 Press submission + 8xx revocation | **Done** |
-| 4 | Milestone review | **Not started** |
+| 4 | Milestone review | **Done** |
 | 5 | 5.1–5.6 (messaging, UUID/relay management) | **Not started** |
 | 6 | 6.1–6.3 + CP-2 (cross-platform hardening, docs, pre-production review) | **Not started** |
 
-As of this writing: 205 tests pass in the `client-sdk` core package (24 in `client-sdk-web`, 21 in `client-sdk-rn`); build/typecheck/lint clean across the whole workspace.
+As of this writing: 206 tests pass in the `client-sdk` core package (24 in `client-sdk-web`, 21 in `client-sdk-rn`); build/typecheck/lint clean across the whole workspace.
 
 ---
 
