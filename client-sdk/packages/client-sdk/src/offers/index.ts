@@ -31,3 +31,10 @@ export {
   type OpenOfferClaimSubmission,
   type AcceptOpenOfferResult,
 } from './countersign.js';
+export { submitOpenOfferClaim, type Scip, type SubmitOpenOfferClaimResult } from './openOfferClaim.js';
+export {
+  acceptOpenOfferForNewWallet,
+  type AcceptOpenOfferForNewWalletOptions,
+  type AcceptOpenOfferForNewWalletResult,
+  type AcceptedOpenOfferForNewWallet,
+} from './newWalletOpenOfferAcceptance.js';

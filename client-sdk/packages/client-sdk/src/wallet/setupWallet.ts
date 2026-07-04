@@ -102,7 +102,7 @@ import type { YubiKeyProvider } from '../providers/YubiKeyProvider.js';
  * `WalletSetupResult` (the only value this function returns) has no field
  * that can carry it.
  */
-export interface WalletSetupOptions {
+export interface WalletSetupOptions<T = void> {
   passkeyProvider: PasskeyProvider;
   storageProvider: StorageProvider;
   transport: ObliviousProtocolTransport;
@@ -131,9 +131,24 @@ export interface WalletSetupOptions {
   yubiKeyProvider?: YubiKeyProvider;
   /** YubiKey PIN, required only if `yubiKeyProvider` is supplied. */
   yubiKeyPin?: string;
+  /**
+   * Optional hook run after the keyring, backups, and device sub-card are
+   * all established — still inside this function's body, i.e. while
+   * `decryptionKey` is still valid, before the `finally` block clears
+   * `masterSecretKey`. Exists for flows that need exactly one more
+   * keyring-touching operation as part of the *same* continuous wallet
+   * creation (Phase 3 Step 3.4's "claim the open offer that prompted this
+   * wallet's creation" — `open_offer_acceptance_new_wallet.md` describes
+   * wallet setup and claim submission as one guided flow, and
+   * `plans/client-sdk/implementation-plan.md` Step 3.4 explicitly calls for
+   * wallet setup to be "invoked inline as this spec requires") — without
+   * duplicating this entire function's body, and without `decryptionKey`
+   * ever crossing this function's own return boundary the way it never has.
+   */
+  postSetupHook?: (decryptionKey: Uint8Array) => Promise<T>;
 }
 
-export interface WalletSetupResult {
+export interface WalletSetupResult<T = void> {
   /** keccak256 address of the master public key — the holder's card_hash / on-chain identity. */
   cardHash: string;
   /** Raw ML-DSA-44 master public key bytes. Public; safe to expose. */
@@ -156,6 +171,8 @@ export interface WalletSetupResult {
   syncedPasskeyBackupId: string;
   /** `backup_id` for the YubiKey backup registration (Step 14), present only if `yubiKeyProvider` was supplied. */
   yubiKeyBackupId?: string;
+  /** Return value of `postSetupHook`, if one was supplied. */
+  postSetupHookResult: T;
 }
 
 interface AccountsChallengeResponseBody {
@@ -181,7 +198,7 @@ interface KeyringUpdateResponseBody {
   keyring_id: string;
 }
 
-export async function setupWallet(options: WalletSetupOptions): Promise<WalletSetupResult> {
+export async function setupWallet<T = void>(options: WalletSetupOptions<T>): Promise<WalletSetupResult<T>> {
   const {
     passkeyProvider,
     storageProvider,
@@ -193,6 +210,7 @@ export async function setupWallet(options: WalletSetupOptions): Promise<WalletSe
     notificationChannels,
     yubiKeyProvider,
     yubiKeyPin,
+    postSetupHook,
   } = options;
   const storageKey = options.storageKey ?? 'keyring';
 
@@ -410,6 +428,13 @@ export async function setupWallet(options: WalletSetupOptions): Promise<WalletSe
       ...(options.subCardKeyId ? { subCardKeyId: options.subCardKeyId } : {}),
     });
 
+    // --- Optional post-setup hook (see WalletSetupOptions' doc) — still
+    // runs inside this try block, before the finally clears masterSecretKey,
+    // so decryptionKey is valid for the hook's entire execution. ---
+    const postSetupHookResult = (
+      postSetupHook ? await postSetupHook(decryptionKey) : undefined
+    ) as T;
+
     return {
       cardHash,
       masterPublicKey,
@@ -424,6 +449,7 @@ export async function setupWallet(options: WalletSetupOptions): Promise<WalletSe
       subCardRegistered: deviceSubCard.registered,
       syncedPasskeyBackupId: syncedPasskeyBackup.backupId,
       ...(yubiKeyBackupId ? { yubiKeyBackupId } : {}),
+      postSetupHookResult,
     };
   } finally {
     // --- Step 6: clear the master private key from memory after the
