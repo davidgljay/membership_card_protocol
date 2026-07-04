@@ -40,7 +40,7 @@
    - 8.6 [Targeted Offer Acceptance and Press Finalization](#86-targeted-offer-acceptance-and-press-finalization)
 9. [Sub-Cards](#9-sub-cards)
    - 9.1 [Requester-Side Request](#91-requester-side-request-implemented)
-   - 9.2 [Wallet-Side Validation](#92-wallet-side-validation-planned)
+   - 9.2 [Wallet-Side Validation](#92-wallet-side-validation-implemented)
    - 9.3 [Consent and Countersigning](#93-consent-and-countersigning-planned)
    - 9.4 [Press Submission and Revocation](#94-press-submission-and-revocation-planned)
    - 9.5 [Deregistration](#95-deregistration-implemented-ahead-of-schedule)
@@ -376,9 +376,19 @@ Unlike the open-offer paths, the recipient never talks to the press directly for
 
 `subcards/requestSubCard.ts`: `requestSubCard(options): Promise<RequestSubCardResult>` — the general, third-party-app side of `subcards.md §Sub-Card Request Flow Step 1`, generalizing what §7.4 already does for the wallet's own case. Generates a fresh, non-exportable ML-DSA-44 keypair via `SecureKeyProvider`, assembles the `SubCardDocument`, signs with the app's own card key → `app_signature`. Returns an `AppSignedSubCardDocument` (`holder_signature` deliberately absent — added later, §9.3) for the host app to transmit via whatever delivery channel it implements — per OQ-SDK-9, this package does not own sub-card request delivery.
 
-### 9.2 Wallet-Side Validation (Planned)
+### 9.2 Wallet-Side Validation (Implemented)
 
-Implementation-plan Step 4.2, not yet built. Will implement `handleSubCardRequest(rawRequestPayload)` — per OQ-SDK-9, the sole entry point for inbound sub-card requests: verify `app_signature`; apply both keccak256 binding checks (`holder_primary_card_pubkey`, `app_card_pubkey`); validate the app card's chain via the shared `CardVerifier` (§6), reusing the same instance/pattern `press.md §5.4`'s `verifyAppCertificationChain` already uses server-side (`trustedRoots` configured to include the governance app-certification policy root — the plan explicitly leaves "one shared instance with both root sets, vs. a second dedicated instance" as an implementation-time decision, to be made and documented when this step is built). No annotation-board check (`fetchAnnotations: false`, OQ-SDK-11) and no attestation-proof verification are in scope for this step.
+`subcards/handleSubCardRequest.ts`:
+
+```ts
+function handleSubCardRequest(options: HandleSubCardRequestOptions): Promise<HandleSubCardRequestResult>;
+```
+
+Per OQ-SDK-9, the sole entry point for inbound sub-card requests (`subcards.md §Sub-Card Request Flow Step 2`): verify `app_signature`; apply both keccak256 binding checks (`holder_primary_card_pubkey`, `app_card_pubkey`); confirm the app card's chain reaches the governance app-certification policy root and is currently valid (not revoked), via the shared `CardVerifier` (§6). Returns `{ valid: true, request, appCardVerification }` or `{ valid: false, code, reason }` — never a throw for an expected rejection condition, matching §13's conventions; a `CardVerifier` error is caught and surfaced as `code: 'verification_error'`.
+
+**`CardVerifier` instance decision** (resolved): this function takes a `CardVerifier` as a direct parameter rather than constructing one, and expects the caller to pass the **same shared instance** used everywhere else in this package (§6, §8.2) — not a second, narrower instance scoped only to app-certification. `verifyCard()`'s trusted-root check (`trustedRoots.includes(address) || isPolicyAuthorizer(address)`) is a flat membership test with no per-call scoping concept, so a single instance constructed with `trustedRoots` containing the *union* of every root this package needs to recognize (policy trusted roots for offer verification, the governance app-certification root for this check) provides everything a second instance would, at lower operational cost. Mirrors `press.md §5.4`'s `verifyAppCertificationChain`, which documents the identical pattern server-side.
+
+No annotation-board check (`fetchAnnotations: false`, OQ-SDK-11 — this function never reads `appCardVerification.annotations`) and no attestation-proof verification (no attestation provider exists in this package yet, same limitation as §7.4) are in scope.
 
 ### 9.3 Consent and Countersigning (Planned)
 
@@ -465,14 +475,14 @@ Established across §8 and reused wherever new verification/acceptance-style fun
 | 3 | 3.5 Existing-wallet open-offer acceptance | **Done** |
 | 3 | 3.6 Targeted offer acceptance + finalization | **Done** |
 | 4 | 4.1 Requester-side sub-card request | **Done** |
-| 4 | 4.2 Wallet-side inbound validation | **Not started** |
+| 4 | 4.2 Wallet-side inbound validation | **Done** |
 | 4 | 4.3 Consent structure + countersigning | **Not started** |
 | 4 | 4.4 Press submission + 8xx revocation | **Not started** (deregistration half already done, §9.5) |
 | 4 | Milestone review | **Not started** |
 | 5 | 5.1–5.6 (messaging, UUID/relay management) | **Not started** |
 | 6 | 6.1–6.3 + CP-2 (cross-platform hardening, docs, pre-production review) | **Not started** |
 
-As of this writing: 182 tests pass in the `client-sdk` core package (24 in `client-sdk-web`, 21 in `client-sdk-rn`); build/typecheck/lint clean across the whole workspace.
+As of this writing: 190 tests pass in the `client-sdk` core package (24 in `client-sdk-web`, 21 in `client-sdk-rn`); build/typecheck/lint clean across the whole workspace.
 
 ---
 
