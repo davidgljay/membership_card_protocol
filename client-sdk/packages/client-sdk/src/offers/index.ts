@@ -38,3 +38,9 @@ export {
   type AcceptOpenOfferForNewWalletResult,
   type AcceptedOpenOfferForNewWallet,
 } from './newWalletOpenOfferAcceptance.js';
+export {
+  acceptOpenOfferForExistingWallet,
+  type AcceptOpenOfferForExistingWalletOptions,
+  type AcceptOpenOfferForExistingWalletResult,
+  type AcceptedOpenOfferForExistingWallet,
+} from './existingWalletOpenOfferAcceptance.js';
