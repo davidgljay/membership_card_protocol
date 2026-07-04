@@ -10,3 +10,14 @@ export {
   type AssembleOpenOfferResult,
   type SignedOpenCardOffer,
 } from './openOffer.js';
+export {
+  reviewTargetedOffer,
+  reviewOpenOffer,
+  type OfferRejectionCode,
+  type OfferRejection,
+  type OfferChainVerificationOptions,
+  type ApprovedTargetedOffer,
+  type ApprovedOpenOffer,
+  type TargetedOfferReviewResult,
+  type OpenOfferReviewResult,
+} from './offerVerification.js';
