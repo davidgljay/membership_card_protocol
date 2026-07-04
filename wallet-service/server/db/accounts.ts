@@ -94,3 +94,15 @@ export async function updateServiceSecretAndKeyring(
     [fields.keyringId, fields.serviceSecretEnc, fields.serviceSecretDekEnc, cardHash]
   );
 }
+
+/**
+ * Replaces `keyring_id` only, leaving `service_secret_enc`/`_dek_enc`
+ * untouched (client-sdk implementation plan Step 2.4 fix: `rotate_service_
+ * secret: false` on `PUT /accounts/{card_hash}/keyring`). See that route's
+ * doc comment for why unconditionally rotating on every call made the
+ * account's stored blob permanently undecryptable via any secret the
+ * server would later hand back.
+ */
+export async function updateKeyringOnly(pool: Pool, cardHash: string, keyringId: string): Promise<void> {
+  await pool.query('UPDATE holder_accounts SET keyring_id = $1 WHERE card_hash = $2', [keyringId, cardHash]);
+}
