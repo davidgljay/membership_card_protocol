@@ -9,6 +9,8 @@ const validEnv: Record<string, string> = {
   PRESS_POLICY_CIDS: 'bafybeipolicy1,bafybeipolicy2',
   PRESS_MLDSA44_PRIVATE_KEY: validMldsaKey,
   PRESS_SECP256R1_PRIVATE_KEY: '0x' + 'ab'.repeat(32),
+  PRESS_GAS_WALLET_PRIVATE_KEY: '0x' + 'cd'.repeat(32),
+  PRESS_OHTTP_PRIVATE_KEY: Buffer.alloc(32, 7).toString('base64url'),
   ARBITRUM_RPC_URL: 'https://arb1.arbitrum.io/rpc',
   REGISTRY_CONTRACT_ADDRESS: '0x' + '00'.repeat(20),
   FILEBASE_KEY: 'test-key',

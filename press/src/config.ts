@@ -19,6 +19,15 @@ export interface PressConfig {
    * PRESS_SECP256R1_PRIVATE_KEY; msg.sender comes from this key.
    */
   PRESS_GAS_WALLET_PRIVATE_KEY: string;
+  /**
+   * X25519 HPKE private key (client-sdk implementation plan Step 1.4d),
+   * used by src/ohttp-gateway.ts to decapsulate/encapsulate the six
+   * oblivious-relay-routed endpoints. Raw 32-byte key, base64url-encoded,
+   * following the same environment-variable-sourced convention as
+   * PRESS_MLDSA44_PRIVATE_KEY / PRESS_SECP256R1_PRIVATE_KEY rather than
+   * inventing new secret-handling machinery.
+   */
+  PRESS_OHTTP_PRIVATE_KEY: Uint8Array;
   ARBITRUM_RPC_URL: string;
   REGISTRY_CONTRACT_ADDRESS: string;
   FILEBASE_KEY: string;
@@ -111,6 +120,8 @@ export function loadConfig(): PressConfig {
     process.exit(1);
   }
 
+  const PRESS_OHTTP_PRIVATE_KEY = decodeBase64urlKey('PRESS_OHTTP_PRIVATE_KEY', 32);
+
   const ARBITRUM_RPC_URL = requireEnv('ARBITRUM_RPC_URL');
   const REGISTRY_CONTRACT_ADDRESS = requireEnv('REGISTRY_CONTRACT_ADDRESS');
   const FILEBASE_KEY = requireEnv('FILEBASE_KEY');
@@ -136,6 +147,7 @@ export function loadConfig(): PressConfig {
     PRESS_MLDSA44_PRIVATE_KEY,
     PRESS_SECP256R1_PRIVATE_KEY,
     PRESS_GAS_WALLET_PRIVATE_KEY,
+    PRESS_OHTTP_PRIVATE_KEY,
     ARBITRUM_RPC_URL,
     REGISTRY_CONTRACT_ADDRESS,
     FILEBASE_KEY,

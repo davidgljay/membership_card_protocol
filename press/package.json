@@ -17,11 +17,13 @@
   },
   "//": "TODO: replace file: reference with versioned npm ref once @membership-card-protocol/verifier is published",
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.0.0",
     "@membership-card-protocol/verifier": "file:../membership_card_verifier/packages/verifier",
+    "@noble/ciphers": "^2.2.0",
     "@noble/curves": "^1.9.0",
     "@noble/hashes": "^1.7.2",
     "@noble/post-quantum": "^0.5.4",
-    "@aws-sdk/client-s3": "^3.0.0",
+    "hpke-js": "^1.8.0",
     "multiformats": "^13.0.0",
     "nitropack": "^2.11.0",
     "viem": "^2.30.0"
