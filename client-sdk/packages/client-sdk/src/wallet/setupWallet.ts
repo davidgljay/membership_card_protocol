@@ -1,3 +1,4 @@
+import { randomBytes } from '@noble/hashes/utils.js';
 import { mlDsa44GenerateKeypair, mlDsa44Sign } from '../crypto/mldsa.js';
 import { keccak256 } from '../crypto/hashes.js';
 import { bytesToBase64Url, base64UrlToBytes } from '../util/base64url.js';
@@ -9,28 +10,33 @@ import {
   type RegisterSubCardFn,
   type SignedSubCardDocument,
 } from './deviceSubCard.js';
+import { registerBackup, type NotificationChannels } from './backupRegistration.js';
 import type { PasskeyProvider } from '../providers/PasskeyProvider.js';
 import type { StorageProvider } from '../providers/StorageProvider.js';
 import type { SecureKeyProvider } from '../providers/SecureKeyProvider.js';
 import type { ObliviousProtocolTransport } from '../providers/ObliviousProtocolTransport.js';
+import type { YubiKeyProvider } from '../providers/YubiKeyProvider.js';
 
 /**
  * Initial wallet setup (`wallet_backup_and_recovery.md §Process 1`, Steps
- * 1–9): generate the master ML-DSA-44 keypair, create the device-bound
+ * 1–14): generate the master ML-DSA-44 keypair, create the device-bound
  * passkey, exchange with the wallet service to obtain `service_secret`,
- * derive `decryption_key`, initialize + persist the encrypted keyring, and
- * generate + register the device sub-card (Steps 7–9, `deviceSubCard.ts`)
- * that all routine signing operations use from this point on (Step 10).
+ * derive `decryption_key`, initialize + persist the encrypted keyring,
+ * register synced-passkey and (opt-in) YubiKey backups (Steps 11–14,
+ * `backupRegistration.ts`), and generate + register the device sub-card
+ * (Steps 7–9, `deviceSubCard.ts`) that all routine signing operations use
+ * from this point on (Step 10).
  *
- * Steps 7–9 are performed inline here, in the same function, rather than
- * as a separately callable step: `decryption_key` and the master private
- * key are local variables scoped to this function's body specifically so
- * neither is ever exposed via any SDK-facing return value (see the
- * "Security-critical structural note" below) — splitting device sub-card
- * registration into its own public entry point would force one of them to
- * cross a function boundary the caller can observe. `wallet_backup_and_
- * recovery.md §Process 1` presents Steps 1–10 as one continuous flow with
- * no natural break point, which this mirrors.
+ * Steps 7–9 and 11–14 are performed inline here, in the same function,
+ * rather than as separately callable steps: `decryption_key` and the master
+ * private key are local variables scoped to this function's body
+ * specifically so neither is ever exposed via any SDK-facing return value
+ * (see the "Security-critical structural note" below) — splitting device
+ * sub-card registration or backup registration into their own public entry
+ * points would force one of them to cross a function boundary the caller
+ * can observe. `wallet_backup_and_recovery.md §Process 1` presents Steps
+ * 1–15 as one continuous flow with no natural break point, which this
+ * mirrors.
  *
  * ## Ordering judgment call: the `POST /accounts` bootstrap problem
  *
@@ -94,6 +100,20 @@ export interface WalletSetupOptions {
   storageKey?: string;
   /** `SecureKeyProvider` key identifier for the device sub-card. Defaults to `'device-sub-card'`. */
   subCardKeyId?: string;
+  /**
+   * Where backup-recovery notifications should be sent (`wallet_backup_and_
+   * recovery.md §Process 1` Step 13 — "at least one notification channel is
+   * required", enforced server-side by `POST /accounts/{card_hash}/backups`).
+   */
+  notificationChannels: NotificationChannels;
+  /**
+   * Opt-in YubiKey backup (Step 14). Omit to skip YubiKey registration
+   * entirely — the synced-passkey backup (Steps 11–13) is always performed,
+   * since the spec describes it as automatic/default, not opt-in.
+   */
+  yubiKeyProvider?: YubiKeyProvider;
+  /** YubiKey PIN, required only if `yubiKeyProvider` is supplied. */
+  yubiKeyPin?: string;
 }
 
 export interface WalletSetupResult {
@@ -115,6 +135,10 @@ export interface WalletSetupResult {
   subCardDocument: SignedSubCardDocument;
   /** Whether `registerSubCard` (Step 9) reported the registration as accepted. */
   subCardRegistered: boolean;
+  /** `backup_id` for the synced-passkey backup registration (Steps 11–13; always performed). */
+  syncedPasskeyBackupId: string;
+  /** `backup_id` for the YubiKey backup registration (Step 14), present only if `yubiKeyProvider` was supplied. */
+  yubiKeyBackupId?: string;
 }
 
 interface AccountsChallengeResponseBody {
@@ -163,8 +187,18 @@ async function requestJson<T>(
 }
 
 export async function setupWallet(options: WalletSetupOptions): Promise<WalletSetupResult> {
-  const { passkeyProvider, storageProvider, transport, secureKeyProvider, walletAppCard, registerSubCard, capabilities } =
-    options;
+  const {
+    passkeyProvider,
+    storageProvider,
+    transport,
+    secureKeyProvider,
+    walletAppCard,
+    registerSubCard,
+    capabilities,
+    notificationChannels,
+    yubiKeyProvider,
+    yubiKeyPin,
+  } = options;
   const storageKey = options.storageKey ?? 'keyring';
 
   // --- Step 1: generate the master ML-DSA-44 keypair (spec Step 1).
@@ -277,6 +311,65 @@ export async function setupWallet(options: WalletSetupOptions): Promise<WalletSe
     // StorageProvider. ---
     await storageProvider.set(storageKey, finalKeyringBlob);
 
+    // --- Steps 11–13: synced-passkey backup registration
+    // (`backupRegistration.ts`; `wallet_backup_and_recovery.md §Process 1`).
+    // Always performed — the spec describes this path as automatic/default,
+    // unlike the opt-in YubiKey path below. Uses `decryptionKey` while it's
+    // still in scope, same rationale as Steps 7–9's use of `masterSecretKey`.
+    //
+    // Judgment call: `PasskeyProvider` (Step 1.2) has no parameter
+    // distinguishing a device-bound credential (Step 2's `register()` call
+    // above) from a synced one — synced-vs-device-bound is a platform
+    // authenticator attachment setting, not something this SDK's interface
+    // models. This calls `register()` a second time for a separate
+    // credential and reuses `devicePasskeyOutputFromRegistration`'s
+    // derivation unchanged (the operation is identical; only which
+    // credential produced `attestationObject` differs). The challenge here
+    // is generated locally rather than fetched from the wallet service:
+    // unlike Step 2's device passkey, this credential is never submitted to
+    // or verified by the wallet service (only the resulting wrapped blob
+    // is) — the wallet service already established WebAuthn/attestation
+    // material at account creation, and `devicePasskeyOutputFromRegistration`
+    // hashes only `attestationObject`, which is device/authenticator-
+    // produced regardless of who issued the challenge. ---
+    const syncedPasskeyChallenge = randomBytes(32);
+    const syncedPasskeyRegistration = await passkeyProvider.register(syncedPasskeyChallenge);
+    const syncedPasskeyOutput = devicePasskeyOutputFromRegistration(syncedPasskeyRegistration.attestationObject);
+
+    const syncedPasskeyBackup = await registerBackup({
+      transport,
+      sessionToken: accountsCreateResponse.session_token,
+      cardHash,
+      type: 'synced_passkey',
+      decryptionKey,
+      wrappingKey: syncedPasskeyOutput,
+      keyringId: keyringUpdateResponse.keyring_id,
+      notificationChannels,
+      cancellationPubkey: masterPublicKey,
+    });
+
+    // --- Step 14: opt-in YubiKey backup registration, only if a
+    // `YubiKeyProvider` was supplied. ---
+    let yubiKeyBackupId: string | undefined;
+    if (yubiKeyProvider) {
+      if (!yubiKeyPin) {
+        throw new Error('setupWallet: yubiKeyPin is required when yubiKeyProvider is supplied.');
+      }
+      const yubiKeyWrappingKey = await yubiKeyProvider.deriveWrappingKey(yubiKeyPin);
+      const yubiKeyBackup = await registerBackup({
+        transport,
+        sessionToken: accountsCreateResponse.session_token,
+        cardHash,
+        type: 'yubikey',
+        decryptionKey,
+        wrappingKey: yubiKeyWrappingKey,
+        keyringId: keyringUpdateResponse.keyring_id,
+        notificationChannels,
+        cancellationPubkey: masterPublicKey,
+      });
+      yubiKeyBackupId = yubiKeyBackup.backupId;
+    }
+
     // --- Steps 7–9: device sub-card generation and registration
     // (`deviceSubCard.ts`). Uses `masterSecretKey` while it's still in
     // scope, before the `finally` block below clears it — matching Step
@@ -307,6 +400,8 @@ export async function setupWallet(options: WalletSetupOptions): Promise<WalletSe
       subCardKeyId: deviceSubCard.subCardKeyId,
       subCardDocument: deviceSubCard.document,
       subCardRegistered: deviceSubCard.registered,
+      syncedPasskeyBackupId: syncedPasskeyBackup.backupId,
+      ...(yubiKeyBackupId ? { yubiKeyBackupId } : {}),
     };
   } finally {
     // --- Step 6: clear the master private key from memory after the

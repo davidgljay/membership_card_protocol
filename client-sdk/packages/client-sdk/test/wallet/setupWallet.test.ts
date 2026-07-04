@@ -2,7 +2,9 @@ import { describe, it, expect, vi } from 'vitest';
 import { setupWallet } from '../../src/wallet/setupWallet.js';
 import { decryptKeyring } from '../../src/wallet/keyring.js';
 import { deriveDecryptionKey } from '../../src/wallet/kdf.js';
+import { unwrapDecryptionKey } from '../../src/wallet/backupRegistration.js';
 import type { WalletAppCardIdentity, RegisterSubCardFn, SignedSubCardDocument } from '../../src/wallet/deviceSubCard.js';
+import type { NotificationChannels } from '../../src/wallet/backupRegistration.js';
 import { bytesToBase64Url, base64UrlToBytes } from '../../src/util/base64url.js';
 import { keccak256 } from '../../src/crypto/hashes.js';
 import { mlDsa44GenerateKeypair, mlDsa44Sign, mlDsa44Verify } from '../../src/crypto/mldsa.js';
@@ -10,6 +12,7 @@ import { canonicalize } from '../../src/crypto/canonicalize.js';
 import type { PasskeyProvider } from '../../src/providers/PasskeyProvider.js';
 import type { StorageProvider } from '../../src/providers/StorageProvider.js';
 import type { SecureKeyProvider } from '../../src/providers/SecureKeyProvider.js';
+import type { YubiKeyProvider } from '../../src/providers/YubiKeyProvider.js';
 import type {
   ObliviousProtocolTransport,
   ObliviousDestination,
@@ -30,17 +33,33 @@ function readJsonBody(options: RequestOptions): Record<string, unknown> {
   return JSON.parse(new TextDecoder().decode(options.body)) as Record<string, unknown>;
 }
 
-/** A fake PasskeyProvider with deterministic (fixed) registration output. */
+/**
+ * A fake PasskeyProvider with deterministic registration output. The first
+ * `register()` call (the device-bound passkey, Step 2) returns
+ * `attestationObject`/`credentialId` exactly as given, so existing tests can
+ * recompute `devicePasskeyOutput` independently. Subsequent calls (the
+ * synced-passkey backup registration, Step 11) return a distinct-but-still-
+ * deterministic attestation, standing in for a genuinely separate credential.
+ */
 function makeFakePasskeyProvider(attestationObject: Uint8Array, credentialId: Uint8Array): PasskeyProvider {
+  let callCount = 0;
   return {
-    register: vi.fn(async (_challenge: Uint8Array) => ({
-      credentialId,
-      attestationObject,
-      clientDataJSON: new TextEncoder().encode('fake-client-data'),
-    })),
+    register: vi.fn(async (_challenge: Uint8Array) => {
+      callCount += 1;
+      if (callCount === 1) {
+        return { credentialId, attestationObject, clientDataJSON: new TextEncoder().encode('fake-client-data') };
+      }
+      return {
+        credentialId: new TextEncoder().encode(`synced-credential-${callCount}`),
+        attestationObject: new TextEncoder().encode(`synced-attestation-${callCount}`),
+        clientDataJSON: new TextEncoder().encode('fake-client-data'),
+      };
+    }),
     assert: vi.fn(),
   };
 }
+
+const NOTIFICATION_CHANNELS: NotificationChannels = { email: 'holder@example.com' };
 
 function makeFakeStorageProvider(): StorageProvider & { store: Map<string, Uint8Array> } {
   const store = new Map<string, Uint8Array>();
@@ -116,7 +135,9 @@ function makeStubWalletService(options: { fixedServiceSecret: Uint8Array }) {
     keyringUpdateCalls: 0,
     storedKeyringBlobsByCardHash: new Map<string, string>(),
     lastAccountsCreateBody: undefined as Record<string, unknown> | undefined,
+    backupRegistrations: [] as Array<{ authorization: string | undefined; body: Record<string, unknown> }>,
   };
+  let backupIdCounter = 0;
 
   let challengeCounter = 0;
   const nextChallenge = () => {
@@ -171,6 +192,14 @@ function makeStubWalletService(options: { fixedServiceSecret: Uint8Array }) {
         });
       }
 
+      const backupsMatch = requestOptions.path.match(/^\/accounts\/([^/]+)\/backups$/);
+      if (requestOptions.method === 'POST' && backupsMatch) {
+        const body = readJsonBody(requestOptions);
+        backupIdCounter += 1;
+        state.backupRegistrations.push({ authorization: requestOptions.headers?.authorization, body });
+        return jsonResponse(200, { backup_id: `backup-${backupIdCounter}` });
+      }
+
       throw new Error(`stub wallet service: unhandled ${requestOptions.method} ${requestOptions.path}`);
     }),
   };
@@ -206,6 +235,7 @@ describe('setupWallet', () => {
       walletAppCard,
       registerSubCard: registerSubCard.fn,
       capabilities: CAPABILITIES,
+      notificationChannels: NOTIFICATION_CHANNELS,
     });
 
     // The flow completed and returned the expected public fields.
@@ -271,6 +301,7 @@ describe('setupWallet', () => {
       walletAppCard,
       registerSubCard: registerSubCard.fn,
       capabilities: CAPABILITIES,
+      notificationChannels: NOTIFICATION_CHANNELS,
     });
 
     // Nothing written to storage contains the service_secret bytes (as a
@@ -301,6 +332,7 @@ describe('setupWallet', () => {
       walletAppCard,
       registerSubCard: registerSubCard.fn,
       capabilities: CAPABILITIES,
+      notificationChannels: NOTIFICATION_CHANNELS,
     });
 
     // Structural check: enumerate every own-property of the result and
@@ -342,6 +374,7 @@ describe('setupWallet', () => {
         walletAppCard,
         registerSubCard: registerSubCard.fn,
         capabilities: CAPABILITIES,
+        notificationChannels: NOTIFICATION_CHANNELS,
       });
 
       // A sub-card key was generated under SecureKeyProvider (non-exportable
@@ -394,6 +427,7 @@ describe('setupWallet', () => {
         walletAppCard,
         registerSubCard: registerSubCard.fn,
         capabilities: CAPABILITIES,
+        notificationChannels: NOTIFICATION_CHANNELS,
       });
 
       // A "routine operation" (e.g. signing a message) after setup goes
@@ -412,6 +446,133 @@ describe('setupWallet', () => {
       // operations" to have used instead.
       expect(secureKeyProvider.keys.size).toBe(1);
       expect(secureKeyProvider.keys.has(result.subCardKeyId)).toBe(true);
+    });
+  });
+
+  describe('backup registration (Step 2.3)', () => {
+    it('always registers a synced-passkey backup, Bearer-authenticated, whose wrapped blob unwraps to decryption_key', async () => {
+      const attestationObject = new TextEncoder().encode('backup-attestation-object');
+      const credentialId = new TextEncoder().encode('backup-credential-id');
+      const fixedServiceSecret = new Uint8Array(32).fill(21);
+
+      const { passkeyProvider, storageProvider, secureKeyProvider, walletAppCard, registerSubCard, transport, state } =
+        makeFixtures(fixedServiceSecret, attestationObject, credentialId);
+
+      const result = await setupWallet({
+        passkeyProvider,
+        storageProvider,
+        transport,
+        secureKeyProvider,
+        walletAppCard,
+        registerSubCard: registerSubCard.fn,
+        capabilities: CAPABILITIES,
+        notificationChannels: NOTIFICATION_CHANNELS,
+      });
+
+      // register() was called twice: once for the device-bound passkey
+      // (Step 2), once for the synced-passkey backup (Step 11).
+      expect(passkeyProvider.register).toHaveBeenCalledTimes(2);
+
+      expect(result.syncedPasskeyBackupId).toBeTruthy();
+      expect(result.yubiKeyBackupId).toBeUndefined();
+
+      expect(state.backupRegistrations).toHaveLength(1);
+      const registration = state.backupRegistrations[0]!;
+      expect(registration.authorization).toBe(`Bearer ${result.sessionToken}`);
+      expect(registration.body.type).toBe('synced_passkey');
+      expect(registration.body.keyring_id).toBe(result.keyringId);
+      expect(registration.body.notification_channels).toEqual(NOTIFICATION_CHANNELS);
+      expect(registration.body.cancellation_pubkey).toBe(bytesToBase64Url(result.masterPublicKey));
+
+      // The wallet service never sees decryption_key: the wire body's
+      // wrapped_blob is opaque ciphertext, distinct from decryption_key's
+      // own bytes.
+      const decryptionKey = deriveDecryptionKey(
+        (await import('../../src/wallet/kdf.js')).devicePasskeyOutputFromRegistration(attestationObject),
+        fixedServiceSecret
+      );
+      const wrappedBlob = base64UrlToBytes(registration.body.wrapped_blob as string);
+      expect(containsBytes(wrappedBlob, decryptionKey)).toBe(false);
+
+      // But it unwraps back to decryption_key using the synced-passkey
+      // output the fake PasskeyProvider's second register() call produced —
+      // proving the round trip is genuinely reproducible, not coincidental.
+      const syncedPasskeyOutput = (await import('../../src/wallet/kdf.js')).devicePasskeyOutputFromRegistration(
+        new TextEncoder().encode('synced-attestation-2')
+      );
+      const unwrapped = unwrapDecryptionKey(wrappedBlob, syncedPasskeyOutput);
+      expect(unwrapped).toEqual(decryptionKey);
+    });
+
+    it('additionally registers a YubiKey backup when a YubiKeyProvider is supplied, requiring a PIN', async () => {
+      const attestationObject = new TextEncoder().encode('yubikey-attestation-object');
+      const credentialId = new TextEncoder().encode('yubikey-credential-id');
+      const fixedServiceSecret = new Uint8Array(32).fill(33);
+
+      const { passkeyProvider, storageProvider, secureKeyProvider, walletAppCard, registerSubCard, transport, state } =
+        makeFixtures(fixedServiceSecret, attestationObject, credentialId);
+
+      const fixedWrappingKey = new Uint8Array(32).fill(55);
+      const yubiKeyProvider: YubiKeyProvider = {
+        deriveWrappingKey: vi.fn(async (pin: string) => {
+          expect(pin).toBe('1234');
+          return fixedWrappingKey;
+        }),
+      };
+
+      const result = await setupWallet({
+        passkeyProvider,
+        storageProvider,
+        transport,
+        secureKeyProvider,
+        walletAppCard,
+        registerSubCard: registerSubCard.fn,
+        capabilities: CAPABILITIES,
+        notificationChannels: NOTIFICATION_CHANNELS,
+        yubiKeyProvider,
+        yubiKeyPin: '1234',
+      });
+
+      expect(yubiKeyProvider.deriveWrappingKey).toHaveBeenCalledTimes(1);
+      expect(result.yubiKeyBackupId).toBeTruthy();
+      expect(state.backupRegistrations).toHaveLength(2);
+
+      const yubiKeyRegistration = state.backupRegistrations.find((r) => r.body.type === 'yubikey');
+      expect(yubiKeyRegistration).toBeDefined();
+      expect(yubiKeyRegistration!.authorization).toBe(`Bearer ${result.sessionToken}`);
+
+      const decryptionKey = deriveDecryptionKey(
+        (await import('../../src/wallet/kdf.js')).devicePasskeyOutputFromRegistration(attestationObject),
+        fixedServiceSecret
+      );
+      const wrappedBlob = base64UrlToBytes(yubiKeyRegistration!.body.wrapped_blob as string);
+      const unwrapped = unwrapDecryptionKey(wrappedBlob, fixedWrappingKey);
+      expect(unwrapped).toEqual(decryptionKey);
+    });
+
+    it('throws if a YubiKeyProvider is supplied without a PIN', async () => {
+      const attestationObject = new TextEncoder().encode('yubikey-no-pin-attestation-object');
+      const credentialId = new TextEncoder().encode('yubikey-no-pin-credential-id');
+      const fixedServiceSecret = new Uint8Array(32).fill(44);
+
+      const { passkeyProvider, storageProvider, secureKeyProvider, walletAppCard, registerSubCard, transport } =
+        makeFixtures(fixedServiceSecret, attestationObject, credentialId);
+
+      const yubiKeyProvider: YubiKeyProvider = { deriveWrappingKey: vi.fn(async () => new Uint8Array(32)) };
+
+      await expect(
+        setupWallet({
+          passkeyProvider,
+          storageProvider,
+          transport,
+          secureKeyProvider,
+          walletAppCard,
+          registerSubCard: registerSubCard.fn,
+          capabilities: CAPABILITIES,
+          notificationChannels: NOTIFICATION_CHANNELS,
+          yubiKeyProvider,
+        })
+      ).rejects.toThrow(/yubiKeyPin is required/);
     });
   });
 });

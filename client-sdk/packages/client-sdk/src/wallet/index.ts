@@ -16,3 +16,12 @@ export {
   type RegisterDeviceSubCardOptions,
   type DeviceSubCardResult,
 } from './deviceSubCard.js';
+export {
+  wrapDecryptionKey,
+  unwrapDecryptionKey,
+  registerBackup,
+  type BackupType,
+  type NotificationChannels,
+  type RegisterBackupOptions,
+  type BackupRegistrationResult,
+} from './backupRegistration.js';

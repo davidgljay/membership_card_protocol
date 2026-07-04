@@ -9,3 +9,4 @@ export type {
   ObliviousResponse,
 } from './ObliviousProtocolTransport.js';
 export type { MultiInstanceLock } from './MultiInstanceLock.js';
+export type { YubiKeyProvider } from './YubiKeyProvider.js';
