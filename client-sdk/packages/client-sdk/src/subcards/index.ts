@@ -12,3 +12,15 @@ export {
   type SubCardRequestRejection,
   type SubCardRequestRejectionCode,
 } from './handleSubCardRequest.js';
+export {
+  assembleSubCardConsent,
+  type SubCardConsentAppIdentity,
+  type SubCardConsentData,
+  type AssembleSubCardConsentOptions,
+} from './consent.js';
+export {
+  countersignSubCardRequest,
+  type ConsentDecision,
+  type CountersignSubCardRequestOptions,
+  type CountersignSubCardRequestOutcome,
+} from './countersign.js';
