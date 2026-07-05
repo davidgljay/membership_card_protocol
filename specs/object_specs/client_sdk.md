@@ -49,7 +49,7 @@
     - 10.2 [Inbound Message Verification and Decryption](#102-inbound-message-verification-and-decryption-implemented)
     - 10.3 [UUID Registration, Session Separation, and Staggering](#103-uuid-registration-session-separation-and-staggering-implemented)
     - 10.4 [Replenishment Scheduling](#104-replenishment-scheduling-implemented)
-    - 10.5 [Realtime Delivery](#105-realtime-delivery-planned)
+    - 10.5 [Realtime Delivery](#105-realtime-delivery-implemented)
     - 10.6 [UUID Pool Deregistration](#106-uuid-pool-deregistration-planned)
 11. [Cross-Platform Hardening and Documentation (Planned)](#11-cross-platform-hardening-and-documentation-planned)
 12. [Security Invariants](#12-security-invariants)
@@ -529,9 +529,24 @@ Implements `notification_relay.md §Replenishment`: proactive UUID pool replenis
 
 A test using an injected fake scheduler (records `{callback, delayMs}` instead of a real timer, driven forward explicitly) proves both halves of the "done when" criterion directly: advancing the fake clock by a trivially small amount immediately after a threshold-crossing report confirms `onReplenish` has *not* fired ("the tick immediately following a simulated message receipt"), and advancing past the maximum configured delay confirms it *has* fired exactly once ("on a subsequent randomized-delay tick").
 
-### 10.5 Realtime Delivery (Planned)
+### 10.5 Realtime Delivery (Implemented)
 
-Will implement SSE (foregrounded), per-card WebSocket (active chat), and silent-push-triggered `GET /pending` catch-up (backgrounded), with explicit-ack-only clearance — never treating relay delivery alone as clearance (`notification_relay.md §Process 3–5`).
+`messaging/delivery.ts`:
+
+```ts
+function openDeviceSse(options: SseConnectionOptions): SseConnectionHandle;
+function openCardWebSocket(options: WebSocketSessionOptions): WebSocketSessionHandle;
+function fetchPending(options: FetchPendingOptions): Promise<DeliveredBlob[]>;
+function ack(options: AckOptions): Promise<void>;
+```
+
+Covers all three delivery paths over the injected `RealtimeTransportProvider` (§4.5): `openDeviceSse` (`notification_relay.md §Process 4` — device-level SSE, foregrounded, not in active chat), `openCardWebSocket` (`§Process 3` — per-card WebSocket during active chat; inbound-only, matching `relay.md §7.3`'s "any frames sent by the device over this WebSocket connection are ignored by the relay" — the returned handle exposes only `close`, no `send`, so there is no outbound-over-relay code path to misuse), and `fetchPending` (`§Process 5` — silent-push-triggered or app-launch catch-up via `GET /pending`).
+
+**The central invariant this module enforces structurally**: `ack` (`§Process 6`, `relay.md §7.6`'s `POST /ack`) is the *only* function in this module that can trigger the relay's staggered wallet-clearance, and none of `openDeviceSse`, `openCardWebSocket`, or `fetchPending` ever calls it — each simply forwards a `DeliveredBlob` to the caller's `onDelivered` callback and returns. This is the device-side mirror of `message_routing.md`'s "wallet services must not clear messages based solely on relay delivery": there is no code path in this module from "blob arrived" to "clearance triggered" that skips an explicit, caller-initiated `ack()` call — matching the plan's requirement that the SDK "never treat a `POST /deliver` 200-equivalent as clearance."
+
+A test confirms all three delivery paths against a stub relay (a fake `RealtimeTransportProvider` whose SSE/WebSocket channels are driven manually, plus a fake relay-fetch client for `GET /pending`) each deliver a blob to `onDelivered`; a further test delivers via all three paths in one run and confirms zero `ack` calls have occurred despite three deliveries, then confirms only an explicit `ack()` call reaches the relay's clearance endpoint. Two additional scenario tests — one in `client-sdk-web`, one in `client-sdk-rn` — run these same `messaging/delivery.ts` functions unmodified against each platform's own *real* default `RealtimeTransportProvider` (native `EventSource`/`WebSocket` on web; `react-native-sse` + native RN `WebSocket` on RN, with only the platform SSE/WebSocket global constructors stubbed since neither jsdom nor Jest's Node environment provides a usable networked implementation), confirming all three delivery paths and the never-ack-on-delivery-alone invariant hold identically on both provider sets, not just against a fully-fake `RealtimeTransportProvider`.
+
+### 10.6 UUID Pool Deregistration (Planned)
 
 ### 10.6 UUID Pool Deregistration (Planned)
 
@@ -596,12 +611,12 @@ Established across §8 and reused wherever new verification/acceptance-style fun
 | 5 | 5.2 Inbound message verification and decryption | **Done** |
 | 5 | 5.3 UUID registration with session separation and staggering | **Done** |
 | 5 | 5.4 Replenishment scheduling | **Done** |
-| 5 | 5.5 Realtime delivery (SSE, WebSocket, push catch-up) | Not started |
+| 5 | 5.5 Realtime delivery (SSE, WebSocket, push catch-up) | **Done** |
 | 5 | 5.6 UUID pool deregistration | Not started |
 | 5 | Milestone review | Not started |
 | 6 | 6.1–6.3 + CP-2 (cross-platform hardening, docs, pre-production review) | **Not started** |
 
-As of this writing: 232 tests pass in the `client-sdk` core package (24 in `client-sdk-web`, 21 in `client-sdk-rn`); build/typecheck/lint clean across the whole workspace.
+As of this writing: 238 tests pass in the `client-sdk` core package (25 in `client-sdk-web`, 22 in `client-sdk-rn` — each includes a Step 5.5 end-to-end realtime-delivery scenario against that platform's real default `RealtimeTransportProvider`); build/typecheck/lint clean across the whole workspace.
 
 ---
 

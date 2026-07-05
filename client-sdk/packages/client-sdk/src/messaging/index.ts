@@ -66,3 +66,16 @@ export {
   type PoolStatus,
   type ReplenishmentSchedulerOptions,
 } from './replenishment.js';
+export {
+  openDeviceSse,
+  openCardWebSocket,
+  fetchPending,
+  ack,
+  type DeliveredBlob,
+  type SseConnectionOptions,
+  type SseConnectionHandle,
+  type WebSocketSessionOptions,
+  type WebSocketSessionHandle,
+  type FetchPendingOptions,
+  type AckOptions,
+} from './delivery.js';
