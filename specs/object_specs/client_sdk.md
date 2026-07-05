@@ -46,7 +46,7 @@
    - 9.5 [Deregistration](#95-deregistration-implemented-ahead-of-schedule)
 10. [Messaging and UUID/Relay Management](#10-messaging-and-uuidrelay-management)
     - 10.1 [Message Envelope Construction and Per-Subcard Fan-out](#101-message-envelope-construction-and-per-subcard-fan-out-implemented)
-    - 10.2 [Inbound Message Verification and Decryption](#102-inbound-message-verification-and-decryption-planned)
+    - 10.2 [Inbound Message Verification and Decryption](#102-inbound-message-verification-and-decryption-implemented)
     - 10.3 [UUID Registration, Replenishment, Realtime Delivery, Deregistration](#103-uuid-registration-replenishment-realtime-delivery-deregistration-planned)
 11. [Cross-Platform Hardening and Documentation (Planned)](#11-cross-platform-hardening-and-documentation-planned)
 12. [Security Invariants](#12-security-invariants)
@@ -476,9 +476,21 @@ The concrete envelope type is named `CardMessageEnvelope`, not `SignedMessageEnv
 
 Since ML-KEM is a KEM, not an AEAD, the actual envelope bytes are encrypted with AES-256-GCM under a key derived via HKDF-SHA3-256 from the ML-KEM shared secret (mirroring the encapsulate-then-derive-then-AEAD shape `HpkeObliviousProtocolTransport` already uses via HPKE's native `export()`, adapted here since ML-KEM has no built-in equivalent). The resulting blob is self-contained (length-prefixed KEM ciphertext + AEAD nonce + AEAD ciphertext) so a recipient holding only the sub-card's ML-KEM secret key can decrypt with no additional side-channel metadata.
 
-### 10.2 Inbound Message Verification and Decryption (Planned)
+### 10.2 Inbound Message Verification and Decryption (Implemented)
 
-Will implement: ML-KEM decapsulation via `decryptRoutingEnvelope`, then signature verification via `CardVerifier.verifyEnvelope()` (§6) — never a hand-rolled check; message-type-specific handling (edit-chain linking, retraction, reaction targets); deduplication by `messageId` for relay-retransmission resilience.
+`messaging/inbound.ts`:
+
+```ts
+function handleInboundRoutingEnvelope(options: HandleInboundRoutingEnvelopeOptions): Promise<InboundResult>;
+```
+
+Decrypts a `RoutingEnvelope` via `decryptRoutingEnvelope` (§10.1), then verifies the recovered `CardMessageEnvelope`'s signature(s) via the shared `CardVerifier`'s `verifyEnvelope()` (`card_verifier.md §6.1`) — never a hand-rolled signature check. Returns a discriminated union: `{ accepted: true, envelope, messageId, verification, duplicate }` or `{ accepted: false, code, reason }` for `decryption_failed`, `signature_invalid` (the verifier call itself threw), or `no_valid_signature` (the verifier ran but no signature in `verification.signatures` validated) — an envelope failing any of these must never be displayed, confirmed by a test that tampers with a signed payload post-signing and asserts the result is `{ accepted: false, code: 'no_valid_signature' }`, not a thrown exception and not a displayed message.
+
+**Bridging to the verifier's generic envelope shape.** `CardVerifier.verifyEnvelope()` expects `{ payload: { message, protocol_version, timestamp, [key]: unknown }, signatures }` — a generic shape used for every kind of envelope the verifier package checks, not specific to this module's typed `MessagePayload`. The verifier's own Stage 1 (`verifyStage1`) canonicalizes and verifies over `payload` exactly as received, without reading or requiring a `message` field itself; passing a `CardMessageEnvelope` through a targeted cast therefore round-trips correctly without this package re-deriving or duplicating any verification logic — the cast bridges an interface-shape mismatch between two packages' unrelated type declarations, not a behavior gap.
+
+Deduplication (`message_routing.md §UUID Re-registration and Retransmission` — "devices must deduplicate by message ID") is by `messageId(payload)` against a `StorageProvider`-backed history keyed `message-history:<id>`: a retransmitted duplicate (same message ID, arriving again after a simulated relay restart) is detected via a check-then-set against that store and reported via `duplicate: true` on the *second* delivery, with exactly one write ever made for that ID — confirmed by a test asserting `StorageProvider.set` is called once across two deliveries of the identical routing envelope.
+
+Message-type-specific handling helpers — `editTarget`, `reactionTarget`, `retractionTarget`, `resolveEditRoot` — derive the piece of state each type's linking rule needs (`edit_of`, `content.target`, `retracts`, and the edit-chain root via `edit_of` pointer-following to the original, `edit_of`-less payload, respectively) without owning any durable message-history store themselves; a host app's own message-history/UI layer is expected to call these against whatever store it maintains.
 
 ### 10.3 UUID Registration, Session Separation, and Staggering (Planned)
 
@@ -552,7 +564,7 @@ Established across §8 and reused wherever new verification/acceptance-style fun
 | 4 | 4.4 Press submission + 8xx revocation | **Done** |
 | 4 | Milestone review | **Done** |
 | 5 | 5.1 Message envelope construction and per-subcard fan-out | **Done** |
-| 5 | 5.2 Inbound message verification and decryption | Not started |
+| 5 | 5.2 Inbound message verification and decryption | **Done** |
 | 5 | 5.3 UUID registration with session separation and staggering | Not started |
 | 5 | 5.4 Replenishment scheduling | Not started |
 | 5 | 5.5 Realtime delivery (SSE, WebSocket, push catch-up) | Not started |
@@ -560,7 +572,7 @@ Established across §8 and reused wherever new verification/acceptance-style fun
 | 5 | Milestone review | Not started |
 | 6 | 6.1–6.3 + CP-2 (cross-platform hardening, docs, pre-production review) | **Not started** |
 
-As of this writing: 215 tests pass in the `client-sdk` core package (24 in `client-sdk-web`, 21 in `client-sdk-rn`); build/typecheck/lint clean across the whole workspace.
+As of this writing: 222 tests pass in the `client-sdk` core package (24 in `client-sdk-web`, 21 in `client-sdk-rn`); build/typecheck/lint clean across the whole workspace.
 
 ---
 

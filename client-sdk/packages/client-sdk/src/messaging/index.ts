@@ -39,3 +39,15 @@ export {
   type RoutingEnvelope,
 } from './fanout.js';
 export { decryptRoutingEnvelope } from './decrypt.js';
+export {
+  handleInboundRoutingEnvelope,
+  editTarget,
+  retractionTarget,
+  reactionTarget,
+  resolveEditRoot,
+  type InboundRejectionCode,
+  type InboundRejection,
+  type InboundMessage,
+  type InboundResult,
+  type HandleInboundRoutingEnvelopeOptions,
+} from './inbound.js';
