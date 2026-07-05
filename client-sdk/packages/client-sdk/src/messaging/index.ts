@@ -51,3 +51,13 @@ export {
   type InboundResult,
   type HandleInboundRoutingEnvelopeOptions,
 } from './inbound.js';
+export {
+  registerCardUuids,
+  registerMultipleCardsUuids,
+  type RegisterCardUuidsOptions,
+  type RegisterCardUuidsResult,
+  type ObliviousProtocolTransportFactory,
+  type CardUuidRegistrationRequest,
+  type RegisterMultipleCardsUuidsOptions,
+  type CardUuidRegistrationOutcome,
+} from './uuidRegistration.js';
