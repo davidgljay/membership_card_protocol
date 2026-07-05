@@ -12,6 +12,7 @@
 - `specs/messaging_protocol.md`
 - `specs/process_specs/message_routing.md`
 - `specs/process_specs/notification_relay.md`
+- `specs/process_specs/oblivious_transport.md`
 - `specs/object_specs/relay.md`
 - `specs/object_specs/press.md`
 - `specs/object_specs/card_verifier.md`
@@ -243,6 +244,7 @@ For reference, the "annotation board" is the EAS (Ethereum Attestation Service) 
 
 ## Related Specs
 
+- `specs/process_specs/oblivious_transport.md` — the formal process spec for the Goal 7 / OQ-SDK-4 oblivious-relay design; covers the envelope format (CP-0), key-configuration discovery, relay target registry, scope table, and the operator-separation caveat in one place, independent of this plan's phased implementation steps
 - `plans/wallet-service/strategic-plan.md`, `plans/wallet-service/implementation-plan.md` — the server-side counterpart this SDK's calls target
 - `specs/object_specs/card_verifier.md` — the verifier package this SDK integrates rather than reimplements
 - `specs/object_specs/press.md` — the press endpoints the SDK submits accepted offers, open-offer claims, and sub-card registrations/deregistrations to

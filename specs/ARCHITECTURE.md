@@ -356,6 +356,8 @@ Use **HTTPS** for all wallet-service-to-wallet-service and press-to-wallet-servi
 
 OHTTP (Oblivious HTTP, RFC 9458) and the Nym mixnet are optional transport upgrades selectable per wallet service via `transport_flags` in the wallet service registry. They are not required for protocol conformance but provide stronger metadata privacy at the cost of latency. See `process_specs/message_routing.md §Transport Extensibility`.
 
+The same HPKE/OHTTP primitive is also used, in a lightweight protocol-specific envelope rather than strict RFC 9458 Binary HTTP, to hide a **device's** IP address from the wallet service and from presses it talks to directly. See `process_specs/oblivious_transport.md` for the full design: the relay as a stateless oblivious forwarder, key-configuration discovery, the envelope format, and the honest caveat that — unlike the defense-in-depth framing above — this specific property requires relay/destination operator separation to hold at all.
+
 ### Routing
 
 Two distinct mappings are involved in the routing model; they must not be conflated:

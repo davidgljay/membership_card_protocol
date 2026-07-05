@@ -1,8 +1,9 @@
 # Acceptance of an Open Offer and Addition to an Existing Wallet — Process Spec
 
-**Version:** 0.1 (draft)  
-**Date:** 2026-05-25  
+**Version:** 0.2 (draft)  
+**Date:** 2026-07-04  
 **Status:** Draft  
+**Changes from v0.1:** Corrected the keyring update step (Step 6) to describe the wallet service's keyring storage and federation replication, replacing an earlier IPFS-based description.
 
 > **Terminology note.** This spec now uses "card" as the canonical term per the Naming Convention.
 
@@ -68,8 +69,8 @@ For first-time recipients who need to create a wallet, see `open_offer_acceptanc
 6. The client stores the new private key in the existing keyring before proceeding:
    - Decrypt the keyring (using `KDF(passkey_output, service_secret)`).
    - Append the new keypair entry (card address → private key) to the keyring blob.
-   - Re-encrypt and post the updated keyring blob to IPFS.
-   - Wait for IPFS confirmation before proceeding to claim submission.
+   - Re-encrypt the keyring blob and send it to the wallet service, which stores it under a new `keyring_id` and replicates it to every other wallet service in the federation (see `wallet_backup_and_recovery.md §Keyring Storage and Replication`).
+   - Wait for the wallet service to confirm the updated keyring is stored before proceeding to claim submission.
 
    The private key must be in the keyring before countersigning so that it is recoverable via the YubiKey backup flow even if the device is lost after signing but before the card is received.
 
@@ -174,3 +175,4 @@ For first-time recipients who need to create a wallet, see `open_offer_acceptanc
 - `card_protocol_spec.md §4` — receiving a card feature spec (open offer receipt flow)
 - `protocol-objects.md §6` — `OpenCardOffer` object reference
 - `protocol-objects.md §7` — `OpenOfferClaimSubmission` object reference
+- `specs/object_specs/wallet.md` — wallet service wire protocol for keyring updates and WebAuthn passkey login

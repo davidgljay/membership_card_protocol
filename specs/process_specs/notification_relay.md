@@ -1,8 +1,9 @@
 # Notification Relay — Process Spec
 
-**Version:** 0.9 (draft)
-**Date:** 2026-07-03
+**Version:** 0.10 (draft)
+**Date:** 2026-07-04
 **Status:** Draft
+**Changes from v0.9:** Corrected the Failure Handling table's relay-unreachable row to match the implemented UUID-pool advance behavior on delivery failure.
 **Changes from v0.8:** `DELETE /cards/{card_hash}/subcards/{subcard_hash}` (wallet-service-local deregistration) previously had zero authentication — anything that knew a `card_hash`/`subcard_hash` pair could wipe a legitimate device's UUID pool. It now requires the same category of signed envelope as UUID registration, proving control of the subcard's private key (§Multi-Device Support "Deregistration"). Also, a v0.8 implementation of UUID-registration verification had additionally rejected registration when the sub-card's on-chain `SubCardEntry.active` flag was `false`; this spec now states explicitly that registration (and deregistration) eligibility must never depend on that flag — on-chain revocation (`subcard_creation_policy.md`'s 8xx/9xx flow) and wallet-service-local deregistration are different mechanisms serving different purposes, and conflating them would make a merely locally-deregistered (e.g. reinstalled-app) sub-card unable to resume receiving messages. See §Multi-Device Support "Deregistration" for the full statement of this distinction.
 **Changes from v0.7:** Process 1 (UUID Registration) step 6 previously registered a subcard's UUID pool with the wallet service via an unauthenticated `{ uuids: [...] }` body — anything that knew a `card_hash`/`subcard_hash` pair could apparently register UUIDs against it without proving control of the corresponding private key. The wallet registration call now requires a signed envelope proving subcard ownership (§Process 1, "Wallet registration"). Registration Privacy is also clarified to name Tor (or another anonymizing transport) as the expected mechanism for wallet registration sessions, rather than an opt-in upgrade for "users with strong privacy requirements" only — and explicitly restates, since it came up during spec review, that this remains a **per-card** session even when a device holds multiple cards: batching multiple cards' registrations into a single session or message was considered and rejected, because it would let a wallet service that happens to service more than one of a device's cards directly infer their co-ownership from the message content — a correlation that anonymizing transport does not prevent, since it hides the sender's network identity, not the payload's contents.
 **Changes from v0.6:** Removed UMBRAL proxy re-encryption from the wallet's message delivery path (see `process_specs/message_routing.md` v0.4). The sender now encrypts independently per subcard before the routing envelope reaches the wallet service; the wallet delivers each already-encrypted envelope to its target subcard's UUID pool without any transform step.
@@ -388,7 +389,7 @@ Device credential registration with the relay must also use separate sessions pe
 | Scenario | Behavior |
 |---|---|
 | UUID pool exhausted for a subcard | Wallet retains message; delivers to remaining subcards; message is held until device replenishes that subcard's UUID pool and wallet retransmits |
-| Relay unreachable for `POST /deliver/{uuid}` | Wallet retries with exponential backoff using the same UUID; UUID not consumed until relay accepts |
+| Relay unreachable for `POST /deliver/{uuid}` | Wallet advances to the next UUID in the subcard's pool and retries (bounded, 5 attempts per delivery pass); UUID not consumed until relay accepts. A sustained outage beyond that leaves the message queued until the subcard next replenishes its UUID pool. |
 | SSE connection drops during delivery | Blob remains in relay message store; delivered via push or `GET /pending` on next wake |
 | WebSocket connection dropped mid-session | Relay closes both sides; UUID consumed; pending blobs in store delivered via SSE or push |
 | Relay restart (Redis cleared) | In-flight blobs lost; wallet retains messages; device re-registers UUIDs; wallet retransmits on re-registration; device deduplicates by message ID |
@@ -421,6 +422,7 @@ The relay service may be operated by the same party as the wallet service, a thi
 ## Related Specs
 
 - `specs/process_specs/message_routing.md` — how messages are routed between wallet services and placed in the recipient card's queue; wallet-to-relay delivery and fan-out
+- `specs/process_specs/oblivious_transport.md` — hides device IP from the wallet service and press using the same relay infrastructure described here, repurposed as a stateless HPKE forwarder rather than a message-delivery bridge; its Honest Caveat section narrows this spec's §Relay Service Trust Model defense-in-depth framing for that specific property
 - `specs/process_specs/wallet_backup_and_recovery.md` — device registration and key management
 - `specs/messaging_protocol.md` — `SignedMessageEnvelope` structure; E2E encryption model
 - `specs/object_specs/relay.md` — relay service API spec; endpoint definitions

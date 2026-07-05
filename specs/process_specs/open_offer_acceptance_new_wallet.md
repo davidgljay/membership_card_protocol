@@ -1,8 +1,9 @@
 # Acceptance of an Open Offer and Creation of a New Wallet — Process Spec
 
-**Version:** 0.1 (draft)  
-**Date:** 2026-05-25  
+**Version:** 0.2 (draft)  
+**Date:** 2026-07-04  
 **Status:** Draft  
+**Changes from v0.1:** Corrected wallet creation (Step 7) and the keyring error path to describe the wallet service's keyring storage and federation replication, replacing an earlier IPFS-based description.
 
 > **Terminology note.** This spec now uses "card" as the canonical term per the Naming Convention.
 
@@ -70,7 +71,7 @@ For recipients who already have a wallet, see `open_offer_acceptance_existing_wa
 
 7. The client generates the recipient's **master card keypair** (ML-DSA-44):
    - The private key is stored in the keyring encrypted with the keyring decryption key.
-   - The keyring blob is posted to IPFS (append-only encrypted blob).
+   - The keyring blob (append-only encrypted store) is sent to the wallet service, which stores it and replicates it to every other wallet service in the federation (see `wallet_backup_and_recovery.md §Keyring Storage and Replication`).
    - The master private key is never stored in plaintext outside secure storage.
 
 8. The client generates a **device sub-card keypair**:
@@ -81,7 +82,7 @@ For recipients who already have a wallet, see `open_offer_acceptance_existing_wa
 9. The wallet service prompts the recipient to optionally set up a YubiKey backup (see `wallet_backup_and_recovery.md`). This step is strongly recommended but may be deferred.
 
 10. Wallet creation is complete. The recipient now has:
-    - A master card keypair (private key in the keyring on IPFS).
+    - A master card keypair (private key in the keyring, stored with the wallet service and replicated across the wallet service federation).
     - A device sub-card keypair (private key in secure device storage).
     - A passkey for re-deriving the keyring decryption key.
 
@@ -162,7 +163,7 @@ For recipients who already have a wallet, see `open_offer_acceptance_existing_wa
 | `expires_at` has passed | Press rejects with "offer expired"; wallet service shows clear error to recipient |
 | `max_acceptances` reached (race lost) | Press rejects with "offer full"; wallet service shows clear error to recipient |
 | Passkey creation fails on device | Wallet creation cannot complete; recipient must use a supported device or browser |
-| Keyring IPFS post fails | Retry; do not allow the recipient to proceed to claim until keyring is posted |
+| Keyring storage or federation replication fails | Retry; do not allow the recipient to proceed to claim until the keyring blob is stored and replicated |
 | Arbitrum transaction reverts | Press surfaces specific rejection reason to wallet service; wallet service shows it to recipient |
 
 ---
@@ -177,3 +178,4 @@ For recipients who already have a wallet, see `open_offer_acceptance_existing_wa
 - `card_protocol_spec.md §4` — receiving a card feature spec
 - `protocol-objects.md §6` — `OpenCardOffer` object reference
 - `protocol-objects.md §7` — `OpenOfferClaimSubmission` object reference
+- `specs/object_specs/wallet.md` — wallet service wire protocol for account creation and keyring storage

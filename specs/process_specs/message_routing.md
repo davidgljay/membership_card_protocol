@@ -1,8 +1,9 @@
 # Message Routing — Process Spec
 
-**Version:** 0.4 (draft)
-**Date:** 2026-06-30
+**Version:** 0.5 (draft)
+**Date:** 2026-07-04
 **Status:** Draft
+**Changes from v0.4:** Corrected the relay delivery failure-handling step (§Message Delivery, Relay Delivery and Multi-Device Fan-out) to match the implemented UUID-pool behavior on delivery failure.
 **Changes from v0.3:** Replaced wallet-service UMBRAL proxy re-encryption with sender-side per-subcard encryption (see §Message Delivery). The wallet service no longer holds re-encryption key material or performs any ciphertext transform — the sender resolves the recipient's current sub-card list from the storage contract and sends one independently-encrypted routing envelope per sub-card. The routing envelope gains a `subcard_hash` field. `reencryption_keys` storage and the `POST /accounts/{card_hash}/subcards` re-encryption-key registration endpoint are removed; sub-card UUID pool registration (`POST /cards/{card_hash}/subcards/{subcard_hash}/uuids`) is unchanged and is now sufficient on its own for a device to begin receiving messages.
 **Changes from v0.2:** Multi-device fan-out model changed from device_key hash to per-subcard pools. The `device_key` concept is removed from the routing layer. UUID registration endpoint updated from `POST /cards/{card_hash}/devices/{device_key}/uuids` to `POST /cards/{card_hash}/subcards/{subcard_hash}/uuids`.
 
@@ -188,7 +189,7 @@ For the envelope's `subcard_hash`:
    ```
 3. On 200: UUID consumed; relay has accepted responsibility for delivery.
 4. On 404 or 410 (UUID unknown or already consumed): advance to the next UUID in the pool and retry.
-5. On 5xx or network error: retry with exponential backoff using the same UUID.
+5. On 5xx or network error: advance to the next UUID in the pool and retry, the same as step 4 — a fresh UUID is cheap and plentiful, and a sustained relay outage is handled by the message remaining queued and being retransmitted whenever the sub-card next registers UUIDs (see UUID Re-registration and Retransmission below), not by repeated attempts against one UUID. This advance is bounded (5 attempts per delivery pass); if the pool is exhausted, the message stays queued until the sub-card replenishes it.
 
 Since the sender already addressed each envelope to a specific sub-card, "fan-out" here means independent per-subcard *envelopes* arriving as independent deliveries — not a single inbound message transformed N ways at the wallet. Failure delivering one sub-card's envelope does not affect any other.
 
@@ -290,6 +291,7 @@ Full sender anonymity at the wallet-service level requires Nym transport (`0x04`
 ## Related Specs
 
 - `ARCHITECTURE.md ADR-007` — transport layer decisions; sender-side per-subcard encryption; OHTTP
+- `specs/process_specs/oblivious_transport.md` — applies this spec's OHTTP transport precedent (§Transport Extensibility) to device-to-wallet-service and device-to-press traffic, rather than only wallet-to-wallet routing
 - `specs/messaging_protocol.md` — `SignedMessageEnvelope` structure; message types; `recipients` and `senders` fields
 - `specs/object_specs/registry_contract.md` — on-chain card registry (note: routing state and the Wallet Service Registry are off-chain; see INC-35)
 - `specs/process_specs/card_offering_and_acceptance.md` — uses routing delivery (step 22: SCIP delivery to recipient wallet service)

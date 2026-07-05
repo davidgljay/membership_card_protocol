@@ -1,10 +1,12 @@
 # Wallet Backup and Recovery — Process Spec
 
-**Version:** 0.3 (draft)  
-**Date:** 2026-06-29  
+**Version:** 0.4 (draft)  
+**Date:** 2026-07-04  
 **Status:** Draft  
 
 > **Terminology note.** This spec now uses "card" as the canonical term per the Naming Convention.
+
+**Changes from v0.3:** Corrected the backup-registration wire format (Process 1, Steps 13-14) to match the implemented field names (`wrapped_blob`, `cancellation_pubkey`), and named the master card key as the cancellation credential.
 
 **Changes from v0.2:** The keyring blob no longer lives on IPFS (see `ARCHITECTURE.md` ADR-009-AMEND). It is stored in traditional, deletable storage and replicated across every wallet service in the federation, identified by `keyring_id` (a content hash) instead of an IPFS CID. Rotation now triggers a synchronized delete of the superseded version across the federation, rather than relying on IPFS unpinning.
 
@@ -106,9 +108,9 @@ This flow runs when a new holder creates their first wallet, or when an existing
 
 13. The client sends the encrypted blob to the backup service:
     ```
-    { type: "synced_passkey", wrapped_decryption_key, keyring_id, notification_channels, cancellation_credentials }
+    { type: "synced_passkey", wrapped_blob, keyring_id, notification_channels, cancellation_pubkey }
     ```
-    The backup service stores the blob and returns a **backup registration confirmation**. The backup service never sees `decryption_key` in plaintext.
+    `cancellation_pubkey` is the holder's master card key (ML-DSA-44 public key) — the credential used to authorize cancellation in Process 2a/2b below. The backup service stores the blob and returns a **backup registration confirmation**. The backup service never sees `decryption_key` in plaintext.
 
 **YubiKey backup registration (opt-in upgrade):**
 
@@ -118,7 +120,7 @@ This flow runs when a new holder creates their first wallet, or when an existing
     - The client wraps `decryption_key`: `wrapped_decryption_key_yubikey = AES-GCM.Encrypt(yubikey_derived_key, decryption_key)`.
     - The client sends the encrypted blob to the backup service:
       ```
-      { type: "yubikey", wrapped_decryption_key, keyring_id, notification_channels, cancellation_credentials }
+      { type: "yubikey", wrapped_blob, keyring_id, notification_channels, cancellation_pubkey }
       ```
     - The backup service stores this blob alongside (or instead of) the synced passkey blob.
 
@@ -157,7 +159,7 @@ This flow runs when the holder has lost their primary device and has a synced pa
 
 **Cancellation window:**
 
-4. The backup service waits **72 hours** for a valid cancellation. A cancellation is valid if it is signed by any registered cancellation credential.
+4. The backup service waits **72 hours** for a valid cancellation. A cancellation is valid if it is signed by the registered cancellation credential — the holder's master card key (`cancellation_pubkey`, registered at backup time, Process 1 Step 13).
 
 5. If a cancellation is received:
    - The backup service aborts the recovery and notifies the holder via all channels.
@@ -219,7 +221,7 @@ This flow runs when the holder has a YubiKey registered and prefers the higher-s
 
 **Cancellation window:**
 
-3. The backup service waits **72 hours** for a valid cancellation. A cancellation is valid if it is signed by any registered cancellation credential.
+3. The backup service waits **72 hours** for a valid cancellation. A cancellation is valid if it is signed by the registered cancellation credential — the holder's master card key (`cancellation_pubkey`, registered at backup time, Process 1 Step 14).
 
 4. If a cancellation is received:
    - The backup service aborts the recovery and notifies the holder via all channels.
@@ -313,5 +315,7 @@ After either recovery path, the holder re-establishes their wallet on a new prim
 ## Related Specs
 
 - `open_offer_acceptance_new_wallet.md` — wallet creation as part of first card acceptance
+- `open_offer_acceptance_existing_wallet.md` — keyring update flow for existing holders, including recovery-triggered keyring updates
 - `card_updates.md` — submitting sub-card revocation intents post-recovery
 - `card_protocol_spec.md §3` — full feature spec for keychain setup and backup
+- `specs/object_specs/wallet.md` — wallet service wire protocol (challenge/response, session tokens, keyring/recovery endpoints) implementing this spec's processes

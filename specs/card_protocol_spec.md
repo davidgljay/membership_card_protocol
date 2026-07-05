@@ -1,8 +1,9 @@
 # Card Protocol — Feature Specification
 
-**Version:** 0.3 (draft)
-**Date:** 2026-05-19
+**Version:** 0.4 (draft)
+**Date:** 2026-07-04
 **Status:** In Review
+**Changes from v0.3:** Corrected §3's keyring structure description and YubiKey recovery flow to describe wallet-service keyring storage and federation replication, replacing an earlier IPFS-based description (approved via CP-SPEC-2, `plans/wallet-service/spec-discrepancies.md` D-8; second passage found during the Phase 5 consistency pass).
 
 ---
 
@@ -701,7 +702,7 @@ A card holder's private keys are the root of their identity in the protocol. Los
 
 #### Must-Have (P0)
 
-**Keyring structure.** The keyring is an append-only encrypted blob stored on IPFS. It holds the master private key for each card the holder controls, the private keys for any sub-cards registered to those master cards, and metadata associating each key with its corresponding card mutable pointer. The keyring is encrypted with a key derived from `passkey + service_secret`. The primary service holds `service_secret` but never sees plaintext keys or the decryption key. Because the keyring is append-only, new keys are added without destroying prior entries.
+**Keyring structure.** The keyring is an append-only encrypted blob stored by the wallet service and replicated across the wallet service federation (see `ARCHITECTURE.md` ADR-009-AMEND). It holds the master private key for each card the holder controls, the private keys for any sub-cards registered to those master cards, and metadata associating each key with its corresponding card mutable pointer. The keyring is encrypted with a key derived from `passkey + service_secret`. The primary service holds `service_secret` but never sees plaintext keys or the decryption key. Because the keyring is append-only, new keys are added without destroying prior entries.
 
 **Sub-card keys.** Sub-card private keys are held in secure device storage (Secure Enclave on Apple devices, TPM on others). All routine signing operations use sub-card keys. The master card key is accessed only for: creating new sub-cards, performing key rotations, and other high-stakes operations. Sub-cards are registered to their master card: the master key signs each sub-card registration, making the link verifiable.
 
@@ -712,7 +713,7 @@ A card holder's private keys are the root of their identity in the protocol. Los
 2. Backup service simultaneously sends notifications to all configured channels (email, SMS, HTTPS webhook, secondary contacts).
 3. Backup service waits 72 hours for a cancellation signed by any registered cancellation credential.
 4. If cancellation is received: the service aborts and notifies the holder to rotate their backup registration and treat the old YubiKey as potentially compromised.
-5. If no cancellation after 72 hours: the service releases the CID of the encrypted keyring blob plus the wrapped decryption key blob. The holder's device presents the wrapped blob to the YubiKey (PIN required); the YubiKey unwraps it locally; the resulting key fetches and decrypts the keyring from IPFS.
+5. If no cancellation after 72 hours: the service releases the `keyring_id` of the encrypted keyring blob plus the wrapped decryption key blob. The holder's device presents the wrapped blob to the YubiKey (PIN required); the YubiKey unwraps it locally; the resulting key fetches the keyring blob by `keyring_id` from any reachable wallet service in the federation and decrypts it.
 6. The holder re-registers with a new primary service, creates a new passkey, re-encrypts the keyring, and optionally rotates their YubiKey backup registration.
 
 **Acceptance criteria:**
