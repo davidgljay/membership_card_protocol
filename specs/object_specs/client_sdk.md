@@ -623,10 +623,10 @@ Established across §8 and reused wherever new verification/acceptance-style fun
 | 5 | 5.4 Replenishment scheduling | **Done** |
 | 5 | 5.5 Realtime delivery (SSE, WebSocket, push catch-up) | **Done** |
 | 5 | 5.6 UUID pool deregistration | **Done** |
-| 5 | Milestone review | Not started |
+| 5 | Milestone review | **Done** |
 | 6 | 6.1–6.3 + CP-2 (cross-platform hardening, docs, pre-production review) | **Not started** |
 
-As of this writing: 242 tests pass in the `client-sdk` core package (25 in `client-sdk-web`, 22 in `client-sdk-rn` — each includes a Step 5.5 end-to-end realtime-delivery scenario against that platform's real default `RealtimeTransportProvider`); build/typecheck/lint clean across the whole workspace.
+As of this writing: 243 tests pass in the `client-sdk` core package (25 in `client-sdk-web`, 22 in `client-sdk-rn` — each includes a Step 5.5 end-to-end realtime-delivery scenario against that platform's real default `RealtimeTransportProvider`); build/typecheck/lint clean across the whole workspace.
 
 ---
 
