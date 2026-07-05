@@ -61,3 +61,8 @@ export {
   type RegisterMultipleCardsUuidsOptions,
   type CardUuidRegistrationOutcome,
 } from './uuidRegistration.js';
+export {
+  ReplenishmentScheduler,
+  type PoolStatus,
+  type ReplenishmentSchedulerOptions,
+} from './replenishment.js';

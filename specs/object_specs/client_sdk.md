@@ -48,7 +48,7 @@
     - 10.1 [Message Envelope Construction and Per-Subcard Fan-out](#101-message-envelope-construction-and-per-subcard-fan-out-implemented)
     - 10.2 [Inbound Message Verification and Decryption](#102-inbound-message-verification-and-decryption-implemented)
     - 10.3 [UUID Registration, Session Separation, and Staggering](#103-uuid-registration-session-separation-and-staggering-implemented)
-    - 10.4 [Replenishment Scheduling](#104-replenishment-scheduling-planned)
+    - 10.4 [Replenishment Scheduling](#104-replenishment-scheduling-implemented)
     - 10.5 [Realtime Delivery](#105-realtime-delivery-planned)
     - 10.6 [UUID Pool Deregistration](#106-uuid-pool-deregistration-planned)
 11. [Cross-Platform Hardening and Documentation (Planned)](#11-cross-platform-hardening-and-documentation-planned)
@@ -512,9 +512,22 @@ function registerMultipleCardsUuids(options: RegisterMultipleCardsUuidsOptions):
 
 A second test confirms `registerCardUuids` succeeds identically against the same stub wallet service via both the oblivious-relay path and the transport's `bypass: true` direct-HTTPS mode — this step's job is purely the content/timing-level separation (session-per-card, staggering) on top of whichever transport mode is in effect, per the plan's framing that the oblivious path's IP-hiding and this step's co-ownership-inference prevention are complementary, not substitutable, protections (`specs/process_specs/oblivious_transport.md`'s overview makes the identical point for the general oblivious-transport case).
 
-### 10.4 Replenishment Scheduling (Planned)
+### 10.4 Replenishment Scheduling (Implemented)
 
-Will implement proactive UUID pool replenishment at a ≤3-remaining threshold, randomized timing, never immediately after message receipt (anti-correlation), per `notification_relay.md §Replenishment`.
+`messaging/replenishment.ts`:
+
+```ts
+class ReplenishmentScheduler {
+  reportPoolStatus(status: PoolStatus): void;
+  isScheduled(subCardHash: string): boolean;
+  cancel(subCardHash: string): void;
+  cancelAll(): void;
+}
+```
+
+Implements `notification_relay.md §Replenishment`: proactive UUID pool replenishment when a subcard's pool drops to (by default) 3 or fewer remaining, on a randomized schedule, never immediately after message receipt. The anti-correlation requirement is structural, not just a documented intention: `reportPoolStatus` (called on every event that changes a pool's size, including message-delivery UUID consumption) never invokes `onReplenish` synchronously or on the same tick — crossing the threshold only ever schedules a callback at a randomized future delay (`minDelayMs`–`maxDelayMs`), so there is no code path from "pool dropped" to "replenishment fired" that skips the randomized-delay step. A pool already below threshold with a replenishment already pending is a no-op on subsequent reports, preventing redundant re-scheduling from every intervening message receipt before the pending one fires.
+
+A test using an injected fake scheduler (records `{callback, delayMs}` instead of a real timer, driven forward explicitly) proves both halves of the "done when" criterion directly: advancing the fake clock by a trivially small amount immediately after a threshold-crossing report confirms `onReplenish` has *not* fired ("the tick immediately following a simulated message receipt"), and advancing past the maximum configured delay confirms it *has* fired exactly once ("on a subsequent randomized-delay tick").
 
 ### 10.5 Realtime Delivery (Planned)
 
@@ -582,13 +595,13 @@ Established across §8 and reused wherever new verification/acceptance-style fun
 | 5 | 5.1 Message envelope construction and per-subcard fan-out | **Done** |
 | 5 | 5.2 Inbound message verification and decryption | **Done** |
 | 5 | 5.3 UUID registration with session separation and staggering | **Done** |
-| 5 | 5.4 Replenishment scheduling | Not started |
+| 5 | 5.4 Replenishment scheduling | **Done** |
 | 5 | 5.5 Realtime delivery (SSE, WebSocket, push catch-up) | Not started |
 | 5 | 5.6 UUID pool deregistration | Not started |
 | 5 | Milestone review | Not started |
 | 6 | 6.1–6.3 + CP-2 (cross-platform hardening, docs, pre-production review) | **Not started** |
 
-As of this writing: 226 tests pass in the `client-sdk` core package (24 in `client-sdk-web`, 21 in `client-sdk-rn`); build/typecheck/lint clean across the whole workspace.
+As of this writing: 232 tests pass in the `client-sdk` core package (24 in `client-sdk-web`, 21 in `client-sdk-rn`); build/typecheck/lint clean across the whole workspace.
 
 ---
 
