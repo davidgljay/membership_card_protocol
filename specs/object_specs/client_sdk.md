@@ -50,7 +50,7 @@
     - 10.3 [UUID Registration, Session Separation, and Staggering](#103-uuid-registration-session-separation-and-staggering-implemented)
     - 10.4 [Replenishment Scheduling](#104-replenishment-scheduling-implemented)
     - 10.5 [Realtime Delivery](#105-realtime-delivery-implemented)
-    - 10.6 [UUID Pool Deregistration](#106-uuid-pool-deregistration-planned)
+    - 10.6 [UUID Pool Deregistration](#106-uuid-pool-deregistration-implemented)
 11. [Cross-Platform Hardening and Documentation (Planned)](#11-cross-platform-hardening-and-documentation-planned)
 12. [Security Invariants](#12-security-invariants)
 13. [Result and Error Conventions](#13-result-and-error-conventions)
@@ -69,7 +69,7 @@ Functional areas, per `strategic-plan.md`'s scoping:
 1. **Card offer creation and acceptance** — targeted and open-offer, including every keypair generation each flow requires (fresh per-card keypair, device sub-card keypair, master keypair at first setup). **Implemented.**
 2. **Backup encryption, sending, and retrieval** — wrapping the keyring decryption key under a synced passkey and/or YubiKey, registering with the backup service, and running the recovery flow. **Implemented.**
 3. **Requesting, accepting, and revoking sub-cards** — both directions the wallet plays: acting as *a* requesting app (the wallet's own device sub-card, self-signing path) and acting as *the* wallet of record for third-party apps' sub-card requests (validate, consent, countersign, revoke/deregister). **Partially implemented** — see §9.
-4. **Sending and receiving messages**, including UUID pool lifecycle management for private relay delivery. **Planned** — see §10.
+4. **Sending and receiving messages**, including UUID pool lifecycle management for private relay delivery. **Implemented** — see §10.
 
 A fifth, cross-cutting area is treated as first-class scope, not an add-on: **verification is delegated to `@membership-card-protocol/verifier`** (§6) — this package never reimplements chain-walking, revocation checking, or policy-compliance evaluation.
 
@@ -546,13 +546,23 @@ Covers all three delivery paths over the injected `RealtimeTransportProvider` (�
 
 A test confirms all three delivery paths against a stub relay (a fake `RealtimeTransportProvider` whose SSE/WebSocket channels are driven manually, plus a fake relay-fetch client for `GET /pending`) each deliver a blob to `onDelivered`; a further test delivers via all three paths in one run and confirms zero `ack` calls have occurred despite three deliveries, then confirms only an explicit `ack()` call reaches the relay's clearance endpoint. Two additional scenario tests — one in `client-sdk-web`, one in `client-sdk-rn` — run these same `messaging/delivery.ts` functions unmodified against each platform's own *real* default `RealtimeTransportProvider` (native `EventSource`/`WebSocket` on web; `react-native-sse` + native RN `WebSocket` on RN, with only the platform SSE/WebSocket global constructors stubbed since neither jsdom nor Jest's Node environment provides a usable networked implementation), confirming all three delivery paths and the never-ack-on-delivery-alone invariant hold identically on both provider sets, not just against a fully-fake `RealtimeTransportProvider`.
 
-### 10.6 UUID Pool Deregistration (Planned)
+### 10.6 UUID Pool Deregistration (Implemented)
 
-### 10.6 UUID Pool Deregistration (Planned)
+`messaging/uuidDeregistration.ts`:
 
-Will implement signed-envelope-authenticated `DELETE /cards/{card_hash}/subcards/{subcard_hash}`, structurally distinct from on-chain sub-card revocation (§9.4/§9.5).
+```ts
+function deregisterCardUuids(options: DeregisterCardUuidsOptions): Promise<DeregisterCardUuidsResult>;
+```
 
-None of Steps 5.2–5.6 is implemented today; `RealtimeTransportProvider` (§4.5) and the ML-KEM primitives (§5) they depend on already exist.
+`DELETE /cards/{card_hash}/subcards/{subcard_hash}`, structurally identical to `uuidRegistration.ts`'s `registerCardUuids` minus the `uuids` field — the signed envelope (`{ card_hash, subcard_hash, timestamp, nonce }`, ML-DSA-44-signed by the subcard's own private key) proves control of the subcard, since deregistration carries no UUID list of its own (`notification_relay.md §Multi-Device Support "Deregistration"`, v0.9's authentication requirement). Succeeds or fails as a discriminated `{ deregistered: boolean }` result rather than throwing, since an invalid signature, an already-deregistered subcard, or a subcard never registered with this wallet service (each surfaced by the wallet service as 400/401/403/404) are all expected outcomes to report, not infrastructure failures.
+
+**Explicitly not on-chain sub-card revocation.** This function has no relationship to `subcards/revocation.ts`'s `revokeSubCard` (8xx/9xx) — no shared code, no shared on-chain state. Wallet-service-local deregistration only empties this wallet service's UUID pool for the subcard; it never reads or writes `SubCardEntry.active`, has no bearing on message deliverability beyond emptying the pool, and is fully reversible — the subcard can call `registerCardUuids` again immediately and resume normal delivery, exactly as if it had never deregistered.
+
+A test proves both literal Step 5.6 acceptance clauses against a stub wallet service that verifies signatures the same way the real one does: deregistration succeeds with a valid signed envelope and is rejected (wrong signer) without one, with the pool left intact on rejection; a second test performs deregistration immediately followed by re-registration and confirms delivery resumes normally (the stub's pool state reflects the new UUIDs, with nothing checked or blocked by any revocation-flag equivalent, since none exists in this code path at all).
+
+**Wire-format bug found and fixed while building this step.** `registerCardUuids` (§10.3) originally merged `public_key` directly into the transmitted `payload` object (`{ ...payload, public_key }`) while `signMessageEnvelope`-style signing was computed only over the `payload` object *without* that field. A real (signature-verifying, not merely call-counting) stub wallet service — built for this step's own test, since deregistration's acceptance criteria specifically require verifying rejection-without-a-valid-signature — canonicalizes and verifies against whatever object the wire body labels `payload`; with the merged field present there, that canonical byte string differs from what the client actually signed, so even a *legitimate* registration would fail verification. §10.3's test suite hadn't caught this because its stub wallet service didn't perform real signature verification, only counted request shape. Fixed by moving `public_key` to a sibling field alongside `payload`/`signature` in the request body, so the signed bytes and the wire `payload` are always byte-identical; §10.3's own code and this section's stub were both updated. Documented here as a caution for any future module that merges an out-of-band field into an object it also signs — canonicalization is only safe when the exact object canonicalized for signing is the exact object canonicalized for verification, with no wire-shape convenience in between.
+
+None of Steps 5.1–5.6 remains unimplemented; the Phase 5 Milestone Review follows.
 
 ---
 
@@ -612,11 +622,11 @@ Established across §8 and reused wherever new verification/acceptance-style fun
 | 5 | 5.3 UUID registration with session separation and staggering | **Done** |
 | 5 | 5.4 Replenishment scheduling | **Done** |
 | 5 | 5.5 Realtime delivery (SSE, WebSocket, push catch-up) | **Done** |
-| 5 | 5.6 UUID pool deregistration | Not started |
+| 5 | 5.6 UUID pool deregistration | **Done** |
 | 5 | Milestone review | Not started |
 | 6 | 6.1–6.3 + CP-2 (cross-platform hardening, docs, pre-production review) | **Not started** |
 
-As of this writing: 238 tests pass in the `client-sdk` core package (25 in `client-sdk-web`, 22 in `client-sdk-rn` — each includes a Step 5.5 end-to-end realtime-delivery scenario against that platform's real default `RealtimeTransportProvider`); build/typecheck/lint clean across the whole workspace.
+As of this writing: 242 tests pass in the `client-sdk` core package (25 in `client-sdk-web`, 22 in `client-sdk-rn` — each includes a Step 5.5 end-to-end realtime-delivery scenario against that platform's real default `RealtimeTransportProvider`); build/typecheck/lint clean across the whole workspace.
 
 ---
 
@@ -664,7 +674,7 @@ Carried forward from `plans/client-sdk/strategic-plan.md`'s open questions; trea
 - `specs/process_specs/card_offering_and_acceptance.md`, `open_offer_creation.md`, `open_offer_acceptance_new_wallet.md`, `open_offer_acceptance_existing_wallet.md` — §8
 - `specs/process_specs/wallet_backup_and_recovery.md` — §7
 - `specs/subcards.md`, `specs/process_specs/subcard_creation_policy.md` — §9
-- `specs/messaging_protocol.md`, `specs/process_specs/message_routing.md`, `specs/process_specs/notification_relay.md` — §10 (planned)
+- `specs/messaging_protocol.md`, `specs/process_specs/message_routing.md`, `specs/process_specs/notification_relay.md` — §10
 - `specs/object_specs/card_verifier.md` — §6
 - `specs/object_specs/press.md` — the press-side counterpart to §8/§9's press-facing calls
 - `specs/ARCHITECTURE.md` — ADR-004 (canonicalization/signing), ADR-006 (content encryption), ADR-007 (OHTTP), ADR-009 (keyring storage)

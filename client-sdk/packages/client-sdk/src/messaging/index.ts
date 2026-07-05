@@ -79,3 +79,9 @@ export {
   type FetchPendingOptions,
   type AckOptions,
 } from './delivery.js';
+export {
+  deregisterCardUuids,
+  type DeregisterCardUuidsOptions,
+  type DeregisterCardUuidsResult,
+  type UuidDeregistrationPayload,
+} from './uuidDeregistration.js';

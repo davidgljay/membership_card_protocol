@@ -99,8 +99,19 @@ export async function registerCardUuids(options: RegisterCardUuidsOptions): Prom
       headers: { 'content-type': 'application/json' },
       body: new TextEncoder().encode(
         JSON.stringify({
-          payload: { ...payload, public_key: options.subCardPublicKey },
+          payload,
           signature: bytesToBase64Url(signature),
+          // Sibling field, not part of the signed payload — the wallet
+          // service still independently re-derives
+          // keccak256(subcard_pubkey) == subcard_hash itself
+          // (`§Process 1` step 7) and resolves the subcard's public key
+          // from on-chain registration data; this is only a convenience
+          // to avoid forcing a second round trip where the wallet
+          // service implementation accepts it, matching the option's own
+          // doc comment. Kept out of `payload` so what is signed and
+          // what is canonicalized for verification are always the exact
+          // same bytes.
+          public_key: options.subCardPublicKey,
         })
       ),
     }
