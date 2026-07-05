@@ -480,14 +480,23 @@ Since ML-KEM is a KEM, not an AEAD, the actual envelope bytes are encrypted with
 
 Will implement: ML-KEM decapsulation via `decryptRoutingEnvelope`, then signature verification via `CardVerifier.verifyEnvelope()` (§6) — never a hand-rolled check; message-type-specific handling (edit-chain linking, retraction, reaction targets); deduplication by `messageId` for relay-retransmission resilience.
 
-### 10.3 UUID Registration, Replenishment, Realtime Delivery, Deregistration (Planned)
-- **Inbound message verification and decryption**: ML-KEM decapsulation, then signature verification via `CardVerifier.verifyEnvelope()` (§6) — never a hand-rolled check; message-type-specific handling (edit-chain linking, retraction, reaction targets); deduplication by message-ID hash for relay-retransmission resilience.
-- **UUID registration with session separation and staggering** (`notification_relay.md §Process 1, §Registration Privacy`): each card's wallet-facing UUID registration in its own session, randomized stagger between different cards on the same device, no SDK-exposed API that can register multiple cards' UUIDs in one call. Routed through `ObliviousProtocolTransport` (§4.7) by default.
-- **Replenishment scheduling**: proactive UUID pool replenishment at a ≤3-remaining threshold, randomized timing, never immediately after message receipt (anti-correlation).
-- **Realtime delivery**: SSE (foregrounded), per-card WebSocket (active chat), silent-push-triggered `GET /pending` catch-up (backgrounded), explicit-ack-only clearance (never treating relay delivery alone as clearance).
-- **UUID pool deregistration**: signed-envelope-authenticated `DELETE /cards/{card_hash}/subcards/{subcard_hash}`, structurally distinct from on-chain sub-card revocation (§9.4/§9.5).
+### 10.3 UUID Registration, Session Separation, and Staggering (Planned)
 
-None of this is implemented today; `RealtimeTransportProvider` (§4.5) and the ML-KEM primitives (§5) it will depend on already exist.
+Will implement `notification_relay.md §Process 1, §Registration Privacy`: each card's wallet-facing UUID registration in its own session, randomized stagger between different cards on the same device, no SDK-exposed API that can register multiple cards' UUIDs in one call. Routed through `ObliviousProtocolTransport` (§4.7) by default.
+
+### 10.4 Replenishment Scheduling (Planned)
+
+Will implement proactive UUID pool replenishment at a ≤3-remaining threshold, randomized timing, never immediately after message receipt (anti-correlation), per `notification_relay.md §Replenishment`.
+
+### 10.5 Realtime Delivery (Planned)
+
+Will implement SSE (foregrounded), per-card WebSocket (active chat), and silent-push-triggered `GET /pending` catch-up (backgrounded), with explicit-ack-only clearance — never treating relay delivery alone as clearance (`notification_relay.md §Process 3–5`).
+
+### 10.6 UUID Pool Deregistration (Planned)
+
+Will implement signed-envelope-authenticated `DELETE /cards/{card_hash}/subcards/{subcard_hash}`, structurally distinct from on-chain sub-card revocation (§9.4/§9.5).
+
+None of Steps 5.2–5.6 is implemented today; `RealtimeTransportProvider` (§4.5) and the ML-KEM primitives (§5) they depend on already exist.
 
 ---
 
