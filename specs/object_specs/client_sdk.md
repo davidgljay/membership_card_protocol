@@ -44,7 +44,10 @@
    - 9.3 [Consent and Countersigning](#93-consent-and-countersigning-implemented)
    - 9.4 [Press Submission and Revocation](#94-press-submission-and-revocation-implemented)
    - 9.5 [Deregistration](#95-deregistration-implemented-ahead-of-schedule)
-10. [Messaging and UUID/Relay Management (Planned)](#10-messaging-and-uuidrelay-management-planned)
+10. [Messaging and UUID/Relay Management](#10-messaging-and-uuidrelay-management)
+    - 10.1 [Message Envelope Construction and Per-Subcard Fan-out](#101-message-envelope-construction-and-per-subcard-fan-out-implemented)
+    - 10.2 [Inbound Message Verification and Decryption](#102-inbound-message-verification-and-decryption-planned)
+    - 10.3 [UUID Registration, Replenishment, Realtime Delivery, Deregistration](#103-uuid-registration-replenishment-realtime-delivery-deregistration-planned)
 11. [Cross-Platform Hardening and Documentation (Planned)](#11-cross-platform-hardening-and-documentation-planned)
 12. [Security Invariants](#12-security-invariants)
 13. [Result and Error Conventions](#13-result-and-error-conventions)
@@ -449,13 +452,35 @@ function deregisterSubCardsAfterRecovery(transport, masterSecretKey, previouslyA
 
 ---
 
-## 10. Messaging and UUID/Relay Management (Planned)
+## 10. Messaging and UUID/Relay Management
 
-*(Implementation-plan Phase 5. Not yet started.)*
+*(Implementation-plan Phase 5. Module: `messaging/`.)*
 
-Will implement:
+### 10.1 Message Envelope Construction and Per-Subcard Fan-out (Implemented)
 
-- **Message envelope construction and per-subcard fan-out** (`messaging_protocol.md`, `message_routing.md §Sender-Side Fan-out`): `SignedMessageEnvelope` construction for the in-scope message-type taxonomy (`text`, `reply`, `edit`, `reaction`, `read_receipt`, `card_offer`/`card_offer_accepted`/`card_offer_declined` reusing §8's offer objects, `card_update_notification`, `auth_request`/`auth_response`); independent ML-KEM encryption to each of a recipient's registered sub-cards (N distinct ciphertexts, never one ciphertext copied N times).
+`messaging/envelope.ts`:
+
+```ts
+function buildMessagePayload<T extends MessageType>(options: BuildMessagePayloadOptions<T>): MessagePayload<T>;
+function signMessageEnvelope<T extends MessageType>(payload: MessagePayload<T>, signers: EnvelopeSigner[]): Promise<CardMessageEnvelope<T>>;
+function messageId(payload: MessagePayload): string;
+```
+
+`MessageType` is a literal union of exactly this SDK's in-scope taxonomy (`messaging_protocol.md`): `text`, `reply`, `edit`, `reaction`, `read_receipt`, `card_offer`/`card_offer_accepted`/`card_offer_declined` (reusing §8's offer CIDs/signatures as `content` fields), `card_update_notification`, `auth_request`/`auth_response`. Every other taxonomy entry (`api.*`, `mcp.*`, `introduction`, `announcement`, `delete`, `flag`, `error`) is out of scope — the literal union makes constructing an out-of-scope-typed envelope a compile error, not just an undocumented gap. `MessageContentByType` maps each `type` to its own typed `content` shape, so `buildMessagePayload({ type: 'text', content: {...} })` gets compile-time checking against `TextContent`, not a bag of `unknown`.
+
+`buildMessagePayload` enforces the spec's structural constraints at construction time rather than leaving them as caller conventions: `edit_of`/`retracts`/`forwards` are mutually exclusive, `edit` requires `edit_of`, `type: edit` with `retracts` set is rejected, and `reply` requires `in_reply_to`. Optional fields are omitted entirely when absent (never emitted as `null`), matching the spec's RFC 8785 field-ordering note. `messageId(payload) = keccak256(canonicalize(payload))` — there is no separate `id` field, matching the spec exactly; used for dedup (§10.2) and edit-chain root derivation.
+
+The concrete envelope type is named `CardMessageEnvelope`, not `SignedMessageEnvelope`, specifically to avoid colliding with the verifier package's own `SignedMessageEnvelope` (its generic `{ payload: { message, timestamp, ... }, signatures }` shape for `CardVerifier.verifyEnvelope`, already re-exported unaliased from `verification/index.ts`) — re-exported as `MessageEnvelope` at this package's top level for readability.
+
+`messaging/fanout.ts`: `fanOutMessageToSubCards(recipientCardHash, envelope, subCards): RoutingEnvelope[]` — implements `message_routing.md §Sender-Side Fan-out`: given the recipient's currently-registered sub-card list (resolved by the caller from the on-chain storage contract; this function does not itself talk to chain), encrypts the same `CardMessageEnvelope` independently to each sub-card's ML-KEM-768 public key, producing one distinct `RoutingEnvelope` (`{ to, subcard_hash, payload }`) per sub-card — never one ciphertext copied N times, confirmed by a test that fans out to 3 sub-cards and asserts all 3 `payload` values are pairwise distinct, then decrypts each independently with its own sub-card's ML-KEM secret key (`messaging/decrypt.ts`'s `decryptRoutingEnvelope`) and confirms it recovers the identical envelope — plus that cross-decrypting with a different sub-card's key never succeeds.
+
+Since ML-KEM is a KEM, not an AEAD, the actual envelope bytes are encrypted with AES-256-GCM under a key derived via HKDF-SHA3-256 from the ML-KEM shared secret (mirroring the encapsulate-then-derive-then-AEAD shape `HpkeObliviousProtocolTransport` already uses via HPKE's native `export()`, adapted here since ML-KEM has no built-in equivalent). The resulting blob is self-contained (length-prefixed KEM ciphertext + AEAD nonce + AEAD ciphertext) so a recipient holding only the sub-card's ML-KEM secret key can decrypt with no additional side-channel metadata.
+
+### 10.2 Inbound Message Verification and Decryption (Planned)
+
+Will implement: ML-KEM decapsulation via `decryptRoutingEnvelope`, then signature verification via `CardVerifier.verifyEnvelope()` (§6) — never a hand-rolled check; message-type-specific handling (edit-chain linking, retraction, reaction targets); deduplication by `messageId` for relay-retransmission resilience.
+
+### 10.3 UUID Registration, Replenishment, Realtime Delivery, Deregistration (Planned)
 - **Inbound message verification and decryption**: ML-KEM decapsulation, then signature verification via `CardVerifier.verifyEnvelope()` (§6) — never a hand-rolled check; message-type-specific handling (edit-chain linking, retraction, reaction targets); deduplication by message-ID hash for relay-retransmission resilience.
 - **UUID registration with session separation and staggering** (`notification_relay.md §Process 1, §Registration Privacy`): each card's wallet-facing UUID registration in its own session, randomized stagger between different cards on the same device, no SDK-exposed API that can register multiple cards' UUIDs in one call. Routed through `ObliviousProtocolTransport` (§4.7) by default.
 - **Replenishment scheduling**: proactive UUID pool replenishment at a ≤3-remaining threshold, randomized timing, never immediately after message receipt (anti-correlation).
@@ -517,10 +542,16 @@ Established across §8 and reused wherever new verification/acceptance-style fun
 | 4 | 4.3 Consent structure + countersigning | **Done** |
 | 4 | 4.4 Press submission + 8xx revocation | **Done** |
 | 4 | Milestone review | **Done** |
-| 5 | 5.1–5.6 (messaging, UUID/relay management) | **Not started** |
+| 5 | 5.1 Message envelope construction and per-subcard fan-out | **Done** |
+| 5 | 5.2 Inbound message verification and decryption | Not started |
+| 5 | 5.3 UUID registration with session separation and staggering | Not started |
+| 5 | 5.4 Replenishment scheduling | Not started |
+| 5 | 5.5 Realtime delivery (SSE, WebSocket, push catch-up) | Not started |
+| 5 | 5.6 UUID pool deregistration | Not started |
+| 5 | Milestone review | Not started |
 | 6 | 6.1–6.3 + CP-2 (cross-platform hardening, docs, pre-production review) | **Not started** |
 
-As of this writing: 206 tests pass in the `client-sdk` core package (24 in `client-sdk-web`, 21 in `client-sdk-rn`); build/typecheck/lint clean across the whole workspace.
+As of this writing: 215 tests pass in the `client-sdk` core package (24 in `client-sdk-web`, 21 in `client-sdk-rn`); build/typecheck/lint clean across the whole workspace.
 
 ---
 
