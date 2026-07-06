@@ -16,7 +16,7 @@ This is the authoritative registry of update codes for the Card Protocol. All ot
 | 2xx | Positive context — an annotation indicating the holder is deserving of additional trust; no field changes implied. | `field_update` | Active |
 | 3xx | Neutral update — a field change with no trust implication (e.g. a `valid_until` refresh). | `field_update` | Active |
 | 4xx | Neutral context — pertinent information added for verifiers that carries no positive or negative trust signal. | `field_update` | Active |
-| 5xx | Programmatic update — an automated field change triggered by protocol or policy logic, not a human decision. | `field_update` | Active |
+| 5xx | Programmatic update — an automated field change triggered by protocol or policy logic, not relevant yo the trustworthiness of the card. | `field_update` | Active |
 | 6xx | Negative context — an annotation suggesting reduced trustworthiness that does not yet warrant revocation. | `field_update` | Active |
 | 7xx | Negative update — a field change that reduces the holder's privileges (e.g. removing admin rights). Within the 7xx range, lower subcodes indicate the reduction is honorable (retiring with distinction); higher subcodes indicate it is less so. | `field_update` | Active |
 | 8xx | Quiet revocation — the card is revoked; the holder is not considered an active risk to other communities. The holder's standing in other contexts is unaffected by this revocation alone. | `revocation` | Revoked |
@@ -66,6 +66,9 @@ Entries with codes 1xx–7xx use `field_updates` and do not carry an `effective_
 | Code | Meaning |
 |---|---|
 | 500 | Programmatic field update |
+| 510 | Subcard addition |
+| 511 | Subcard removal |
+| 512 | Subcard key rotation |
 
 ### 6xx — Negative Context
 
