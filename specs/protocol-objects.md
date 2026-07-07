@@ -59,6 +59,10 @@ The genesis document of a card. Every card — including policy cards, press sub
 
 ```json
 {
+  "active_subcards": [
+    "<base64url — ML-DSA-44 public key of an active sub-card, 1312 bytes raw>",
+    "..."
+  ],
   "ancestry_pubkeys": [
     "<base64url — ML-DSA-44 public key of the immediate parent (issuer card), 1312 bytes raw>",
     "<base64url — ML-DSA-44 public key of the next ancestor up the issuer chain>",
@@ -88,10 +92,11 @@ The genesis document of a card. Every card — including policy cards, press sub
 }
 ```
 
-> **RFC 8785 field ordering note:** The JSON example above lists fields in their RFC 8785 canonical order (lexicographic by Unicode code point). The `protocol_version` field sorts between `press_signature` (`press_s` < `proto`) and `recipient_pubkey` (`proto` < `r`). Signing tools that construct the object and then canonicalize it do not need to insert fields in this order — RFC 8785 re-sorts regardless of construction order.
+> **RFC 8785 field ordering note:** The JSON example above lists fields in their RFC 8785 canonical order (lexicographic by Unicode code point). The `protocol_version` field sorts between `press_signature` (`press_s` < `proto`) and `recipient_pubkey` (`proto` < `r`). The `active_subcards` field, when present, sorts before `ancestry_pubkeys` (`active_s` < `ancest`). Signing tools that construct the object and then canonicalize it do not need to insert fields in this order — RFC 8785 re-sorts regardless of construction order.
 
 | Field | Type | Required | Mutable | Notes |
 |---|---|---|---|---|
+| `active_subcards` | `array of base64url` | No | Yes — codes 510, 511, 512 only | Flat array of ML-DSA-44 public keys (1312 bytes each, base64url) of the holder's currently-active sub-cards. **Not present at genesis** (see §1.1 for the protocol-reserved-field definition); absence means no active sub-cards, not an empty array — though once the field has been added by a code-510 entry, it is legal for it to be `[]` after all sub-cards are removed (the field itself is not deleted by removal, only its entries). Added, modified, and removed only via codes 510 (addition), 511 (removal), 512 (key rotation), each hardcoded to holder-only authorization (`{ "is_holder": true }`), not overridable by any policy's `field_definitions` or `update_policy`. See §1.1. |
 | `policy_id` | `cid` | Yes | No | Pinned to the policy at time of issuance |
 | `issuer_card` | `card-pointer` | Yes | No | The offerer who constructed and first-signed the offer; used to evaluate `requester_predicate` and verify `issuer_signature` |
 | `press_card` | `card-pointer` | Yes | No | Identifies the press that validated and registered the card; used to walk the authorization chain |
@@ -128,8 +133,17 @@ These fields are NOT present at genesis. They are added to an existing card via 
 | Field | Type | Authorization | Codes | Meaning |
 |---|---|---|---|---|
 | `successor` | `card-pointer` | Codes 100, 101: `{ "is_holder": true }`. Code 102: `{ "is_issuer": true }` with 72-hour pending window. | 100, 101, 102 | Mutable pointer of the card that supersedes this one. May be set at most once; once effective, it is immutable. See `key_rotation.md §8`. |
+| `active_subcards` | `array of base64url` | Codes 510, 511, 512: `{ "is_holder": true }`, hardcoded — **not policy-configurable, not overridable by any policy's `field_definitions` or `update_policy`.** This is a hard protocol limit for this version of the protocol, not a default that policies may loosen or tighten. | 510, 511, 512 | Flat array of the holder's currently-active sub-card ML-DSA-44 public keys (1312 bytes each). Not present at genesis; added by the first code-510 entry. Entries are deleted outright from the array on removal (code 511) or rotation (code 512) — the array always reflects the live/current set; historical additions and removals are recorded permanently in the master card's append-only log, not in the field itself. See `subcards.md` and `update_codes.md §5xx`. |
 
 A code-102 `successor` entry carries a `pending_until` field and is not effective until that timestamp is reached without a holder-submitted code-103 cancellation. See `key_rotation.md §2.6`.
+
+**Codes 510/511/512 scope.** These three codes apply only to `LogEntry` records on the **master (primary) card's own log** — they record changes the holder makes to their own `active_subcards` directory. This is distinct from the general prohibition on 5xx updates targeting a **sub-card's** log, which remains prohibited per `process_specs/subcard_creation_policy.md §Update Card Content`. A code-510/511/512 entry is never posted to a sub-card's log; it is always posted to the master card's log by the master card's own holder key.
+
+- **Code 510 (subcard addition):** `field_updates` sets `active_subcards` to the current array plus one new pubkey (or, if the field is absent, initializes it to a single-element array).
+- **Code 511 (subcard removal):** `field_updates` sets `active_subcards` to the current array with exactly one pubkey deleted.
+- **Code 512 (subcard key rotation):** `field_updates` sets `active_subcards` to the current array with exactly one old pubkey replaced by exactly one new pubkey in a single atomic entry (not a separate 511 + 510 pair) — see `registry_contract.md` for the corresponding on-chain rotation path.
+
+In all three cases, the press and every verifier reject the entry unless it is signed by the card's own holder key, regardless of what the governing policy's `update_policy` states — the authorization predicate above is hardcoded and takes precedence over any policy-supplied value for this field.
 
 ---
 
@@ -762,6 +776,14 @@ The genesis document for a sub-card — a device-bound, app-specific credential 
   "app_card":                   "<base64url — mutable pointer of the requesting app's card>",
   "app_card_pubkey":            "<base64url — ML-DSA-44 public key of the app's card, 1312 bytes raw>",
   "capabilities":               ["<message type string>", "..."],
+  "limitations":                [
+    {
+      "applies_to": ["<message type string>", "..."],
+      "field_requirements": [
+        { "field": "<dot-path into the signed payload>", "regex": "<pattern the value must match>" }
+      ]
+    }
+  ],
   "recipient_pubkey":           "<base64url — sub-card ML-DSA-44 public key, 1312 bytes raw>",
   "issued_at":                  "<ISO 8601 timestamp>",
   "valid_until":                "<ISO 8601 timestamp — optional; absent means no expiry>",
@@ -779,6 +801,7 @@ The genesis document for a sub-card — a device-bound, app-specific credential 
 | `app_card` | `card-pointer` | Yes | Mutable pointer of the requesting app's card; must chain to the governance authority's app-certification policy |
 | `app_card_pubkey` | `base64url` | Yes | ML-DSA-44 public key (1312 bytes raw) of the card referenced by `app_card`. **Untrusted hint**: the verifier MUST confirm `keccak256(app_card_pubkey)` equals the `app_card` pointer address before using it to derive a content key or verify a signature. A mismatch, or an AES-GCM authentication failure when decrypting the referenced card, is a hard rejection. Set at sub-card issuance; covered by both `app_signature` and `holder_signature`. |
 | `capabilities` | `array of text` | Yes | Whitelist of message type strings this sub-card may sign (e.g. `["auth_response", "exchange_offer"]`). An empty array is valid but non-functional. |
+| `limitations` | `array of objects` | No | Additional constraints on statements this sub-card may sign, beyond the `capabilities` whitelist, expressed using the protocol's existing predicate/`field_requirements` grammar (`card_protocol_spec.md` §The Field Type System, §The Predicate System) rather than a new vocabulary. Absent means no additional limitations. Each entry has an optional `applies_to` (array of message type strings this entry constrains; absent means it applies to all message types in `capabilities`) and `field_requirements` (array of `{ "field": "<dot-path into the signed message payload>", "regex": "<pattern>" }` pairs — the same shape used elsewhere for `card-pointer`/`cid` field validation, here evaluated against the payload of the statement being signed rather than a referenced card's fields). Combinators (`any_of`/`all_of`/`none_of`) may wrap multiple `limitations` entries the same way they wrap predicate leaves elsewhere. Covered by both `app_signature` and `holder_signature`, like `capabilities`. See `subcards.md §Limitations` for worked examples and the stateless-evaluation caveat (count-based rate limits are out of scope for this mechanism — see that section). |
 | `recipient_pubkey` | `base64url` | Yes | ML-DSA-44 public key generated in device hardware-backed secure storage; 1312 bytes raw |
 | `issued_at` | `timestamp` | Yes | Set by the app at document assembly time |
 | `valid_until` | `timestamp` | No | Optional expiry; verifiers must reject signatures from expired sub-cards |
@@ -803,7 +826,7 @@ The genesis document for a sub-card — a device-bound, app-specific credential 
 9. Completed SubCardDocument is posted to IPFS.
 10. Sub-card is registered on Arbitrum One via `RegisterSubCard` (see §15).
 
-**Verifier chain walk (runtime).** A verifier encountering a signature from a sub-card must: (1) confirm the message type appears in the sub-card's `capabilities`; (2) confirm `valid_until` has not passed; (3) verify `app_signature` is valid; (4) verify `holder_signature` is valid; (5) read `holder_primary_card_pubkey` from the decrypted sub-card document; (6) confirm `keccak256(holder_primary_card_pubkey)` equals the `holder_primary_card` pointer address — if the addresses do not match, reject; (7) derive the master card's content key as `HKDF-SHA3-256(holder_primary_card_pubkey, info="card-content-v1")` and decrypt the master card from IPFS — if AES-GCM authentication fails, reject; (8) confirm the sub-card appears in the master card's active sub-card list; (9) walk the holder's master card chain to a trusted root using the master card's `ancestry_pubkeys` (Stage 3 of `card_validation.md`); (10) confirm the sub-card is not revoked in the on-chain registry (check `SubCardRegistrations[sub_card_address].active`); (11) confirm `attestation_level` is `"T2"` unless the governing policy explicitly accepts `"T1"`; (12) walk the `app_card` chain: derive `app_card` content key via `HKDF-SHA3-256(app_card_pubkey_bytes, "card-content-v1")`; fetch and decrypt the app card document from IPFS; walk `ancestry_pubkeys` hop by hop until the chain reaches `VerifierConfig.appCertificationRoot`. Hard-reject with `APP_CARD_CHAIN_NOT_TRUSTED` and `scope_clean: false` if the chain exhausts without reaching the configured root or exceeds `maxChainDepth`.
+**Verifier chain walk (runtime).** A verifier encountering a signature from a sub-card must: (1) confirm the message type appears in the sub-card's `capabilities`; (2) confirm `valid_until` has not passed; (3) verify `app_signature` is valid; (4) verify `holder_signature` is valid; (5) read `holder_primary_card_pubkey` from the decrypted sub-card document; (6) confirm `keccak256(holder_primary_card_pubkey)` equals the `holder_primary_card` pointer address — if the addresses do not match, reject; (7) derive the master card's content key as `HKDF-SHA3-256(holder_primary_card_pubkey, info="card-content-v1")` and decrypt the master card from IPFS — if AES-GCM authentication fails, reject; (8) read `active_subcards` from the now-decrypted master card (§1.1) and, for each entry, derive `keccak256(entry_pubkey)`; confirm one of these matches the sub-card's own registry address (`keccak256` of the `SignatureEntry`'s `public_key`) — **hard-reject if absent, independent of the on-chain `SubCardRegistrations[sub_card_address].active` flag checked in step 10** (the on-chain flag and the IPFS directory are two independent sources that could in principle desync; absence from `active_subcards` is a hard rejection on its own regardless of the on-chain flag's value); if `active_subcards` is absent from the master card entirely, treat it as an empty directory and reject; (9) walk the holder's master card chain to a trusted root using the master card's `ancestry_pubkeys` (Stage 3 of `card_validation.md`); (10) confirm the sub-card is not revoked in the on-chain registry (check `SubCardRegistrations[sub_card_address].active`); (11) confirm `attestation_level` is `"T2"` unless the governing policy explicitly accepts `"T1"`; (12) walk the `app_card` chain: derive `app_card` content key via `HKDF-SHA3-256(app_card_pubkey_bytes, "card-content-v1")`; fetch and decrypt the app card document from IPFS; walk `ancestry_pubkeys` hop by hop until the chain reaches `VerifierConfig.appCertificationRoot`. Hard-reject with `APP_CARD_CHAIN_NOT_TRUSTED` and `scope_clean: false` if the chain exhausts without reaching the configured root or exceeds `maxChainDepth`.
 
 **App-certification chain: verifier-enforced.** Runtime verifiers independently walk the `app_card` chain from `app_card_pubkey` up to the governance authority's app-certification policy root configured as `appCertificationRoot` in `VerifierConfig`. A sub-card whose `app_card` does not reach that root is rejected at Stage 2 (`APP_CARD_CHAIN_NOT_TRUSTED`) regardless of whether a press accepted it at registration time. The press also performs this check as an early gate before submitting `RegisterSubCard` (see §5.4 of press.md), but the verifier's check is the binding enforcement layer. Per-link on-chain addresses remain authoritative; `holder_primary_card_pubkey` and `app_card_pubkey` are untrusted hints whose validity is established by the binding check before use.
 

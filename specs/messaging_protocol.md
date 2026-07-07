@@ -222,7 +222,68 @@ The press notifies a holder of a post-issuance update to one of their cards.
 
 ---
 
-### 9. `auth_request`
+### 9. `subcard_sibling_added`
+
+The press notifies a subcard that a new sibling has been registered on the same master card.
+
+```json
+{
+  "type": "subcard_sibling_added",
+  "content": {
+    "master_card":    "<mutable pointer of the master card>",
+    "new_pubkey":     "<base64url — ML-DSA-44 public key of the newly-added subcard>",
+    "log_entry_cid":  "<IPFS CID of the code-510 LogEntry that added it>",
+    "timestamp":      "<ISO 8601 — when the addition was recorded>"
+  }
+}
+```
+
+**Notes.** Sent by the press to all existing subcards listed in the master card's `active_subcards` immediately after a code-510 entry is accepted. Security purpose: alerts the holder's legitimate subcards (on their other devices) that a new sibling has been registered, enabling detection of unauthorized additions. The `senders` list contains the press card's pointer; `recipients` is the registry address of the receiving subcard.
+
+---
+
+### 10. `subcard_sibling_removed`
+
+The press notifies a subcard that a sibling has been deregistered from the same master card.
+
+```json
+{
+  "type": "subcard_sibling_removed",
+  "content": {
+    "master_card":    "<mutable pointer of the master card>",
+    "removed_pubkey": "<base64url — ML-DSA-44 public key of the deregistered subcard>",
+    "log_entry_cid":  "<IPFS CID of the code-511 LogEntry that removed it>",
+    "timestamp":      "<ISO 8601 — when the removal was recorded>"
+  }
+}
+```
+
+**Notes.** Sent by the press to all remaining subcards after a code-511 entry is accepted. Informs the holder's remaining devices that a sibling has been deregistered (whether by the holder's intentional revocation or by loss/compromise).
+
+---
+
+### 11. `subcard_sibling_rotated`
+
+The press notifies a subcard that a sibling's key has been rotated on the same master card.
+
+```json
+{
+  "type": "subcard_sibling_rotated",
+  "content": {
+    "master_card":    "<mutable pointer of the master card>",
+    "old_pubkey":     "<base64url — ML-DSA-44 public key that was rotated out>",
+    "new_pubkey":     "<base64url — ML-DSA-44 public key that replaced it>",
+    "log_entry_cid":  "<IPFS CID of the code-512 LogEntry that performed the rotation>",
+    "timestamp":      "<ISO 8601 — when the rotation was recorded>"
+  }
+}
+```
+
+**Notes.** Sent by the press to all remaining subcards after a code-512 entry is accepted. Informs the holder's devices that a sibling's key has been rotated (typically due to key compromise or device replacement). The subcard identified by `old_pubkey` should be considered compromised/lost and its old registry address invalidated.
+
+---
+
+### 13. `auth_request`
 
 A service requests authentication from a card holder — "Sign in with your card."
 
@@ -247,7 +308,7 @@ Also deliverable as a deep link: `mcard://auth?r=<base64(envelope)>` or QR code 
 
 ---
 
-### 10. `auth_response`
+### 14. `auth_response`
 
 The holder responds to an `auth_request`.
 
@@ -270,7 +331,7 @@ The service verifies: `content.nonce` matches the issued challenge, `content.con
 
 ---
 
-### 11. `api`
+### 15. `api`
 
 A message to or from a card that instruments an API capability. Subtypes handle the full request/response cycle.
 
@@ -326,7 +387,7 @@ The API card returns the result.
 
 ---
 
-### 12. `mcp`
+### 16. `mcp`
 
 A message to or from a card attached to an LLM or other AI model, following the Model Context Protocol message shape. Enables AI agent identities to be card-anchored.
 
@@ -387,7 +448,7 @@ A message to or from a card attached to an LLM or other AI model, following the 
 
 ---
 
-### 13. `introduction`
+### 17. `introduction`
 
 A card introduces two cards that don't yet share a trust path, bootstrapping their mutual discovery.
 
@@ -407,7 +468,7 @@ A card introduces two cards that don't yet share a trust path, bootstrapping the
 
 ---
 
-### 14. `announcement`
+### 18. `announcement`
 
 A one-to-many broadcast from a card to a group of recipients, such as a press or community announcement.
 
@@ -427,7 +488,7 @@ A one-to-many broadcast from a card to a group of recipients, such as a press or
 
 ---
 
-### 15. `read_receipt`
+### 19. `read_receipt`
 
 Acknowledges that a message was delivered and opened.
 
@@ -446,7 +507,7 @@ Acknowledges that a message was delivered and opened.
 
 ---
 
-### 16. `delete`
+### 20. `delete`
 
 A recipient's request to remove a message from one or more stores. Not guaranteed — the request may be declined, and is always declined if the target message has an active `flag` against it.
 
@@ -474,7 +535,7 @@ A recipient's request to remove a message from one or more stores. Not guarantee
 
 ---
 
-### 17. `flag`
+### 21. `flag`
 
 Reports a message to the press (or any authorized card) that issued a card attached to that message. Flags are the entry point to the 6xx/9xx revocation pipeline and serve as a community safety mechanism.
 
@@ -515,7 +576,7 @@ Reports a message to the press (or any authorized card) that issued a card attac
 
 ---
 
-### 18. `error`
+### 22. `error`
 
 A structured error response to any message type that requires a reply.
 

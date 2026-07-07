@@ -76,6 +76,8 @@ describe("stage2 — sub-card to master link", () => {
 
     const subDoc = makeSubCardDoc(holder.publicKey, holder.secretKey, app.publicKey, app.secretKey, sub.publicKey);
     const masterDoc = makeCardDoc(holder.publicKey, issuer.secretKey, holder.secretKey, press.secretKey);
+    // Add sub-card to active_subcards so it passes Step 9, but fails on-chain binding at Step 10
+    masterDoc.active_subcards = [Buffer.from(sub.publicKey).toString("base64url")];
 
     const encSubDoc = encryptForCard(sub.publicKey, new TextEncoder().encode(JSON.stringify(subDoc)));
     const encMasterDoc = encryptForCard(holder.publicKey, new TextEncoder().encode(JSON.stringify(masterDoc)));
@@ -104,6 +106,8 @@ describe("stage2 — sub-card to master link", () => {
 
     const subDoc = makeSubCardDoc(holder.publicKey, holder.secretKey, app.publicKey, app.secretKey, sub.publicKey);
     const masterDoc = makeCardDoc(holder.publicKey, issuer.secretKey, holder.secretKey, press.secretKey);
+    // Add sub-card's public key to active_subcards so it passes Step 9
+    masterDoc.active_subcards = [Buffer.from(sub.publicKey).toString("base64url")];
 
     const encSubDoc = encryptForCard(sub.publicKey, new TextEncoder().encode(JSON.stringify(subDoc)));
     const encMasterDoc = encryptForCard(holder.publicKey, new TextEncoder().encode(JSON.stringify(masterDoc)));
@@ -132,6 +136,8 @@ describe("stage2 — sub-card to master link", () => {
 
     const subDoc = makeSubCardDoc(holder.publicKey, holder.secretKey, app.publicKey, app.secretKey, sub.publicKey);
     const masterDoc = makeCardDoc(holder.publicKey, issuer.secretKey, holder.secretKey, press.secretKey);
+    // Add sub-card's public key to active_subcards
+    masterDoc.active_subcards = [Buffer.from(sub.publicKey).toString("base64url")];
     // App card chains to certRoot via ancestry_pubkeys[0]
     const appCardDoc = makeCardDoc(app.publicKey, certRoot.secretKey, app.secretKey, press.secretKey, [Buffer.from(certRoot.publicKey).toString("base64url")]);
 
@@ -167,6 +173,8 @@ describe("stage2 — app_card chain walk", () => {
 
     const subDoc = makeSubCardDoc(holder.publicKey, holder.secretKey, app.publicKey, app.secretKey, sub.publicKey);
     const masterDoc = makeCardDoc(holder.publicKey, issuer.secretKey, holder.secretKey, press.secretKey);
+    // Add sub-card's public key to active_subcards
+    masterDoc.active_subcards = [Buffer.from(sub.publicKey).toString("base64url")];
     const appCardDoc = makeCardDoc(app.publicKey, certRoot.secretKey, app.secretKey, press.secretKey, [Buffer.from(certRoot.publicKey).toString("base64url")]);
 
     const encSubDoc = encryptForCard(sub.publicKey, new TextEncoder().encode(JSON.stringify(subDoc)));
@@ -201,6 +209,8 @@ describe("stage2 — app_card chain walk", () => {
 
     const subDoc = makeSubCardDoc(holder.publicKey, holder.secretKey, app.publicKey, app.secretKey, sub.publicKey);
     const masterDoc = makeCardDoc(holder.publicKey, issuer.secretKey, holder.secretKey, press.secretKey);
+    // Add sub-card's public key to active_subcards
+    masterDoc.active_subcards = [Buffer.from(sub.publicKey).toString("base64url")];
     // app card chains to intermediate
     const appCardDoc = makeCardDoc(app.publicKey, intermediate.secretKey, app.secretKey, press.secretKey, [Buffer.from(intermediate.publicKey).toString("base64url")]);
     // intermediate card chains to certRoot
@@ -239,6 +249,8 @@ describe("stage2 — app_card chain walk", () => {
 
     const subDoc = makeSubCardDoc(holder.publicKey, holder.secretKey, app.publicKey, app.secretKey, sub.publicKey);
     const masterDoc = makeCardDoc(holder.publicKey, issuer.secretKey, holder.secretKey, press.secretKey);
+    // Add sub-card's public key to active_subcards
+    masterDoc.active_subcards = [Buffer.from(sub.publicKey).toString("base64url")];
     // App card terminates at wrongRoot, not certRoot
     const appCardDoc = makeCardDoc(app.publicKey, wrongRoot.secretKey, app.secretKey, press.secretKey, []);
 
@@ -261,6 +273,42 @@ describe("stage2 — app_card chain walk", () => {
     expect(result.scope_clean).toBe(false);
     expect(result.app_card_chain_valid).toBe(false);
     expect(result.errors.some((e) => e.code === "APP_CARD_CHAIN_NOT_TRUSTED")).toBe(true);
+  });
+
+  it("sub-card not in master's active_subcards returns SUB_CARD_NOT_IN_ACTIVE_DIRECTORY", async () => {
+    const sub = generateKeypair();
+    const holder = generateKeypair();
+    const app = generateKeypair();
+    const issuer = generateKeypair();
+    const press = generateKeypair();
+
+    const subDoc = makeSubCardDoc(holder.publicKey, holder.secretKey, app.publicKey, app.secretKey, sub.publicKey);
+    const masterDoc = makeCardDoc(holder.publicKey, issuer.secretKey, holder.secretKey, press.secretKey);
+    // Master doc has empty or missing active_subcards, so sub-card won't be found
+    masterDoc.active_subcards = [];
+
+    const encSubDoc = encryptForCard(sub.publicKey, new TextEncoder().encode(JSON.stringify(subDoc)));
+    const encMasterDoc = encryptForCard(holder.publicKey, new TextEncoder().encode(JSON.stringify(masterDoc)));
+
+    const rpc = mockRpc({
+      getCardEntry: vi.fn().mockImplementation((addr: string) => {
+        if (addr === sub.address) return Promise.resolve({ exists: true, log_head_cid: "QmSub", policy_address: "0x", last_press_address: "0x", forward_to: null });
+        if (addr === holder.address) return Promise.resolve({ exists: true, log_head_cid: "QmMaster", policy_address: "0x", last_press_address: "0x", forward_to: null });
+        return Promise.resolve(null);
+      }),
+      getSubCardEntry: vi.fn().mockResolvedValue({
+        master_card_address: holder.address,
+        registration_log_head: "0x",
+        sub_card_doc_cid: "QmSub",
+        active: true,
+        registered_at: "2026-01-01T00:00:00Z",
+        deregistered_at: null,
+      } as SubCardEntry),
+    });
+    const ipfs = mockIpfs({ QmSub: encSubDoc, QmMaster: encMasterDoc });
+    const result = await verifyStage2(sub.publicKey, rpc, ipfs, { appCertificationRoot: DUMMY_CERT_ROOT });
+    expect(result.scope_clean).toBe(false);
+    expect(result.errors.some((e) => e.code === "SUB_CARD_NOT_IN_ACTIVE_DIRECTORY")).toBe(true);
   });
 
   it("constructor rejects missing appCertificationRoot", () => {

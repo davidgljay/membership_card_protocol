@@ -342,7 +342,7 @@ A `signature_valid: false` result does not abort subsequent stages. The chain wa
    - `keccak256(app_card_pubkey)` must equal the `app_card` pointer address in the sub-card document.
 7. Derive the master card content key: `HKDF-SHA3-256(holder_primary_card_pubkey, info="card-content-v1")`.
 8. Fetch and decrypt the master card document from IPFS. AES-GCM auth failure is a **hard reject** (`scope_clean: false`).
-9. Confirm the sub-card address appears in the master card's active sub-card list.
+9. Confirm the sub-card address appears in the master card's `active_subcards` field (`protocol-objects.md §1.1`): for each entry, derive `keccak256(entry_pubkey)` and confirm one matches the sub-card's own address (from step 1). **Hard reject** (`scope_clean: false`) if absent — this check is independent of the on-chain `SubCardRegistrations[sub_card_address].active` flag checked in step 11; either failing alone is sufficient to reject. If `active_subcards` is absent from the master card entirely, treat it as an empty directory (no sub-card passes this check).
 10. Verify the master card holder's ML-DSA-44 signature on the sub-card registration using `holder_primary_card_pubkey`.
 11. Check on-chain: `SubCardRegistrations[sub_card_address].active == true`. If `false`, record `scope_clean: false`.
 12. Verify `app_signature` using `app_card_pubkey`. The app-card's own certification chain is **not** re-walked at runtime — the press validated this at `RegisterSubCard` time, and on-chain registration is the proof.
@@ -389,7 +389,7 @@ A `signature_valid: false` result does not abort subsequent stages. The chain wa
 **Network:** IPFS (policy snapshot at `policy_id` CID), Arbitrum One (`getPressAuthorization`).
 
 1. Fetch the policy snapshot at the immutable `policy_id` CID from IPFS. The policy at issuance governs — the policy's current mutable pointer head is not used.
-2. Evaluate the card's field values against `field_definitions` in the policy snapshot. Any violation → `policy_compliant: false`.
+2. Evaluate the card's **declared-field** values against `field_definitions` in the policy snapshot. Any violation → `policy_compliant: false`. A card carrying additional fields not declared in `field_definitions` is not itself a violation — the policy's schema is a floor (required fields plus declared fields), not a closed allow-list; see `card_protocol_spec.md` §Background Concepts, *A Card's Schema Is a Floor, Not a Closed Allow-List*. The package does not attempt to validate undeclared fields against anything and must not choke on or reject a card for their presence.
 3. Look up `PressAuthorizations[policy_id_address][press_address]` on-chain:
    - If no entry exists, record `policy_compliant: false`. (No entry means the press was never authorized; the card could not have been validly registered.)
    - If an entry exists, on-chain registration is proof of write-time authorization. A press that is currently `active == false` (subsequently revoked) does **not** retroactively invalidate the card. Record `policy_compliant: true` if field values also passed; surface the subsequent revocation as informational context (`press_subsequently_revoked: true`) in the result.

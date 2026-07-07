@@ -493,7 +493,8 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 1. Verify `intentSignature` over canonical RFC 8785 JSON of `updateIntent` using the updater's ML-DSA-44 public key. To resolve the updater's public key: call `verifier.verifyCard(updateIntent.updater_card_address)` and extract the public key from the resolved card chain. Reject with `P-09` on signature failure.
 2. Confirm `updateIntent.timestamp` is within the press's staleness window. Reject stale intents.
 3. Resolve the target card's policy from the on-chain `CardEntry` (via the press's RPC connection).
-4. Evaluate the relevant `update_policy` predicate for each field in `field_updates` (for 1xx–7xx codes). For revocation codes (8xx–9xx), evaluate `policy.revocation_permissions`. Use `verifier.verifyCard(updateIntent.updater_card_address)` for the chain data required by predicate evaluation.
+4. **Codes 510/511/512 (`active_subcards` directory updates) are a hardcoded special case, evaluated before the generic `update_policy` step below and never subject to it:** reject with `P-23` unless `updater_card_address` equals `target_card_address` (only a card's own holder may touch its own `active_subcards`), and reject with `P-13` unless `keccak256(intentSignature.public_key)` equals `target_card_address` (the address-equality check above is meaningless without also confirming the signature was actually produced by that address's own key — implemented in `press/src/handlers/update.ts`). This is a hardcoded protocol invariant per `update_codes.md §5xx` and `process_specs/card_updates.md` — no policy's `update_policy` is consulted for these three codes, and `verifier.verifyCard` is not called for them.
+4b. For all other codes: evaluate the relevant `update_policy` predicate for each field in `field_updates` (for 1xx–7xx codes). For revocation codes (8xx–9xx), evaluate `policy.revocation_permissions`. Use `verifier.verifyCard(updateIntent.updater_card_address)` for the chain data required by predicate evaluation.
 5. Confirm the updater card chain satisfies the predicate. Reject with `P-11` if not.
 6. Multiple revocation entries on the same card are permitted; if present, the entry with the earliest `effective_date` governs (per `card_updates.md`). Field update codes (1xx–7xx) may be applied to a card that already has a revocation entry — revocation does not block further field updates.
 7. Call `checkRateLimits('update_card_head', updater_card_address, policy_address)` for 1xx codes.
@@ -579,6 +580,12 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 
 **Returns:** `{ sub_card_doc_cid, tx_hash }` on success.
 
+**Note — `active_subcards` is a separate update.** `RegisterSubCard` above updates only the on-chain `SubCardEntry`. It does **not** touch the holder's `active_subcards` field on their master card (`protocol-objects.md §1.1`) — that requires a separate code-510 `UpdateIntentPayload` signed by the holder and submitted through the standard card-update flow (`process_specs/card_updates.md`), which may be handled by this press or any other press listed in the master card's `approved_presses`. A press processing that code-510 intent MUST verify it is signed by the master card's own holder key before posting, per `update_codes.md §5xx` — this authorization is hardcoded and not subject to the governing policy's `update_policy`. Implemented in `handleUpdate` (`press/src/handlers/update.ts`) — see §5.3 step 4 above and error codes `P-23`/`P-13`.
+
+**Notification: Sibling subcard alert.** When the press accepts and appends a code-510 `LogEntry` (subcard addition) to the master card's log, the press reads the now-updated `active_subcards` array and sends a `subcard_sibling_added` message (per `messaging_protocol.md §9`) to each existing subcard listed in that array (not including the newly-added one). This notifies the holder's legitimate subcards on their other devices that a new sibling has been registered, enabling detection of unauthorized additions. The message includes the new subcard's public key and the CID of the code-510 entry. Similarly, when a code-511 entry (removal) is accepted, the press sends `subcard_sibling_removed` to all remaining subcards; when a code-512 entry (rotation) is accepted, it sends `subcard_sibling_rotated` to all remaining subcards.
+
+Implemented in `press/src/functions/notifications.ts` (`diffActiveSubcards` identifies what changed and who the recipients are by diffing the pre-update `active_subcards` — read by decrypting the master card's *previous* IPFS content under ADR-006's public-key-derived content key, which the press can always do since it already confirmed `intent_signature.public_key` is the target card's own key — against the post-update array supplied in `field_updates`; `notifySubcardSiblings` then dispatches) and wired into `handleUpdate` after the log entry is successfully appended. **Delivery is currently best-effort plaintext JSON POSTed to a per-recipient-address endpoint stub**, mirroring the existing Phase 3 auditor-notification precedent in `appendIssuanceRecord` (`press/src/functions/log.ts`) — not full ADR-007 E2E encryption to each subcard's ML-KEM-768 public key, because no field anywhere in this protocol yet records a subcard's ML-KEM public key for the press to resolve (see `plans/milestones/subcard-registry-final-summary.md` "Next Steps"). A notification failure never blocks or fails the underlying `active_subcards` update.
+
 ---
 
 #### `verifyAppCertificationChain(appCardAddress)`
@@ -631,6 +638,8 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
    - If sufficient: deduct the gas cost from the app balance and submit `DeregisterSubCard`.
    - If zero: sponsor from the issuing organization's press balance and submit. Deregistration must never be blocked by a depleted app balance.
 6. Call `DeregisterSubCard(sub_card_address, sig_payload, master_signature)` on the registry.
+
+**Note — `active_subcards` is a separate update.** As with registration, this call does not remove the sub-card's pubkey from `active_subcards`; that requires a separate holder-signed code-511 intent via `process_specs/card_updates.md`. When that code-511 `LogEntry` is accepted by any press, all remaining subcards are notified via `subcard_sibling_removed` messages.
 
 **Returns:** Transaction hash on success.
 
@@ -863,6 +872,7 @@ Press-side error codes (not on-chain reverts). Returned in the HTTP response bod
 | `P-20` | Insufficient ETH balance to cover estimated gas cost |
 | `P-21` | Policy `valid_until` has passed; press will not issue new cards under this policy |
 | `P-22` | Offer timestamp is stale (replay prevention) |
+| `P-23` | Code-510/511/512 `active_subcards` update where `updater_card_address` ≠ `target_card_address` (holder-only rule violated) |
 | `P-24` | Piñata upload failed; IPFS pin not confirmed |
 
 ---

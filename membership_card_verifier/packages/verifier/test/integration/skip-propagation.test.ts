@@ -91,6 +91,8 @@ describe("hard rejection skip propagation", () => {
       holder.publicKey, issuer.secretKey, holder.secretKey, press.secretKey,
       [Buffer.from(fakeAncestor.publicKey).toString("base64url")]
     );
+    // Add sub-card to active_subcards so Stage 2 passes
+    masterDoc.active_subcards = [Buffer.from(sub.publicKey).toString("base64url")];
     const ancestorDoc = makeCardDoc(
       fakeAncestor.publicKey, issuer.secretKey, fakeAncestor.secretKey, press.secretKey,
       [Buffer.from(fakeAncestor.publicKey).toString("base64url")] // cycle

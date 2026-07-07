@@ -88,6 +88,8 @@ This spec extends and supersedes the `RegistryEntry` description in `protocol-ob
 
 The governance tables (`PolicyAuthorizerKeys`, `PressAuthorizations`, `RegisterPolicy`, `AuthorizePress`, `RevokePress`, `RotateAuthorizerKey`) are adopted from `ARCHITECTURE.md` ADR-011, which is the authoritative source for their original specification. This document extends them with the full function signatures, authorization checks, and storage layout required for implementation.
 
+**Note on sub-card directory updates (codes 510/511/512):** The holder's `active_subcards` field (per `protocol-objects.md §1.1`) is maintained entirely off-chain in the card's IPFS log. When codes 510 (addition), 511 (removal), or 512 (rotation) are posted as `LogEntry` records, the press validates them (confirming holder-only authorization) and posts them to IPFS; the contract's on-chain registry pointer is updated (via `UpdateCardHead`, §4.2) just like any other log entry. The contract itself plays no special role for 510/511/512 — it neither validates nor stores `active_subcards`. This is consistent with the contract's general role as a write-gate for authorization and a pointer-store for content on IPFS; the contract does not validate log entry content.
+
 ---
 
 ## 3. Storage Layout

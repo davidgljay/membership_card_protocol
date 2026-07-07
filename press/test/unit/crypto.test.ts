@@ -11,22 +11,13 @@ import {
   mlDsa44Sign,
   secp256r1Sign,
   aes256gcmEncrypt,
+  aes256gcmDecrypt,
   deriveContentKey,
   keccak256,
   toBase64url,
   fromBase64url,
   mlDsa44PublicKeyFromPrivate,
 } from '../../src/functions/crypto.js';
-import { createDecipheriv } from 'node:crypto';
-
-function aes256gcmDecrypt(key: Uint8Array, noncePlusCiphertext: Uint8Array): Uint8Array {
-  const nonce = noncePlusCiphertext.subarray(0, 12);
-  const tag = noncePlusCiphertext.subarray(noncePlusCiphertext.length - 16);
-  const ct = noncePlusCiphertext.subarray(12, noncePlusCiphertext.length - 16);
-  const d = createDecipheriv('aes-256-gcm', key, nonce);
-  d.setAuthTag(tag);
-  return new Uint8Array(Buffer.concat([d.update(ct), d.final()]));
-}
 
 // Generate a deterministic ML-DSA-44 keypair from a fixed seed for testing.
 const SEED = new Uint8Array(32).fill(0x42);

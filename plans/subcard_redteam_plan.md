@@ -16,6 +16,36 @@ The sub-card flow introduces new attack surfaces not present in the baseline car
 
 ---
 
+## Adversary 0: Compromised Holder Key (Phase 4 Addition)
+
+**Goal:** Silently modify the sub-card directory to insert unauthorized sub-cards or remove legitimate ones.
+
+**Attacker profile:** An attacker who has compromised the holder's ML-DSA-44 private key (via theft, malware, or social engineering). The holder key controls all signatures over the master card, including the `active_subcards` directory.
+
+### Attack Vectors
+
+#### 0.1 — Silent Sub-Card Directory Insertion via Codes 510/511/512
+
+**Description:** A compromised holder key signs an "add sub-card" (code-510) or "rotate sub-card" (code-512) log entry on the master card, inserting a rogue public key into `active_subcards`. The rogue key belongs to an attacker-controlled device. The verifier now accepts signatures from the rogue device as if they were legitimate sub-cards.
+
+**Analysis:** Codes 510/511/512 are hardcoded to require holder-only authorization (not policy-configurable). The holder's signature is the sole authorization gate. If the holder key is compromised, the attacker can freely modify `active_subcards`. The entry appears in the IPFS log with the holder's legitimate signature, so a verifier that checks the signature will not detect the insertion as unauthorized — from the verifier's perspective, it is a legitimate holder-initiated update.
+
+**Severity:** Critical — enables arbitrary sub-card injection with the appearance of legitimacy.
+**Likelihood:** Medium — requires holder key compromise.
+**Mitigation:** This is a consequence of the key compromise itself, not a protocol flaw. The holder's key hygiene (secure storage, multi-device recovery) is the primary defense. The wallet SHOULD provide a secure recovery mechanism so that if a device is compromised, the user can rotate the holder key on another device and re-sign the `active_subcards` directory. The `active_subcards` field itself should be explicitly monitored by the card holder as part of their regular card health checks (similar to reviewing connected devices in a cloud account).
+
+#### 0.2 — Sub-Card Directory as a Privacy Leak Vector
+
+**Description:** Anyone who decrypts the master card (authorized verifiers, the card holder, or anyone with the decryption key) can see the full list of active sub-cards. This includes the holder's apps, capabilities delegated to each, and the sub-card public keys. An observer who collects multiple snapshots of `active_subcards` over time can build a complete behavioral profile of the holder's app usage and trust relationships.
+
+**Analysis:** The `active_subcards` field is part of the master card's encrypted content, so it is not publicly visible on the blockchain. However, anyone who has legitimate access to decrypt the master card (e.g., a verifier walking the chain to check a sub-card, or the wallet itself) can see the full directory. This is more fine-grained than the baseline sub-card correlation risk (Adversary 3, Attack 3.1), which only links sub-cards if they appear in independent signatures. Here, a single decryption reveals the entire active roster.
+
+**Severity:** High — enables detailed behavioral profiling for anyone with decryption access.
+**Likelihood:** High — decryption happens every time a sub-card is verified.
+**Mitigation:** Users who require strong behavioral privacy should consider using separate master cards for different trust contexts (similar to the "isolated sub-card" option already recommended for Adversary 3). The wallet SHOULD display a summary of active sub-cards and allow the user to revoke them at any time. Verifiers SHOULD minimize the number of times they decrypt the master card (e.g., cache the `active_subcards` entry per verification session if multiple sub-cards are being checked).
+
+---
+
 ## Adversary 1: Malicious Application
 
 **Goal:** Sign false statements or gain illicit access using users' cards.
@@ -220,6 +250,8 @@ The sub-card flow introduces new attack surfaces not present in the baseline car
 
 | ID | Adversary | Attack | Severity | Likelihood | Current Mitigation | Gap |
 |---|---|---|---|---|---|---|
+| 0.1 | Compromised Holder Key | Silent sub-card injection via 510/511/512 | Critical | Medium | Holder key hygiene | Key rotation + directory monitoring needed |
+| 0.2 | Compromised Holder Key | Sub-card directory as privacy leak | High | High | Encrypted storage | Separate master cards for privacy contexts |
 | 1.1 | Malicious App | Capability escalation | High | Medium | Capability fields in spec | Verification library must enforce |
 | 1.2 | Malicious App | Installation card reuse | Medium | Low | Per-install key design | Wallet warning needed |
 | 1.3 | Malicious App | Version-pinned audit bypass | High | Medium | EAS annotations | Audit must be version-specific |
@@ -231,7 +263,7 @@ The sub-card flow introduces new attack surfaces not present in the baseline car
 | 3.2 | Observer | Card inventory inference | Medium | Medium | Private mode available | Private mode recommended in spec |
 | 4.1 | Data Harvester | Predicate enumeration | High | Medium | User-mediated consent | "Unsatisfied" must be undisclosed |
 | 4.2 | Data Harvester | Approval pattern profiling | Medium | Medium | Partial | Aggregate predicates in single screen |
-| 4.3 | Data Harvester | Behavioral log via notes | High | Medium | None | Note size limits + wallet preview needed |
+| 4.3 | Data Harvester | Behavioral log via notes | High | Medium | **Limitations mechanism (Phase 4)** | Note `limitations` in sub-card spec |
 | 4.4 | Data Harvester | Cross-device tracking | Medium | High | Baseline limitation | Isolated sub-card for multi-device users |
 
 ---
@@ -248,6 +280,10 @@ The following findings represent the highest-priority gaps to address before the
 
 **Finding S-4 (High):** Predicate enumeration via consent-flow observation must be blocked. The wallet must not reveal predicate satisfaction to the app before user approval; "unsatisfied" and "declined" must be indistinguishable from the app's perspective.
 
-**Finding S-5 (High):** Note-writing abuse as behavioral surveillance needs explicit mitigation. A note size limit and wallet preview requirement should be added to the sub-card creation policy.
+**Finding S-5 (High → Medium w/ Phase 4 Mitigation):** Note-writing abuse as behavioral surveillance. The Phase 4 `limitations` mechanism (§1.5 of the sub-card spec) now provides a content-constraint option: an app can be granted the note-writing capability but restricted by `field_requirements` to only write notes matching a specific format (e.g., user-facing strings, bounded size). Verifiers enforce these constraints, preventing arbitrary behavioral telemetry. Additionally, a note size limit and wallet preview requirement should be added to the sub-card creation policy as a second layer of protection.
 
 **Finding S-6 (High):** Cross-app correlation via parent card pointer is a structural risk. The spec should prominently document this and describe the isolated sub-card option as the mitigation for users requiring strong unlinkability.
+
+**Finding S-7 (Critical - Phase 4 Addition):** Compromised holder key can silently inject rogue sub-cards via codes 510/511/512. These codes are hardcoded to require holder-only authorization, and a compromised holder key can freely modify `active_subcards`. Mitigation requires the holder to detect and respond (key rotation on a secure device, `active_subcards` monitoring). The wallet MUST provide a secure recovery flow and the spec MUST document `active_subcards` as a critical security-sensitive field requiring regular review by the holder.
+
+**Finding S-8 (High - Phase 4 Addition):** The `active_subcards` field is a privacy leak vector for anyone with decryption access (verifiers, the wallet, or key-compromised parties). A single master card decryption reveals the holder's entire active sub-card roster and delegated capabilities. Mitigation: users requiring behavioral privacy should use separate master cards for different trust contexts. Verifiers should minimize decryption frequency.

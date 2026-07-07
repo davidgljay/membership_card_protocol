@@ -37,3 +37,16 @@ export {
   type RevokeSubCardOptions,
   type RevokeSubCardResult,
 } from './revocation.js';
+export {
+  resolveActiveSubCardTargets,
+  type SubCardMessageTarget,
+} from './resolveActiveSubcardTargets.js';
+export {
+  addActiveSubCard,
+  removeActiveSubCard,
+  rotateActiveSubCard,
+  type AddActiveSubCardOptions,
+  type RemoveActiveSubCardOptions,
+  type RotateActiveSubCardOptions,
+  type UpdateSubcardsResult,
+} from './activeSubcardsUpdate.js';

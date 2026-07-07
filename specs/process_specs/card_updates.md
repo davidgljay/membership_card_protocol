@@ -85,6 +85,7 @@ Updates are classified by a three-digit code (1xx–9xx) that signals the semant
    - **Signature validity:** Verify `intent_signature` over the canonical `UpdateIntentPayload`.
    - **Updater not revoked:** Confirm the updater's card has no 8xx or 9xx entry with `effective_date` ≤ now.
    - **Authorization — field updates (codes 1xx–7xx):** For each field in `field_updates`, confirm the updater's card chain satisfies that field's `update_policy` predicate (from the policy's `field_definitions`). All predicates must be satisfied by the same updater.
+   - **Authorization — sub-card directory updates (codes 510/511/512):** The press MUST confirm the intent is signed by the target card's own holder key (`{ "is_holder": true }`), regardless of what the governing policy's `update_policy` states for `active_subcards` or any other field. This authorization is hardcoded per `protocol-objects.md §1.1` and `update_codes.md §5xx` — a policy cannot grant this authority to an issuer or any other party, and the press MUST reject any 510/511/512 intent not signed by the holder even if the policy's `update_policy` would otherwise permit it.
    - **Authorization — revocations (codes 8xx–9xx):** Confirm the updater's card chain satisfies `revocation_permissions` for the given code range. If `revocation_permissions` is absent from the policy, the default applies: 8xx by holder or issuer, 9xx by issuer only.
    - **Immutable fields:** Confirm no `field_updates` entry targets a protocol-required immutable field (`policy_id`, `issuer_card`, `press_card`, `recipient_pubkey`, `issued_at`, `ancestry_pubkeys`, `past_keys`, `issuer_signature`, `holder_signature`, `press_signature`). Note: `successor` (codes 100/101/102), `supersedes`, and `supersession_note` are protocol-reserved fields that may be set post-issuance via the defined update-code mechanisms and are NOT in this immutable list.
    - **Code consistency:** 8xx–9xx entries must include `revocation` and no `field_updates`; 1xx–7xx entries must include `field_updates` and no `revocation`.
@@ -111,6 +112,19 @@ Updates are classified by a three-digit code (1xx–9xx) that signals the semant
     - If the holder's wallet service endpoint is unreachable, the notification is dropped; the holder will discover the update on next poll.
 
 13. The press sends a success confirmation to the updater via the submission channel.
+
+---
+
+## Sub-Card Directory Updates (Codes 510/511/512)
+
+These codes are a special case of the 1xx–7xx field-update flow above (they use `field_updates`, not `revocation`), scoped to the `active_subcards` field on the **holder's own master card** (`protocol-objects.md §1.1`). They follow the same five phases as any other update, with these specifics:
+
+- **Updater:** Always the master card's own holder — the `updater_card` in the `UpdateIntentPayload` is the target card itself, and `intent_signature` is produced with the holder's current master-card key. There is no cross-card scenario for these codes: an app or issuer cannot originate a 510/511/512 intent on a holder's behalf.
+- **Code 510 (addition):** `field_updates` is `[{ "field": "active_subcards", "value": <full new array, with the new pubkey appended> }]`. If `active_subcards` is not yet present on the card, this entry both adds the field and sets its first element.
+- **Code 511 (removal):** `field_updates` is `[{ "field": "active_subcards", "value": <full new array, with the removed pubkey deleted> }]`. A `note` explaining the removal (e.g., "device lost", "app uninstalled") is recommended but not required.
+- **Code 512 (key rotation):** `field_updates` is `[{ "field": "active_subcards", "value": <full new array, with exactly one pubkey swapped for its replacement> }]` — a single atomic entry, not a paired 511+510.
+- **Press validation (step 7):** In addition to the standard signature and freshness checks, the press MUST confirm the intent is signed by the target card's own holder key before posting (see Phase 3, step 7 above). No other authorization path is accepted for these three codes.
+- **Verifier requirement:** Any verifier or press encountering a 510/511/512 entry not signed by the card's own holder key MUST reject it, independent of the card's governing policy. This is a MUST, not a SHOULD — see `card_validation.md`.
 
 ---
 

@@ -71,6 +71,7 @@ export interface CardDocument {
   recipient_pubkey: string;
   issued_at: string;
   ancestry_pubkeys: string[];
+  active_subcards?: string[];
   past_keys?: PastKey[];
   issuer_signature: string;
   holder_signature: string;
@@ -89,6 +90,7 @@ export interface SubCardDocument {
   app_card: string;
   app_card_pubkey: string;
   capabilities: string[];
+  limitations?: SubCardLimitation[];
   recipient_pubkey: string;
   issued_at: string;
   valid_until?: string;
@@ -96,6 +98,16 @@ export interface SubCardDocument {
   attestation_proof?: string;
   app_signature: string;
   holder_signature: string;
+}
+
+export interface SubCardLimitation {
+  applies_to?: string[];
+  field_requirements?: FieldRequirement[];
+}
+
+export interface FieldRequirement {
+  field: string;
+  regex: string;
 }
 
 // ─── Configuration ────────────────────────────────────────────────────────────

@@ -15,7 +15,7 @@ import { keccak_256 } from '@noble/hashes/sha3';
 import { hkdf } from '@noble/hashes/hkdf';
 import { sha3_256 } from '@noble/hashes/sha3';
 import { sha256 } from '@noble/hashes/sha256';
-import { createCipheriv, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 
 // ---------------------------------------------------------------------------
 // ML-DSA-44 signing
@@ -88,6 +88,28 @@ export function aes256gcmEncrypt(key: Uint8Array, plaintext: Uint8Array): Uint8A
   out.set(ciphertext, 12);
   out.set(tag, 12 + ciphertext.length);
   return out;
+}
+
+/**
+ * Decrypt an AES-256-GCM payload produced by {@link aes256gcmEncrypt} (or by
+ * the verifier package's identical `aes256gcmDecrypt` — same 12-byte-nonce ||
+ * ciphertext || 16-byte-tag layout). Per ADR-006, card content is encrypted
+ * under a key derived only from the card's own *public* key
+ * (`deriveContentKey`), so the press — like anyone who knows the card's
+ * public key — can decrypt registered card content without holding any
+ * private key material.
+ */
+export function aes256gcmDecrypt(key: Uint8Array, noncePlusCiphertext: Uint8Array): Uint8Array {
+  if (noncePlusCiphertext.length < 12 + 16) {
+    throw new Error('aes256gcmDecrypt: payload too short to contain nonce and GCM tag');
+  }
+  const nonce = noncePlusCiphertext.subarray(0, 12);
+  const tag = noncePlusCiphertext.subarray(noncePlusCiphertext.length - 16);
+  const ciphertext = noncePlusCiphertext.subarray(12, noncePlusCiphertext.length - 16);
+  const decipher = createDecipheriv('aes-256-gcm', key, nonce);
+  decipher.setAuthTag(tag);
+  const plain = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+  return new Uint8Array(plain);
 }
 
 // ---------------------------------------------------------------------------

@@ -63,12 +63,18 @@ Entries with codes 1xx–7xx use `field_updates` and do not carry an `effective_
 
 ### 5xx — Programmatic Updates
 
-| Code | Meaning |
-|---|---|
-| 500 | Programmatic field update |
-| 510 | Subcard addition |
-| 511 | Subcard removal |
-| 512 | Subcard key rotation |
+| Code | Meaning | Authority |
+|---|---|---|
+| 500 | Programmatic field update | Per governing policy's `update_policy` |
+| 510 | Subcard addition — adds one pubkey to the holder's own `active_subcards` | `{ "is_holder": true }`, hardcoded |
+| 511 | Subcard removal — deletes one pubkey from the holder's own `active_subcards` | `{ "is_holder": true }`, hardcoded |
+| 512 | Subcard key rotation — atomically replaces one pubkey in `active_subcards` with a new one | `{ "is_holder": true }`, hardcoded |
+
+**Notes on 510/511/512:**
+- These three codes are **hardcoded to holder-only authorization** — `{ "is_holder": true }` — and are **not policy-configurable**. No policy's `update_policy` may loosen, tighten, or reassign authority over these codes; this is a hard protocol limit for this version of the protocol (see `subcard-registry-strategic-plan.md`'s resolved open questions for rationale). This distinguishes 510/511/512 from code 500, whose authority is policy-defined.
+- These codes apply **only to entries on the master (primary) card's own log** — they record changes the holder makes to their own `active_subcards` directory (`protocol-objects.md §1.1`). They are never posted to a **sub-card's** own log: 5xx updates targeting a sub-card's log remain prohibited per `process_specs/subcard_creation_policy.md §Update Card Content`. A press or verifier encountering a 510/511/512 entry on a sub-card's log rejects it as malformed; encountering one on the master card's log not signed by that card's own holder key rejects it as unauthorized.
+- Code 512 is a single atomic entry (one old pubkey out, one new pubkey in), not a 511+510 pair — this preserves rotation as one logical operation with one log entry rather than a brief window where the directory reflects neither the old nor the intended final state.
+- See `protocol-objects.md §1.1` for the `active_subcards` field definition and `subcards.md` for the sub-card lifecycle these codes support.
 
 ### 6xx — Negative Context
 

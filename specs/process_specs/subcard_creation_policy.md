@@ -53,6 +53,8 @@ Specifically, neither party may submit log entries with codes in the following r
 
 The one exception is `valid_until` refresh (code 301, neutral field update). This is explicitly **not permitted** under this policy. If a sub-card expires, it must be re-created through the full sub-card request flow; it cannot be silently extended.
 
+**Disambiguation: 5xx on the sub-card vs. 510/511/512 on the parent card.** The prohibition above covers 5xx entries **on the sub-card's own log** — no party may post them there, full stop. This is a separate matter from codes 510 (subcard addition), 511 (subcard removal), and 512 (subcard key rotation), which are posted to the **holder's master/parent card's log** to maintain that card's `active_subcards` directory (`protocol-objects.md §1.1`). The holder posting a 510/511/512 entry on their own master card is not an exception to this policy — it is a different log entirely, governed by the hardcoded holder-only authorization rule in `update_codes.md §5xx`, not by this sub-card creation policy.
+
 ### Revocation — 8xx (Quiet)
 
 Both the **user** and the **application** have 8xx (quiet) revocation privileges on the sub-card.

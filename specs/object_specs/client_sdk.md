@@ -442,6 +442,8 @@ function revokeSubCard(options: RevokeSubCardOptions): Promise<RevokeSubCardResu
 
 Deregistration is already built — see §9.5, not duplicated here.
 
+**Gap: `active_subcards` directory maintenance (Planned, `subcard-registry-implementation-plan.md` Steps 4.1–4.2).** `subcards.md §Step 5b` and `§Authorization for Deregistration` require the holder to post a code-510 entry (on registration) and a code-511 entry (on deregistration) against their own master card, maintaining `active_subcards`. Neither `subCardRegistration`'s registrar nor `subcards/revocation.ts`/`wallet/subCardDeregistration.ts` currently constructs or submits these entries — both were built before `active_subcards` existed as a protocol-reserved field. Closing this gap means composing the existing `POST /update` code-update-intent path (already used by `subcards/revocation.ts` for 8xx codes) with codes 510/511 instead, signed by the same primary/master key already required for deregistration (§9.5) and available at registration time (§7.4/§9.3's `holder_signature` key).
+
 ### 9.5 Deregistration (Implemented, Ahead of Schedule)
 
 `wallet/subCardDeregistration.ts` — originally planned as part of Step 4.4, built during Phase 2 (Step 2.5) instead, since post-recovery batch deregistration needed it immediately:
@@ -475,7 +477,16 @@ function messageId(payload: MessagePayload): string;
 
 The concrete envelope type is named `CardMessageEnvelope`, not `SignedMessageEnvelope`, specifically to avoid colliding with the verifier package's own `SignedMessageEnvelope` (its generic `{ payload: { message, timestamp, ... }, signatures }` shape for `CardVerifier.verifyEnvelope`, already re-exported unaliased from `verification/index.ts`) — re-exported as `MessageEnvelope` at this package's top level for readability.
 
-`messaging/fanout.ts`: `fanOutMessageToSubCards(recipientCardHash, envelope, subCards): RoutingEnvelope[]` — implements `message_routing.md §Sender-Side Fan-out`: given the recipient's currently-registered sub-card list (resolved by the caller from the on-chain storage contract; this function does not itself talk to chain), encrypts the same `CardMessageEnvelope` independently to each sub-card's ML-KEM-768 public key, producing one distinct `RoutingEnvelope` (`{ to, subcard_hash, payload }`) per sub-card — never one ciphertext copied N times, confirmed by a test that fans out to 3 sub-cards and asserts all 3 `payload` values are pairwise distinct, then decrypts each independently with its own sub-card's ML-KEM secret key (`messaging/decrypt.ts`'s `decryptRoutingEnvelope`) and confirms it recovers the identical envelope — plus that cross-decrypting with a different sub-card's key never succeeds.
+`messaging/fanout.ts`: `fanOutMessageToSubCards(recipientCardHash, envelope, subCards): RoutingEnvelope[]` — implements `message_routing.md §Sender-Side Fan-out`: given the recipient's currently-registered sub-card list, encrypts the same `CardMessageEnvelope` independently to each sub-card's ML-KEM-768 public key, producing one distinct `RoutingEnvelope` (`{ to, subcard_hash, payload }`) per sub-card — never one ciphertext copied N times, confirmed by a test that fans out to 3 sub-cards and asserts all 3 `payload` values are pairwise distinct, then decrypts each independently with its own sub-card's ML-KEM secret key (`messaging/decrypt.ts`'s `decryptRoutingEnvelope`) and confirms it recovers the identical envelope — plus that cross-decrypting with a different sub-card's key never succeeds.
+
+**Resolving `subCards` — `active_subcards` directory read (Planned, `subcard-registry-implementation-plan.md` Step 4.1).** `fanOutMessageToSubCards` itself never talks to chain or IPFS; `subCards` is caller-supplied. The intended caller-side helper for "message all of a holder's sub-cards" is:
+
+```ts
+function resolveActiveSubCardTargets(masterCard: DecryptedCardDocument): SubCardMessageTarget[];
+// SubCardMessageTarget = { pubkey: Uint8Array; address: string /* keccak256(pubkey) */ }
+```
+
+Given an already-decrypted master `CardDocument` (obtained however the caller already resolves master cards — this helper performs no fetch or decryption itself), reads `active_subcards` (`protocol-objects.md §1.1`) and returns one `SubCardMessageTarget` per entry, deriving `address = keccak256(pubkey)` for each. A card with no `active_subcards` field returns `[]`, not a throw, matching the field's "absence = no active sub-cards" convention. This is a pure, synchronous function with no network round trip beyond whatever single card fetch the caller already performed to obtain `masterCard` — composing directly with `fanOutMessageToSubCards` (`resolveActiveSubCardTargets(masterCard)` feeds `subCards` above) and re-exported identically from `client-sdk-web` and `client-sdk-rn` with no platform-specific duplication of the address-derivation logic, per Steps 4.1–4.2 of the sub-card registry implementation plan.
 
 Since ML-KEM is a KEM, not an AEAD, the actual envelope bytes are encrypted with AES-256-GCM under a key derived via HKDF-SHA3-256 from the ML-KEM shared secret (mirroring the encapsulate-then-derive-then-AEAD shape `HpkeObliviousProtocolTransport` already uses via HPKE's native `export()`, adapted here since ML-KEM has no built-in equivalent). The resulting blob is self-contained (length-prefixed KEM ciphertext + AEAD nonce + AEAD ciphertext) so a recipient holding only the sub-card's ML-KEM secret key can decrypt with no additional side-channel metadata.
 
@@ -625,6 +636,8 @@ Established across §8 and reused wherever new verification/acceptance-style fun
 | 5 | 5.6 UUID pool deregistration | **Done** |
 | 5 | Milestone review | **Done** |
 | 6 | 6.1–6.3 + CP-2 (cross-platform hardening, docs, pre-production review) | **Not started** |
+| — | `active_subcards` directory: `resolveActiveSubCardTargets` helper (§10.1) | **Not started** — `subcard-registry-implementation-plan.md` Step 4.1 |
+| — | `active_subcards` directory: code-510/511 posting on registration/deregistration (§9.4/§9.5 gap) | **Not started** — `subcard-registry-implementation-plan.md` Steps 4.1–4.2 |
 
 As of this writing: 243 tests pass in the `client-sdk` core package (25 in `client-sdk-web`, 22 in `client-sdk-rn` — each includes a Step 5.5 end-to-end realtime-delivery scenario against that platform's real default `RealtimeTransportProvider`); build/typecheck/lint clean across the whole workspace.
 

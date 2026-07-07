@@ -62,6 +62,8 @@ describe("full pipeline integration", () => {
       [Buffer.from(parent.publicKey).toString("base64url")]
     );
     masterDoc.policy_id = POLICY_CID;
+    // Add sub-card to active_subcards
+    masterDoc.active_subcards = [Buffer.from(sub.publicKey).toString("base64url")];
     const MASTER_CID = "QmMaster";
 
     // Sub-card document
@@ -195,6 +197,8 @@ describe("full pipeline integration", () => {
       [Buffer.from(root.publicKey).toString("base64url")]
     );
     masterDoc.policy_id = POLICY_CID;
+    // Add sub-card to active_subcards
+    masterDoc.active_subcards = [Buffer.from(sub.publicKey).toString("base64url")];
     const MASTER_CID = "QmMaster";
 
     const subDoc = makeSubCardDoc(holder.publicKey, holder.secretKey, app.publicKey, app.secretKey, sub.publicKey);

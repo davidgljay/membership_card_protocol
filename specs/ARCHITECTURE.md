@@ -590,7 +590,9 @@ Verifier receives signed message or card pointer
          (binding check — mismatch → hard reject)
       derive content_key = HKDF-SHA3-256(holder_primary_card_pubkey, info="card-content-v1")
          and decrypt master card (AES-GCM auth failure → hard reject)
-      confirm sub-card appears in master card's active sub-card list
+      confirm sub-card's address appears in master card's active_subcards field
+         (keccak256 of each entry pubkey; hard reject if absent — independent of
+          the on-chain SubCardEntry.active flag; see protocol-objects.md §1.1)
       verify master card holder's ML-DSA-44 signature on sub-card registration
       derive content_key = HKDF-SHA3-256(app_card_pubkey, info="card-content-v1")
          and decrypt app card (AES-GCM auth failure → hard reject)

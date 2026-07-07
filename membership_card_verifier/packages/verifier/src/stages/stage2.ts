@@ -94,7 +94,33 @@ export async function verifyStage2(
     return { scope_clean: false, signer_card: signerCard, app_card_chain_valid: false, errors };
   }
 
-  // Step 9: confirm sub-card appears in master's registrations (via on-chain SubCardEntry)
+  // Step 9: confirm sub-card appears in master's active_subcards field (IPFS directory)
+  // Derive keccak256(entry_pubkey) for each entry in active_subcards and check for match
+  const activeSubcardsArray = (masterCardDoc.active_subcards as string[] | undefined) ?? [];
+  let foundInActiveSubcards = false;
+  for (const subcardPubkeyB64 of activeSubcardsArray) {
+    try {
+      const subcardPubkeyBytes = new Uint8Array(Buffer.from(subcardPubkeyB64, "base64url"));
+      const subcardAddress = keccak256(subcardPubkeyBytes);
+      if (subcardAddress === signerCard) {
+        foundInActiveSubcards = true;
+        break;
+      }
+    } catch (e) {
+      // Ignore decode errors and continue checking other entries
+      continue;
+    }
+  }
+  if (!foundInActiveSubcards) {
+    errors.push({
+      stage: 2,
+      code: "SUB_CARD_NOT_IN_ACTIVE_DIRECTORY",
+      message: `Sub-card ${signerCard} not found in master card's active_subcards directory`,
+    });
+    return { scope_clean: false, signer_card: signerCard, app_card_chain_valid: false, errors };
+  }
+
+  // Step 10: confirm sub-card appears in master's registrations (via on-chain SubCardEntry)
   const subCardEntry = await rpc.getSubCardEntry(signerCard);
   if (!subCardEntry || subCardEntry.master_card_address !== holderCardAddress) {
     errors.push({
@@ -105,7 +131,7 @@ export async function verifyStage2(
     return { scope_clean: false, signer_card: signerCard, app_card_chain_valid: false, errors };
   }
 
-  // Step 10: verify master card holder's ML-DSA-44 signature on sub-card registration
+  // Step 11: verify master card holder's ML-DSA-44 signature on sub-card registration
   const { holder_signature, ...subCardDocWithoutHolderSig } = subCardDoc;
   const holderSigBytes = Buffer.from(holder_signature, "base64url");
   const subCardCanonical = canonicalize(subCardDocWithoutHolderSig);
@@ -119,13 +145,13 @@ export async function verifyStage2(
     return { scope_clean: false, signer_card: signerCard, app_card_chain_valid: false, errors };
   }
 
-  // Step 11: check on-chain active status
+  // Step 12: check on-chain active status
   if (!subCardEntry.active) {
     errors.push({ stage: 2, code: "SUB_CARD_INACTIVE", message: "Sub-card is not active on-chain" });
     return { scope_clean: false, signer_card: signerCard, app_card_chain_valid: false, errors };
   }
 
-  // Step 12: verify app_signature using app_card_pubkey
+  // Step 13: verify app_signature using app_card_pubkey
   const { app_signature, holder_signature: _hs, ...subCardDocWithoutSigs } = subCardDoc;
   const appSigBytes = Buffer.from(app_signature, "base64url");
   const appSigCanonical = canonicalize(subCardDocWithoutSigs);
@@ -138,7 +164,12 @@ export async function verifyStage2(
     errors.push({ stage: 2, code: "INVALID_APP_SIGNATURE", message: "App signature on sub-card document is invalid" });
   }
 
-  // Step 13: app_card chain walk — confirm app_card chains to appCertificationRoot
+  // Step 14: [Planned] sub-card limitations enforcement
+  // TODO: Check that the message payload conforms to all limitations in subCardDoc.limitations
+  // (This requires passing the message payload through the verification pipeline)
+  // See: protocol-objects.md §16, messaging_protocol.md §9-11, subcards.md §Limitations
+
+  // Step 15: app_card chain walk — confirm app_card chains to appCertificationRoot
   // (APP_CARD_CHAIN_NOT_TRUSTED if the chain does not reach the configured root)
   const appCertRoot = config.appCertificationRoot;
   const maxDepth = config.maxChainDepth ?? 64;

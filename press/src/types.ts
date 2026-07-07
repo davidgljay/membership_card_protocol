@@ -126,12 +126,18 @@ export interface OpenOfferClaimResponse {
 // Update types
 // ---------------------------------------------------------------------------
 
+export interface FieldUpdate {
+  field: string;
+  value: unknown;
+}
+
 export interface UpdateIntentPayload {
   updater_card_address: string;
   target_card_address: string;
   code: number;
   timestamp: string;
-  field_updates?: Record<string, unknown>;
+  /** `[{ field, value }, ...]` per `process_specs/card_updates.md` — not a keyed record. */
+  field_updates?: FieldUpdate[];
   revocation?: {
     code: number;
     effective_date: string;

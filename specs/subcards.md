@@ -127,6 +127,10 @@ The press then calls `RegisterSubCard` on the Arbitrum One registry contract, cr
 
 The sub-card is now a live, independently-verifiable credential in the registry.
 
+**Step 5b: Holder posts the `active_subcards` directory entry.** Registration on-chain (`RegisterSubCard`) and the holder's own `active_subcards` directory (`protocol-objects.md §1.1`) are updated separately: after (or alongside) the press's `RegisterSubCard` call, the holder submits a code-510 `UpdateIntentPayload` against their own master card, adding the new sub-card's `recipient_pubkey` to `active_subcards`. This entry is signed by the holder's primary card key — the same key that produced `holder_signature` on the `SubCardDocument` in Step 4 — and is processed via the standard update flow (`card_updates.md`). A sub-card that is on-chain registered but never added to `active_subcards` fails the runtime verifier's directory check (§16 Verifier chain walk, step 8) even though `SubCardRegistrations[sub_card_address].active` is true — the wallet MUST post the code-510 entry as part of completing sub-card issuance, not as an optional follow-up.
+
+**Step 5c: Press notifies existing subcards of the new sibling.** When the press accepts the code-510 `LogEntry`, it sends a `subcard_sibling_added` message (`messaging_protocol.md §9`) to all existing subcards previously listed in `active_subcards` (not including the newly-added one). This alerts the holder's other devices that a new sibling has been registered, enabling detection of unauthorized additions — a key anti-compromise signal if an attacker gains access to the holder's key.
+
 ---
 
 ## Sub-Card Key Management
@@ -195,6 +199,52 @@ Verifiers must check that a sub-card signature's message type appears in the sub
 
 ---
 
+## Limitations
+
+`capabilities` is a coarse whitelist — it says *which* message types a sub-card may sign, but nothing about their content. `limitations` (`protocol-objects.md §16`) generalizes this: arbitrary, additional constraints on the *content* of what a sub-card signs, expressed in the same predicate/`field_requirements` grammar the protocol already uses for `update_policy` and card-pointer field validation (`card_protocol_spec.md` §The Predicate System, §The Field Type System) — not a new, parallel constraint language.
+
+Each `limitations` entry has:
+- `applies_to` (optional) — the message type(s) this entry constrains; absent means it applies to every type in `capabilities`.
+- `field_requirements` — a list of `{ "field": "<dot-path into the signed message payload>", "regex": "<pattern>" }` pairs, evaluated against the payload of the statement being signed (the same `{ field, regex }` shape already used for `card-pointer`/`cid` field validation elsewhere, retargeted from "fields of a referenced card" to "fields of the message being signed").
+
+A verifier evaluating a sub-card signature checks every `limitations` entry whose `applies_to` includes (or is absent, matching) the message's type; if any `field_requirements` pair fails to match, the signature is rejected — with the same rigor as the `capabilities` check.
+
+**Worked example 1 — field_requirements-style content constraint.** Restrict the `note` field length and character set on a note-writing sub-card, mitigating the note-writing-as-surveillance risk identified in `plans/subcard_redteam_plan.md` (Finding S-5):
+
+```json
+"capabilities": ["note"],
+"limitations": [
+  {
+    "applies_to": ["note"],
+    "field_requirements": [
+      { "field": "payload.note", "regex": "^[\\s\\S]{0,280}$" }
+    ]
+  }
+]
+```
+
+This does not fully resolve S-5 (a 280-character note can still carry behavioral surveillance data), but it bounds the size and lets a policy pair it with a wallet-side content preview requirement — see `plans/subcard_redteam_plan.md` Finding S-5 for the full mitigation, of which this is one part.
+
+**Worked example 2 — predicate-style time-window constraint.** Restrict an `exchange_offer`-signing sub-card to a specific calendar window by matching the message's own timestamp field:
+
+```json
+"capabilities": ["exchange_offer"],
+"limitations": [
+  {
+    "applies_to": ["exchange_offer"],
+    "field_requirements": [
+      { "field": "payload.timestamp", "regex": "^2026-(0[7-9]|1[0-2])-" }
+    ]
+  }
+]
+```
+
+This example restricts signing to July–December 2026 by matching the ISO 8601 prefix. It illustrates the mechanism's reach and its limit: `field_requirements` regex constraints are evaluated per-message and statelessly (consistent with the rest of the protocol's fully-offline, independently-re-derivable verification model — `card_validation.md`), so they can express calendar/time-of-day windows against a timestamp field, but they **cannot** express count-based rate limits (e.g., "at most 10 signatures per day") — that would require a verifier to track signing history across messages, which no part of this protocol does. Rate-limiting a sub-card is out of scope for `limitations` in this protocol version; a wallet-side mitigation (e.g., revoking a sub-card that misbehaves) remains the available lever.
+
+**Acceptance criteria for `limitations` are listed alongside the rest of this spec's acceptance criteria below.**
+
+---
+
 ## Sub-Card Revocation
 
 Sub-cards follow the standard 8xx/9xx revocation model.
@@ -208,6 +258,8 @@ Sub-card revocations are submitted to an approved press (for the primary card's 
 ### Authorization for Deregistration
 
 Sub-card deregistration (the on-chain `DeregisterSubCard` call that marks a sub-card inactive) requires a signature from the holder's **primary card key** — not from the sub-card key itself, and not from the app. The press verifies this signature off-chain before submitting the transaction; gas is paid from the requesting app's pre-funded account with the press. If the app's balance is insufficient, the issuing organization's press sponsors the cost so that deregistration is never blocked by a depleted balance (stranding an active sub-card key is a security risk). See `registry_contract.md §4.12`.
+
+Deregistration is paired with a code-511 `UpdateIntentPayload` against the holder's master card, deleting the sub-card's pubkey from `active_subcards`. Both changes — the on-chain `active` flag and the IPFS `active_subcards` entry — should be made together; a sub-card removed from one but not the other is rejected by the runtime verifier regardless (§16 Verifier chain walk, step 8 and step 10 are independent hard-rejection checks), but leaving the two out of sync is a hygiene issue the wallet should avoid, not something to rely on the verifier to paper over.
 
 This means sub-card keys cannot unilaterally deregister themselves. An app that wants to revoke its own sub-card (e.g., on uninstall) must request deregistration through the press, which requires the holder's primary key to be available. In practice, the holder's wallet signs the deregistration request; the app triggers the flow by notifying the wallet.
 
@@ -277,6 +329,13 @@ The wallet is the enforcement point. It:
 - [ ] A `SubCardDocument` with `attestation_level: "T2"` is accepted only if the `attestation_proof` verifies against the platform's attestation service and the attested key hash matches `recipient_pubkey`.
 - [ ] A `SubCardDocument` with `attestation_level: "T1"` is rejected unless the governing policy explicitly declares T1 acceptable.
 - [ ] The wallet blocks issuance if the `attestation_level` is missing or unrecognized.
+- [ ] A runtime verifier rejects a sub-card signature whenever the sub-card's registry address (`keccak256` of its public key) is absent from the master card's `active_subcards` field, **even if** `SubCardRegistrations[sub_card_address].active` is `true` on-chain — the two checks are independent and both must pass.
+- [ ] Sub-card issuance is not considered complete until the holder has posted a code-510 entry adding the new sub-card's pubkey to `active_subcards` on their own master card.
+- [ ] Sub-card deregistration is paired with a code-511 entry removing the sub-card's pubkey from `active_subcards`.
+- [ ] A code-510, 511, or 512 entry on a master card's log is accepted only when signed by that card's own holder key; an issuer-signed (or any other party's) 510/511/512 intent is rejected regardless of the governing policy's `update_policy`.
+- [ ] A verifier rejects a sub-card-signed statement whose payload violates any `limitations` entry whose `applies_to` matches (or is absent for) the statement's message type.
+- [ ] A verifier accepts a sub-card-signed statement that satisfies every applicable `limitations` entry, with the same message otherwise valid.
+- [ ] A `SubCardDocument` with no `limitations` field is treated as having no additional content constraints (only `capabilities` applies) — absence must not be treated as a rejection.
 
 ---
 
