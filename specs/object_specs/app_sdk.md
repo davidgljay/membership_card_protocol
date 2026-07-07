@@ -101,7 +101,7 @@ util/         base64url encode/decode.
 testing/      Shared provider-contract test suite and cross-platform scenario harness.
 ```
 
-**Platform-specific default implementations:** The shared `client-sdk-web` and `client-sdk-rn` packages (restructured as part of the split) provide platform-specific defaults for providers and realtime transport. See `wallet_sdk.md` for the dependency on these shared platform packages.
+**Platform-specific default implementations:** `@membership-card-protocol/sdk-providers-web` and `@membership-card-protocol/sdk-providers-rn` (renamed from `client-sdk-web`/`client-sdk-rn` as part of the split) provide platform-specific defaults for providers and realtime transport. Each depends on this package (for the provider interface types their classes implement), not the other way around — this package has no dependency on either platform package. A host app depends on this package *and*, separately, on whichever platform package matches its runtime, then wires a default provider instance in itself.
 
 TypeScript, ESLint, Vitest are configured per package, matching `membership_card_verifier`'s conventions.
 

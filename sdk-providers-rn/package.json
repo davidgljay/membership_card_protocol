@@ -1,0 +1,17 @@
+{
+  "name": "sdk-providers-rn-workspace",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "packageManager": "pnpm@9.6.0",
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=9"
+  }
+}

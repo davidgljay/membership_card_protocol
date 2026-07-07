@@ -36,7 +36,7 @@
    - 7.4 [Existing-Wallet Open-Offer Acceptance](#74-existing-wallet-open-offer-acceptance)
    - 7.5 [Targeted Offer Acceptance](#75-targeted-offer-acceptance)
 8. [Messaging Helpers (Active Sub-Card Resolution)](#8-messaging-helpers-active-sub-card-resolution)
-   - 8.1 [Resolving Active Sub-Cards from On-Chain Registry](#81-resolving-active-sub-cards-from-on-chain-registry-planned)
+   - 8.1 [Resolving Active Sub-Cards from On-Chain Registry](#81-resolving-active-sub-cards-from-on-chain-registry-implemented)
 9. [Cross-Platform Hardening and Documentation (Planned)](#9-cross-platform-hardening-and-documentation-planned)
 10. [Security Invariants](#10-security-invariants)
 11. [Result and Error Conventions](#11-result-and-error-conventions)
@@ -122,7 +122,7 @@ This package imports all six provider interfaces, the `ObliviousProtocolTranspor
 - `StorageProvider` — used for keyring and backup state persistence.
 - `RealtimeTransportProvider` — used for SSE/WebSocket messaging delivery during active wallet sessions.
 
-Platform-specific default implementations are provided by shared `client-sdk-web` and `client-sdk-rn` packages.
+Platform-specific default implementations are provided by `@membership-card-protocol/sdk-providers-web` and `@membership-card-protocol/sdk-providers-rn` (renamed from `client-sdk-web`/`client-sdk-rn` as part of the split). Both depend on App SDK, not on this package — this package has no dependency on either platform package, same as App SDK. A wallet integrator depends on this package *and*, separately, on whichever platform package matches its runtime.
 
 ---
 
@@ -332,22 +332,20 @@ Review (via this package's own `reviewTargetedOffer`, §7.1) + countersign (via 
 
 ## 8. Messaging Helpers (Active Sub-Card Resolution)
 
-*(Partially implemented — Phase 5. Module: `messaging/`. Full implementation planned per sub-card registry plan.)*
+*(Implemented — salvaged from `client-sdk-old` during the split's platform-package reconciliation step, having been built ahead of the original spec's own schedule the same way §6.5's deregistration was. Module: `messaging/`.)*
 
-### 8.1 Resolving Active Sub-Cards from On-Chain Registry (Planned)
-
-*(Gap from original client_sdk.md §10.1 — noted as "Planned" in the strategic plan.)*
+### 8.1 Resolving Active Sub-Cards from On-Chain Registry (Implemented)
 
 ```ts
-function resolveActiveSubCardTargets(masterCard: DecryptedCardDocument): SubCardMessageTarget[];
-// SubCardMessageTarget = { pubkey: Uint8Array; address: string /* keccak256(pubkey) */ }
+function resolveActiveSubCardTargets(masterCard: CardDocument): SubCardMessageTarget[];
+// SubCardMessageTarget = { pubkey: string; address: string /* keccak256(pubkey), lowercase hex without 0x prefix */ }
 ```
 
-Given an already-decrypted master `CardDocument`, reads `active_subcards` (`protocol-objects.md §1.1`) and returns one `SubCardMessageTarget` per entry, deriving `address = keccak256(pubkey)` for each. A card with no `active_subcards` field returns `[]`.
+Given an already-decrypted master `CardDocument`, reads `active_subcards` (`protocol-objects.md §1.1`) and returns one `SubCardMessageTarget` per entry, deriving `address = keccak256(pubkey)` for each. `pubkey` is the base64url-encoded public key exactly as stored in `active_subcards`, not raw bytes — matching how every other signature/pubkey field in this SDK's protocol documents is represented on the wire. A card with no `active_subcards` field, or a non-array value in that field, returns `[]` rather than throwing.
 
 This function bridges wallet state (master card ownership) with App SDK's `fanOutMessageToSubCards` (app_sdk.md §9.1) — a wallet can pass `resolveActiveSubCardTargets(masterCard)` directly as the `subCards` parameter to fan-out a message to all active sub-cards.
 
-This is the **read side** of the `active_subcards` directory only. Once §6.6's code-510/511 posting gap is closed (the **write side**, maintaining `active_subcards` on registration/deregistration), this helper becomes straightforward — no secret decryption or on-chain state reading beyond what the caller already did to obtain `masterCard`. Both sides are tracked together in `subcard-registry-implementation-plan.md` Steps 4.1–4.2.
+This is the **read side** of the `active_subcards` directory only. §6.6's code-510/511 posting gap (the **write side**, maintaining `active_subcards` on registration/deregistration) is still planned — until it's closed, `active_subcards` is not reliably populated in practice, even though this read-side helper itself is complete and tested. Both sides are tracked together in `subcard-registry-implementation-plan.md` Steps 4.1–4.2.
 
 ---
 
@@ -405,7 +403,7 @@ Functions that gate on a verification step return a discriminated union (`{ appr
 | 6 | 6.1–6.3 + CP-2 (cross-platform hardening, docs, pre-production review) | **Not started** |
 | — | §5.4 Device sub-card collapse (refactor to thin wrapper) | **Planned** — part of split implementation |
 | — | §6.6 `active_subcards` directory maintenance (code-510/511 posting on registration/deregistration) | **Not started** — `subcard-registry-implementation-plan.md` Steps 4.1–4.2 |
-| — | §8.1 `resolveActiveSubCardTargets` helper (read side) | **Planned** — `subcard-registry-implementation-plan.md` Step 4.1 |
+| — | §8.1 `resolveActiveSubCardTargets` helper (read side) | **Implemented** — salvaged during Step 2.4 platform-package reconciliation |
 
 As of this writing: 243 tests pass in the original unified client-sdk; the split preserves this test count, redistributing by capability ownership.
 
