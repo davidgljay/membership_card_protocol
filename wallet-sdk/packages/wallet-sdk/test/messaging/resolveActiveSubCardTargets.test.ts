@@ -120,7 +120,7 @@ describe('resolveActiveSubCardTargets', () => {
   });
 
   it('treats non-array active_subcards as no sub-cards', () => {
-    const masterCard: any = {
+    const masterCard = {
       policy_id: 'QmTest',
       issuer_card: '0x' + 'a'.repeat(64),
       press_card: '0x' + 'b'.repeat(64),
@@ -132,7 +132,7 @@ describe('resolveActiveSubCardTargets', () => {
       active_subcards: 'not-an-array',
       issuer_signature: 'test',
       holder_signature: 'test',
-    };
+    } as unknown as CardDocument;
 
     const result = resolveActiveSubCardTargets(masterCard);
     expect(result).toEqual([]);

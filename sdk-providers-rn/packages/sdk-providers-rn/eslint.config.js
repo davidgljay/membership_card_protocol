@@ -22,4 +22,12 @@ export default [
       '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
     },
   },
+  {
+    // jest.mock() factories must require() lazily to avoid the hoisting
+    // TDZ hazard documented in test/mocks/eventTargetFakes.ts.
+    files: ['test/**/*.ts'],
+    rules: {
+      '@typescript-eslint/no-require-imports': 'off',
+    },
+  },
 ];
