@@ -1,0 +1,54 @@
+{
+  "name": "@membership-card-protocol/client-sdk-rn",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Default React Native provider implementations (StorageProvider, SecureKeyProvider, PasskeyProvider, RealtimeTransportProvider, MultiInstanceLock) for @membership-card-protocol/client-sdk",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "jest",
+    "test:watch": "jest --watch"
+  },
+  "dependencies": {
+    "@membership-card-protocol/client-sdk": "workspace:*",
+    "@noble/ciphers": "^1.0.0",
+    "@react-native-async-storage/async-storage": "^2.0.0",
+    "react-native-keychain": "^10.0.0",
+    "react-native-passkey": "^3.0.0",
+    "react-native-sse": "^1.2.1"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.25.0",
+    "@babel/plugin-transform-modules-commonjs": "^7.25.0",
+    "@react-native/babel-preset": "^0.86.0",
+    "@types/jest": "^29.5.0",
+    "@types/node": "^22.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "babel-jest": "^29.7.0",
+    "eslint": "^9.0.0",
+    "jest": "^29.7.0",
+    "prettier": "^3.3.0",
+    "react-native": "^0.75.0",
+    "typescript": "^5.8.3"
+  }
+}
