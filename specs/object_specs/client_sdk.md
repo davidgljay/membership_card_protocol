@@ -1,3 +1,13 @@
+## ⚠️ SUPERSEDED
+
+This spec has been split into two packages as of 2026-07-06. See:
+- `specs/object_specs/app_sdk.md` — app-side, key-independent capabilities
+- `specs/object_specs/wallet_sdk.md` — wallet-side, key-custody capabilities
+
+This document is retained as a historical reference; future changes should target one of the two split specs.
+
+---
+
 # Card Protocol — `@membership-card-protocol/client-sdk` npm Package Spec
 
 **Version:** 0.1 (draft)
