@@ -1,0 +1,48 @@
+{
+  "name": "@membership-card-protocol/wallet-sdk",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Wallet SDK for the Card Protocol — wallet-side, key-custody holder functionality: wallet setup, keyring, backup/recovery, sub-card authorization, and card offer review/countersign/acceptance. Depends on @membership-card-protocol/app-sdk.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "NODE_OPTIONS=--experimental-global-webcrypto vitest run",
+    "test:watch": "NODE_OPTIONS=--experimental-global-webcrypto vitest"
+  },
+  "//": "TODO: replace file: references with versioned npm refs once @membership-card-protocol/app-sdk(-verifier) is published",
+  "dependencies": {
+    "@membership-card-protocol/app-sdk": "file:../../../app-sdk/packages/app-sdk",
+    "@noble/ciphers": "^1.0.0",
+    "@noble/hashes": "^1.7.2",
+    "@noble/post-quantum": "^0.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint": "^9.0.0",
+    "prettier": "^3.3.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}
