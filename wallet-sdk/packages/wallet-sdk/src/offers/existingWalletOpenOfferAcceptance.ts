@@ -22,20 +22,35 @@ import type { SignedOpenCardOffer, Scip, ObliviousProtocolTransport, StorageProv
  * current `service_secret`) — this function never derives or re-derives
  * it itself; it has no `kdf.ts` import at all.
  */
+/**
+ * Options for accepting an open offer in an existing wallet (no setup needed).
+ *
+ * @property offer - The signed open-card offer to review and accept.
+ * @property chainVerification - Chain/press verification inputs for the review gate.
+ * @property pressBaseUrl - The offer's named press URL — claim submission destination.
+ * @property transport - Oblivious transport for claim submission.
+ * @property storageProvider - Storage provider for keyring persistence during countersigning.
+ * @property decryptionKey - The wallet's current `decryption_key` — caller-supplied, never derived internally.
+ * @property storageKey - Optional key name for storage; defaults to standard keyring storage key.
+ */
 export interface AcceptOpenOfferForExistingWalletOptions {
   offer: SignedOpenCardOffer;
-  /** Chain/press verification inputs for the review gate. */
   chainVerification: OfferChainVerificationOptions;
-  /** The offer's named press (`offer.press_card`'s HTTPS base URL) — claim submission destination. */
   pressBaseUrl: string;
   transport: ObliviousProtocolTransport;
   storageProvider: StorageProvider;
-  /** The wallet's current `decryption_key` — caller-supplied; see this module's doc for why. */
   decryptionKey: Uint8Array;
-  /** Defaults to `'keyring'`, matching `setupWallet.ts`/`recovery.ts`. */
   storageKey?: string;
 }
 
+/**
+ * Result of successfully accepting an open offer in an existing wallet.
+ *
+ * @property approved - Always `true` — rejection cases return `OfferRejection` instead.
+ * @property cardCid - IPFS CID of the newly-issued card from the press.
+ * @property scip - Short-circuit-issuance proof from the press.
+ * @property newCardPublicKey - The newly-generated public key for the accepted card.
+ */
 export interface AcceptedOpenOfferForExistingWallet {
   approved: true;
   cardCid: string;

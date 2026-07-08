@@ -1,6 +1,12 @@
 import type { ObliviousProtocolTransport, Scip } from '@membership-card-protocol/app-sdk';
 import type { OpenOfferClaimSubmission } from './countersign.js';
 
+/**
+ * Result of successfully submitting an open-offer claim to the press.
+ *
+ * @property cardCid - IPFS CID of the newly-issued card, as returned by the press.
+ * @property scip - The short-circuit-issuance proof from the press.
+ */
 export interface SubmitOpenOfferClaimResult {
   cardCid: string;
   scip: Scip;

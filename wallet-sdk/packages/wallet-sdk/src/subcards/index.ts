@@ -25,3 +25,11 @@ export {
   type RevokeSubCardOptions,
   type RevokeSubCardResult,
 } from './revocation.js';
+export {
+  postSubCardAddedToDirectory,
+  postSubCardRemovedFromDirectory,
+  type SubCardDirectoryUpdateCode,
+  type PostSubCardAddedOptions,
+  type PostSubCardRemovedOptions,
+  type ActiveSubcardsUpdateResult,
+} from './activeSubcardsUpdate.js';

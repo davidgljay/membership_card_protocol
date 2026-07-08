@@ -37,10 +37,14 @@
     "@noble/post-quantum": "^0.5.4"
   },
   "devDependencies": {
+    "@membership-card-protocol/sdk-providers-rn": "file:../../../sdk-providers-rn/packages/sdk-providers-rn",
+    "@membership-card-protocol/sdk-providers-web": "file:../../../sdk-providers-web/packages/sdk-providers-web",
     "@types/node": "^22.0.0",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
     "eslint": "^9.0.0",
+    "fake-indexeddb": "^6.0.0",
+    "jsdom": "^25.0.0",
     "prettier": "^3.3.0",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"

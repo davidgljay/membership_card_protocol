@@ -22,14 +22,32 @@ import type { SignedOpenCardOffer, Scip } from '@membership-card-protocol/app-sd
  * If Phase 1 rejects the offer, wallet setup is never attempted — a
  * rejected offer must not create a device/service side effect.
  */
+/**
+ * Options for accepting an open offer as part of initial wallet setup.
+ *
+ * Extends all `WalletSetupOptions` fields (providers, passkey credential, etc.)
+ * except `postSetupHook`, which is managed internally to chain the claim
+ * countersigning within the master-key's scoped lifetime.
+ *
+ * @property offer - The signed open-card offer to review and accept.
+ * @property chainVerification - Chain/press verification inputs for the review gate.
+ * @property pressBaseUrl - The offer's named press URL — claim submission destination.
+ */
 export interface AcceptOpenOfferForNewWalletOptions extends Omit<WalletSetupOptions<void>, 'postSetupHook'> {
   offer: SignedOpenCardOffer;
-  /** Chain/press verification inputs for the review gate. */
   chainVerification: OfferChainVerificationOptions;
-  /** The offer's named press (`offer.press_card`'s HTTPS base URL) — claim submission destination. */
   pressBaseUrl: string;
 }
 
+/**
+ * Result of successfully accepting an open offer during initial wallet setup.
+ *
+ * @property approved - Always `true` — rejection cases return `OfferRejection` instead.
+ * @property walletSetup - The newly-created wallet state (master key, keyring, backups, device sub-card).
+ * @property cardCid - IPFS CID of the newly-issued card from the press.
+ * @property scip - Short-circuit-issuance proof from the press.
+ * @property newCardPublicKey - The newly-generated public key for the accepted card.
+ */
 export interface AcceptedOpenOfferForNewWallet {
   approved: true;
   walletSetup: Omit<WalletSetupResult<unknown>, 'postSetupHookResult'>;

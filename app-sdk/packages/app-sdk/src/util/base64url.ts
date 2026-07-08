@@ -10,6 +10,16 @@
 const CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
 const STANDARD_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
+/**
+ * Encode bytes to base64url (RFC 4648 §5).
+ *
+ * Returns a standard base64url string (no padding, with `-` and `_` replacing
+ * `+` and `/`), suitable for HTTP headers, JWT payloads, and protocol
+ * documents.
+ *
+ * @param bytes - The bytes to encode.
+ * @returns Base64url-encoded string.
+ */
 export function bytesToBase64Url(bytes: Uint8Array): string {
   let output = '';
   for (let i = 0; i < bytes.length; i += 3) {
@@ -28,6 +38,16 @@ export function bytesToBase64Url(bytes: Uint8Array): string {
   return output;
 }
 
+/**
+ * Decode base64url (RFC 4648 §5) to bytes.
+ *
+ * Accepts both standard base64url format (with `-` and `_`) and standard
+ * base64 format (with `+` and `/`), for compatibility with callers that
+ * may normalize differently. Tolerates missing padding.
+ *
+ * @param input - Base64url-encoded string.
+ * @returns Decoded bytes.
+ */
 export function base64UrlToBytes(input: string): Uint8Array {
   const cleaned = input.replace(/-/g, '+').replace(/_/g, '/');
   const bytes: number[] = [];

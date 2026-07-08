@@ -157,24 +157,27 @@ Implements `wallet_backup_and_recovery.md §Process 1` Steps 1–14 as one conti
 
 `decryption_key` and the master private key are local variables scoped to this function's body only — never returned, logged, or exposed. An optional generic `postSetupHook?: (decryptionKey) => Promise<T>` runs inside this same scope, after keyring/backups/sub-card are established but before the master key is cleared — the mechanism that open-offer new-wallet flows (§7.3) use to "invoke wallet setup inline" without duplicating this function or exposing `decryption_key` to a second function.
 
-### 5.4 Device Sub-Card Registration
+**Known gap, tracked (found during Step 3.2c scenario testing):** `setupWallet` requires `registration.prfOutput` to be truthy immediately after the device-bound passkey `register()` call, and throws a named error otherwise (`kdf.ts`'s `passkeyOutputFromPrf` has no fallback derivation). The shipped default web `PasskeyProvider` (`sdk-providers-web`'s `WebAuthnPasskeyProvider`) never populates `prfOutput` — see `app_sdk.md` §4.3 for the full gap description. In practice, **`setupWallet` cannot complete against the default web provider today**; a caller must supply a `PasskeyProvider` implementation that actually requests and extracts the WebAuthn PRF extension until `sdk-providers-web` closes this gap. Same applies to `recoverWallet` (§5.6), which has the identical requirement.
+
+### 5.4 Device Sub-Card Registration (Collapsed)
 
 `wallet/deviceSubCard.ts`: `registerDeviceSubCard(options): Promise<DeviceSubCardResult>`
 
-*(Designed per the strategic plan's resolved decision on the deviceSubCard collapse.)*
+*(Per the strategic plan's resolved decision Split-SDK-3 on the deviceSubCard collapse — implemented.)*
 
-The wallet's own "self-signing" sub-card path, per `subcards.md`'s wallet-self-signing exception — but refactored to avoid duplicating App SDK's request/consent/countersign logic.
+The wallet's own "self-signing" sub-card path, per `subcards.md`'s wallet-self-signing exception — refactored via the collapse decision to avoid duplicating App SDK's request/consent/countersign logic.
 
-**Target shape (planned/rewritten, not the old parallel path):** This function is now a thin wrapper that:
+**Implementation:** This function is a thin wrapper over App SDK's ordinary request/consent/countersign pipeline:
 
 1. Calls App SDK's `requestSubCard` with the wallet's own master card (`issuer_card`) and app identity, obtaining an `AppSignedSubCardDocument`.
-2. Internally satisfies the consent step (the wallet is both requester and granter, so it self-authorizes the request with `decision.approvedCapabilities === requestedCapabilities`).
-3. Calls App SDK's `countersignSubCardRequest` with the wallet's `masterSecretKey` to sign the document.
-4. Submits the result via the press-submission path (App SDK's `submitSubCardRegistration`, `app_sdk.md` §7.3).
+2. Validates the request via this package's own `handleSubCardRequest` (same wallet-side checks any third-party sub-card would go through).
+3. Assembles consent via this package's own `assembleSubCardConsent` — the wallet is both requester and granter, so it self-authorizes the request with `decision.approvedCapabilities === requestedCapabilities` (no actual UI/consent step).
+4. Countersigns via this package's own `countersignSubCardRequest` with the wallet's `masterSecretKey`.
+5. Submits the result via the press-submission path (App SDK's press-registration integration).
 
-The old `wallet/deviceSubCard.ts` code path that duplicated request/consent/countersign logic is being collapsed into this wrapper — the wallet is both requester and granter, so it avoids the UI consent step but still goes through the ordinary protocol pipeline, not a parallel self-signing shortcut. This ensures the device sub-card's lifecycle is identical to any other sub-card from a protocol perspective.
+The wallet is both requester and granter here, so it avoids the UI consent step but still goes through the ordinary protocol pipeline, not a parallel self-signing shortcut. This ensures the device sub-card's lifecycle is identical to any other sub-card from a protocol perspective — a closed case for protocol-design consistency and security review.
 
-Hardcodes `attestation_level: 'T1'` (no App Attest/Play Integrity provider exists yet).
+Hardcodes `attestation_level: 'T1'` (no App Attest/Play Integrity attestation provider exists yet).
 
 ### 5.5 Backup Registration
 
@@ -270,17 +273,27 @@ Per `subcards.md §Authorization for Deregistration`: deregistration requires an
 
 **Explicitly not sub-card revocation.** This is wallet-service-local UUID pool deregistration (App SDK's concern, §9.6 in app_sdk.md), distinct from 8xx/9xx revocation (this section). A sub-card can be deregistered from the relay pool and then re-registered immediately, with no impact on the sub-card's on-chain status.
 
-### 6.6 Active Sub-Cards Directory Maintenance (Planned)
+### 6.6 Active Sub-Cards Directory Maintenance (Implemented)
 
-*(Gap from original client_sdk.md §9.4 — carried into this spec as its own explicit planned capability, distinct from §8.1's read-only `resolveActiveSubCardTargets` helper.)*
+*(Codes 510/511 posting; distinct from §8.1's read-only `resolveActiveSubCardTargets` helper.)*
 
-`subcards.md §Step 5b` and `§Authorization for Deregistration` require the holder to post a code-510 update-intent entry (on sub-card registration) and a code-511 update-intent entry (on deregistration) against their own master card, maintaining the `active_subcards` field. Neither the registration path (§6.3's `countersignSubCardRequest` / §5.4's `registerDeviceSubCard`) nor the deregistration paths (§6.4's `revokeSubCard`, §6.5's `deregisterSubCard`) currently construct or submit these entries — both were designed before `active_subcards` existed as a protocol-reserved field.
+Per `update_codes.md §5xx` and `card_updates.md §Sub-Card Directory Updates`: the holder posts code-510 (add) and code-511 (remove) update-intent entries against their own master card to maintain the `active_subcards` field. Both are implemented via two exported functions in `subcards/activeSubcardsUpdate.ts`:
 
-Closing this gap means composing the existing `POST /update` code-update-intent path (already used by §6.4's `subcards/revocation.ts` for 8xx codes) with codes 510/511 instead, signed by the same primary/master key already required for deregistration (§6.5) and available at registration time (§5.4/§6.3's `holder_signature` key). This is a Wallet SDK capability, not an App SDK one, because both code-510 and code-511 update-intents must be signed with the wallet's master/primary key — the same key-custody boundary that places all of §5–§7 in this package.
+```ts
+function postSubCardAddedToDirectory(options: PostSubCardAddedOptions): Promise<ActiveSubcardsUpdateResult>;
+function postSubCardRemovedFromDirectory(options: PostSubCardRemovedOptions): Promise<ActiveSubcardsUpdateResult>;
+```
 
-This capability is distinct from — and a prerequisite for making non-trivial — App SDK's `fanOutMessageToSubCards` (app_sdk.md §9.1) and this package's own `resolveActiveSubCardTargets` (§8.1): §8.1 only *reads* `active_subcards`, whereas this section *writes* it. Until this gap is closed, `active_subcards` is not reliably populated, so §8.1's helper has nothing to read.
+Both:
+- **Sign with the master key only** — `masterSecretKey: Uint8Array` is a direct parameter (no injectable signer callback), mirroring `deregisterSubCard`'s structural enforcement of primary-key-only signing.
+- **Use the `POST /update` code-update-intent path** — same transport pattern as §6.4's `revokeSubCard`, with `field_updates: [{ field: 'active_subcards', value: <full new array> }]` payload shape per the spec.
+- **Target the master card itself** — `target_card === updater_card`, both pointing at the holder's own card.
 
-Tracked in `subcard-registry-implementation-plan.md` Steps 4.1–4.2, alongside §8.1's read-side helper.
+Code-510 appends one pubkey; code-511 filters out exactly one pubkey (no-op if absent, allowing idempotent resubmission). Code-512 (atomic rotation) is out of scope for this step.
+
+**Caller-composes-explicitly:** These two primitives exist and are exported for direct caller use. Callers that want to maintain `active_subcards` must explicitly invoke these functions alongside registration/deregistration flows — they are not implicitly wired in. This is the same composition pattern used elsewhere in this package (e.g., `deregisterSubCardsAfterRecovery` in §6.5 composes multiple primitives explicitly).
+
+This capability is distinct from — and a prerequisite for making non-trivial — this package's own `resolveActiveSubCardTargets` (§8.1): §8.1 only *reads* `active_subcards`, whereas this section *writes* it. Until callers wire in explicit use of these functions, `active_subcards` is not reliably populated.
 
 ---
 
@@ -384,7 +397,7 @@ Functions that gate on a verification step return a discriminated union (`{ appr
 |---|---|---|
 | 1 | 1.1–1.7 (workspace, providers, crypto, verifier, transport, platform defaults, CI) | **Implemented** |
 | 2 | 2.1 Wallet setup | **Implemented** |
-| 2 | 2.2 Device sub-card (old parallel path) | **Implemented** — to be refactored per deviceSubCard collapse (§5.4) |
+| 2 | 2.2 Device sub-card (collapsed, thin wrapper over App SDK's `requestSubCard`) | **Implemented** |
 | 2 | 2.3 Backup registration | **Implemented** |
 | 2 | 2.4 Recovery and re-registration | **Implemented** |
 | 2 | 2.5 Post-recovery deregistration | **Implemented** |
@@ -401,8 +414,7 @@ Functions that gate on a verification step return a discriminated union (`{ appr
 | 5 | — (messaging/UUID delivery is App SDK responsibility) | **Implemented in App SDK** |
 | 5 | Milestone review | **Done** |
 | 6 | 6.1–6.3 + CP-2 (cross-platform hardening, docs, pre-production review) | **Not started** |
-| — | §5.4 Device sub-card collapse (refactor to thin wrapper) | **Planned** — part of split implementation |
-| — | §6.6 `active_subcards` directory maintenance (code-510/511 posting on registration/deregistration) | **Not started** — `subcard-registry-implementation-plan.md` Steps 4.1–4.2 |
+| — | §6.6 `active_subcards` directory maintenance (code-510/511 posting, caller-composed) | **Implemented** |
 | — | §8.1 `resolveActiveSubCardTargets` helper (read side) | **Implemented** — salvaged during Step 2.4 platform-package reconciliation |
 
 As of this writing: 243 tests pass in the original unified client-sdk; the split preserves this test count, redistributing by capability ownership.

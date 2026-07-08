@@ -25,7 +25,7 @@
 6. [Verifier Integration](#6-verifier-integration)
 7. [Sub-Card Requests (Requester-Side)](#7-sub-card-requests-requester-side)
    - 7.1 [Requester-Side Request](#71-requester-side-request-implemented)
-   - 7.2 [Signing Arbitrary Data with a Sub-Card](#72-signing-arbitrary-data-with-a-sub-card-planned)
+   - 7.2 [Signing Arbitrary Data with a Sub-Card](#72-signing-arbitrary-data-with-a-sub-card-implemented)
    - 7.3 [Press Submission (Registration)](#73-press-submission-registration-implemented)
 8. [Card Offers (Offerer-Side)](#8-card-offers-offerer-side)
    - 8.1 [Offer Construction](#81-offer-construction)
@@ -162,6 +162,8 @@ interface PasskeyProvider {
 
 Abstracts WebAuthn registration/assertion. `prfOutput` (the WebAuthn PRF extension's evaluated output) is required in practice by wallet-side recovery flows (see `wallet_sdk.md` §7.1) — this package exports the interface for consistency with the other provider interfaces, but does not require or consume `PasskeyProvider` directly. **Defaults:** `navigator.credentials` on web; `react-native-passkey` on RN.
 
+**Known gap, tracked (found during Step 3.2c scenario testing, not yet closed):** the shipped default web implementation, `WebAuthnPasskeyProvider` (`sdk-providers-web/src/PasskeyProvider.ts`), never requests or reads the WebAuthn PRF extension — `register()`/`assert()` never call `credential.getClientExtensionResults()`, so `prfOutput` is always `undefined` in their real return values, regardless of what the underlying authenticator ceremony actually supports. Since `wallet_sdk.md`'s `setupWallet`/`recoverWallet` hard-require a truthy `prfOutput` and throw without one, **the shipped default web `PasskeyProvider` cannot currently complete wallet setup or recovery in a real browser** — this is not a test-environment artifact (confirmed by reading the provider's source, not by a failing test alone; see `wallet-sdk/test/scenarios/setupWallet.web.test.ts`'s regression-guarded proof). Predates the SDK split — the same gap exists unchanged in `client-sdk-old/packages/client-sdk-web/src/PasskeyProvider.ts`, so this is not a regression introduced by the split, but it is a real, currently-open production blocker for any web integrator using the default provider. Closing it means adding a WebAuthn PRF extension request to `register()`'s/`assert()`'s `publicKey.extensions` and extracting the result via `getClientExtensionResults()` — scoped as follow-up work to `sdk-providers-web`, not App SDK itself (this package only defines the interface).
+
 ### 4.4 YubiKeyProvider
 
 ```ts
@@ -247,9 +249,9 @@ function createCardVerifier(options: CreateCardVerifierOptions): CardVerifier;
 
 `subcards/requestSubCard.ts`: `requestSubCard(options): Promise<RequestSubCardResult>` — the general, third-party-app side of `subcards.md §Sub-Card Request Flow Step 1`. Generates a fresh, non-exportable ML-DSA-44 keypair via `SecureKeyProvider`, assembles the `SubCardDocument`, signs with the app's own card key → `app_signature`. Returns an `AppSignedSubCardDocument` (`holder_signature` deliberately absent — added later by the wallet via wallet-sdk's authorization flow) for the host app to transmit via whatever delivery channel it implements.
 
-### 7.2 Signing Arbitrary Data with a Sub-Card (Planned)
+### 7.2 Signing Arbitrary Data with a Sub-Card (Implemented)
 
-*(New primitive, part of Phase 6 cross-platform hardening.)*
+*(App-side primitive for proving sub-card ownership. Implemented in Phase 2.*)
 
 ```ts
 function signWithSubCard(options: SignWithSubCardOptions): Promise<Uint8Array>;
@@ -434,7 +436,7 @@ Functions that gate on a verification step return a discriminated union (`{ appr
 | 5 | 5.5 Realtime delivery (SSE, WebSocket, push catch-up) | **Implemented** |
 | 5 | 5.6 UUID pool deregistration | **Implemented** |
 | 6 | 6.1–6.3 + CP-2 (cross-platform hardening, docs, pre-production review) | **Not started** |
-| — | 7.2 Signing arbitrary data with a sub-card | **Planned** |
+| 4 | 4.2 Signing arbitrary data with a sub-card | **Implemented** |
 
 As of this writing: 243 tests pass in the original unified client-sdk core package; the split preserves this test count across app-sdk and wallet-sdk halves, with redistribution of tests to match capability ownership.
 

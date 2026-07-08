@@ -24,19 +24,32 @@ import type { SignedTargetedOffer, CountersignedTargetedOffer } from '@membershi
  * `forwardCountersignedTargetedOffer` to finalize with the press.
  */
 
+/**
+ * Options for accepting a targeted offer.
+ *
+ * @property offer - The signed targeted offer to review and accept.
+ * @property chainVerification - Chain/press verification inputs for the review gate.
+ * @property storageProvider - Storage provider for keyring persistence during countersigning.
+ * @property decryptionKey - The recipient's current `decryption_key` — caller-supplied, never derived internally.
+ * @property storageKey - Optional key name for storage; defaults to standard keyring storage key.
+ */
 export interface AcceptTargetedOfferOptions {
   offer: SignedTargetedOffer;
-  /** Chain/press verification inputs for the review gate. */
   chainVerification: OfferChainVerificationOptions;
   storageProvider: KeyringWriteOptions['storageProvider'];
-  /** The recipient's current `decryption_key` — caller-supplied, same as the existing-wallet open-offer flow; this function never derives it. */
   decryptionKey: Uint8Array;
   storageKey?: string;
 }
 
+/**
+ * Result of successfully accepting a targeted offer.
+ *
+ * @property approved - Always `true` — rejection cases return `OfferRejection` instead.
+ * @property countersignedOffer - The countersigned offer; send back to offerer (out of band) for press finalization.
+ * @property newCardPublicKey - The newly-generated public key for the accepted card.
+ */
 export interface AcceptedTargetedOffer {
   approved: true;
-  /** Send this back to the offerer (out of band) to complete finalization. */
   countersignedOffer: CountersignedTargetedOffer;
   newCardPublicKey: Uint8Array;
 }
