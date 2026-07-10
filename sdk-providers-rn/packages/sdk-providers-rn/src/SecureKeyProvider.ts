@@ -26,6 +26,19 @@ interface WrappedKeyRecord {
  * (Android) — via `react-native-keychain`'s `SECURE_HARDWARE` security
  * level.
  *
+ * **Hardware backing is the norm on RN, but is device-dependent, and is
+ * never available on web.** Requesting `SECURITY_LEVEL.SECURE_HARDWARE`
+ * (line below) is the expected case on real iOS/Android hardware — most
+ * devices in practice have a Secure Enclave or StrongBox-backed keystore —
+ * but `react-native-keychain` also defines `SECURE_SOFTWARE` and `ANY`
+ * precisely because hardware backing isn't universal (e.g. some older or
+ * budget Android devices lack a StrongBox module); on a device without one,
+ * the underlying OS keystore falls back to a software-backed store rather
+ * than failing outright. This is a meaningful platform difference from the
+ * web default (`WebCryptoSecureKeyProvider`), which has no hardware-backed
+ * option on any device — IndexedDB-backed WebCrypto is always software-only,
+ * per OQ-SDK-1.
+ *
  * **Disclosed limitation, distinct from OQ-SDK-1's web-specific gap:** no
  * current mobile HSM (Secure Enclave, StrongBox) natively supports
  * ML-DSA-44 (post-quantum) key generation or signing — those APIs only
@@ -33,15 +46,21 @@ interface WrappedKeyRecord {
  * literally generate/sign with the ML-DSA-44 key *inside* hardware, as
  * `subcards.md`'s prose describes idealized. Instead, exactly as the web
  * default does: a random AES-256-GCM wrapping key is generated and stored
- * via `react-native-keychain` at `SECURE_HARDWARE` — the OS enforces that
- * this wrapping key never leaves the hardware-backed keystore in
- * extractable form — and it wraps the ML-DSA-44 secret key, which is
- * decrypted into JS memory only transiently, for the duration of a single
- * `sign()` call. This is a real, meaningful step up from the web default
- * (OS-enforced hardware custody of the wrapping key vs. software
- * WebCrypto), but the underlying industry limitation — no hardware-native
- * post-quantum signing on mobile today — applies to any SDK building on
- * ML-DSA-44, not just this one.
+ * via `react-native-keychain` at `SECURE_HARDWARE` (when available on the
+ * device) — the OS hardware-backs the wrapping key's storage and gates
+ * access to it (e.g. behind biometric/passcode unlock, depending on
+ * `ACCESSIBLE`), but `Keychain.getGenericPassword()` is a plaintext
+ * *retrieval* API: the wrapping key is fetched into ordinary JS-accessible
+ * memory on every `sign()` call, not operated on from inside the hardware
+ * boundary. It then wraps/unwraps the ML-DSA-44 secret key the same way the
+ * web provider does, with the plaintext secret key existing in JS memory
+ * only transiently, for the duration of a single `sign()` call. This is a
+ * real, meaningful step up from the web default (OS-enforced, potentially
+ * hardware-backed *at-rest* protection and access-gating for the wrapping
+ * key, vs. software-only WebCrypto) — but it is at-rest protection, not
+ * confinement of the key from JS at use time, and the underlying industry
+ * limitation — no hardware-native post-quantum signing on mobile today —
+ * applies to any SDK building on ML-DSA-44, not just this one.
  *
  * **Host app requirement:** React Native / Hermes does not provide
  * `crypto.getRandomValues` by default. The host app must install and
