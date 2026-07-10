@@ -1,0 +1,82 @@
+# Clarification Checkpoint CP-2 — Wallet SDK Custody-Surface Security Review
+
+**Date:** 2026-07-08
+**Scope:** `wallet-sdk/packages/wallet-sdk/src/` (full) plus `sdk-providers-web/packages/sdk-providers-web/src/SecureKeyProvider.ts` and `sdk-providers-rn/packages/sdk-providers-rn/src/SecureKeyProvider.ts` (the two platform packages' `SecureKeyProvider` implementations, in scope per this checkpoint's own instructions since "never returns private key material" must be verified against real provider code, not the interface contract). Mirrors the gravity and structure of `plans/client-sdk/milestones/cp1-security-review.md`, this split's own earlier review — conducted per Step 3.2f of `plans/sdk-split-implementation-plan.md`.
+**Reviewer:** Claude, direct (not delegated to a subagent, per the plan's explicit instruction that this checkpoint mirrors CP-1's gravity and should not be handed to a lower-effort reviewer).
+
+This review covers five specific points the implementation plan named. Each is addressed as its own section below, followed by the findings the review actually turned up.
+
+## Review Point (a): "Persist before sign" invariant (`offers/countersign.ts`)
+
+**Confirmed sound**, by direct code reading, not by trusting the existing test suite:
+
+- `generateAndPersistCardKey` (the sole function that produces a fresh card keypair for offer acceptance) is declared without `export` — grep across `offers/countersign.ts` confirms it appears nowhere in the module's export list (`KeyringWriteOptions`, `AcceptTargetedOfferResult`, `acceptTargetedOfferAndCountersign`, `OpenOfferClaimPayload`, `OpenOfferClaimSubmission`, `AcceptOpenOfferResult`, `acceptOpenOfferAndCountersign` are the only exports).
+- Inside `generateAndPersistCardKey`: the existing keyring is decrypted, the new keypair is generated, the updated keyring is re-encrypted, and `await options.storageProvider.set(storageKey, updatedBlob)` is evaluated — only *after* that `await` resolves does the function `return { publicKey, secretKey }`. If `.set()` throws, the function exits via that exception; there is no code path after the `await` that could still reach the `return` with a signable secret key.
+- Both exported entry points (`acceptTargetedOfferAndCountersign`, `acceptOpenOfferAndCountersign`) call `await generateAndPersistCardKey(keyringWrite)` first, destructure `{ publicKey, secretKey }`, and only then call `mlDsa44Sign(secretKey, ...)`.
+- Grepped the rest of `offers/*.ts` for any other `mlDsa44Sign`/`mlDsa44GenerateKeypair` call related to offer acceptance: none exists outside `countersign.ts`. `existingWalletOpenOfferAcceptance.ts`, `newWalletOpenOfferAcceptance.ts`, and `targetedOfferAcceptance.ts` all import and delegate to the two exported `accept*AndCountersign` functions rather than reimplementing signing.
+- A failing `decryptKeyring` call (e.g. wrong `decryptionKey`) fails even earlier, before the new keypair is even generated — not a bypass of the invariant, a stricter failure than it.
+
+**Caveat, not a defect:** "confirm the write" means `StorageProvider.set` resolving without throwing — this package has no way to independently verify the injected `StorageProvider` implementation actually persisted the bytes durably (a pathological implementation that resolves without writing would defeat the invariant). This is inherent to the injected-provider architecture, not something `countersign.ts` could close on its own, and matches the same caveat that would apply to any consumer of an injected interface.
+
+## Review Point (b): `SecureKeyProvider` non-exportability, both platforms, real code
+
+**Interface-level guarantee confirmed sound on both platforms — but see Finding 1 below for a real, separate issue found in the process.**
+
+Read `sdk-providers-web/src/SecureKeyProvider.ts` (`WebCryptoSecureKeyProvider`) and `sdk-providers-rn/src/SecureKeyProvider.ts` (`SecureEnclaveKeyProvider`) end to end, not just their exported type signatures:
+
+- **Web:** `generateKey` returns only `publicKey`; the AES-GCM wrapping `CryptoKey` is generated with `extractable: false` (`crypto.subtle.generateKey({...}, false, [...])` — the literal `false` second argument), so the wrapping key itself cannot be exported via WebCrypto's own `exportKey` API. `sign` decrypts the wrapped secret key into a local `Uint8Array` (`secretKeyBuffer`), uses it for one `mlDsa44Sign` call, and returns only the signature — `secretKeyBuffer` never crosses the function's return boundary. `getPublicKey`/`delete` don't touch secret material at all. No method on this class returns raw private key bytes to a caller.
+- **RN:** same shape — `generateKey` returns only `publicKey`; `sign` reconstructs the secret key locally (via `gcm(wrappingKey, nonce).decrypt(wrappedSecretKey)`) and returns only a signature. No method returns raw private key bytes.
+
+Both satisfy the actual invariant this checkpoint is verifying: **no `SecureKeyProvider` method, on either platform, returns private key material to a caller.**
+
+## Review Point (c): Sub-card 9xx-exclusion and primary-key-only deregistration, including the new §6.6 primitives
+
+**Confirmed sound**, including the Step 3.2b additions:
+
+- `subcards/revocation.ts`'s `SubCardRevocationCode` is a closed literal union, `800 | 801 | 810 | 811` — no value of that type can name a 9xx code. A runtime `VALID_CODES.has(options.code)` check (a `Set` containing exactly those four numbers) re-verifies this even if a caller bypasses TypeScript via a type assertion, throwing before any network call. Unchanged since CP-1, which already reviewed and found this sound.
+- `wallet/subCardDeregistration.ts`'s `deregisterSubCard` takes `masterSecretKey: Uint8Array` as a direct field on `DeregisterSubCardOptions` — there is no signer-callback parameter of any kind, unlike `revocation.ts`'s `UpdateIntentSigner`-shaped injectable signer. `deregisterSubCardsAfterRecovery` passes the same `masterSecretKey` straight through. Unchanged since CP-1.
+- **The new `subcards/activeSubcardsUpdate.ts` (§6.6, Step 3.2b) follows the identical no-callback pattern**: `ActiveSubcardsUpdateBaseOptions` (the shared base both `PostSubCardAddedOptions` and `PostSubCardRemovedOptions` extend) declares `masterSecretKey: Uint8Array` as a direct field, with no signer callback anywhere in either interface. Confirmed by reading both interface definitions directly, not just the accompanying test's arity check (`postSubCardAddedToDirectory.length === 1`, which the test suite also asserts, but arity alone wouldn't catch a signer field smuggled into the single options object — direct interface inspection is the check that actually matters here, and it confirms no such field exists).
+
+## Review Point (d): No secret material in log output
+
+**Confirmed sound.** `grep -rn "console\.\(log\|error\|warn\|info\|debug\)" wallet-sdk/packages/wallet-sdk/src/ wallet-sdk/packages/wallet-sdk/test/` returns zero matches — there are no `console.*` calls anywhere in this package's source or test trees. Additionally checked for the subtler variant of this class of bug (a secret value accidentally interpolated into a thrown `Error` message's template string): grepped every `new Error(\`...\`)` template literal for secret-shaped variable names (`secretKey`, `decryptionKey`, `serviceSecret`, `masterKey`, `privateKey`, case-insensitive) — zero matches. No secret material is logged or embedded in any error message.
+
+## Review Point (e): Re-confirm the two open CP-1 findings
+
+**Both still accurately described; Step 3.2b does not make either worse.**
+
+- **CP-1 Finding 2 (transient secrets not zeroed):** re-confirmed via `grep -rn "\.fill(0)" wallet-sdk/packages/wallet-sdk/src/wallet/*.ts wallet-sdk/packages/wallet-sdk/src/subcards/*.ts wallet-sdk/packages/wallet-sdk/src/offers/*.ts` — only `setupWallet.ts` and `recovery.ts` zero `masterSecretKey`, unchanged since CP-1. The new `activeSubcardsUpdate.ts` (§6.6) receives `masterSecretKey` as an input parameter and uses it for one `mlDsa44Sign` call — it never copies or retains it, and produces no new transient secret (only a signature, which is not sensitive the way a private key is) — so it introduces no new zeroing gap. It does, however, inherit the existing gap: whoever eventually wires these primitives into the actual registration/deregistration call sites (not yet done — see §6.6's "caller-composes-explicitly" note) will need to carry forward the same master-key-clearing discipline `setupWallet`/`recoverWallet` already apply, since `activeSubcardsUpdate.ts` itself has no opinion on the key's lifecycle before or after the call.
+- **CP-1 Finding 3 (non-master keyring entries not zeroed if keyring grows):** unaffected by this phase's work — no new keyring-entry-generating code path was added; `activeSubcardsUpdate.ts` never touches the keyring at all (it operates on `active_subcards`, a different field, on a different object — the master card document, not the keyring blob).
+
+## New Findings from This Review
+
+### Finding 1 (MEDIUM): RN `SecureEnclaveKeyProvider`'s doc comment overstates its hardware-confinement guarantee
+
+`sdk-providers-rn/src/SecureKeyProvider.ts`'s class doc comment (lines 29–44) states: *"the OS enforces that this wrapping key never leaves the hardware-backed keystore in extractable form."* This is not accurate for the actual code path.
+
+`sign()` (line 84) calls `Keychain.getGenericPassword({ service: this.#keychainService(keyId) })` (line 89), and line 95 does `const wrappingKey = base64UrlToBytes(wrappingKeyCredentials.password)` — the plaintext wrapping key, as a base64url string, is retrieved directly into JS-accessible memory on every single `sign()` call. `getGenericPassword` is `react-native-keychain`'s plaintext-credential-*retrieval* API (confirmed by reading the package's own `src/index.ts` and its documented usage pattern) — it is not an in-hardware cryptographic operation that keeps the key confined and returns only a result. `SECURE_HARDWARE` (the `securityLevel` option passed at `setGenericPassword` time, line 70) governs how strongly the OS protects the credential *at rest* between accesses (hardware-backed encryption, potentially requiring biometric/passcode unlock to retrieve) — it does not mean the retrieved value stays inside a hardware boundary once `getGenericPassword` returns it to JS.
+
+**Impact:** this is a documentation-accuracy defect, not an interface-contract violation — no `SecureKeyProvider` method exposes this wrapping key or the underlying secret key to any *caller* of the class (Review Point (b) above already confirmed that boundary holds). The actual security posture this class provides is real and meaningfully better than the web default: the wrapping key rests in OS-managed, hardware-backed storage between uses, and the plaintext ML-DSA-44 secret key only exists in JS memory transiently, for the duration of a single `sign()` call — the same "transient reconstruction, never persisted unwrapped" pattern the web provider uses, just with stronger at-rest protection for the wrapping key. But the doc comment's specific phrase "never leaves the hardware-backed keystore in extractable form" is factually wrong for this exact code path, and a future reader relying on that sentence (an integrator deciding whether this meets a compliance bar, or a later reviewer extending this class) would draw an incorrect conclusion about what protection actually exists against, e.g., a compromised app process reading the wrapping key at sign time. This is the same category of error CP-1's Finding 1 was — a security claim in a doc comment not holding under the real code — though far smaller in blast radius, since it doesn't defeat a cross-party trust boundary the way Finding 1 did; it overstates an already-real, already-disclosed limitation rather than hiding an undisclosed one.
+
+**Recommended fix:** correct the doc comment to state plainly that the wrapping key is retrieved into JS-accessible plaintext on every `sign()` call, and that `SECURE_HARDWARE` protects the credential's storage/access-gating, not its confinement once retrieved — matching the same honest framing the web provider's own doc comment already uses for its own (different) limitation. No code change is required; this class's actual behavior is a reasonable, disclosed best-effort given the underlying constraint the comment's second paragraph already correctly identifies (no mobile HSM supports native ML-DSA-44 operations).
+
+### Finding 2 (LOW, extends CP-1 Finding 2's scope, informational): both platform packages' `SecureKeyProvider.sign()` implementations don't zero the transiently-reconstructed secret key
+
+Both `WebCryptoSecureKeyProvider.sign()` (web) and `SecureEnclaveKeyProvider.sign()` (RN) decrypt/reconstruct the ML-DSA-44 secret key into a local variable (`secretKeyBuffer` / `secretKey`) for the duration of one `mlDsa44Sign` call, then let it fall out of scope without an explicit `.fill(0)`. This is the identical pattern CP-1's Finding 2 already flagged for `wallet-sdk`'s own transient secrets (`decryptionKey`, `serviceSecret`, etc.) — this review confirms the same pattern also exists in both platform packages' provider implementations, which CP-1 didn't cover (they didn't have concrete implementations yet at CP-1's time, per that review's own caveats section). Same low urgency as CP-1's original Finding 2: no secret is logged or returned, this relies on GC rather than explicit clearing. Folding into the same tracked gap rather than treating as a new, separate issue.
+
+## Reviewed and Found Sound (summary)
+
+- Persist-before-sign (`offers/countersign.ts`) — Review Point (a), full detail above.
+- `SecureKeyProvider` interface-level non-exportability, both platforms — Review Point (b), full detail above (see Finding 1 for the adjacent doc-comment issue, which does not affect this conclusion).
+- 9xx-exclusion (`subcards/revocation.ts`) and primary-key-only deregistration (`wallet/subCardDeregistration.ts`), including the new §6.6 primitives (`subcards/activeSubcardsUpdate.ts`) — Review Point (c), full detail above.
+- No secret material in log output anywhere in `wallet-sdk` — Review Point (d), full detail above.
+
+## Caveats
+
+- Same limitation CP-1 disclosed: this is not a second, independent reviewer re-reading the code cold — it's a review conducted by the same overall effort (though a different session/context than the one that wrote Step 3.2b's code) using the CP-1 review's own depth and format as a calibration target. A genuinely independent reviewer remains more likely to catch something this process misses, per CP-1's own stated caveat about self-review.
+- This review's scope was the five points the implementation plan named plus what those points led to reading (the two platform packages' `SecureKeyProvider`s). It did not re-review `wallet/setupWallet.ts`, `wallet/recovery.ts`, `wallet/backupRegistration.ts`, or `wallet/kdf.ts` line-by-line the way CP-1 originally did — those already went through CP-1 directly and are unchanged by this phase's work (confirmed no diffs to those files in this session's git history).
+- `PasskeyProvider`'s WebAuthn PRF extension gap (documented separately in `app_sdk.md` §4.3 and `wallet_sdk.md` §5.3, found during Step 3.2c's scenario-testing work, not during this review) is a related but distinct issue — a functional gap (setupWallet can't complete against the real default provider) rather than a security-property violation, so it's tracked in those sections rather than folded into this document's findings.
+
+## Disposition
+
+No CRITICAL or HIGH finding — nothing at CP-1 Finding 1's severity. Both new/extended findings (RN doc-comment accuracy, transient-secret zeroing in the platform providers) are MEDIUM and LOW respectively, tracked here and referenced from `wallet_sdk.md` §10, following the same documented-gap pattern CP-1 established rather than blocking on them. This checkpoint is **closed** — Phase 3 may proceed to its final verification substep (3.2g) and, subsequently, Phase 4.

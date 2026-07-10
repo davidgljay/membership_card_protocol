@@ -37,7 +37,7 @@
    - 7.5 [Targeted Offer Acceptance](#75-targeted-offer-acceptance)
 8. [Messaging Helpers (Active Sub-Card Resolution)](#8-messaging-helpers-active-sub-card-resolution)
    - 8.1 [Resolving Active Sub-Cards from On-Chain Registry](#81-resolving-active-sub-cards-from-on-chain-registry-implemented)
-9. [Cross-Platform Hardening and Documentation (Planned)](#9-cross-platform-hardening-and-documentation-planned)
+9. [Cross-Platform Hardening and Documentation (Mostly Complete)](#9-cross-platform-hardening-and-documentation-mostly-complete)
 10. [Security Invariants](#10-security-invariants)
 11. [Result and Error Conventions](#11-result-and-error-conventions)
 12. [Implementation Status](#12-implementation-status)
@@ -358,15 +358,15 @@ Given an already-decrypted master `CardDocument`, reads `active_subcards` (`prot
 
 This function bridges wallet state (master card ownership) with App SDK's `fanOutMessageToSubCards` (app_sdk.md §9.1) — a wallet can pass `resolveActiveSubCardTargets(masterCard)` directly as the `subCards` parameter to fan-out a message to all active sub-cards.
 
-This is the **read side** of the `active_subcards` directory only. §6.6's code-510/511 posting gap (the **write side**, maintaining `active_subcards` on registration/deregistration) is still planned — until it's closed, `active_subcards` is not reliably populated in practice, even though this read-side helper itself is complete and tested. Both sides are tracked together in `subcard-registry-implementation-plan.md` Steps 4.1–4.2.
+This is the **read side** of the `active_subcards` directory only. §6.6's code-510/511 posting primitives (the **write side**, maintaining `active_subcards` on registration/deregistration) now exist and are tested, but per §6.6's own caller-composes-explicitly note, nothing in this package invokes them automatically yet — until some caller wires them into the actual registration/deregistration call sites, `active_subcards` still isn't reliably populated in practice, even though both the read-side helper and the write-side primitives are individually complete. Both sides are tracked together in `subcard-registry-implementation-plan.md` Steps 4.1–4.2.
 
 ---
 
-## 9. Cross-Platform Hardening and Documentation (Planned)
+## 9. Cross-Platform Hardening and Documentation (Mostly Complete)
 
-*(Implementation-plan Phase 6. Not yet started.)*
+*(SDK-split implementation plan Step 3.2, substeps a–g. Scope narrowed from the original Phase 6 description — see `plans/sdk-split-implementation-plan.md`'s Phase 3 scope-correction note: validation against real *platform providers* is in scope; validation against real, deployed wallet-service/press/relay *infrastructure* is not — that belongs to the follow-on integration plan.)*
 
-Will cover: running every prior phase's scenario against real (non-stub) local wallet-service/press instances on both platforms; integrator documentation (README, per-provider guides, worked examples); and Clarification Checkpoint CP-2, a pre-production security review — covering the persist-before-sign invariant's bypass-resistance, the master key's confinement to `setupWallet`/`recoverWallet`, the sub-card 9xx-exclusion and primary-key-only-deregistration checks, and confirming no transient secrets appear in any log output.
+Covered: cross-platform scenario tests against real (non-stub) `SecureKeyProvider`/`StorageProvider`/`PasskeyProvider` implementations from `sdk-providers-web`/`sdk-providers-rn` (§6.1); integrator documentation, `wallet-sdk/README.md` (§6.3); and Clarification Checkpoint CP-2, a pre-production security review — covering the persist-before-sign invariant's bypass-resistance, the master key's confinement to `setupWallet`/`recoverWallet`, `SecureKeyProvider` non-exportability on both platforms, the sub-card 9xx-exclusion and primary-key-only-deregistration checks, and confirming no transient secrets appear in any log output — complete, see `plans/sdk-split/milestones/cp2-security-review.md`. Not covered, and explicitly out of this split's scope: validating `ObliviousProtocolTransport` against real deployed OHTTP endpoints (§6.2), which requires live wallet-service/press infrastructure.
 
 ---
 
@@ -382,6 +382,8 @@ Cross-cutting properties this package maintains:
 - **`SecureKeyProvider` never returns private key material**, on any platform — requester-side sub-card keys (App SDK) and master key usage (this package) both go through hardware-backed or scoped-local key material.
 
 Two lower-severity, explicitly tracked gaps from the CP-1 review (not yet closed): transient secrets other than the master key (`decryptionKey`, wrapping keys, `serviceSecret`) are not explicitly zeroed after use in every function that handles them (relies on GC); and if the keyring ever grows to hold more than one entry that needs clearing on a given code path, only the entry aliased by whatever local variable gets `.fill(0)`-ed is actually cleared.
+
+**CP-2 (pre-production security review, Step 3.2f) — complete, see `plans/sdk-split/milestones/cp2-security-review.md` for full detail.** No CRITICAL/HIGH finding. Re-confirmed the "persist before sign" invariant (`offers/countersign.ts`), `SecureKeyProvider` non-exportability on both platforms, and the 9xx-exclusion/primary-key-only-deregistration checks (including the new §6.6 primitives) all hold by direct code reading, not just passing tests. Confirmed no secret material appears in any log output. Two new/extended tracked gaps, both lower severity: (1) MEDIUM — `sdk-providers-rn`'s `SecureEnclaveKeyProvider` doc comment overstates its hardware-confinement guarantee (the wrapping key is retrieved into JS-accessible plaintext via `Keychain.getGenericPassword()` on every `sign()` call — a real, disclosed limitation stated inaccurately, not an undisclosed defect); (2) LOW — both platform packages' `SecureKeyProvider.sign()` implementations don't explicitly zero the transiently-reconstructed secret key, extending CP-1 Finding 2's already-tracked pattern to code CP-1 predates.
 
 ---
 
@@ -413,11 +415,14 @@ Functions that gate on a verification step return a discriminated union (`{ appr
 | 4 | Milestone review | **Done** |
 | 5 | — (messaging/UUID delivery is App SDK responsibility) | **Implemented in App SDK** |
 | 5 | Milestone review | **Done** |
-| 6 | 6.1–6.3 + CP-2 (cross-platform hardening, docs, pre-production review) | **Not started** |
+| 6 | 6.1 Cross-platform scenario tests against real providers | **Implemented** — `test/scenarios/` (setupWallet, sub-card authorization, offer acceptance); RN `setupWallet` counterpart blocked by a confirmed Vitest/react-native toolchain gap, recorded as `it.todo` |
+| 6 | 6.2 Real deployed OHTTP endpoint validation | **Not started** — out of this split's scope; belongs to the follow-on wallet-service/press/relay integration plan |
+| 6 | 6.3 Integrator documentation | **Implemented** — `wallet-sdk/README.md` |
+| 6 | CP-2 pre-production security review | **Done** — see `plans/sdk-split/milestones/cp2-security-review.md`; no CRITICAL/HIGH finding, two lower-severity findings tracked (§10) |
 | — | §6.6 `active_subcards` directory maintenance (code-510/511 posting, caller-composed) | **Implemented** |
 | — | §8.1 `resolveActiveSubCardTargets` helper (read side) | **Implemented** — salvaged during Step 2.4 platform-package reconciliation |
 
-As of this writing: 243 tests pass in the original unified client-sdk; the split preserves this test count, redistributing by capability ownership.
+As of this writing: 105 tests pass (plus 1 documented `it.todo` for the confirmed-blocked RN `setupWallet` scenario) in `wallet-sdk` alone, against the original unified `client-sdk`'s 243 total (spanning what's now split across four packages — see `plans/sdk-split/milestones/phase-2-summary.md` for the full cross-package reconciliation: combined total across all four packages is 326, above the original 243).
 
 ---
 

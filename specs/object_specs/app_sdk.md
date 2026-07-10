@@ -37,7 +37,7 @@
     - 9.4 [Replenishment Scheduling](#94-replenishment-scheduling-implemented)
     - 9.5 [Realtime Delivery](#95-realtime-delivery-implemented)
     - 9.6 [UUID Pool Deregistration](#96-uuid-pool-deregistration-implemented)
-10. [Cross-Platform Hardening and Documentation (Planned)](#10-cross-platform-hardening-and-documentation-planned)
+10. [Cross-Platform Hardening and Documentation (Mostly Complete)](#10-cross-platform-hardening-and-documentation-mostly-complete)
 11. [Security Invariants](#11-security-invariants)
 12. [Result and Error Conventions](#12-result-and-error-conventions)
 13. [Implementation Status](#13-implementation-status)
@@ -395,11 +395,13 @@ function deregisterCardUuids(options: DeregisterCardUuidsOptions): Promise<Dereg
 
 ---
 
-## 10. Cross-Platform Hardening and Documentation (Planned)
+## 10. Cross-Platform Hardening and Documentation (Mostly Complete)
 
-*(Implementation-plan Phase 6. Not yet started.)*
+*(SDK-split implementation plan Step 3.1, substeps a–e. Scope narrowed from the original Phase 6 description — see `plans/sdk-split-implementation-plan.md`'s Phase 3 scope-correction note: validation against real *platform providers* is in scope; validation against real, deployed backend *infrastructure* is not — that belongs to the follow-on integration plan.)*
 
-Will cover: running every prior phase's scenario against real (non-stub) local endpoints on both platforms; validating `ObliviousProtocolTransport` against real deployed OHTTP endpoints; integrator documentation (README, per-provider integration guides, worked examples); and Clarification Checkpoint CP-2, a pre-production security review — covering the persist-before-sign invariant's bypass-resistance, `SecureKeyProvider` non-exportability on both platforms, and confirming no derived key or private key material appears in any log output.
+Covered: cross-platform scenario tests against real (non-stub) `SecureKeyProvider` implementations from `sdk-providers-web`/`sdk-providers-rn` — sub-card request + signing, offer construction (§7.1, §7.2, §8.1); integrator documentation, `app-sdk/README.md`. Not covered, and explicitly out of this split's scope: validating `ObliviousProtocolTransport` against real deployed OHTTP endpoints, which requires live relay/press/wallet-service infrastructure.
+
+**No separate CP-2 review for this package.** This package holds no long-lived custody surface (App SDK never touches a master key, a keyring, or backup material — see §1, §2), so the CP-2-equivalent security review (persist-before-sign, `SecureKeyProvider` non-exportability, log-safety) was scoped to `wallet-sdk` (Step 3.2f, `plans/sdk-split/milestones/cp2-security-review.md`), which covers this package's own `SecureKeyProvider` usage as part of reviewing both platform packages' real provider implementations — those same providers are the ones App SDK's requester-side sub-card flow (§7.1) uses.
 
 ---
 
@@ -435,10 +437,13 @@ Functions that gate on a verification step return a discriminated union (`{ appr
 | 5 | 5.4 Replenishment scheduling | **Implemented** |
 | 5 | 5.5 Realtime delivery (SSE, WebSocket, push catch-up) | **Implemented** |
 | 5 | 5.6 UUID pool deregistration | **Implemented** |
-| 6 | 6.1–6.3 + CP-2 (cross-platform hardening, docs, pre-production review) | **Not started** |
+| 6 | 6.1 Cross-platform scenario tests against real providers | **Implemented** — `sdk-providers-web`/`sdk-providers-rn` `test/scenarios/` (sub-card request+signing, offer construction) |
+| 6 | 6.2 Real deployed OHTTP endpoint validation | **Not started** — out of this split's scope; belongs to the follow-on wallet-service/press/relay integration plan |
+| 6 | 6.3 Integrator documentation | **Implemented** — `app-sdk/README.md` |
+| 6 | CP-2 pre-production security review | **Not applicable to this package** — see §10; scoped to `wallet-sdk` instead, which covers this package's `SecureKeyProvider` usage as part of reviewing the real platform providers |
 | 4 | 4.2 Signing arbitrary data with a sub-card | **Implemented** |
 
-As of this writing: 243 tests pass in the original unified client-sdk core package; the split preserves this test count across app-sdk and wallet-sdk halves, with redistribution of tests to match capability ownership.
+As of this writing: 162 tests pass in `app-sdk` alone, against the original unified `client-sdk`'s 243 total (spanning what's now split across four packages — see `plans/sdk-split/milestones/phase-2-summary.md` for the full cross-package reconciliation: combined total across all four packages is 326, above the original 243).
 
 ---
 
