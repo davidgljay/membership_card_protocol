@@ -418,7 +418,7 @@ Functions that gate on a verification step return a discriminated union (`{ appr
 | 6 | 6.1 Cross-platform scenario tests against real providers | **Implemented** — `test/scenarios/` (setupWallet, sub-card authorization, offer acceptance); RN `setupWallet` counterpart blocked by a confirmed Vitest/react-native toolchain gap, recorded as `it.todo` |
 | 6 | 6.2 Real deployed OHTTP endpoint validation | **Not started** — out of this split's scope; belongs to the follow-on wallet-service/press/relay integration plan |
 | 6 | 6.3 Integrator documentation | **Implemented** — `wallet-sdk/README.md` |
-| 6 | CP-2 pre-production security review | **Done** — see `plans/sdk-split/milestones/cp2-security-review.md`; no CRITICAL/HIGH finding, two lower-severity findings tracked (§10) |
+| 6 | CP-2 pre-production security review | **Done** — see `plans/sdk-split/milestones/cp2-security-review.md`; no CRITICAL/HIGH finding, one MEDIUM finding resolved, one LOW finding tracked and accepted as-is (§10) |
 | — | §6.6 `active_subcards` directory maintenance (code-510/511 posting, caller-composed) | **Implemented** |
 | — | §8.1 `resolveActiveSubCardTargets` helper (read side) | **Implemented** — salvaged during Step 2.4 platform-package reconciliation |
 
