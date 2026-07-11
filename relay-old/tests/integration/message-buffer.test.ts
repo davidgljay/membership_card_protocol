@@ -42,7 +42,7 @@ beforeAll(async () => {
     apps: [{
       app_id: TEST_APP_ID,
       platform: "apns",
-      wallet_ws_url: "wss://wallet.example.com/ws",
+      wallet_base_url: "https://wallet.example.com",
       apns: { key_file: fakeP8, key_id: "AAAAAAAAAA", team_id: "BBBBBBBBBB", bundle_id: "com.test", sandbox: true },
     }],
   }));

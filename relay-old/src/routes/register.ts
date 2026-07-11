@@ -119,7 +119,7 @@ export async function handleRegister(
       const record: UuidRecord = {
         app_id,
         push_token,
-        wallet_ws_url: app.wallet_ws_url,
+        wallet_base_url: app.wallet_base_url,
         device_credential: deviceCredential,
         status: "unused",
         created_at: new Date().toISOString(),

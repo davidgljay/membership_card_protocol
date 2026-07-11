@@ -37,7 +37,7 @@ beforeAll(async () => {
         {
           app_id: TEST_APP_ID,
           platform: "apns",
-          wallet_ws_url: "wss://wallet.example.com/ws",
+          wallet_base_url: "https://wallet.example.com",
           apns: {
             key_file: join(tmpDir, "fake.p8"),
             key_id: "AAAAAAAAAA",

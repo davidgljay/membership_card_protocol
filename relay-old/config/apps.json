@@ -3,7 +3,7 @@
     {
       "app_id": "example-wallet",
       "platform": "apns",
-      "wallet_ws_url": "wss://wallet.example.com/ws",
+      "wallet_base_url": "https://wallet.example.com",
       "apns": {
         "key_file": "/app/config/secrets/apns-key.p8",
         "key_id": "ABCD123456",

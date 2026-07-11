@@ -1,15 +1,15 @@
 /**
- * Integration tests for GET /ws/{uuid} WebSocket bridge.
+ * Integration tests for GET /ws/{uuid} WebSocket delivery (inbound-only).
  *
  * Requires a live Redis instance. Set REDIS_URL (default: redis://localhost:6379).
- * A stub wallet WebSocket server is spun up per test.
+ * Tests the new inbound-only delivery model per relay.md §7.3.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import http from "node:http";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { WebSocketServer, WebSocket } from "ws";
+import { WebSocket } from "ws";
 import { router } from "../../src/router.js";
 import { loadAppRegistry } from "../../src/utils/apps.js";
 import { getRedisClient, closeRedis, setUuid } from "../../src/utils/storage/redis.js";
@@ -19,10 +19,7 @@ process.env.NODE_ENV = "development";
 process.env.REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 
 let relayServer: http.Server;
-let walletWss: WebSocketServer;
-let walletServer: http.Server;
 let relayBaseUrl: string;
-let walletBaseUrl: string;
 let tmpDir: string;
 
 const TEST_APP_ID = "test-app";
@@ -35,13 +32,6 @@ beforeAll(async () => {
   const fakeP8 = join(tmpDir, "fake.p8");
   writeFileSync(fakeP8, "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n");
 
-  // Wallet stub server — plain WS echo server
-  walletServer = http.createServer();
-  walletWss = new WebSocketServer({ server: walletServer });
-  await new Promise<void>((r) => walletServer.listen(0, "127.0.0.1", r));
-  const walletAddr = walletServer.address() as { port: number };
-  walletBaseUrl = `ws://127.0.0.1:${walletAddr.port}`;
-
   const appsJson = join(tmpDir, "apps.json");
   writeFileSync(
     appsJson,
@@ -50,7 +40,7 @@ beforeAll(async () => {
         {
           app_id: TEST_APP_ID,
           platform: "apns",
-          wallet_ws_url: walletBaseUrl,
+          wallet_base_url: "https://wallet.example.com",
           apns: { key_file: fakeP8, key_id: "AAAAAAAAAA", team_id: "BBBBBBBBBB", bundle_id: "com.test.app", sandbox: true },
         },
       ],
@@ -82,7 +72,6 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await new Promise<void>((r) => relayServer.close(() => r()));
-  await new Promise<void>((r) => walletServer.close(() => r()));
   await closeRedis();
   closeDb();
   rmSync(tmpDir, { recursive: true, force: true });
@@ -90,15 +79,14 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await getRedisClient().flushdb();
-  // Remove all wallet listeners between tests
-  walletWss.removeAllListeners("connection");
 });
 
-async function seedUuid(uuid: string): Promise<void> {
+async function seedUuid(uuid: string, deviceCredential = "test-credential"): Promise<void> {
   await setUuid(uuid, {
     app_id: TEST_APP_ID,
     push_token: "test-token",
-    wallet_ws_url: walletBaseUrl,
+    wallet_base_url: "https://wallet.example.com",
+    device_credential: deviceCredential,
     status: "unused",
     created_at: new Date().toISOString(),
   }, TTL);
@@ -120,78 +108,143 @@ function waitForClose(ws: WebSocket): Promise<number> {
   });
 }
 
-describe("GET /ws/{uuid} — connection establishment", () => {
-  it("bridges device to wallet and passes messages device → wallet", async () => {
-    const uuid = crypto.randomUUID();
-    await seedUuid(uuid);
-
-    const received: string[] = [];
-    walletWss.on("connection", (ws: WebSocket) => {
-      ws.on("message", (data: Buffer) => received.push(data.toString()));
+function postDeliver(uuid: string, blob: string): Promise<{ status: number; body: unknown }> {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify({ blob });
+    const req = http.request(`http://127.0.0.1:${(relayServer.address() as { port: number }).port}/deliver/${uuid}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) },
+    }, (res) => {
+      let data = "";
+      res.on("data", (c: Buffer) => { data += c; });
+      res.on("end", () => resolve({ status: res.statusCode!, body: JSON.parse(data) }));
     });
-
-    const { ws: device } = await connectDevice(uuid);
-    await new Promise<void>((r) => setTimeout(r, 50)); // let wallet connect
-    device.send("hello from device");
-    await new Promise<void>((r) => setTimeout(r, 100));
-
-    expect(received).toContain("hello from device");
-    device.close();
+    req.on("error", reject);
+    req.write(payload);
+    req.end();
   });
+}
 
-  it("passes messages wallet → device", async () => {
+describe("GET /ws/{uuid} — inbound-only delivery model", () => {
+  it("accepts WebSocket connection for valid unused UUID and transitions to active", async () => {
     const uuid = crypto.randomUUID();
     await seedUuid(uuid);
-
-    walletWss.on("connection", (ws: WebSocket) => {
-      ws.on("open", () => ws.send("hello from wallet"));
-      // send immediately on connection
-      setTimeout(() => ws.send("hello from wallet"), 20);
-    });
-
-    const { ws: device, messages } = await connectDevice(uuid);
-    await new Promise<void>((r) => setTimeout(r, 200));
-
-    expect(messages).toContain("hello from wallet");
-    device.close();
-  });
-
-  it("closes wallet socket when device disconnects and UUID becomes consumed", async () => {
-    const uuid = crypto.randomUUID();
-    await seedUuid(uuid);
-
-    let walletClosed = false;
-    walletWss.on("connection", (ws: WebSocket) => {
-      ws.on("close", () => { walletClosed = true; });
-    });
 
     const { ws: device } = await connectDevice(uuid);
     await new Promise<void>((r) => setTimeout(r, 50));
-    device.close();
-    await new Promise<void>((r) => setTimeout(r, 200));
 
-    expect(walletClosed).toBe(true);
+    const record = await getRedisClient().hget(`uuid:${uuid}`, "status");
+    expect(record).toBe("active");
+
+    device.close();
+  });
+
+  it("delivers blob via POST /deliver to a *different* UUID sharing the same device_credential", async () => {
+    // Per relay_data_model.md §8 / process_specs Process 3 step 6: the UUID
+    // that opens GET /ws/{uuid} is consumed by opening the connection and is
+    // never itself a valid POST /deliver/{uuid} target — the wallet always
+    // delivers to a separate, still-unused UUID from the same device's pool.
+    // The relay must find the open WebSocket by device_credential, not by
+    // matching the delivery UUID against the connection's own UUID.
+    const credential = "shared-credential-" + crypto.randomUUID();
+    const wsUuid = crypto.randomUUID();
+    const deliveryUuid = crypto.randomUUID();
+    await seedUuid(wsUuid, credential);
+    await seedUuid(deliveryUuid, credential);
+
+    const { ws: device, messages } = await connectDevice(wsUuid);
+    await new Promise<void>((r) => setTimeout(r, 50));
+
+    // Deliver blob for the *other* UUID via HTTP POST (wallet-side call)
+    const blob = "test-blob-base64url";
+    const result = await postDeliver(deliveryUuid, blob);
+    expect(result.status).toBe(200);
+
+    // Wait for message to arrive over the open WebSocket
+    await new Promise<void>((r) => {
+      const timeout = setTimeout(r, 500);
+      const interval = setInterval(() => {
+        if (messages.length > 0) {
+          clearTimeout(timeout);
+          clearInterval(interval);
+          r();
+        }
+      }, 10);
+    });
+
+    expect(messages).toHaveLength(1);
+    const msg = JSON.parse(messages[0]);
+    expect(msg.uuid).toBe(deliveryUuid);
+    expect(msg.blob).toBe(blob);
+
+    // The delivery UUID is consumed by the normal /deliver state machine;
+    // the WS-opening UUID's own status is untouched by this delivery.
+    const deliveryStatus = await getRedisClient().hget(`uuid:${deliveryUuid}`, "status");
+    expect(deliveryStatus).toBe("consumed");
+    const wsStatus = await getRedisClient().hget(`uuid:${wsUuid}`, "status");
+    expect(wsStatus).toBe("active");
+
+    device.close();
+  });
+
+  it("rejects POST /deliver called directly against a UUID that is itself open as a WebSocket", async () => {
+    // An "active" UUID (i.e. currently open via GET /ws/{uuid}) is never a
+    // valid /deliver target in its own right — see relay.md §7.2 step 3.
+    const uuid = crypto.randomUUID();
+    await seedUuid(uuid);
+
+    const { ws: device } = await connectDevice(uuid);
+    await new Promise<void>((r) => setTimeout(r, 50));
+
+    const result = await postDeliver(uuid, "irrelevant-blob");
+    expect(result.status).toBe(410);
+    expect((result.body as { error: string }).error).toBe("UUID_CONSUMED");
+
+    device.close();
+  });
+
+  it("ignores frames sent by device (delivery-only channel)", async () => {
+    const uuid = crypto.randomUUID();
+    await seedUuid(uuid);
+
+    const { ws: device, messages } = await connectDevice(uuid);
+    await new Promise<void>((r) => setTimeout(r, 50));
+
+    // Device sends a frame — this should be ignored by relay, not forwarded
+    device.send("device outbound message");
+    await new Promise<void>((r) => setTimeout(r, 100));
+
+    // No message should arrive (relay ignores device frames)
+    expect(messages).toHaveLength(0);
+
+    device.close();
+  });
+
+  it("transitions UUID to consumed when device closes", async () => {
+    const uuid = crypto.randomUUID();
+    await seedUuid(uuid);
+
+    const { ws: device } = await connectDevice(uuid);
+    await new Promise<void>((r) => setTimeout(r, 50));
+
+    device.close();
+    await new Promise<void>((r) => setTimeout(r, 100));
 
     const record = await getRedisClient().hget(`uuid:${uuid}`, "status");
     expect(record).toBe("consumed");
   });
 
-  it("closes device connection when wallet disconnects and UUID becomes consumed", async () => {
+  it("transitions UUID to consumed when device has network error", async () => {
     const uuid = crypto.randomUUID();
     await seedUuid(uuid);
 
-    let walletSocket: WebSocket | null = null;
-    walletWss.on("connection", (ws: WebSocket) => { walletSocket = ws; });
-
     const { ws: device } = await connectDevice(uuid);
+    await new Promise<void>((r) => setTimeout(r, 50));
+
+    // Simulate network error by destroying the socket
+    (device as unknown as { _socket?: { destroy(): void } })._socket?.destroy();
     await new Promise<void>((r) => setTimeout(r, 100));
 
-    const closedCode = waitForClose(device);
-    walletSocket!.close();
-    const code = await closedCode;
-    expect(code).toBe(1001); // GOING_AWAY
-
-    await new Promise<void>((r) => setTimeout(r, 100));
     const record = await getRedisClient().hget(`uuid:${uuid}`, "status");
     expect(record).toBe("consumed");
   });
@@ -214,8 +267,6 @@ describe("GET /ws/{uuid} — rejection cases", () => {
     const uuid = crypto.randomUUID();
     await seedUuid(uuid);
 
-    walletWss.on("connection", () => {}); // accept connections
-
     const { ws: first } = await connectDevice(uuid);
     await new Promise<void>((r) => setTimeout(r, 50));
 
@@ -231,7 +282,7 @@ describe("GET /ws/{uuid} — rejection cases", () => {
     await setUuid(uuid, {
       app_id: TEST_APP_ID,
       push_token: "test-token",
-      wallet_ws_url: walletBaseUrl,
+      wallet_base_url: "https://wallet.example.com",
       status: "consumed",
       created_at: new Date().toISOString(),
     }, TTL);
@@ -246,7 +297,7 @@ describe("GET /ws/{uuid} — rejection cases", () => {
     await setUuid(uuid, {
       app_id: TEST_APP_ID,
       push_token: "test-token",
-      wallet_ws_url: walletBaseUrl,
+      wallet_base_url: "https://wallet.example.com",
       status: "consumed",
       created_at: new Date().toISOString(),
     }, TTL);

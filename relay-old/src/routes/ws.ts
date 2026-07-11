@@ -3,19 +3,16 @@ import type { Duplex } from "node:stream";
 import { WebSocketServer, WebSocket } from "ws";
 import { isValidUuidV4 } from "../utils/http.js";
 import { getUuid, transitionUuid } from "../utils/storage/redis.js";
+import { registerWsConnection, removeWsConnection } from "../utils/ws_connections.js";
 
-// Close codes defined in relay.md §6.3
+// Close codes defined in relay.md §7.3
 const WS_CLOSE = {
   INVALID_UUID: 4000,
-  WALLET_REJECTED: 4002,
   UNKNOWN_UUID: 4004,
   UUID_CONSUMED: 4010,
   GOING_AWAY: 1001,
   INTERNAL_ERROR: 1011,
 } as const;
-
-// Map from device socket to wallet socket for cleanup
-const activePeers = new Map<WebSocket, WebSocket>();
 
 const wss = new WebSocketServer({ noServer: true });
 
@@ -66,11 +63,10 @@ wss.on("connection", async (deviceSocket: WebSocket, req: IncomingMessage) => {
     return;
   }
 
-  // Step 5: open outbound WebSocket to wallet service
-  const walletUrl = `${record.wallet_ws_url}/${uuid}`;
-  const walletSocket = new WebSocket(walletUrl);
-
-  activePeers.set(deviceSocket, walletSocket);
+  // Step 5: register device WebSocket, keyed by device_credential (not the
+  // UUID) — see ws_connections.ts for why: this is the device-level delivery
+  // channel POST /deliver/{uuid} looks up for a *different* UUID's blob.
+  registerWsConnection(record.device_credential, deviceSocket);
 
   let tornDown = false;
   const consumeUuid = async () => {
@@ -84,57 +80,23 @@ wss.on("connection", async (deviceSocket: WebSocket, req: IncomingMessage) => {
       console.warn(`Unexpected UUID status on WS teardown: ${result.currentStatus}`);
     }
     // NOT_FOUND is benign (UUID expired via TTL or Redis was reset)
-    activePeers.delete(deviceSocket);
+    removeWsConnection(record.device_credential);
   };
 
-  const teardown = (initiator: "device" | "wallet") => {
-    const other = initiator === "device" ? walletSocket : deviceSocket;
-    if (other.readyState === WebSocket.OPEN) {
-      other.close(WS_CLOSE.GOING_AWAY, "Other side disconnected");
-    }
-    consumeUuid();
-  };
-
-  let bridgeEstablished = false;
-
-  walletSocket.on("open", () => {
-    // Step 6: bridge is established — wire up message forwarding
-    bridgeEstablished = true;
-
-    deviceSocket.on("message", (data, isBinary) => {
-      if (walletSocket.readyState === WebSocket.OPEN) {
-        walletSocket.send(data, { binary: isBinary });
-      }
-    });
-
-    walletSocket.on("message", (data, isBinary) => {
-      if (deviceSocket.readyState === WebSocket.OPEN) {
-        deviceSocket.send(data, { binary: isBinary });
-      }
-    });
-  });
-
-  walletSocket.on("error", (err) => {
-    if (!bridgeEstablished) {
-      // Wallet connection failed before the bridge opened — tell device the wallet rejected
-      console.warn("Wallet connection failed before bridge established:", err.message);
-      deviceSocket.close(WS_CLOSE.WALLET_REJECTED, "Wallet service connection failed");
-    } else {
-      console.error("Wallet socket error:", err);
-    }
-  });
-
-  walletSocket.on("close", () => {
-    teardown("wallet");
+  // Step 6: set up message handler to discard incoming frames (delivery-only)
+  deviceSocket.on("message", () => {
+    // Frames from device are ignored per relay.md §7.3:
+    // "Any frames sent by the device over this WebSocket connection are
+    // ignored by the relay (the connection is delivery-only)."
   });
 
   deviceSocket.on("error", (err) => {
     console.error("Device socket error:", err);
-    teardown("device");
+    consumeUuid();
   });
 
   deviceSocket.on("close", () => {
-    teardown("device");
+    consumeUuid();
   });
 });
 

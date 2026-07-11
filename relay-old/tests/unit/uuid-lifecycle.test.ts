@@ -25,7 +25,7 @@ function makeRecord(status: UuidStatus, deviceCredential = "test-device-credenti
   return {
     app_id: "test-app",
     push_token: "test-token",
-    wallet_ws_url: "wss://wallet.example.com/ws",
+    wallet_base_url: "https://wallet.example.com",
     device_credential: deviceCredential,
     status,
     created_at: new Date().toISOString(),

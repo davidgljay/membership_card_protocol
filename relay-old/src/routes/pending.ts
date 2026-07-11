@@ -117,7 +117,7 @@ export async function handleAck(
 
     try {
       await enqueuePendingDelete(
-        { wallet_url: record.wallet_ws_url, uuid: rawUuid, attempts: 0 },
+        { wallet_url: record.wallet_base_url, uuid: rawUuid, attempts: 0 },
         executeAtMs
       );
     } catch (err) {

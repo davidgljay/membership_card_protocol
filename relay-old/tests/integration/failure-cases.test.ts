@@ -11,7 +11,7 @@ import http from "node:http";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { WebSocket, WebSocketServer } from "ws";
+import { WebSocket } from "ws";
 import { router } from "../../src/router.js";
 import { loadAppRegistry } from "../../src/utils/apps.js";
 import {
@@ -31,10 +31,7 @@ process.env.REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 
 const TEST_APP_ID = "test-app";
 let relayServer: http.Server;
-let walletWss: WebSocketServer;
-let walletServer: http.Server;
 let relayBaseUrl: string;
-let walletBaseUrl: string;
 let tmpDir: string;
 
 beforeAll(async () => {
@@ -44,18 +41,12 @@ beforeAll(async () => {
   const fakeP8 = join(tmpDir, "fake.p8");
   writeFileSync(fakeP8, "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n");
 
-  walletServer = http.createServer();
-  walletWss = new WebSocketServer({ server: walletServer });
-  await new Promise<void>((r) => walletServer.listen(0, "127.0.0.1", r));
-  const walletAddr = walletServer.address() as { port: number };
-  walletBaseUrl = `ws://127.0.0.1:${walletAddr.port}`;
-
   const appsJson = join(tmpDir, "apps.json");
   writeFileSync(appsJson, JSON.stringify({
     apps: [{
       app_id: TEST_APP_ID,
       platform: "apns",
-      wallet_ws_url: walletBaseUrl,
+      wallet_base_url: "https://wallet.example.com",
       apns: { key_file: fakeP8, key_id: "AAAAAAAAAA", team_id: "BBBBBBBBBB", bundle_id: "com.test", sandbox: true },
     }],
   }));
@@ -79,7 +70,6 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await new Promise<void>((r) => relayServer.close(() => r()));
-  await new Promise<void>((r) => walletServer.close(() => r()));
   await closeRedis();
   closeDb();
   rmSync(tmpDir, { recursive: true, force: true });
@@ -89,7 +79,6 @@ beforeEach(async () => {
   await getRedisClient().flushdb();
   // Reset SQLite between tests
   getDb().prepare("DELETE FROM device_registry").run();
-  walletWss.removeAllListeners("connection");
 });
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -115,7 +104,7 @@ async function seedUuid(uuid: string, status: "unused" | "active" | "in_flight" 
   await setUuid(uuid, {
     app_id: TEST_APP_ID,
     push_token: "test-token",
-    wallet_ws_url: walletBaseUrl,
+    wallet_base_url: "https://wallet.example.com",
     device_credential: "test-device-credential",
     status,
     created_at: new Date().toISOString(),
@@ -157,12 +146,10 @@ describe("Failure case: relay unreachable / push dispatch fails", () => {
   });
 });
 
-describe("Failure case: WebSocket connection dropped mid-session", () => {
-  it("both sides close and UUID is consumed when device disconnects mid-session", async () => {
+describe("Failure case: WebSocket connection closed", () => {
+  it("UUID is consumed when device disconnects mid-session", async () => {
     const uuid = crypto.randomUUID();
     await seedUuid(uuid);
-
-    walletWss.on("connection", () => {}); // accept wallet connections
 
     const device = new WebSocket(`${relayBaseUrl}/ws/${uuid}`);
     await new Promise<void>((r) => device.on("open", r));
@@ -171,27 +158,6 @@ describe("Failure case: WebSocket connection dropped mid-session", () => {
     device.close();
     await new Promise<void>((r) => setTimeout(r, 200));
 
-    const record = await getUuid(uuid);
-    expect(record?.status).toBe("consumed");
-  });
-
-  it("device connection closes and UUID is consumed when wallet drops mid-session", async () => {
-    const uuid = crypto.randomUUID();
-    await seedUuid(uuid);
-
-    let walletSocket: WebSocket | null = null;
-    walletWss.on("connection", (ws: WebSocket) => { walletSocket = ws; });
-
-    const device = new WebSocket(`${relayBaseUrl}/ws/${uuid}`);
-    await new Promise<void>((r) => device.on("open", r));
-    await new Promise<void>((r) => setTimeout(r, 100));
-
-    const deviceClosed = new Promise<number>((r) => device.on("close", (code) => r(code)));
-    walletSocket!.close();
-    const code = await deviceClosed;
-    expect(code).toBe(1001); // GOING_AWAY
-
-    await new Promise<void>((r) => setTimeout(r, 100));
     const record = await getUuid(uuid);
     expect(record?.status).toBe("consumed");
   });
@@ -211,7 +177,7 @@ describe("Failure case: push token rotated", () => {
     const uuid = crypto.randomUUID();
     await setUuid(uuid, {
       app_id: TEST_APP_ID, push_token: "old-token",
-      wallet_ws_url: walletBaseUrl, device_credential: "test-cred",
+      wallet_base_url: "https://wallet.example.com", device_credential: "test-cred",
       status: "unused", created_at: new Date().toISOString(),
     }, 1); // 1 second TTL
 
@@ -227,7 +193,7 @@ describe("Failure case: push token rotated", () => {
     const uuid = crypto.randomUUID();
     await setUuid(uuid, {
       app_id: TEST_APP_ID, push_token: "old-token",
-      wallet_ws_url: walletBaseUrl, device_credential: "test-cred",
+      wallet_base_url: "https://wallet.example.com", device_credential: "test-cred",
       status: "unused", created_at: new Date().toISOString(),
     }, 1);
     await new Promise<void>((r) => setTimeout(r, 1500));

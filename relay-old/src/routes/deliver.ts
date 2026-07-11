@@ -4,6 +4,7 @@ import { getUuid, transitionUuid, storeMessage } from "../utils/storage/redis.js
 import { getApp } from "../utils/apps.js";
 import { dispatchPush } from "../utils/push/dispatch.js";
 import { getSSEConnection } from "../utils/sse_connections.js";
+import { getWsConnection } from "../utils/ws_connections.js";
 
 interface DeliverBody {
   blob?: unknown;
@@ -49,6 +50,13 @@ export async function handleDeliver(
     return;
   }
 
+  // Only accept delivery for unused UUIDs. Note: an "active" UUID is one
+  // currently open as a GET /ws/{uuid} delivery channel for a *different*
+  // future delivery — it is never itself a valid /deliver target (the device
+  // pool allocates distinct UUIDs to WS-opening vs. message delivery; see
+  // process_specs/notification_relay.md §UUID Pools). So "active" here
+  // correctly falls through to the generic 410 below, same as "consumed" or
+  // "in_flight".
   if (record.status !== "unused") {
     sendError(res, 410, "UUID_CONSUMED", "UUID has already been used or is in use");
     return;
@@ -84,7 +92,7 @@ export async function handleDeliver(
     await storeMessage(record.device_credential, {
       uuid,
       blob,
-      wallet_url: record.wallet_ws_url,
+      wallet_url: record.wallet_base_url,
       received_at: new Date().toISOString(),
     }, ttl);
   } catch (err) {
@@ -110,7 +118,23 @@ export async function handleDeliver(
       sendJson(res, 200, {});
       return;
     } catch (err) {
-      console.error("SSE write failed, falling through to push:", err);
+      console.error("SSE write failed, falling through to WebSocket/push:", err);
+      // Fall through to WebSocket, then push dispatch
+    }
+  }
+
+  // No SSE — try the device's active chat WebSocket, if any (relay.md §1
+  // priority order: SSE, then WebSocket, then push). Keyed by
+  // device_credential, same as SSE — see ws_connections.ts.
+  const wsConn = getWsConnection(record.device_credential);
+  if (wsConn && wsConn.readyState === 1 /* OPEN */) {
+    try {
+      wsConn.send(JSON.stringify({ uuid, blob }));
+      // Blob remains in store until /ack is received, same as SSE delivery
+      sendJson(res, 200, {});
+      return;
+    } catch (err) {
+      console.error("WebSocket write failed, falling through to push:", err);
       // Fall through to push dispatch
     }
   }

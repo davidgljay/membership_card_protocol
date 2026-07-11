@@ -15,7 +15,7 @@ export interface FcmConfig {
 export interface AppConfig {
   app_id: string;
   platform: "apns" | "fcm";
-  wallet_ws_url: string;
+  wallet_base_url: string;
   apns?: ApnsConfig;
   fcm?: FcmConfig;
 }
@@ -62,8 +62,8 @@ function validateApp(app: AppConfig, seen: Set<string>): void {
   if (!app.app_id || typeof app.app_id !== "string") fatal("app_id is required and must be a string", app);
   if (seen.has(app.app_id)) fatal(`Duplicate app_id: ${app.app_id}`, app);
   if (app.platform !== "apns" && app.platform !== "fcm") fatal(`platform must be 'apns' or 'fcm'`, app);
-  if (!app.wallet_ws_url || (!app.wallet_ws_url.startsWith("wss://") && !app.wallet_ws_url.startsWith("ws://"))) {
-    fatal(`wallet_ws_url must be a valid wss:// URL`, app);
+  if (!app.wallet_base_url || !app.wallet_base_url.startsWith("https://")) {
+    fatal(`wallet_base_url must be a valid https:// URL`, app);
   }
 
   if (app.platform === "apns") {

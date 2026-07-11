@@ -5,7 +5,7 @@ export type UuidStatus = "unused" | "in_flight" | "active" | "consumed";
 export interface UuidRecord {
   app_id: string;
   push_token: string;
-  wallet_ws_url: string;
+  wallet_base_url: string;
   device_credential: string;
   status: UuidStatus;
   created_at: string;
