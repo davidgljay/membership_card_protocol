@@ -1,34 +1,33 @@
 {
-  "name": "@membership-card-protocol/relay",
+  "name": "relay",
   "version": "0.1.0",
   "private": true,
-  "type": "module",
-  "description": "Card Protocol relay (serverless architecture) — Nitro app targeting Cloudflare Workers/Durable Objects and node-server, backed by Redis Cloud",
   "scripts": {
-    "dev": "nitro dev",
-    "build": "nitro build",
-    "build:cloudflare": "NITRO_PRESET=cloudflare-module nitro build",
-    "build:node": "NITRO_PRESET=node-server nitro build",
-    "start": "node .output/server/index.mjs",
-    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "tsx watch src/server.ts",
     "test": "vitest run",
-    "test:watch": "vitest",
-    "test:do": "vitest run --config vitest.workers.config.ts"
+    "test:watch": "vitest"
   },
   "dependencies": {
-    "nitropack": "^2.11.0"
+    "ioredis": "^5.3.2",
+    "better-sqlite3": "^9.4.3",
+    "node-apn": "^3.0.0",
+    "firebase-admin": "^12.0.0",
+    "ws": "^8.16.0"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.12.21",
-    "@cloudflare/workers-types": "^4.20260702.1",
+    "@types/better-sqlite3": "^7.6.8",
     "@types/node": "^20.11.0",
-    "crossws": "^0.4.8",
-    "ioredis-mock": "^8.13.1",
-    "typescript": "^5.8.3",
-    "vitest": "^3.2.4",
-    "wrangler": "^4.107.0"
+    "@types/ws": "^8.5.10",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3",
+    "vitest": "^1.3.1"
   },
-  "engines": {
-    "node": ">=22"
+  "allowScripts": {
+    "better-sqlite3@9.6.0": true,
+    "protobufjs@7.6.4": true,
+    "esbuild@0.28.1": true,
+    "esbuild@0.21.5": true
   }
 }

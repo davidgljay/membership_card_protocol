@@ -1,17 +1,26 @@
 name: Relay Deploy
 
+# DISABLED (2026-07-11): this workflow's steps below deploy to Cloudflare
+# Workers via `wrangler`, built for the serverless relay implementation that
+# used to live at `relay/` (now archived at `relay_serverless_old/`, per
+# plans/relay-old-restoration-plan.md). `relay/` now holds the restored
+# Docker/self-hosted-Redis implementation instead (formerly `relay-old/`),
+# which this workflow does not know how to build or deploy. Automatic
+# triggering is disabled (workflow_dispatch only) so a push touching the
+# renamed `relay/**` doesn't run the wrong deploy path. The job definitions
+# below are left in place, not deleted, since they may inform a future
+# Docker-based CI/deploy workflow for `relay/` — but they should not run
+# as-is against the current directory contents. Re-enabling the `push`
+# trigger requires first rewriting the `test`/`deploy` jobs for the Docker
+# target.
+#
 # Production branch is `main` (confirmed via `git branch`/`git log` — this
 # repo has no separate release/production branch; the wallet-service CI
 # workflow (wallet-service-ci.yml) also treats pushes as the trigger signal
 # with no branch filter of its own, so this is consistent with existing
 # convention).
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'relay/**'
-      - '.github/workflows/relay-deploy.yml'
+  workflow_dispatch: {}
 
 jobs:
   test:

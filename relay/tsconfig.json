@@ -1,18 +1,15 @@
 {
-  "extends": "./.nitro/types/tsconfig.json",
   "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "outDir": "dist",
+    "rootDir": "src",
     "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "exactOptionalPropertyTypes": true,
-    "noImplicitReturns": true,
-    "noFallthroughCasesInSwitch": true,
+    "esModuleInterop": true,
     "skipLibCheck": true,
-    "types": ["@cloudflare/workers-types", "node", "@cloudflare/vitest-pool-workers"]
+    "sourceMap": true
   },
-  "include": [
-    ".nitro/types/nitro.d.ts",
-    "server/**/*",
-    "nitro.config.ts"
-  ],
-  "exclude": ["node_modules", ".output", "dist"]
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "tests"]
 }

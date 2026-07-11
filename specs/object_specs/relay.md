@@ -1,10 +1,18 @@
 # Notification Relay — Service Spec
 
-**Version:** 0.8 (draft)
-**Date:** 2026-07-02
-**Status:** Draft — describes the target serverless architecture; not yet implemented (Phase 2 of `plans/relay-serverless-migration-implementation-plan.md`). This revision is itself a draft pending user review and approval — see that plan's step 1.4.
-**Amends:** v0.7 — the device registry moves from a second Redis Cloud database to **Cloudflare KV** (via Nitro's `storage()` abstraction), per revised decision #2 in `plans/relay-serverless-migration-implementation-plan.md`. §9 (re-registration on store reset) updated accordingly. §2 and §4 also corrected: they still referred to the device registry as SQLite, a stale holdover from v0.4 that v0.6/v0.7's amendments missed. Full authoritative detail lives in `specs/object_specs/relay_data_model.md` §5 and §10.4 — this document defers to that one rather than duplicating it.
-**Amends (v0.6 → v0.7, carried forward):** §7.3 (`GET /ws/{uuid}`) and §7.4 (`GET /sse`) describe a Cloudflare Durable-Object-backed connection model (one Durable Object instance per UUID for WS, one per `device_credential` for SSE) replacing the in-process `Map`-based connection tracking (`activePeers` in `relay-old/src/routes/ws.ts`, the module-level `Map` in `relay-old/src/utils/sse_connections.ts`). §5 (App Registry) startup-loading note qualified for the loss of a single-process "startup" moment. See `plans/relay-serverless-migration-strategic-plan.md` and its companion implementation plan for the full rationale.
+**Version:** 0.9
+**Date:** 2026-07-11
+**Status:** Draft — describes the Docker/self-hosted architecture implemented in `relay/` (a plain Node.js/Express-style HTTP+WebSocket process, self-hosted Redis, SQLite device registry). `relay/`'s code has been brought to full compliance with this revision (see `plans/relay-old-restoration-plan.md`).
+**Amends: v0.8 — reverts the serverless (Cloudflare Workers + Durable Objects + Redis Cloud + Cloudflare KV) architecture back to the Docker/self-hosted design, per `plans/relay-old-restoration-plan.md` (the authorizing decision for this reversion).** The serverless design still needed a Redis instance, and running that Redis instance in Docker alongside the app turned out simpler than splitting state across a third-party Redis Cloud service and Cloudflare KV — so the project reverted to `relay/`, the pre-migration Docker implementation.
+**This is not a blind rollback to v0.4/v0.5.** Several corrections made during the v0.5–v0.8 serverless-migration period are **preserved**, because they are substantive behavior specs, not serverless artifacts:
+- **The inbound-only `GET /ws/{uuid}` delivery model** (§7.3): the relay never opens a connection to the wallet service; the wallet is reached only via `wallet_base_url` for staggered deletes. This was introduced during the v0.5 migration but is not itself serverless-specific — it reflects the actual, currently-correct wire contract with the wallet service (`wallet-service/src/relay-client.ts` only ever calls `POST /deliver/{uuid}` over HTTPS; it has no WebSocket client). **One part of the v0.8 text describing this model was itself a Durable-Object-specific artifact and has been corrected back**: v0.8 said the connection is addressed by "the UUID itself" (tied to Cloudflare's `idFromName(uuid)` addressing). The actual, currently-implemented, and correct behavior — confirmed against `relay/src/routes/ws.ts` and `relay/src/routes/deliver.ts` — is that the connection is addressed by **`device_credential`**, exactly like `GET /sse`. This matches `specs/process_specs/notification_relay.md`'s unchanged "Process 3" description. See §7.3 for the corrected text.
+- **`wallet_base_url`** (§5, §6.1): an `https://` base URL used only for staggered `DELETE {wallet_base_url}/messages/{uuid}` calls. Confirmed correct and consistent throughout this revision — no `wallet_ws_url`/`ws://`/`wss://` language remains.
+- **The UUID state machine** (`unused` / `in_flight` / `active` / `consumed`) and the staggered delete queue — not serverless-specific, unchanged.
+- **Device credential auth model** — not serverless-specific, unchanged.
+
+What is dropped, because it was purely serverless-infrastructure-specific: the Durable-Object-backed connection model for §7.3/§7.4 (revert to in-process `Map`-based tracking, since there is only one relay process and no "authority split" to describe); Cloudflare KV as the device registry (revert to SQLite, §9); Cloudflare Cron Triggers (revert to a one-time startup scan, per `relay_data_model.md` §2.5–§2.6); the "no single startup moment under Workers" framing in §5 (a Docker process has an ordinary, single startup moment).
+
+**Amends (v0.6 → v0.8, historical, superseded by this revision):** §7.3/§7.4 described a Cloudflare Durable-Object-backed connection model; §5 described the app registry as having no single startup moment under Workers. See `plans/relay-serverless-migration-strategic-plan.md` and its companion implementation plan for that migration's rationale — both are superseded by this v0.9 reversion.
 
 ---
 
@@ -34,7 +42,7 @@
 
 ## 1. Overview
 
-The notification relay is an HTTP and WebSocket service that bridges wallet services to holder devices without allowing either party to identify the other. It now operates as a **message buffer**: the wallet service deposits encrypted blobs at the relay, and the relay delivers them to the device via the highest-priority available channel.
+The notification relay is an HTTP and WebSocket service that bridges wallet services to holder devices without allowing either party to identify the other. It operates as a **message buffer**: the wallet service deposits encrypted blobs at the relay, and the relay delivers them to the device via the highest-priority available channel.
 
 Delivery priority (highest to lowest):
 
@@ -47,6 +55,8 @@ The relay stores a mapping from opaque single-use UUIDs to device credentials an
 
 UUID associations and message blobs are held exclusively in RAM (Redis with no persistence). The relay never writes UUID-to-device mappings or message blobs to disk. See §4 for the full privacy model and §9 for the store-reset recovery flow.
 
+The relay runs as a single long-running Node.js process (deployed via Docker Compose — see `relay_data_model.md` §1.1 for the topology), with a self-hosted Redis container as its primary store and a SQLite file on a Docker volume as its device registry.
+
 ---
 
 ## 2. Relationship to Existing Specs
@@ -56,7 +66,7 @@ UUID associations and message blobs are held exclusively in RAM (Redis with no p
 | `specs/process_specs/notification_relay.md` | Process-level spec this document implements. Defines delivery processes, UUID pools, device credentials, multi-device, and privacy properties. |
 | `specs/process_specs/message_routing.md` | Defines how wallet services route messages to recipient cards and deliver blobs to the relay. |
 | `specs/process_specs/wallet_backup_and_recovery.md` | Device registration and key management; UUID pool replenishment lifecycle. |
-| `specs/object_specs/relay_data_model.md` | Redis key schema, message store, delete queue, device credential store, UUID state machine, Cloudflare-KV-backed device registry, and app registry config. |
+| `specs/object_specs/relay_data_model.md` | Redis key schema, message store, delete queue, device credential store, UUID state machine, SQLite-backed device registry, and app registry config. |
 
 ---
 
@@ -78,9 +88,9 @@ UUID associations and message blobs are held exclusively in RAM (Redis with no p
 | Wallet service | Card hash → subcard_hash → UUID(s) | Device identity, push token, device credential, which subcards belong to the same physical device |
 | Relay service | UUID → device credential + push token; device credential → pending blobs | Card hash, card identity, message content (blobs are E2E encrypted) |
 
-UUID associations must never be written to disk. Redis runs with persistence explicitly disabled (`--save "" --appendonly no`).
+UUID associations must never be written to disk. Redis runs with persistence explicitly disabled (`--save "" --appendonly no --maxmemory-policy noeviction`).
 
-The device registry (Cloudflare KV) stores only push tokens and `app_id` — no UUID associations, no device credentials, no card-linkable data.
+The device registry (SQLite, on a Docker volume) stores only push tokens and `app_id` — no UUID associations, no device credentials, no card-linkable data.
 
 ---
 
@@ -96,7 +106,7 @@ The relay serves multiple apps. Each app is a distinct wallet service deployment
 | `apns` | APNs credentials (required if `platform == "apns"`): `key_file`, `key_id`, `team_id`, `bundle_id`, `sandbox` |
 | `fcm` | FCM credentials (required if `platform == "fcm"`): `service_account_file` |
 
-Loaded from JSON at startup (`APP_REGISTRY_PATH`). Changes require a restart. **Under the Cloudflare Workers deployment target, there is no single-process "startup" moment, and how the registry is sourced at all is a Phase 2 open item — see `relay_data_model.md` §6's note.** This section's description of the registry's *content* is otherwise unchanged.
+Loaded once, synchronously, from a JSON file at process startup (`APP_REGISTRY_PATH`), before the relay begins accepting requests. Changes require a process restart — there is no hot-reload. Full authoritative detail (schema, validation rules) lives in `relay_data_model.md` §6.
 
 ---
 
@@ -167,7 +177,7 @@ Authorization: Bearer {device_credential}   ← omit on first (bootstrap) call
 2. Generate a new `device_credential` (cryptographically random, 32 bytes, hex or base64url encoded).
 3. Store `cred:{device_credential} → { push_token, app_id, created_at }` with TTL `UUID_TTL_SECONDS`.
 4. Generate `count` UUIDs, each stored as `uuid:{uuid} → { app_id, push_token, wallet_base_url, device_credential, status: "unused" }` with TTL `UUID_TTL_SECONDS`.
-5. Upsert push token in the Cloudflare KV device registry.
+5. Upsert push token in the SQLite device registry.
 6. Return UUIDs and device credential.
 
 **Replenishment (`Authorization: Bearer {credential}` present):**
@@ -176,7 +186,7 @@ Authorization: Bearer {device_credential}   ← omit on first (bootstrap) call
 2. Validate `app_id` and `push_token`.
 3. Update `cred:{credential}` with new `push_token` (if rotated) and refresh TTL.
 4. Generate `count` new UUIDs under the same credential.
-5. Upsert push token in the Cloudflare KV device registry.
+5. Upsert push token in the SQLite device registry.
 6. Return only the new UUIDs (no credential in response — device already has it).
 
 #### Response — 200 OK
@@ -237,7 +247,7 @@ Content-Type: application/json
 6. Transition UUID `in_flight → consumed`.
 7. Attempt immediate delivery (in order):
    - If SSE connection open for this `device_credential`: stream `data: {"uuid":"<uuid>","blob":"<blob>"}`. Do not remove from message store yet — wait for `POST /ack`.
-   - Else if WebSocket session active: forward blob. Schedule staggered delete on delivery.
+   - Else if WebSocket connection open for this `device_credential`: forward the blob directly over that socket. Do not remove from message store yet — wait for `POST /ack`.
    - Else: dispatch silent push via APNs/FCM with payload `{ "uuid": "<uuid>" }`.
 8. Return 200.
 
@@ -269,20 +279,11 @@ Empty body.
 
 Opens an inbound WebSocket delivery channel for the device. While this connection is open, the relay delivers incoming message blobs directly over the WebSocket rather than via silent push. Used when the app is in an active chat session.
 
-**Inbound only.** Outbound messages (device → wallet) are sent by the device directly to the wallet service HTTPS endpoint (`wallet_base_url`). The relay does not proxy outbound messages and does not open any connection to the wallet service on behalf of this endpoint.
+**Inbound only.** Outbound messages (device → wallet) are sent by the device directly to the wallet service HTTPS endpoint (`wallet_base_url`). The relay does not proxy outbound messages and does not open any connection to the wallet service on behalf of this endpoint or any other.
 
-**Connection model (changed from v0.6):** the connection is now backed by a
-Cloudflare Durable Object, one instance per UUID, addressed via
-`idFromName(uuid)`, using the Workers Hibernation API
-(`acceptWebSocket`/`getWebSockets`, not the interactive `accept()`) so
-billable compute stops accruing while the connection is idle. This
-replaces the in-process `activePeers` `Map` the current Node.js
-implementation uses. The full statement of which system (the stateless
-Redis-backed HTTP layer, or the Durable Object) is authoritative for which
-part of this connection's state — and exactly how the two stay
-consistent — is specified in `specs/object_specs/relay_data_model.md`
-§10; this section describes the resulting request-visible behavior, not
-the internal split (see that section for the internal detail).
+**Connection model:** the connection is tracked in an in-process `Map<device_credential, WebSocket>` (`relay/src/utils/ws_connections.ts`), populated when the connection is accepted and removed on teardown. Because the relay runs as a single long-running process, this in-memory map is simply, unambiguously authoritative for "is there a live WebSocket connection for this device right now" — there is no second system whose view of connection liveness could disagree with it.
+
+**Addressing key: `device_credential`, not the UUID.** The UUID in the path (`GET /ws/{uuid}`) is consumed by the act of opening the connection — it transitions to `active` and can never again be a valid `POST /deliver/{uuid}` target. When a *different* UUID from the same device's pool is later delivered via `POST /deliver/{uuid'}`, the relay must find this open connection by asking "does this device (identified by its `device_credential`) currently have a live WebSocket," not "does UUID `{uuid'}` have one" — no connection was ever opened for `uuid'` itself. The connection is therefore registered and looked up by `device_credential`, exactly the same way `GET /sse` (§7.4) is. This matches `specs/process_specs/notification_relay.md`'s "Process 3" description (the relay detects the active WebSocket connection for a device credential) and the actual implementation (`relay/src/routes/ws.ts`'s `registerWsConnection(record.device_credential, deviceSocket)`; `relay/src/routes/deliver.ts`'s `getWsConnection(record.device_credential)`).
 
 #### Upgrade request
 
@@ -295,49 +296,29 @@ Upgrade: websocket
 #### Connection establishment
 
 1. Validate UUID format. Close 4000 if invalid.
-2. Look up UUID in Redis (primary database). Close 4004 if not found.
+2. Look up UUID in Redis. Close 4004 if not found.
 3. Confirm `status == "unused"`. Close 4010 if not.
 4. Transition `unused → active` in Redis.
-5. Forward the upgrade to the UUID's Durable Object instance
-   (`idFromName(uuid)`), which accepts the WebSocket via the Hibernation
-   API. The Durable Object is only reached if step 4 succeeded — a
-   rejection at steps 1–3 never invokes the Durable Object at all.
+5. Register the connection in the in-process `Map`, keyed by the UUID record's `device_credential`.
 6. Confirm connection to device (no outbound wallet connection is opened).
-
-Steps 1–4 happen in the stateless Nitro HTTP-handler layer, not inside
-the Durable Object — see `relay_data_model.md` §10.2 for why the Durable
-Object never talks to Redis directly.
 
 #### Message flow
 
-**Inbound (wallet → device):** When `POST /deliver/{uuid}` arrives for a
-UUID whose Durable Object currently holds an open WebSocket, the relay
-delivers the blob over the open WebSocket:
+**Inbound (wallet → device):** When `POST /deliver/{uuid'}` arrives for a *different* UUID that shares this connection's `device_credential`, and this WebSocket is currently open, the relay delivers the blob over the open WebSocket:
 
 ```
-{"uuid": "<uuid>", "blob": "<base64url>"}
+{"uuid": "<uuid'>", "blob": "<base64url>"}
 ```
 
-This is now a direct UUID → Durable Object address (`idFromName(uuid)`),
-not a `device_credential`-keyed lookup — the addressing key for `GET
-/ws/{uuid}` connections is the UUID itself, matching the endpoint's own
-path parameter. (Contrast with `GET /sse`, §7.4, which is keyed by
-`device_credential` because it is a device-level, not per-UUID, channel.)
+(Contrast with `GET /sse`, §7.4, which is also keyed by `device_credential` — both are device-level channels, not per-UUID channels; the UUID in the `GET /ws/{uuid}` path only ever identifies *this* connection's own opening request, never a future delivery target.)
 
 **Outbound (device → wallet):** The device sends outbound messages directly to the wallet service HTTPS endpoint. Any frames sent by the device over this WebSocket connection are ignored by the relay (the connection is delivery-only). The device is responsible for tracking the `wallet_base_url` for its wallet service.
 
 #### Session teardown
 
-On device-side close or network error: the Durable Object's close/error
-handler fires, and it requests the Redis `active → consumed` transition
-via the stateless layer (`relay_data_model.md` §10.3) — the Durable
-Object does not write to Redis itself. If the Durable Object is evicted
-in a way that this handler never runs, the UUID remains `active` in Redis
-until the periodic reconciliation scan (`relay_data_model.md` §2.5, §7.2)
-transitions it to `consumed` on a bounded delay (default every 5 minutes).
-This is a change from v0.6's assumption that teardown is always
-synchronous with the connection closing — see `relay_data_model.md` §10.3
-for the bounded-staleness reasoning.
+On device-side close or network error, the WebSocket's `close`/`error` handler fires synchronously and performs the Redis `active → consumed` transition directly, then removes the connection from the in-process `Map` (`relay/src/routes/ws.ts`). Because this all happens in the same process holding both the Redis client and the connection map, there is no bounded-staleness window in the ordinary case — teardown is synchronous with the connection actually closing.
+
+The only case where a UUID can be left stuck at `active` is the relay process itself dying before this handler runs (crash, forced kill, host failure). That case is caught on the next process startup by the reconciliation scan (`relay_data_model.md` §2.5), which transitions any UUID still `active` or `in_flight` to `consumed` before the relay begins accepting new requests.
 
 #### WebSocket close codes
 
@@ -357,19 +338,7 @@ Opens a device-level Server-Sent Events stream. Receives delivery events for all
 
 **Called by the device.** Requires device credential.
 
-**Connection model (changed from v0.6):** like `GET /ws/{uuid}` (§7.3),
-this connection is now backed by a Cloudflare Durable Object using the
-Hibernation API — but addressed by `idFromName(device_credential)`, not
-by UUID, since this is a device-level channel shared across all of a
-device's cards, not a per-UUID channel. This replaces the module-level
-`Map<device_credential, SSEConnection>` the current Node.js implementation
-uses (`relay-old/src/utils/sse_connections.ts`). Nitro's `crossws` adapters
-support both WebSocket and SSE-shaped connections; whether this endpoint
-is implemented as a genuine long-lived SSE response streamed from within
-the Durable Object, or reimplemented as a WebSocket-shaped connection that
-the stateless layer translates back into SSE framing for the device, is a
-Phase 2 implementation decision — either is compatible with this section's
-request/response contract, which is unchanged from v0.6.
+**Connection model:** tracked in an in-process `Map<device_credential, ServerResponse>` (`relay/src/utils/sse_connections.ts`), populated when the connection is established and removed on close. As with `GET /ws/{uuid}` (§7.3), because there is only one relay process, this map is simply authoritative for connection liveness — no second system to reconcile against.
 
 #### Request
 
@@ -383,28 +352,11 @@ Accept: text/event-stream
 
 1. Validate credential. Return 401 if missing or invalid.
 2. Resolve `device_credential → push_token`.
-3. Forward the connection to the `device_credential`'s Durable Object
-   instance (`idFromName(device_credential)`), which registers the
-   connection using the Hibernation API. As with §7.3, this happens in
-   the stateless Nitro HTTP-handler layer first (steps 1–2), and the
-   Durable Object is only reached after credential validation succeeds —
-   see `relay_data_model.md` §10.2 for why Redis access stays out of the
-   Durable Object entirely.
+3. Register the connection in the in-process `Map`, keyed by `device_credential`.
 4. Set response headers: `Content-Type: text/event-stream`, `Cache-Control: no-cache`, `Connection: keep-alive`.
 5. Send heartbeat comment every 30 seconds: `:\n\n`.
-6. On `POST /deliver/{uuid}` arriving for a UUID whose `device_credential`
-   matches this connection's Durable Object, while the SSE connection is
-   open: stream the event immediately (§7.2 step 7). This requires the
-   stateless handler to resolve `uuid → device_credential` (already part
-   of the existing UUID record, §7.2) before checking whether that
-   credential's Durable Object holds a live connection — same two-step
-   check-then-deliver pattern as §7.3's WebSocket delivery path
-   (`relay_data_model.md` §10.3).
-7. On connection close (app backgrounds, network drop): the Durable
-   Object's close handler fires and the connection is torn down. Unlike
-   `GET /ws/{uuid}`, there is no UUID state transition to perform here —
-   the SSE channel is not itself tied to any single UUID's lifecycle, so
-   there is nothing in Redis for this teardown to update.
+6. On `POST /deliver/{uuid}` arriving for a UUID whose `device_credential` matches this connection's, while the SSE connection is open: stream the event immediately (§7.2 step 7).
+7. On connection close (app backgrounds, network drop): remove the connection from the `Map`. There is no UUID state transition to perform here — the SSE channel is not itself tied to any single UUID's lifecycle, so there is nothing in Redis for this teardown to update.
 
 #### Event format
 
@@ -601,58 +553,27 @@ This behavior will be removed in a future version.
 
 UUID `consumed` means the relay has accepted responsibility for the blob — not that the device has received it. Message lifecycle continues independently in the message store.
 
-**Note on "session close" under the Durable-Object-backed connection model (v0.7):** the diagram's `active → consumed` transition on session close is usually synchronous with the WebSocket actually closing, but is not guaranteed to be — see §7.3's teardown description and `relay_data_model.md` §10.3 for the case where a Durable Object is evicted before its close handler runs. The diagram describes the common case; the bounded-staleness fallback (periodic reconciliation scan) is the correctness backstop, not shown here to keep the diagram legible.
+**Note on "session close":** the diagram's `active → consumed` transition on session close is synchronous with the WebSocket actually closing in the ordinary case — the same process holds both the Redis client and the connection registry, so there is nothing for the two to disagree about. The only exception is the relay process itself dying before the close handler runs, which the startup reconciliation scan (`relay_data_model.md` §2.5) resolves on the next boot. That fallback is not shown in the diagram to keep it legible; see §7.3's teardown description for the full accounting.
 
-**Latency note (HTTPS delivery vs. prior WebSocket bridging):** The wallet service delivers message blobs to the relay via `POST /deliver/{uuid}` (HTTPS). With HTTP/2 or keep-alive connection pooling between wallet service and relay, the per-delivery overhead is the TCP round-trip plus relay processing — typically 5–20 ms on the same cloud provider or data center. This is undetectable for human chat (conversations typically have 200–2000 ms natural pacing). The wallet service should maintain a persistent HTTP connection pool to the relay to avoid per-message TCP handshake overhead. **This figure was measured against the original same-process Node.js/self-hosted-Redis architecture and has not been re-validated against the Cloudflare Workers + Redis Cloud topology** — Redis Cloud is not colocated with Cloudflare's edge the way the original self-hosted Redis was colocated with the relay process, so actual latency under the new architecture should be measured once both are provisioned (see `relay/PROVISIONING.md` §5) rather than assumed to still hold.
+**Latency note (HTTPS delivery to the relay):** The wallet service delivers message blobs to the relay via `POST /deliver/{uuid}` (HTTPS). With a persistent connection pool between wallet service and relay, the per-delivery overhead is the TCP round-trip plus relay processing — typically 5–20 ms when both are colocated (e.g. on the same cloud provider or data center). This is undetectable for human chat (conversations typically have 200–2000 ms natural pacing). The wallet service should maintain a persistent HTTP connection pool to the relay to avoid per-message TCP handshake overhead.
 
 ---
 
 ## 9. Re-registration on Store Reset
 
-**Changed from v0.7:** the device registry is no longer a second Redis
-Cloud database — it is Cloudflare KV, accessed via Nitro's `storage()`
-abstraction (`relay_data_model.md` §5, §1). "Redis restarts" still means
-only the **primary** Redis Cloud database (persistence off) resetting; KV
-is durable by platform default and is not expected to reset under normal
-operation, which is the whole reason the device registry lives there
-rather than in the primary database. When the primary database resets,
-all UUID state and message blobs are lost, exactly as in v0.7.
+The device registry is a SQLite file on a Docker volume (`relay_data_model.md` §5), separate from Redis so that it survives exactly the kind of restart that clears Redis. "Redis restarts" means the self-hosted Redis container losing its data (persistence is deliberately off — §4). The SQLite device registry is not expected to reset under normal operation, which is the whole reason it lives on its own durable volume rather than in Redis.
 
-**Detection mechanism unchanged from v0.7:** performed by a periodic
-Cloudflare Cron Trigger that scans for `uuid:*` keys in the primary
-database (`relay_data_model.md` §2.5–§2.6), on the schedule
-`RECONCILIATION_CRON_SCHEDULE` (default every 5 minutes). This check must
-distinguish "database was actually reset" from "database happens to be
-momentarily empty because there are no outstanding UUIDs right now" — see
-`relay_data_model.md` §2.6 for the false-positive-avoidance mechanism this
-requires (a transition-detecting flag, now stored as a KV entry rather
-than in a second Redis database — same logic, different store).
-
-If the primary database is confirmed reset (per that mechanism), the
-relay lists the current contents of the KV device registry (all entries
-present are, by construction, within the retention window — see
-`relay_data_model.md` §5's note on TTL-based expiry replacing the old
-prune-by-timestamp query) and sends a re-registration push to each:
+**Detection mechanism:** performed once, at process startup, before the relay begins accepting requests (`relay_data_model.md` §2.6). The relay checks whether the Redis UUID store is empty; if so, it checks whether the SQLite device registry has any entries. An empty Redis store with a non-empty device registry means Redis was reset while devices were already known — the relay lists the current SQLite device-registry entries (all within the 90-day retention window, `relay_data_model.md` §5.4) and sends a re-registration push to each:
 
 ```json
 { "type": "relay_reregistration_requested", "relay_id": "<RELAY_ID>" }
 ```
 
+An empty Redis store with an *also*-empty device registry is treated as a first deployment, not a reset — no re-registration push is sent in that case.
+
 The device handles this silent push by calling `POST /register` (replenishment if it has a stored credential, bootstrap if the credential was also lost) for each of its cards and re-registering new UUIDs with wallet services. The wallet service, on receiving new UUIDs, retransmits any messages it retained. The device deduplicates by message ID within the decrypted blob.
 
-**Live WebSocket/SSE connections during a primary-database reset:**
-Durable Object instances holding open connections are unaffected by a
-Redis Cloud primary-database reset — the two systems are operationally
-independent (`relay_data_model.md` §10.1). A device with an open `GET
-/ws/{uuid}` or `GET /sse` connection at the moment of a primary-database
-reset keeps that connection open, but any *new* delivery attempt for its
-UUIDs will fail Redis-side validation (the UUID record is gone) until the
-device re-registers and the wallet service re-delivers with fresh UUIDs.
-This is the same "window during which push delivery may fail" v0.6
-already describes for the non-connected case; connected devices are not
-better protected against it, since the UUID→Durable-Object mapping itself
-depends on Redis still knowing about that UUID (`relay_data_model.md`
-§10.3, step 1 of connection establishment).
+**Live WebSocket/SSE connections during a Redis reset:** because Redis and the in-process connection registries are held by the same relay process, a Redis reset (the *data* being cleared, e.g. by recreating the Redis container without its volume) does not by itself sever any open WebSocket or SSE connection — the process and its in-memory connection maps are unaffected by Redis's own state being wiped. A device with an open `GET /ws/{uuid}` or `GET /sse` connection at the moment of a Redis reset keeps that connection open, but any *new* delivery attempt for its UUIDs will fail Redis-side validation (the UUID record is gone) until the device re-registers and the wallet service re-delivers with fresh UUIDs. This is the same "window during which push delivery may fail" the relay has always had for the non-connected case; connected devices are not better protected against it, since delivering to an existing connection still requires resolving `uuid → device_credential` from a Redis record that a reset has just erased.
 
 ---
 
