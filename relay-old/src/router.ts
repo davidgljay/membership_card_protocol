@@ -4,6 +4,7 @@ import { handleDeliver } from "./routes/deliver.js";
 import { handleHealth } from "./routes/health.js";
 import { handleSSE } from "./routes/sse.js";
 import { handlePending, handleAck } from "./routes/pending.js";
+import { handleOhttpForward } from "./routes/ohttp.js";
 import { sendJson } from "./utils/http.js";
 
 type Handler = (
@@ -34,6 +35,7 @@ function handleNotifyDeprecated(
 const routes: Route[] = [
   { method: "POST", pattern: /^\/register$/, paramNames: [], handler: handleRegister },
   { method: "POST", pattern: /^\/deliver\/([^/]+)$/, paramNames: ["uuid"], handler: handleDeliver },
+  { method: "POST", pattern: /^\/ohttp\/([^/]+)$/, paramNames: ["target_id"], handler: handleOhttpForward },
   { method: "GET",  pattern: /^\/ws\/([^/]+)$/, paramNames: ["uuid"], handler: handleWs },
   { method: "GET",  pattern: /^\/sse$/, paramNames: [], handler: handleSSE },
   { method: "GET",  pattern: /^\/pending$/, paramNames: [], handler: handlePending },

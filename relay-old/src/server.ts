@@ -1,6 +1,7 @@
 import http from "node:http";
 import { router } from "./router.js";
 import { loadAppRegistry } from "./utils/apps.js";
+import { loadObliviousTargets } from "./utils/oblivious_targets.js";
 import { runStartupChecks } from "./startup.js";
 import { stopWalletClearance } from "./utils/wallet_clearance.js";
 import { closeRedis } from "./utils/storage/redis.js";
@@ -13,6 +14,8 @@ if (!APP_REGISTRY_PATH) {
   process.exit(1);
 }
 loadAppRegistry(APP_REGISTRY_PATH);
+
+loadObliviousTargets(process.env.OBLIVIOUS_TARGETS_PATH);
 
 const server = http.createServer((req, res) => {
   Promise.resolve(router(req, res)).catch((err: unknown) => {
