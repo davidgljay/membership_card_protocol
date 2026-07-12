@@ -168,6 +168,79 @@ describe("returnChain", () => {
     void MASTER_CID;
     void PARENT_CID;
   });
+
+  it("fully asserts chain shape: card_address, public_key, and card_content at each hop", async () => {
+    const { rpc, ipfs, envelope, root, holder, parent, appCertRoot } = buildScenario();
+    const verifier = new CardVerifier({
+      rpc,
+      ipfs,
+      trustedRoots: [root.address],
+      appCertificationRoot: appCertRoot.address,
+      returnChain: true,
+    });
+    const result = await verifier.verifyEnvelope(envelope);
+    const sig0 = result.signatures[0]!;
+    expect(sig0.chain).toBeDefined();
+    expect(sig0.chain!.length).toBe(2);
+
+    // First hop: master card
+    const firstHop = sig0.chain![0]!;
+    expect(firstHop.card_address).toBe(holder.address);
+    expect(firstHop.public_key).toBeDefined();
+    expect(typeof firstHop.public_key).toBe("string");
+    expect(firstHop.public_key.length).toBeGreaterThan(0);
+    expect(firstHop.card_content).toBeDefined();
+    expect(typeof firstHop.card_content).toBe("object");
+    expect(firstHop.card_content["policy_id"]).toBeDefined();
+    expect(firstHop.card_content["issued_at"]).toBeDefined();
+    expect(firstHop.card_content["ancestry_pubkeys"]).toBeDefined();
+
+    // Second hop: parent card
+    const secondHop = sig0.chain![1]!;
+    expect(secondHop.card_address).toBe(parent.address);
+    expect(secondHop.public_key).toBeDefined();
+    expect(typeof secondHop.public_key).toBe("string");
+    expect(secondHop.public_key.length).toBeGreaterThan(0);
+    expect(secondHop.card_content).toBeDefined();
+    expect(typeof secondHop.card_content).toBe("object");
+    expect(secondHop.card_content["policy_id"]).toBeDefined();
+    expect(secondHop.card_content["issued_at"]).toBeDefined();
+  });
+
+  it("returns partial chain when walk fails mid-way (e.g., IPFS fetch error)", async () => {
+    const { rpc, ipfs, envelope, root, holder, parent, appCertRoot, MASTER_CID, PARENT_CID } = buildScenario();
+    // Mock the IPFS provider to fail when fetching the parent card, simulating a mid-walk failure
+    const failingIpfs: IpfsProvider = {
+      fetch: vi.fn().mockImplementation((cid: string) => {
+        if (cid === MASTER_CID || cid === "QmPolicy") {
+          return (ipfs.fetch as (c: string) => Promise<Uint8Array>)(cid);
+        }
+        if (cid === PARENT_CID) {
+          // Simulate IPFS fetch failure mid-walk
+          return Promise.reject(new Error("IPFS fetch failed"));
+        }
+        return (ipfs.fetch as (c: string) => Promise<Uint8Array>)(cid);
+      }),
+    };
+
+    const verifier = new CardVerifier({
+      rpc,
+      ipfs: failingIpfs,
+      trustedRoots: [root.address],
+      appCertificationRoot: appCertRoot.address,
+      returnChain: true,
+    });
+
+    const result = await verifier.verifyEnvelope(envelope);
+    const sig0 = result.signatures[0]!;
+    // Partial chain should still be returned even though the walk failed
+    expect(sig0.chain).toBeDefined();
+    // We got the master card before the failure, so at least one link
+    expect(sig0.chain!.length).toBeGreaterThanOrEqual(1);
+    expect(sig0.chain![0]!.card_address).toBe(holder.address);
+    // The chain walk should have failed; chain_reaches_trusted_root should be false
+    expect(sig0.chain_reaches_trusted_root).toBe(false);
+  });
 });
 
 describe("policy_match", () => {
@@ -244,6 +317,85 @@ describe("policy_match", () => {
     });
     const result = await verifier.verifyEnvelope(envelope);
     expect(result.signatures[0]!.policy_match).toBe(true);
+  });
+
+  it("multiple field_match conditions: all match -> true", async () => {
+    const { rpc, ipfs, envelope, root, appCertRoot, POLICY_CID } = buildScenario({
+      user_type: "admin",
+      department: "engineering",
+    });
+    const verifier = new CardVerifier({
+      rpc,
+      ipfs,
+      trustedRoots: [root.address],
+      appCertificationRoot: appCertRoot.address,
+      conditions: {
+        policy_id: POLICY_CID,
+        field_match: { user_type: "admin", department: "engineering" },
+      },
+    });
+    const result = await verifier.verifyEnvelope(envelope);
+    expect(result.signatures[0]!.policy_match).toBe(true);
+  });
+
+  it("multiple field_match conditions: one non-matching -> false", async () => {
+    const { rpc, ipfs, envelope, root, appCertRoot, POLICY_CID } = buildScenario({
+      user_type: "admin",
+      department: "sales",
+    });
+    const verifier = new CardVerifier({
+      rpc,
+      ipfs,
+      trustedRoots: [root.address],
+      appCertificationRoot: appCertRoot.address,
+      conditions: {
+        policy_id: POLICY_CID,
+        field_match: { user_type: "admin", department: "engineering" },
+      },
+    });
+    const result = await verifier.verifyEnvelope(envelope);
+    expect(result.signatures[0]!.policy_match).toBe(false);
+  });
+
+  it("verifyCard() with conditions and returnChain returns empty chain and false policy_match", async () => {
+    const { rpc, ipfs, root, appCertRoot, POLICY_CID, holder } = buildScenario({
+      user_type: "admin",
+    });
+    const verifier = new CardVerifier({
+      rpc,
+      ipfs,
+      trustedRoots: [root.address],
+      appCertificationRoot: appCertRoot.address,
+      returnChain: true,
+      conditions: { policy_id: POLICY_CID, field_match: { user_type: "admin" } },
+    });
+
+    // verifyCard takes a bare card address (holder's master card address)
+    const result = await verifier.verifyCard(holder.address);
+    // When returnChain is true, chain field is present but always empty for verifyCard
+    // (no pubkey available from address alone, so no CardDocument can be decrypted)
+    expect("chain" in result).toBe(true);
+    expect(result.chain).toBeDefined();
+    expect(result.chain).toHaveLength(0);
+    // When conditions are supplied but no chain can be resolved, policy_match is false
+    expect(result.policy_match).toBe(false);
+  });
+
+  it("verifyCard() without conditions and returnChain returns empty chain and null policy_match", async () => {
+    const { rpc, ipfs, root, appCertRoot, holder } = buildScenario();
+    const verifier = new CardVerifier({
+      rpc,
+      ipfs,
+      trustedRoots: [root.address],
+      appCertificationRoot: appCertRoot.address,
+      returnChain: true,
+      // no conditions supplied
+    });
+
+    const result = await verifier.verifyCard(holder.address);
+    expect("chain" in result).toBe(true);
+    expect(result.chain).toHaveLength(0);
+    expect(result.policy_match).toBeNull();
   });
 
   it("envelope-level policy_match is the OR across all signatures", async () => {

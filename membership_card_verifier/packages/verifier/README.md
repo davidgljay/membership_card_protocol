@@ -96,6 +96,29 @@ if (status.is_currently_valid === true && status.chain_reaches_trusted_root === 
 }
 ```
 
+To check whether a signer meets a relying party's policy requirements:
+
+```typescript
+const verifier = new CardVerifier({
+  rpc,
+  ipfs,
+  conditions: {
+    policy_id: "QmIssuancePolicyCID",
+    field_match: { user_type: "admin" },
+  },
+});
+
+const result = await verifier.verifyEnvelope(envelope);
+
+if (result.policy_match === true) {
+  // At least one signer's card was issued under this policy with user_type == "admin"
+  acceptMessage();
+} else if (result.policy_match === false) {
+  // No signer met the policy requirement
+  rejectMessage("Not authorized under required policy");
+}
+```
+
 ---
 
 ## Providers
@@ -176,10 +199,63 @@ const verifier = new CardVerifier({
   registryEndpoint: undefined,           // Override the Press Registry Body endpoint
   fetchAnnotations: false,               // Enable Stage 6 EAS annotation lookup
   additionalAnnotators: [],              // Extra annotator addresses to include in Stage 6
+  returnChain: false,                    // Include full chain data in result
+  conditions: undefined,                 // Policy matching conditions for policy_match field
 });
 ```
 
 `trustedRoots` is useful when you have a local copy of known governance roots and want to skip the on-chain lookup for them — for example when building a CLI that operates against a known deployment. It supplements the on-chain table; it does not replace it.
+
+### Checking policy requirements with `conditions`
+
+To evaluate whether a card meets a relying party's policy requirements, pass a `conditions` object:
+
+```typescript
+const verifier = new CardVerifier({
+  rpc,
+  ipfs,
+  conditions: {
+    policy_id: "QmPolicyDocumentCID", // CID of the policy the card was issued under
+    field_match: {
+      user_type: "admin",                            // exact-match shorthand
+      department: { regex: "^(eng|product)$" },      // regex escape hatch
+    },
+  },
+});
+
+const result = await verifier.verifyEnvelope(envelope);
+for (const sig of result.signatures) {
+  if (sig.policy_match === true) {
+    // This signer's card was issued under the specified policy
+    // and all field values matched the conditions.
+  }
+}
+```
+
+The `policy_id` is checked against each card's `policy_id` field as the chain is walked. All `field_match` entries must match against the same card (the first one in the chain matching the policy_id). Field values are matched exactly by default; use `{ regex: "..." }` for pattern matching.
+
+### Retrieving chain data with `returnChain`
+
+Pass `returnChain: true` to inspect the full chain of cards from the signer back to the trusted root:
+
+```typescript
+const verifier = new CardVerifier({
+  rpc,
+  ipfs,
+  returnChain: true,
+});
+
+const result = await verifier.verifyEnvelope(envelope);
+for (const sig of result.signatures) {
+  for (const link of sig.chain ?? []) {
+    console.log(link.card_address);     // On-chain address of this card
+    console.log(link.public_key);       // base64url-encoded public key
+    console.log(link.card_content);     // Decrypted card document fields
+  }
+}
+```
+
+This is useful for building policy-enforcement logic, auditing, or displaying card details to the user. The chain is ordered from the signer's master card outward toward the trusted root. If the walk fails partway through, `chain` contains a partial list up to the point of failure.
 
 ---
 
@@ -199,6 +275,7 @@ interface SignatureVerificationResult {
 
   // Stage 3
   chain_reaches_trusted_root: boolean | "skipped";
+  chain?: ChainLink[];                           // present only when returnChain: true
 
   // Stage 4
   revocation: {
@@ -213,7 +290,7 @@ interface SignatureVerificationResult {
 
   // Stage 5
   policy_compliant: boolean | null | "skipped";
-  policy_match: boolean | null;                  // null if no per-call predicate supplied
+  policy_match: boolean | null;                  // result of conditions check (null if not supplied)
   press_subsequently_revoked: boolean;           // informational — does not affect compliance
   non_compliance_reported: boolean;
 
@@ -223,6 +300,44 @@ interface SignatureVerificationResult {
   annotations: EasAnnotation[];                  // empty unless fetchAnnotations: true
 }
 ```
+
+Also returned at the envelope level:
+
+```typescript
+interface EnvelopeVerificationResult {
+  envelope_id: string;
+  verified_at: string;
+  protocol_version: string;
+  signatures: SignatureVerificationResult[];
+  policy_match: boolean | null;                  // OR across all signatures (null if no conditions)
+}
+```
+
+### Chain data (`chain`)
+
+When `returnChain: true`, each signature result includes a `chain` field:
+
+```typescript
+interface ChainLink {
+  card_address: string;                 // on-chain address (keccak256 of public key)
+  public_key: string;                   // base64url-encoded ML-DSA-44 public key
+  card_content: Record<string, unknown>; // decrypted CardDocument fields
+}
+```
+
+The array is ordered from the signer's master card outward toward the trusted root. If `returnChain: false` (default), the `chain` field is absent from the result. If the chain walk fails partway through, `chain` contains a partial list up to the point of failure.
+
+### Policy matching (`policy_match`)
+
+When `conditions` is supplied in the config:
+
+- **Per-signature level:** `policy_match` on each `SignatureVerificationResult` is `true` if that signer's card chain includes a card with matching `policy_id` and all `field_match` conditions are satisfied; `false` if the policy is not found or conditions don't match; `null` only if `conditions` wasn't supplied.
+
+- **Envelope level:** `policy_match` on the `EnvelopeVerificationResult` is the **OR** across all signatures — `true` if at least one signature's `policy_match` is `true`, `false` if `conditions` was supplied and no signatures matched, `null` if `conditions` wasn't supplied.
+
+For `verifyCard()` (checking a bare card address without a signature), `chain` is always empty (no pubkey available from an address alone), so `policy_match` is `false` if conditions are supplied (since an empty chain cannot match) or `null` if not supplied.
+
+### Interpreting results
 
 The `"skipped"` sentinel means a stage did not run because a hard rejection in an upstream stage made its output meaningless. `false` means the stage ran and the card failed it. These are different situations.
 

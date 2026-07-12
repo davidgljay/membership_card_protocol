@@ -92,6 +92,27 @@ if status.is_currently_valid is True and status.chain_reaches_trusted_root is Tr
     ...  # Card is in good standing
 ```
 
+To check whether a signer meets a relying party's policy requirements:
+
+```python
+verifier = CardVerifier(VerifierConfig(
+    rpc=my_rpc_provider,
+    ipfs=my_ipfs_provider,
+    app_certification_root=APP_CERT_ROOT,
+    conditions=PolicyMatchConditions(
+        policy_id="QmIssuancePolicyCID",
+        field_match={"user_type": "admin"},
+    ),
+))
+
+result = await verifier.verify_envelope(envelope)
+
+if result.policy_match is True:
+    ...  # At least one signer's card was issued under this policy with user_type == "admin"
+elif result.policy_match is False:
+    ...  # No signer met the policy requirement
+```
+
 ---
 
 ## Providers
@@ -163,12 +184,61 @@ config = VerifierConfig(
     registry_endpoint=None,                       # Override the Press Registry Body endpoint
     fetch_annotations=False,                      # Enable Stage 6 EAS annotation lookup
     additional_annotators=[],                     # Extra annotator addresses to include in Stage 6
+    return_chain=False,                           # Include full chain data in the result
+    conditions=None,                              # Policy-matching conditions for the policy_match field
 )
 
 verifier = CardVerifier(config)
 ```
 
 `trusted_roots` is useful when you have a local copy of known governance roots and want to skip the on-chain lookup for them — for example when building a CLI that operates against a known deployment. It supplements the on-chain table; it does not replace it.
+
+### Checking policy requirements with `conditions`
+
+To evaluate whether a card meets a relying party's policy requirements, pass a `conditions` object:
+
+```python
+from membership_card_verifier import PolicyMatchConditions
+
+config = VerifierConfig(
+    rpc=rpc,
+    ipfs=ipfs,
+    app_certification_root=APP_CERT_ROOT,
+    conditions=PolicyMatchConditions(
+        policy_id="QmPolicyDocumentCID",              # CID of the policy the card was issued under
+        field_match={
+            "user_type": "admin",                     # exact-match shorthand
+            "department": {"regex": "^(eng|product)$"},  # regex escape hatch
+        },
+    ),
+)
+
+result = await verifier.verify_envelope(envelope)
+for sig in result.signatures:
+    if sig.policy_match is True:
+        ...  # This signer's card was issued under the specified policy
+             # and all field values matched the conditions.
+```
+
+The `policy_id` is checked against each card's `policy_id` field as the chain is walked. All `field_match` entries must match against the same card (the first one in the chain matching `policy_id`). Field values are matched exactly by default; use `{"regex": "..."}` for pattern matching.
+
+### Retrieving chain data with `return_chain`
+
+Pass `return_chain=True` to inspect the full chain of cards from the signer back to the trusted root:
+
+```python
+config = VerifierConfig(rpc=rpc, ipfs=ipfs, app_certification_root=APP_CERT_ROOT, return_chain=True)
+verifier = CardVerifier(config)
+
+result = await verifier.verify_envelope(envelope)
+for sig in result.signatures:
+    for link in sig.chain or []:
+        print(link.card_address)   # On-chain address of this card
+        print(link.public_key)     # base64url-encoded public key
+        print(link.card_content)   # Decrypted card document fields
+```
+
+This is useful for building policy-enforcement logic, auditing, or displaying card details to the user. The chain is ordered from the signer's master card outward toward the trusted root. If the walk fails partway through, `chain` contains a partial list up to the point of failure.
 
 ---
 
@@ -189,6 +259,7 @@ class SignatureVerificationResult:
 
     # Stage 3
     chain_reaches_trusted_root: bool | Literal["skipped"]
+    chain: list[ChainLink] | None                           # present only when return_chain=True
 
     # Stage 4
     revocation: RevocationStatus                            # status, code, effective_date, data_freshness_seconds
@@ -198,7 +269,7 @@ class SignatureVerificationResult:
 
     # Stage 5
     policy_compliant: bool | None | Literal["skipped"]
-    policy_match: bool | None                               # None if no per-call predicate supplied
+    policy_match: bool | None                               # result of `conditions` check (None if not supplied)
     press_subsequently_revoked: bool                        # informational — does not affect compliance
     non_compliance_reported: bool
 
@@ -211,6 +282,38 @@ class SignatureVerificationResult:
 The `"skipped"` sentinel means a stage did not run because a hard rejection in an upstream stage made its output meaningless. `False` means the stage ran and the card failed it. These are different situations — check for `is False` / `== "skipped"` explicitly rather than relying on truthiness.
 
 `log_updates` is always populated regardless of pass or fail — it contains the card's non-revocation history (field updates, key rotations, successor designations) which you may want to surface for audit or display purposes.
+
+### Chain data (`chain`)
+
+Present on `SignatureVerificationResult`/`CardVerificationResult` only when `return_chain=True` (absent, not an empty list, when not requested):
+
+```python
+@dataclass
+class ChainLink:
+    card_address: str                  # keccak256(pubkey) — same value as chain_card_addresses
+    public_key: str                    # base64url — the raw ML-DSA-44 public key
+    card_content: dict[str, Any]        # the decrypted CardDocument's fields
+```
+
+Ordered from the signer's master card outward toward the trusted root. If the chain walk fails partway through, `chain` contains the partial list up to the point of failure rather than being empty — useful for policy checks that need to know what was actually resolved even when overall verification fails. `verify_card()` never resolves any chain data (no pubkey is available from a bare address alone), so its `chain` is always an empty list.
+
+### Policy matching (`policy_match`)
+
+`policy_match` reflects whether the `conditions` you supplied (if any) were satisfied — per-signature on `SignatureVerificationResult`/`CardVerificationResult`, and as an OR-aggregate across every signature on the top-level `EnvelopeVerificationResult`:
+
+```python
+@dataclass
+class EnvelopeVerificationResult:
+    envelope_id: str
+    verified_at: str
+    protocol_version: str
+    signatures: list[SignatureVerificationResult]
+    policy_match: bool | None    # True if at least one signer's card met conditions
+```
+
+- `None` — `conditions` wasn't supplied.
+- `True`/`False` — whether that signer's card (per-signature) or at least one signer's card (envelope-level) was issued under `conditions.policy_id` and satisfied every `field_match` entry.
+- For `verify_card()`, `policy_match` is computed against that call's (always empty, per above) chain — so it's `False` whenever `conditions` is supplied and `None` otherwise; `verify_card()` is not the right call for a `conditions` check on anything but the bare card itself.
 
 ---
 

@@ -145,6 +145,19 @@ class FieldRequirement:
 # ─── Configuration ────────────────────────────────────────────────────────────
 
 @dataclass
+class ChainLink:
+    card_address: str  # keccak256(pubkey) — same as chain_card_addresses today
+    public_key: str  # base64url — the raw ML-DSA-44 public key ("public id")
+    card_content: dict[str, Any]  # the decrypted CardDocument's fields
+
+
+@dataclass
+class PolicyMatchConditions:
+    policy_id: str  # CID — checked via issued_under_template semantics
+    field_match: Optional[dict[str, str | dict[str, str]]] = None  # plain string = exact-match shorthand; { regex } = full regex
+
+
+@dataclass
 class VerifierConfig:
     rpc: RpcProvider
     ipfs: IpfsProvider
@@ -156,6 +169,8 @@ class VerifierConfig:
     registry_endpoint: Optional[str] = None
     fetch_annotations: Optional[bool] = None
     additional_annotators: Optional[list[str]] = None
+    return_chain: Optional[bool] = None
+    conditions: Optional[PolicyMatchConditions] = None
 
 
 # ─── API Input Types ──────────────────────────────────────────────────────────
@@ -192,6 +207,7 @@ class EnvelopeVerificationResult:
     verified_at: str
     protocol_version: str
     signatures: list[SignatureVerificationResult]
+    policy_match: Optional[bool] = None
 
 
 @dataclass
@@ -247,6 +263,7 @@ class SignatureVerificationResult:
     signature_valid: Optional[bool] = None
     policy_compliant: bool | Literal["skipped"] | None = None
     policy_match: Optional[bool] = None
+    chain: Optional[list[ChainLink]] = None
 
 
 @dataclass
@@ -268,6 +285,7 @@ class CardVerificationResult:
     signature_valid: None = None
     policy_compliant: bool | Literal["skipped"] | None = None
     policy_match: Optional[bool] = None
+    chain: Optional[list[ChainLink]] = None
 
 
 # ─── Non-Compliance Reporting ─────────────────────────────────────────────────

@@ -3,10 +3,12 @@ from .card_verifier import CardVerifier
 from .constants import KNOWN_PROTOCOL_VERSIONS, PROTOCOL_VERSION_0_1, ProtocolVersion
 from .crypto import ml_dsa44_verify
 from .errors import CardProtocolError
+from .policy_match import evaluate_policy_match
 from .types import (
     CardDocument,
     CardEntry,
     CardVerificationResult,
+    ChainLink,
     EasAnnotation,
     EasAttestation,
     EnvelopeVerificationResult,
@@ -16,6 +18,7 @@ from .types import (
     LogUpdate,
     NonComplianceReport,
     PastKey,
+    PolicyMatchConditions,
     PressAuthEntry,
     RevocationStatus,
     RpcProvider,
@@ -35,6 +38,7 @@ __all__ = [
     "CardProtocolError",
     "canonicalize",
     "ml_dsa44_verify",
+    "evaluate_policy_match",
     "PROTOCOL_VERSION_0_1",
     "KNOWN_PROTOCOL_VERSIONS",
     "ProtocolVersion",
@@ -62,4 +66,6 @@ __all__ = [
     "CardDocument",
     "SubCardDocument",
     "PastKey",
+    "ChainLink",
+    "PolicyMatchConditions",
 ]

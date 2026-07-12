@@ -8,6 +8,7 @@ from .canonicalize import canonicalize
 from .constants import PROTOCOL_VERSION_0_1
 from .crypto import keccak256
 from .errors import CardProtocolError
+from .policy_match import evaluate_policy_match
 from .stages.stage1 import verify_stage1
 from .stages.stage2 import verify_stage2
 from .stages.stage3 import verify_stage3
@@ -16,6 +17,7 @@ from .stages.stage5 import verify_stage5
 from .stages.stage6 import verify_stage6
 from .types import (
     CardVerificationResult,
+    ChainLink,
     EnvelopeVerificationResult,
     RevocationStatus,
     SignatureEntry,
@@ -33,6 +35,7 @@ _DEFAULTS = SimpleNamespace(
     max_chain_depth=64,
     fetch_annotations=False,
     additional_annotators=[],
+    return_chain=False,
 )
 
 
@@ -93,6 +96,12 @@ class CardVerifier:
                 if config.additional_annotators is not None
                 else list(_DEFAULTS.additional_annotators)
             ),
+            return_chain=(
+                config.return_chain
+                if config.return_chain is not None
+                else _DEFAULTS.return_chain
+            ),
+            conditions=config.conditions,
         )
 
     async def verify_envelope(self, envelope: dict[str, Any]) -> EnvelopeVerificationResult:
@@ -104,30 +113,32 @@ class CardVerifier:
         except CardProtocolError as e:
             raw = payload.get("protocol_version")
             ver = raw if isinstance(raw, str) else "unknown"
+            early_policy_match = evaluate_policy_match([], self.config.conditions)
+            early_signature = SignatureVerificationResult(
+                signer_card="",
+                signature_valid=False,
+                scope_clean="skipped",
+                chain_reaches_trusted_root="skipped",
+                app_card_chain_valid="skipped",
+                revocation=_unknown_revocation(),
+                was_valid_at_signing_time="skipped",
+                is_currently_valid="skipped",
+                log_updates=[],
+                policy_compliant="skipped",
+                policy_match=early_policy_match,
+                press_subsequently_revoked=False,
+                non_compliance_reported=False,
+                addressed_to_verifier=False,
+                errors=[VerificationError(stage=1, code=e.code, message=str(e))],
+                annotations=[],
+                **({"chain": []} if self.config.return_chain else {}),
+            )
             return EnvelopeVerificationResult(
                 envelope_id="",
                 verified_at=verified_at,
                 protocol_version=ver,
-                signatures=[
-                    SignatureVerificationResult(
-                        signer_card="",
-                        signature_valid=False,
-                        scope_clean="skipped",
-                        chain_reaches_trusted_root="skipped",
-                        app_card_chain_valid="skipped",
-                        revocation=_unknown_revocation(),
-                        was_valid_at_signing_time="skipped",
-                        is_currently_valid="skipped",
-                        log_updates=[],
-                        policy_compliant="skipped",
-                        policy_match=None,
-                        press_subsequently_revoked=False,
-                        non_compliance_reported=False,
-                        addressed_to_verifier=False,
-                        errors=[VerificationError(stage=1, code=e.code, message=str(e))],
-                        annotations=[],
-                    )
-                ],
+                signatures=[early_signature],
+                policy_match=self._aggregate_envelope_policy_match([early_signature]),
             )
 
         canonical_envelope = canonicalize(envelope)
@@ -145,6 +156,7 @@ class CardVerifier:
             verified_at=verified_at,
             protocol_version=protocol_version,
             signatures=list(signatures),
+            policy_match=self._aggregate_envelope_policy_match(list(signatures)),
         )
 
     async def verify_card(
@@ -198,6 +210,10 @@ class CardVerifier:
 
         all_errors = errors + stage4.errors + stage6.errors
 
+        # verify_card cannot decrypt any CardDocument (no pubkey available for the given
+        # address alone), so no chain data is ever resolved here — chain is always empty.
+        chain: list[ChainLink] = []
+
         return CardVerificationResult(
             signer_card=card_address,
             signature_valid=None,
@@ -210,12 +226,13 @@ class CardVerifier:
             is_currently_valid=stage4.is_currently_valid,
             log_updates=stage4.log_updates,
             policy_compliant="skipped",
-            policy_match=None,
+            policy_match=evaluate_policy_match(chain, self.config.conditions),
             press_subsequently_revoked=False,
             non_compliance_reported=False,
             addressed_to_verifier=False,
             errors=all_errors,
             annotations=stage6.annotations,
+            **({"chain": chain} if self.config.return_chain else {}),
         )
 
     async def _verify_signature_entry(
@@ -252,7 +269,8 @@ class CardVerifier:
         errors.extend(stage2.errors)
 
         if stage2.scope_clean is False and not stage2.master_card_doc:
-            # Hard rejection: skip stages 3-5
+            # Hard rejection: skip stages 3-5. No CardDocument was ever resolved, so
+            # there is no chain data to compute policy_match from beyond "not found".
             return self._build_result(
                 signer_card,
                 signature_valid,
@@ -265,21 +283,30 @@ class CardVerifier:
                 is_currently_valid="skipped",
                 log_updates=[],
                 policy_compliant="skipped",
+                chain=[],
             )
 
         # Stage 3
+        # The walk starts from the master card's own document, so it must also start from
+        # the master card's own address — not stage2.signer_card, which identifies the
+        # sub-card that actually signed (used below for the result's signer_card field).
+        # A sub-card has no ancestry of its own; only the master does.
         assert stage2.master_card_doc is not None
         start_doc = stage2.master_card_doc
-        start_address = stage2.signer_card
+        start_pubkey = stage2.master_card_pubkey
+        assert start_pubkey is not None
+        start_address = keccak256(start_pubkey)
         stage3 = await verify_stage3(
-            start_doc, start_address, self.config.rpc, self.config.ipfs, self.config
+            start_doc, start_address, self.config.rpc, self.config.ipfs, self.config, start_pubkey
         )
         errors.extend(stage3.errors)
 
         if stage3.chain_reaches_trusted_root is False and any(
             e.code in ("DECRYPTION_FAILED", "ADDRESS_BINDING_MISMATCH") for e in stage3.errors
         ):
-            # Hard rejection mid-chain: skip stages 4-5
+            # Hard rejection mid-chain: skip stages 4-5. stage3.chain is partial (as far as
+            # the walk got before the failure) — still exposed/used per the plan's decision
+            # to keep partial chains rather than discard them.
             return self._build_result(
                 signer_card,
                 signature_valid,
@@ -292,6 +319,7 @@ class CardVerifier:
                 is_currently_valid="skipped",
                 log_updates=[],
                 policy_compliant="skipped",
+                chain=stage3.chain,
             )
 
         # Stage 4
@@ -303,7 +331,6 @@ class CardVerifier:
         # Stage 5
         card_entry = await self.config.rpc.get_card_entry(signer_card)
         policy_compliant: bool | None | Literal["skipped"] = "skipped"
-        policy_match: Optional[bool] = None
         press_subsequently_revoked = False
         non_compliance_reported = False
 
@@ -321,9 +348,14 @@ class CardVerifier:
             )
             errors.extend(stage5.errors)
             policy_compliant = stage5.policy_compliant
-            policy_match = stage5.policy_match
             press_subsequently_revoked = stage5.press_subsequently_revoked
             non_compliance_reported = stage5.non_compliance_reported
+
+        # policy_match: computed from Stage 3's already-walked chain data (Task 1) —
+        # no second chain walk or IPFS fetch pass, per the plan's "avoid reproducing
+        # logic" decision. Computed regardless of `return_chain`, which only controls
+        # whether the chain itself is exposed on the result.
+        policy_match = evaluate_policy_match(stage3.chain, self.config.conditions)
 
         # Stage 6
         stage6 = await verify_stage6(
@@ -348,6 +380,7 @@ class CardVerifier:
             addressed_to_verifier=False,
             errors=errors,
             annotations=stage6.annotations,
+            **({"chain": stage3.chain} if self.config.return_chain else {}),
         )
 
     def _build_result(
@@ -364,6 +397,7 @@ class CardVerifier:
         is_currently_valid: bool | Literal["skipped"],
         log_updates: list[Any],
         policy_compliant: bool | None | Literal["skipped"],
+        chain: list[ChainLink],
     ) -> SignatureVerificationResult:
         return SignatureVerificationResult(
             signer_card=signer_card,
@@ -376,12 +410,13 @@ class CardVerifier:
             is_currently_valid=is_currently_valid,
             log_updates=log_updates,
             policy_compliant=policy_compliant,
-            policy_match=None,
+            policy_match=evaluate_policy_match(chain, self.config.conditions),
             press_subsequently_revoked=False,
             non_compliance_reported=False,
             addressed_to_verifier=False,
             errors=errors,
             annotations=[],
+            **({"chain": chain} if self.config.return_chain else {}),
         )
 
     def _skipped_result(
@@ -399,10 +434,19 @@ class CardVerifier:
             is_currently_valid="skipped",
             log_updates=[],
             policy_compliant="skipped",
-            policy_match=None,
+            policy_match=evaluate_policy_match([], self.config.conditions),
             press_subsequently_revoked=False,
             non_compliance_reported=False,
             addressed_to_verifier=False,
             errors=errors,
             annotations=[],
+            **({"chain": []} if self.config.return_chain else {}),
         )
+
+    def _aggregate_envelope_policy_match(
+        self, signatures: list[SignatureVerificationResult]
+    ) -> Optional[bool]:
+        """Aggregates policy_match across signatures as an OR."""
+        if not self.config.conditions:
+            return None
+        return any(s.policy_match is True for s in signatures)
