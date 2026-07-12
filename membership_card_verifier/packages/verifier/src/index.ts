@@ -2,6 +2,7 @@ export { CardVerifier } from "./CardVerifier.js";
 export { CardProtocolError } from "./errors.js";
 export { canonicalize } from "./canonicalize.js";
 export { mlDsa44Verify } from "./crypto.js";
+export { evaluatePolicyMatch } from "./policy-match.js";
 export {
   PROTOCOL_VERSION_0_1,
   KNOWN_PROTOCOL_VERSIONS,
@@ -34,4 +35,6 @@ export type {
   CardDocument,
   SubCardDocument,
   PastKey,
+  ChainLink,
+  PolicyMatchConditions,
 } from "./types.js";

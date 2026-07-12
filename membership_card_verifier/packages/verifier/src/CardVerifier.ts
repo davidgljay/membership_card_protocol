@@ -3,9 +3,11 @@ import { canonicalize } from "./canonicalize.js";
 import { PROTOCOL_VERSION_0_1 } from "./constants.js";
 import { keccak256 } from "./crypto.js";
 import { CardProtocolError } from "./errors.js";
+import { evaluatePolicyMatch } from "./policy-match.js";
 import { verifyStage1 } from "./stages/stage1.js";
 import { verifyStage2 } from "./stages/stage2.js";
 import { verifyStage3 } from "./stages/stage3.js";
+import type { ChainLink } from "./stages/stage3.js";
 import { verifyStage4 } from "./stages/stage4.js";
 import { verifyStage5 } from "./stages/stage5.js";
 import { verifyStage6 } from "./stages/stage6.js";
@@ -27,11 +29,13 @@ const DEFAULTS = {
   maxChainDepth: 64,
   fetchAnnotations: false,
   additionalAnnotators: [] as string[],
+  returnChain: false,
 } as const;
 
 export class CardVerifier {
-  private readonly config: Required<Omit<VerifierConfig, "registryEndpoint">> & {
+  private readonly config: Required<Omit<VerifierConfig, "registryEndpoint" | "conditions">> & {
     registryEndpoint: string | undefined;
+    conditions: VerifierConfig["conditions"];
   };
 
   constructor(config: VerifierConfig) {
@@ -59,6 +63,8 @@ export class CardVerifier {
       registryEndpoint: config.registryEndpoint,
       fetchAnnotations: config.fetchAnnotations ?? DEFAULTS.fetchAnnotations,
       additionalAnnotators: config.additionalAnnotators ?? DEFAULTS.additionalAnnotators,
+      returnChain: config.returnChain ?? DEFAULTS.returnChain,
+      conditions: config.conditions,
     };
   }
 
@@ -74,28 +80,32 @@ export class CardVerifier {
       if (e instanceof CardProtocolError) {
         const raw = envelope.payload.protocol_version;
         const ver = typeof raw === "string" ? raw : "unknown";
+        const earlyPolicyMatch = evaluatePolicyMatch([], this.config.conditions);
+        const earlySignature: SignatureVerificationResult = {
+          signer_card: "",
+          signature_valid: false,
+          scope_clean: "skipped",
+          chain_reaches_trusted_root: "skipped",
+          app_card_chain_valid: "skipped",
+          revocation: { status: "unknown", code: null, effective_date: null, data_freshness_seconds: 0 },
+          was_valid_at_signing_time: "skipped",
+          is_currently_valid: "skipped",
+          log_updates: [],
+          policy_compliant: "skipped",
+          policy_match: earlyPolicyMatch,
+          press_subsequently_revoked: false,
+          non_compliance_reported: false,
+          addressed_to_verifier: false,
+          errors: [{ stage: 1, code: e.code, message: e.message }],
+          annotations: [],
+          ...(this.config.returnChain ? { chain: [] } : {}),
+        };
         return {
           envelope_id: "",
           verified_at,
           protocol_version: ver,
-          signatures: [{
-            signer_card: "",
-            signature_valid: false,
-            scope_clean: "skipped",
-            chain_reaches_trusted_root: "skipped",
-            app_card_chain_valid: "skipped",
-            revocation: { status: "unknown", code: null, effective_date: null, data_freshness_seconds: 0 },
-            was_valid_at_signing_time: "skipped",
-            is_currently_valid: "skipped",
-            log_updates: [],
-            policy_compliant: "skipped",
-            policy_match: null,
-            press_subsequently_revoked: false,
-            non_compliance_reported: false,
-            addressed_to_verifier: false,
-            errors: [{ stage: 1, code: e.code, message: e.message }],
-            annotations: [],
-          }],
+          signatures: [earlySignature],
+          policy_match: this.#aggregateEnvelopePolicyMatch([earlySignature]),
         };
       }
       throw e;
@@ -110,7 +120,13 @@ export class CardVerifier {
       )
     );
 
-    return { envelope_id, verified_at, protocol_version, signatures };
+    return {
+      envelope_id,
+      verified_at,
+      protocol_version,
+      signatures,
+      policy_match: this.#aggregateEnvelopePolicyMatch(signatures),
+    };
   }
 
   async verifyCard(
@@ -160,6 +176,10 @@ export class CardVerifier {
 
     const allErrors = [...errors, ...stage4.errors, ...stage6.errors];
 
+    // verifyCard cannot decrypt any CardDocument (no pubkey available for the given
+    // address alone), so no chain data is ever resolved here — chain is always empty.
+    const chain: ChainLink[] = [];
+
     return {
       signer_card: cardAddress,
       signature_valid: null,
@@ -172,12 +192,13 @@ export class CardVerifier {
       is_currently_valid: stage4.is_currently_valid,
       log_updates: stage4.log_updates,
       policy_compliant: "skipped",
-      policy_match: null,
+      policy_match: evaluatePolicyMatch(chain, this.config.conditions),
       press_subsequently_revoked: false,
       non_compliance_reported: false,
       addressed_to_verifier: false,
       errors: allErrors,
       annotations: stage6.annotations,
+      ...(this.config.returnChain ? { chain } : {}),
     };
   }
 
@@ -210,36 +231,47 @@ export class CardVerifier {
     errors.push(...stage2.errors);
 
     if (stage2.scope_clean === false && !stage2.master_card_doc) {
-      // Hard rejection: skip stages 3–5
+      // Hard rejection: skip stages 3–5. No CardDocument was ever resolved, so
+      // there is no chain data to compute policy_match from beyond "not found".
       return this.#buildResult(signerCard, signatureValid, stage2.scope_clean, "skipped", stage2.app_card_chain_valid, errors, {
         revocation: { status: "unknown", code: null, effective_date: null, data_freshness_seconds: 0 },
         was_valid_at_signing_time: "skipped",
         is_currently_valid: "skipped",
         log_updates: [],
         policy_compliant: "skipped",
+        chain: [],
       });
     }
 
     // Stage 3
+    // The walk starts from the master card's own document, so it must also start from
+    // the master card's own address — not stage2.signer_card, which identifies the
+    // sub-card that actually signed (used below for the result's signer_card field).
+    // A sub-card has no ancestry of its own; only the master does.
     const startDoc = stage2.master_card_doc!;
-    const startAddress = stage2.signer_card;
+    const startPubkey = stage2.master_card_pubkey!;
+    const startAddress = keccak256(startPubkey);
     const stage3 = await verifyStage3(
       startDoc,
       startAddress,
       this.config.rpc,
       this.config.ipfs,
-      this.config
+      this.config,
+      startPubkey
     );
     errors.push(...stage3.errors);
 
     if (stage3.chain_reaches_trusted_root === false && stage3.errors.some((e) => e.code === "DECRYPTION_FAILED" || e.code === "ADDRESS_BINDING_MISMATCH")) {
-      // Hard rejection mid-chain: skip stages 4–5
+      // Hard rejection mid-chain: skip stages 4–5. stage3.chain is partial (as far as
+      // the walk got before the failure) — still exposed/used per the plan's decision
+      // to keep partial chains rather than discard them.
       return this.#buildResult(signerCard, signatureValid, stage2.scope_clean, stage3.chain_reaches_trusted_root, stage2.app_card_chain_valid, errors, {
         revocation: { status: "unknown", code: null, effective_date: null, data_freshness_seconds: 0 },
         was_valid_at_signing_time: "skipped",
         is_currently_valid: "skipped",
         log_updates: [],
         policy_compliant: "skipped",
+        chain: stage3.chain,
       });
     }
 
@@ -255,7 +287,6 @@ export class CardVerifier {
     // Stage 5
     const cardEntry = await this.config.rpc.getCardEntry(signerCard);
     let policyCompliant: boolean | null | "skipped" = "skipped";
-    let policyMatch: boolean | null = null;
     let pressSubsequentlyRevoked = false;
     let nonComplianceReported = false;
 
@@ -273,10 +304,15 @@ export class CardVerifier {
       );
       errors.push(...stage5.errors);
       policyCompliant = stage5.policy_compliant;
-      policyMatch = stage5.policy_match;
       pressSubsequentlyRevoked = stage5.press_subsequently_revoked;
       nonComplianceReported = stage5.non_compliance_reported;
     }
+
+    // policy_match: computed from Stage 3's already-walked chain data (Task 1) —
+    // no second chain walk or IPFS fetch pass, per the plan's "avoid reproducing
+    // logic" decision. Computed regardless of `returnChain`, which only controls
+    // whether the chain itself is exposed on the result.
+    const policyMatch = evaluatePolicyMatch(stage3.chain, this.config.conditions);
 
     // Stage 6
     const stage6 = await verifyStage6(
@@ -304,6 +340,7 @@ export class CardVerifier {
       addressed_to_verifier: false,
       errors,
       annotations: stage6.annotations,
+      ...(this.config.returnChain ? { chain: stage3.chain } : {}),
     };
   }
 
@@ -320,6 +357,7 @@ export class CardVerifier {
       is_currently_valid: boolean | "skipped";
       log_updates: SignatureVerificationResult["log_updates"];
       policy_compliant: boolean | null | "skipped";
+      chain: ChainLink[];
     }
   ): SignatureVerificationResult {
     return {
@@ -333,13 +371,19 @@ export class CardVerifier {
       is_currently_valid: overrides.is_currently_valid,
       log_updates: overrides.log_updates,
       policy_compliant: overrides.policy_compliant,
-      policy_match: null,
+      policy_match: evaluatePolicyMatch(overrides.chain, this.config.conditions),
       press_subsequently_revoked: false,
       non_compliance_reported: false,
       addressed_to_verifier: false,
       errors,
       annotations: [],
+      ...(this.config.returnChain ? { chain: overrides.chain } : {}),
     };
+  }
+
+  #aggregateEnvelopePolicyMatch(signatures: SignatureVerificationResult[]): boolean | null {
+    if (!this.config.conditions) return null;
+    return signatures.some((s) => s.policy_match === true);
   }
 
   #skippedResult(
@@ -358,12 +402,13 @@ export class CardVerifier {
       is_currently_valid: "skipped",
       log_updates: [],
       policy_compliant: "skipped",
-      policy_match: null,
+      policy_match: evaluatePolicyMatch([], this.config.conditions),
       press_subsequently_revoked: false,
       non_compliance_reported: false,
       addressed_to_verifier: false,
       errors,
       annotations: [],
+      ...(this.config.returnChain ? { chain: [] } : {}),
     };
   }
 }

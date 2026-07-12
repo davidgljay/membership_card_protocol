@@ -123,6 +123,21 @@ export interface VerifierConfig {
   registryEndpoint?: string;
   fetchAnnotations?: boolean;
   additionalAnnotators?: string[];
+  returnChain?: boolean;
+  conditions?: PolicyMatchConditions;
+}
+
+// ─── Chain Data & Policy Matching ─────────────────────────────────────────────
+
+export interface ChainLink {
+  card_address: string; // keccak256(pubkey) — same as chain_card_addresses today
+  public_key: string; // base64url — the raw ML-DSA-44 public key ("public id")
+  card_content: Record<string, unknown>; // the decrypted CardDocument's fields
+}
+
+export interface PolicyMatchConditions {
+  policy_id: string; // CID — checked via issued_under_template semantics
+  field_match?: Record<string, string | { regex: string }>; // plain string = exact-match shorthand; { regex } = full regex
 }
 
 // ─── API Input Types ──────────────────────────────────────────────────────────
@@ -154,6 +169,7 @@ export interface EnvelopeVerificationResult {
   verified_at: string;
   protocol_version: string;
   signatures: SignatureVerificationResult[];
+  policy_match: boolean | null;
 }
 
 export interface SignatureVerificationResult {
@@ -173,6 +189,7 @@ export interface SignatureVerificationResult {
   addressed_to_verifier: boolean;
   errors: VerificationError[];
   annotations: EasAnnotation[];
+  chain?: ChainLink[];
 }
 
 export interface CardVerificationResult
