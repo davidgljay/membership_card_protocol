@@ -1,7 +1,7 @@
 # Verifier Packages — Criteria Matching & Chain Return — Implementation Plan
 
 **Date:** 2026-07-11
-**Status:** Draft — awaiting final sign-off before any agent is dispatched (three open questions resolved below)
+**Status:** Complete — all 7 steps implemented, reviewed, and committed (see Status section at the end)
 **Packages affected:** `membership_card_verifier/packages/verifier` (TypeScript, `@membership-card-protocol/verifier`), `membership_card_verifier/packages/verifier-py` (Python, `membership-card-verifier`)
 **Motivation:** requested directly, to support the Matrix policy module's needs (chain data for `chain_includes`/`card_field_matches` predicates, and a general-purpose "does this card qualify" check) without rolling bespoke verification logic inside the Matrix code — but this is a verifier-package feature, useful independent of Matrix.
 
@@ -101,9 +101,22 @@ Confirmed reading of "public id": the raw ML-DSA-44 public key (base64url), dist
 
 ## Done when
 
-- Both packages expose `conditions`/`return_chain` with identical behavior on shared fixtures, including the envelope-level OR case.
-- `policy_match` is implemented in place — same field, same name, both languages — computed from one shared internal chain walk, not a second independent one.
-- READMEs updated in both packages.
+- [x] Both packages expose `conditions`/`return_chain` with identical behavior on shared fixtures, including the envelope-level OR case.
+- [x] `policy_match` is implemented in place — same field, same name, both languages — computed from one shared internal chain walk, not a second independent one.
+- [x] READMEs updated in both packages.
+
+## Status: Complete (2026-07-11)
+
+All 7 steps landed and were independently verified (not just trusted from agent reports), across three commits:
+- `2709e500` — TS implementation (Steps 1–2), plus a pre-existing bug found and fixed during review: the chain walk for a sub-card signer started from the signer's own address paired with the master card's document, mismatching `chain[0]`'s address against its content. Fixed to start from the master's own address.
+- `372d88fc` — TS test/doc completion (Step 3) and the Python port (Steps 4–6), including independently re-deriving and fixing the same master/signer address bug in the Python code (it predated the TS fix).
+- `2258b908` — Step 7: a new kind of interop vector (beyond the existing crypto-primitive ones) — a deterministic multi-card chain replayed through both languages' `CardVerifier`, generated from the real TS package's actual output. 5 cases, all passing on both sides, including the envelope-level OR across two signers.
+
+Notable findings during review, not assumed away:
+- One agent's Python port initially reported it "couldn't run tests due to a pre-existing cryptography library incompatibility" — this was verified independently and found to be a stale global-environment `cryptography` install in that agent's sandbox, not a real incompatibility; a clean venv install ran all 125 (now 130) tests successfully.
+- Final state: TS 101/101 tests + `tsc` clean; Python 130/130 tests + `mypy` clean (17 source files); 5/5 cross-language interop cases passing.
+
+Final counts: TS 101 tests, Python 130 tests (125 unit + 5 cross-language interop), both packages' `mypy`/`tsc` clean.
 
 ## Downstream note (not part of this plan's scope, just context)
 
