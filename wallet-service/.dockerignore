@@ -1,0 +1,12 @@
+node_modules/
+.git/
+.output/
+.nitro/
+.wrangler/
+dist/
+.env
+*.local
+
+# Matrix secrets/rendered config — never belongs in a build context or image layer.
+matrix/secrets/
+matrix/homeserver.yaml

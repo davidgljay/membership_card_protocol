@@ -10,5 +10,69 @@ services:
     volumes:
       - wallet_pg_data:/var/lib/postgresql/data
 
+  synapse-postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: synapse
+      POSTGRES_PASSWORD: synapse
+      POSTGRES_DB: synapse
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - synapse_pg_data:/var/lib/postgresql/data
+    networks:
+      - card-net
+
+  synapse:
+    # Build context is the wallet-service root, not ./matrix — matrix/Dockerfile's
+    # `COPY matrix-policy-module/ ...` needs to reach matrix-policy-module/, which
+    # lives as a sibling of matrix/, not inside it. Docker's COPY can't reach
+    # outside its build context, so context: ./matrix (the original value) could
+    # never have worked. Deliberately no runtime bind-mount for
+    # matrix-policy-module here — per matrix_synapse_module.md, the module is
+    # meant to be pinned into the image at build time, not fetched at runtime;
+    # a bind mount would silently defeat that and shadow whatever's baked in.
+    build:
+      context: .
+      dockerfile: matrix/Dockerfile
+    volumes:
+      - ./matrix/homeserver.yaml:/data/homeserver.yaml:ro
+      - ./matrix/secrets:/data/secrets:ro
+      - synapse_media:/data/media
+      - synapse_membership_registry:/data/membership_registry
+    environment:
+      SYNAPSE_SERVER_NAME: ${MATRIX_SERVER_NAME}
+      ARBITRUM_RPC_URL: ${ARBITRUM_RPC_URL}
+      ARBITRUM_RPC_WS_URL: ${ARBITRUM_RPC_WS_URL}
+      REGISTRY_CONTRACT_ADDRESS: ${REGISTRY_CONTRACT_ADDRESS}
+      IPFS_GATEWAY_URL: ${IPFS_GATEWAY_URL}
+      MATRIX_SERVER_NAME: ${MATRIX_SERVER_NAME}
+      JOIN_ATTESTATION_FRESHNESS_SECONDS: ${JOIN_ATTESTATION_FRESHNESS_SECONDS}
+      WATCHER_BACKSTOP_INTERVAL_SECONDS: ${WATCHER_BACKSTOP_INTERVAL_SECONDS}
+      MATRIX_MEMBERSHIP_REGISTRY_PATH: ${MATRIX_MEMBERSHIP_REGISTRY_PATH}
+      MATRIX_MEMBERSHIP_REGISTRY_KEY_PATH: ${MATRIX_MEMBERSHIP_REGISTRY_KEY_PATH}
+    # The base image's ENTRYPOINT is /start.py (unchanged by matrix/Dockerfile,
+    # which only FROM+COPYs) — command: supplies *arguments to start.py*, not a
+    # replacement for it. start.py expects a mode ("run", "generate", ...) as
+    # its first arg and forwards --config-path flags to the actual
+    # `python -m synapse.app.homeserver` invocation itself; it does not accept
+    # "python" as a mode.
+    command: ["run", "--config-path=/data/homeserver.yaml", "--config-path=/data/secrets/registration-shared-secret.yaml"]
+    depends_on:
+      - synapse-postgres
+    networks:
+      - card-net
+    # NOT exposed publicly; not in `ports:` — only the wallet-service AS
+    # bridge and, once client-sdk connects directly for E2EE sync, an
+    # internal-only network path reach it. The container also runs a
+    # long-running watcher process (not a separate Compose service) that
+    # needs outbound network access to ARBITRUM_RPC_WS_URL for the
+    # CardHeadUpdated subscription and occasional backstop re-walks.
+
 volumes:
   wallet_pg_data:
+  synapse_pg_data:
+  synapse_media:
+  synapse_membership_registry:
+
+networks:
+  card-net:
