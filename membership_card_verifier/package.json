@@ -1,7 +1,7 @@
 {
-  "name": "membership-card-verifier-workspace",
-  "private": true,
-  "version": "0.0.0",
+  "name": "membership-card-verifier",
+  "private": false,
+  "version": "0.0.1",
   "type": "module",
   "scripts": {
     "build": "pnpm -r build",
