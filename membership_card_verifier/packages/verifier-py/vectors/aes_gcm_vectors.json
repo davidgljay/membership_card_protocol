@@ -1,0 +1,22 @@
+{
+  "cases": [
+    {
+      "id": "AES-01",
+      "key_hex": "59fadab22c4c3253e16a8b4b742e737c802d4b86222957b8e3cf59f3bc6a090f",
+      "encrypted_hex": "7f641bd4aabf6e9cf46980b15512ea30af5725d88960025941f028e0d5760501dfea509768a82ec3ce9fefbbef9b653d",
+      "expected_plaintext_hex": "68656c6c6f2c20636172642070726f746f636f6c"
+    },
+    {
+      "id": "AES-02",
+      "key_hex": "3430fbd8f146f544235b1f68393575fe935400523d90ae30f29dcfc21d09d22a",
+      "encrypted_hex": "b97b55791c4f5dd4dffeeb88cd20b51efebf599a139e669a4afe514bc142eb37bf7030fcb43b2b27a73a4b7e4db974fcf0417e0fd97f72cc24e96f953cbd72cd84d49c91653e05ee7baeb7220c6855d27e2e8972a777c597a6be9fd2a9ba",
+      "expected_plaintext_hex": "7b22706f6c6963795f6964223a22516d46616b65506f6c696379434944222c226973737565645f6174223a22323032362d30362d32305430303a30303a30305a227d"
+    },
+    {
+      "id": "AES-03",
+      "key_hex": "aaf16e9e2a2c35d72d03e35965574504f0bc4b9dd1571c03c578a42d8cb34337",
+      "encrypted_hex": "d86be6ed07aa0ec0858ffaf8cf897137e231129dd04d33a53da48e44",
+      "expected_plaintext_hex": ""
+    }
+  ]
+}

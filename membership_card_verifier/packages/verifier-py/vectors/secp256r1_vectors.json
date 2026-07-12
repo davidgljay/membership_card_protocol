@@ -1,0 +1,20 @@
+{
+  "cases": [
+    {
+      "id": "P256-01",
+      "description": "valid signature, JS-generated keypair and signature",
+      "public_key_hex": "89d0a4b374907b3b97b62ac4e9a8f9e3b0301d24b52f4b6da723a522fc71bc08cc958f262ebbadf77520c9e080d9453edd4b006f88ddd6c50c2ca774b0416816",
+      "message_hex": "636172642070726f746f636f6c2073656370323536723120696e7465726f702074657374",
+      "signature_hex": "4e3156f2bea2a2fda4beedbbffec4e7090bd62ccaf199f0621ff91dfe58220f31b7a1f7844c3e679206cdec58befa2611451ceeb7aed8da1c2059b3d5085b555",
+      "expected_valid": true
+    },
+    {
+      "id": "P256-02",
+      "description": "tampered signature byte, must fail verification",
+      "public_key_hex": "38cfa74252597b146c12fb494cb886e202bf7fc2c3ed5fe7ed816359a19ffbb40298c26bba31c2443bcf1f50116f414167a8dd34085c62b8f92cff9c89a66047",
+      "message_hex": "74616d70657265642063617365206d657373616765",
+      "signature_hex": "501fd3c8d0436b95327d4baab1f8418eef21d8c16c150db235850a8e2de47056bed2f879a6842ec9d7ce91bd3e3b9bebc8fd3d5df6c65409b7f54cd4848954a6",
+      "expected_valid": false
+    }
+  ]
+}

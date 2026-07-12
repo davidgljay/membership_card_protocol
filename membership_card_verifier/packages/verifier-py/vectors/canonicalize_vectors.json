@@ -1,0 +1,126 @@
+{
+  "cases": [
+    {
+      "id": "IC-01",
+      "description": "deeply nested arrays of objects",
+      "input": {
+        "a": [
+          {
+            "b": [
+              1,
+              2,
+              {
+                "c": 3
+              }
+            ]
+          },
+          {
+            "d": null
+          }
+        ]
+      },
+      "expected_json": "{\"a\":[{\"b\":[1,2,{\"c\":3}]},{\"d\":null}]}",
+      "expected_hex": "7b2261223a5b7b2262223a5b312c322c7b2263223a337d5d7d2c7b2264223a6e756c6c7d5d7d"
+    },
+    {
+      "id": "IC-02",
+      "description": "unicode surrogate pair (emoji)",
+      "input": {
+        "emoji": "hello 😀 world"
+      },
+      "expected_json": "{\"emoji\":\"hello 😀 world\"}",
+      "expected_hex": "7b22656d6f6a69223a2268656c6c6f20f09f988020776f726c64227d"
+    },
+    {
+      "id": "IC-03",
+      "description": "empty string key and empty string value",
+      "input": {
+        "": ""
+      },
+      "expected_json": "{\"\":\"\"}",
+      "expected_hex": "7b22223a22227d"
+    },
+    {
+      "id": "IC-04",
+      "description": "mixed array of types",
+      "input": {
+        "arr": [
+          1,
+          "two",
+          true,
+          null,
+          {
+            "five": 5
+          },
+          [
+            6,
+            7
+          ]
+        ]
+      },
+      "expected_json": "{\"arr\":[1,\"two\",true,null,{\"five\":5},[6,7]]}",
+      "expected_hex": "7b22617272223a5b312c2274776f222c747275652c6e756c6c2c7b2266697665223a357d2c5b362c375d5d7d"
+    },
+    {
+      "id": "IC-05",
+      "description": "keys requiring escape: quotes and backslashes",
+      "input": {
+        "a\"b": "c\\d"
+      },
+      "expected_json": "{\"a\\\"b\":\"c\\\\d\"}",
+      "expected_hex": "7b22615c2262223a22635c5c64227d"
+    },
+    {
+      "id": "IC-06",
+      "description": "large safe integer",
+      "input": {
+        "n": 9007199254740991
+      },
+      "expected_json": "{\"n\":9007199254740991}",
+      "expected_hex": "7b226e223a393030373139393235343734303939317d"
+    },
+    {
+      "id": "IC-07",
+      "description": "zero and negative zero as object values",
+      "input": {
+        "z": 0,
+        "nz": 0
+      },
+      "expected_json": "{\"nz\":0,\"z\":0}",
+      "expected_hex": "7b226e7a223a302c227a223a307d"
+    },
+    {
+      "id": "IC-08",
+      "description": "array of empty objects and arrays",
+      "input": {
+        "x": [
+          {},
+          [],
+          {}
+        ]
+      },
+      "expected_json": "{\"x\":[{},[],{}]}",
+      "expected_hex": "7b2278223a5b7b7d2c5b5d2c7b7d5d7d"
+    },
+    {
+      "id": "IC-09",
+      "description": "non-ASCII keys sorted by code point",
+      "input": {
+        "é": 1,
+        "a": 2,
+        "中": 3
+      },
+      "expected_json": "{\"a\":2,\"é\":1,\"中\":3}",
+      "expected_hex": "7b2261223a322c22c3a9223a312c22e4b8ad223a337d"
+    },
+    {
+      "id": "IC-10",
+      "description": "control character in string requiring escape",
+      "input": {
+        "s": "line1\nline2\ttab"
+      },
+      "expected_json": "{\"s\":\"line1\\nline2\\ttab\"}",
+      "expected_hex": "7b2273223a226c696e65315c6e6c696e65325c74746162227d"
+    }
+  ]
+}

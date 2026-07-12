@@ -1,0 +1,22 @@
+{
+  "cases": [
+    {
+      "id": "HK-01",
+      "ikm_hex": "4242424242424242424242424242424242424242424242424242424242424242",
+      "info": "card-content-v1",
+      "expected_hex": "126699bf9b45f6abf9069d30f339d1fb7338dd6373827b6afd86b60064a6abe6"
+    },
+    {
+      "id": "HK-02",
+      "ikm_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "info": "card-content-v1",
+      "expected_hex": "fc96bb3ad0fd4d4f67aebbec724c4cb3edde0fc9c6f0167d7b15f2cb93590c36"
+    },
+    {
+      "id": "HK-03",
+      "ikm_hex": "b19cf2fb84b154bafac6047087965d4156917e2a5dc16ccc39e3e0d9e3a84da7",
+      "info": "different-info-string",
+      "expected_hex": "546c50e7f171d98df1a10baf95c53c1db330a835412d0cebca3b686ead9cd6b6"
+    }
+  ]
+}
