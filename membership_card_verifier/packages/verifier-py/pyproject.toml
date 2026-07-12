@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "membership-card-verifier"
+version = "0.1.0"
+description = "Verifies SignedMessageEnvelope objects produced by the Card Protocol"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "cryptography",
+    "httpx",
+    "pycryptodome",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "ruff",
+    "mypy",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/membership_card_verifier"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.mypy]
+python_version = "3.11"
