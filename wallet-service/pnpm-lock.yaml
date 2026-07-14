@@ -20,6 +20,9 @@ importers:
       '@aws-sdk/client-kms':
         specifier: ^3.0.0
         version: 3.1076.0
+      '@membership-card-protocol/verifier':
+        specifier: file:../membership_card_verifier/packages/verifier
+        version: file:../membership_card_verifier/packages/verifier
       '@noble/ciphers':
         specifier: ^2.2.0
         version: 2.2.0
@@ -458,6 +461,10 @@ packages:
     resolution: {integrity: sha512-uwPAhccfFJlsfCxMYTwOdVfOz3xqyj8xYL3zJj8f0pb30tLohnnFPhLuqp4/qoEz8sNxe4SESZedcBojRefIzg==}
     engines: {node: '>=18'}
     hasBin: true
+
+  '@membership-card-protocol/verifier@file:../membership_card_verifier/packages/verifier':
+    resolution: {directory: ../membership_card_verifier/packages/verifier, type: directory}
+    engines: {node: '>=22'}
 
   '@noble/ciphers@1.3.0':
     resolution: {integrity: sha512-2I0gnIVPtfnMw9ee9h1dJG7tp81+8Ob3OJb3Mv37rx5L40/b0i7djjCVvGOVqc9AEIQyvyu1i6ypKdFw8R8gQw==}
@@ -3192,6 +3199,12 @@ snapshots:
     transitivePeerDependencies:
       - encoding
       - supports-color
+
+  '@membership-card-protocol/verifier@file:../membership_card_verifier/packages/verifier':
+    dependencies:
+      '@noble/curves': 1.9.1(patch_hash=3si4d2sf5afhrcajre6pxgsg6i)
+      '@noble/hashes': 1.8.0
+      '@noble/post-quantum': 0.5.4
 
   '@noble/ciphers@1.3.0': {}
 

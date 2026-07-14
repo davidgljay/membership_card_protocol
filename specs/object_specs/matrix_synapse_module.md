@@ -14,7 +14,7 @@
 
 Synapse exposes two overlapping event-authorization mechanisms: the older, explicitly experimental **Third-Party Rules** category (`check_event_allowed`) and the **Spam Checker** category (`check_event_for_spam`, `user_may_join_room`). Synapse's own module documentation states `check_event_allowed` "is very experimental and can and will break without notice," and directs module developers to `check_event_for_spam` instead. This module therefore uses the **Spam Checker** callbacks, not `check_event_allowed`, reversing the implementation plan's original assumption (which named `check_event_allowed` as a candidate) based on this doc check.
 
-### `user_may_join_room` — join authorization
+### `user_may_join_room` — always a permissive no-op (resolved 2026-07-12)
 
 ```python
 async def user_may_join_room(
@@ -24,13 +24,9 @@ async def user_may_join_room(
 ) -> Union["synapse.module_api.NOT_SPAM", "synapse.module_api.errors.Codes", bool]
 ```
 
-- `user` — the joining Matrix user ID (a shadow-account ID; the module resolves `card_hash` from this via a private call to `wallet-service`'s card-binding resolver, **not** by computation — the shadow-account derivation is a one-way commitment with no inverse, see `matrix_encryption.md §3` and `matrix_room_membership.md §1`).
-- `room` — the room ID being joined.
-- `is_invited` — whether the user currently holds a pending invite. The policy module ignores this distinction: card-gated rooms are evaluated the same way whether the joiner was invited or is joining an open/discoverable room — an invite does not bypass the predicate.
-- **Return `synapse.module_api.NOT_SPAM`** to allow the join, or a `synapse.module_api.errors.Codes` value (e.g. `Codes.FORBIDDEN`) to deny it. The module does not use the deprecated bare-boolean return form.
-- **Known limitation, stated in Synapse's own docs and inherited here:** this callback is *not* called for joins performed by a server administrator, or in the context of room creation (the creator's own auto-join). The room-creation flow (`matrix_room.md §Room Creation`) therefore does not rely on this callback to authorize the creator's own join — the creator is trusted to have a valid card by virtue of having authenticated to `wallet-service` and provisioned their shadow account through the Application Service bridge, per `matrix_room_membership.md`'s framing of what is and isn't in the module's authority.
+**This callback structurally cannot authorize a card-gated join and always returns `NOT_SPAM`.** Its signature carries no request content, so a client-presented join attestation (`matrix_join_attestation_and_revocation.md §1`) can never reach it, regardless of wire format — this was the actual reason the "wire transport" open item in that document couldn't be resolved by picking a request-parameter scheme, and is why real join authorization was moved to `check_event_for_spam` below instead (§2 of that document). This callback is retained (rather than left unregistered) only because Synapse's spam-checker API expects it if a module registers for join-related checks at all; it performs no card-policy logic of its own.
 
-### `check_event_for_spam` — post authorization (every message)
+### `check_event_for_spam` — post authorization *and* join authorization (updated 2026-07-12)
 
 ```python
 async def check_event_for_spam(
@@ -38,12 +34,15 @@ async def check_event_for_spam(
 ) -> Union["synapse.module_api.NOT_SPAM", "synapse.module_api.errors.Codes", str, bool]
 ```
 
-- `event` — the incoming event, prior to persistence. The module reads `event.sender` (a shadow-account Matrix user ID) and `event.room_id`.
+- `event` — the incoming event, prior to persistence. The module reads `event.sender` (a shadow-account Matrix user ID), `event.room_id`, `event.type`, and `event.content`.
 - The module only applies its card-policy check to events in rooms that carry an `m.card.policy` state event; for any other room (there should be none, in this deployment, since all rooms this module manages are created via `POST /matrix/rooms` — but the module must not assume that invariant blindly) the callback returns `NOT_SPAM` unconditionally, deferring to Synapse's normal event-auth.
-- For a room with an `m.card.policy` state event, the module runs the full post sequence from `matrix_room_membership.md §2` and **returns `synapse.module_api.errors.Codes.FORBIDDEN` on any deny path (predicate false, or any failure-mode deny per `matrix_room_membership.md §4`), and `NOT_SPAM` otherwise.** The module does not use the deprecated string/boolean return forms.
-- **This callback is invoked per event, on every message** — this is exactly the mechanism `matrix_room_membership.md §2` relies on to make revocation enforcement work without a separate polling loop.
+- **Join authorization (new 2026-07-12 — see the wire-transport resolution in `matrix_join_attestation_and_revocation.md §1`):** for an `m.room.member` event with `content.membership == "join"` in a card-gated room, the module reads the join attestation from `content["io.cardprotocol.join_attestation"]`, verifies it (signature, freshness, server_name, sender-binding — `matrix_join_attestation_and_revocation.md §2`), evaluates the room predicate against its chain, and on success registers the membership (`membership_registry.py`) and seeds the chain-walk cache. A join event with no attestation in its content, an invalid attestation, or a chain that doesn't satisfy the room's predicate is denied via `Codes.FORBIDDEN`. This runs *instead of* `user_may_join_room`, not in addition to any real check there.
+- For a **post** (`m.room.message`) in a card-gated room, the module runs the post sequence from `matrix_room_membership.md §2` (resolve `card_hash` from the membership registry — no fresh attestation — check cached revocation status, evaluate the predicate) and **returns `synapse.module_api.errors.Codes.FORBIDDEN` on any deny path (predicate false, or any failure-mode deny per `matrix_room_membership.md §4`), and `NOT_SPAM` otherwise.** The module does not use the deprecated string/boolean return forms.
+- **This callback is invoked per event, on every message and every join** — this is exactly the mechanism `matrix_room_membership.md §2` relies on to make revocation enforcement work without a separate polling loop, and now also carries join authorization for the same reason.
 
-Room state events (`m.room.name`, `m.room.topic`, `m.room.encryption`, and `m.card.policy` itself) also pass through `check_event_for_spam`. The module's card-policy check applies only to `m.room.message` (and other content-bearing message-like event types); state events are passed through to `NOT_SPAM` provided their sender already holds current room membership (state-event authorship authorization is otherwise handled by Synapse's own room-power-level model, which this module does not touch).
+Other room state events (`m.room.name`, `m.room.topic`, `m.room.encryption`, and `m.card.policy` itself) pass through unchanged. The module's card-policy check applies only to `m.room.message` and to `m.room.member`/join events; other state events are passed through to `NOT_SPAM` provided their sender already holds current room membership (state-event authorship authorization is otherwise handled by Synapse's own room-power-level model, which this module does not touch).
+
+**Known limitation, stated in Synapse's own docs and inherited here:** neither callback is invoked for joins performed by a server administrator, or in the context of room creation (the creator's own auto-join) — Synapse admits these without running spam-checker callbacks at all. The room-creation flow (`matrix_room.md §Room Creation`) therefore does not rely on either callback to authorize the creator's own join — the creator is trusted to have a valid card by virtue of having authenticated to `wallet-service` and provisioned their shadow account through the Application Service bridge, per `matrix_room_membership.md`'s framing of what is and isn't in the module's authority. The creator's membership must still be entered into the membership registry directly by the room-creation code path (`matrix_join_attestation_and_revocation.md §2`'s "Creator auto-join" note), since their join never reaches `check_event_for_spam` either.
 
 ---
 
@@ -64,6 +63,7 @@ modules:
       watcher_backstop_interval_seconds: 3600
       membership_registry_path: "${MATRIX_MEMBERSHIP_REGISTRY_PATH}"
       membership_registry_key_path: "${MATRIX_MEMBERSHIP_REGISTRY_KEY_PATH}"
+      enforcement_matrix_user_id: "${MATRIX_ENFORCEMENT_USER_ID}"
 ```
 
 | Key | Type | Required | Notes |
@@ -77,6 +77,7 @@ modules:
 | `matrix_server_name` | string | Yes | The homeserver's own domain, passed to `verifyMatrixUserIdBinding` (`matrix_encryption.md §3`) both for join-attestation verification (`matrix_join_attestation_and_revocation.md §2` step 4) and, unchanged, for any other forward-verification the module performs. |
 | `join_attestation_freshness_seconds` | integer | No, default `300` | Maximum age of a join attestation's `payload.timestamp` before the module rejects it as stale (`matrix_join_attestation_and_revocation.md §1`). |
 | `watcher_backstop_interval_seconds` | integer | No, default `3600` | Interval for the watcher's coarse backstop re-walk of the full watch-set, independent of events (`matrix_join_attestation_and_revocation.md §3.3`) — a correctness floor, not the primary detection path. |
+| `enforcement_matrix_user_id` | string (Matrix user ID) | Yes (added 2026-07-12) | The Matrix user ID `watcher.py`'s `ModuleApiForcePartClient` passes as `sender` to `ModuleApi.update_room_membership` for force-part. **Not a secret** — there is no Synapse Admin API endpoint for force-removing a room member (confirmed 2026-07-12; a prior draft of this schema assumed one and provisioned a token for it, which is now known to be unnecessary — see `matrix_join_attestation_and_revocation.md §3.1`'s force-part note). This account instead needs kick-level power in every card-gated room, granted at room creation (`matrix_room.md §Room Creation`'s `m.room.power_levels` initial state, Step 16) — a permission grant, not a credential to protect. |
 
 ~~`card_cache_ttl_seconds`~~, ~~`wallet_service_internal_url`~~, and ~~`wallet_service_module_shared_secret`~~ are **removed** (superseded 2026-07-11) — the TTL cache and the wallet-service resolver dependency they configured no longer exist; see `matrix_join_attestation_and_revocation.md`.
 

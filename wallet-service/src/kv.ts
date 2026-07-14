@@ -29,4 +29,16 @@ export const kvKeys = {
   recoveryInitiationRate: (cardHash: string) => `wallet:rate:recovery-initiation:${cardHash}`,
   /** Step 6.1: POST /bindings/announce — 100 per peer per minute. */
   bindingAnnounceRate: (walletServiceId: string) => `wallet:rate:binding-announce:${walletServiceId}`,
+  /** Matrix Phase 4 Step 15c: caches a shadow account's minted Matrix access token so POST /matrix/token doesn't re-mint on every call. */
+  matrixAccessToken: (matrixUserId: string) => `wallet:matrix:access-token:${matrixUserId}`,
+  /**
+   * Matrix Phase 4 Step 16c: abuse rate-limit counter for
+   * POST /matrix/discover-rooms (specs/process_specs/room_discovery.md §3).
+   * Deliberately the *only* state this endpoint keeps per card_hash — a
+   * short-window request counter, not a durable record of which rooms a
+   * card asked about. Same sliding-window counter mechanism (checkSlidingWindow
+   * / enforceRateLimit) already used for every other rate limit in this
+   * file, reused rather than inventing new abuse-tracking machinery.
+   */
+  discoverRoomsRate: (cardHash: string) => `wallet:rate:discover-rooms:${cardHash}`,
 };

@@ -49,6 +49,13 @@ report_stats: false
 trusted_key_servers:
   - server_name: matrix.org
 
+# Application Service registrations. wallet-service's shadow-account bridge
+# (matrix-implementation-plan.md Phase 4, Step 14) — see
+# appservice-registration.yaml.template for the AS's token/namespace config;
+# rendered alongside this file by scripts/render-matrix-config.ts.
+app_service_config_files:
+  - /data/appservice-registration.yaml
+
 # Matrix Policy Module for card-gated room authorization
 modules:
   - module: "matrix_policy_module.module.PolicyModule"

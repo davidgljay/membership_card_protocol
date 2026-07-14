@@ -1,0 +1,51 @@
+# Matrix Phase 4 Milestone Review — Wallet-Service Bridge (Application Service)
+
+**Date:** 2026-07-12 (amended same day — a real, shipped correctness bug in Steps 16b/16c found and fixed post-review)
+**Status:** Complete — all Steps 13–16c built and tested. One real, honestly-flagged gap carried forward to Phase 5/later (chain-walk `RpcProvider` wiring for server-side discovery), not fixed here since it's a standalone subsystem, not this phase's scope.
+
+## Amendment: Steps 16b/16c shipped with `discoverRooms` always returning zero eligible rooms — found and fixed same day
+
+**What was wrong.** Both `discoverRooms` (16b) and its server-side mirror (16c) called `cardVerifier.verifyCard(cardHash)` expecting a populated `.chain`. `CardVerifier.verifyCard()` hardcodes `chain: []` unconditionally — it has no pubkey for a bare address, so it can never decrypt a `CardDocument` to walk ancestry, regardless of `returnChain` config (confirmed identical in the Python port). Consequence: **every card was reported ineligible for every room, unconditionally** — a total functional failure, not a partial gap. This shipped past this very milestone review's own checklist because both test suites mocked `verifyCard` directly rather than exercising the real `CardVerifier`, and this review's own verification pass checked typecheck/test-pass without tracing the actual data flow through the real verifier implementation — a real process gap in the review itself, not just the code.
+
+**How it was found:** flagged by David directly, questioning whether the TS and Python sides of `verifyCard` genuinely diverged in behavior (they don't — both are correctly, identically limited) versus whether the *usage* was wrong (it was).
+
+**The fix, two different shapes for two different reasons:**
+- **16b (`client-sdk`):** the caller always holds the card's private key, so `discoverRooms` now builds and signs a minimal self-attestation envelope locally (`buildRoomDiscoveryEnvelope`, newly exported) and calls `verifyEnvelope` instead — the same pattern Step 10/12's join-attestation chain-walk already uses.
+- **16c (`wallet-service`):** not a simple call-site swap — the server never holds a card's private key, so it cannot construct or sign an envelope itself. This required an actual **request-shape change**: `POST /matrix/discover-rooms` now requires the client to submit an already-signed envelope (built the same way as 16b's), and the server verifies both the signature's validity and that its recovered `signer_card` matches the authenticated session's `card_hash` (mirroring `matrix-policy-module/attestation.py`'s sender-binding discipline). `specs/process_specs/room_discovery.md §3` itself had this same gap in its original spec text and was corrected alongside the code.
+
+**New tests added, at the boundary that would have caught this the first time:** both Step 16b's and Step 16c's test suites now include an end-to-end test against the *real* `CardVerifier` class (full multi-hop card-chain fixture, real ML-DSA-44 signatures, real HKDF/AES-GCM-encrypted card documents) rather than a mock of the verifier's own methods — 14 tests (16b) and 16 tests (16c), all passing, including explicit sender-binding-mismatch rejection cases.
+
+**Filed for later, not fixed now (per David's explicit instruction):** `plans/membership_card_verifier_todo.md` item 2 recommends `verifyCard`/`verify_card` gain an optional parameter (a caller-supplied pubkey or known `CardDocument`) so a caller with more than a bare address available isn't structurally funneled toward the wrong, chain-less entry point — closing this exact footgun for whoever reaches for `verifyCard` next.
+
+## What was built
+
+All steps run through agents (per instruction), each independently verified afterward — cross-language parity, typecheck, and test runs re-executed directly, not just taken on the agent's word.
+
+| Step | What | Files |
+|---|---|---|
+| 13 | Shadow-account derivation | `wallet-service/src/matrix/account-id.ts` — `deriveMatrixUserId`/`verifyMatrixUserIdBinding`, no inverse. Cross-language parity against the Python mirror (`matrix-policy-module/attestation.py`) confirmed independently — byte-identical output for the same inputs. |
+| 14 | AS registration | `wallet-service/matrix/appservice-registration.yaml.template` (+ `homeserver.yaml.template`'s `app_service_config_files`, `docker-compose.yml` mount, `generate-matrix-secrets.ts`/`render-matrix-config.ts` extensions). Rendered and validated end-to-end (dummy secrets + full env) — YAML parses, namespace regex correctly matches real `deriveMatrixUserId` output and rejects a near-miss. |
+| 15 | AS endpoint + provisioning | `server/routes/matrix/transactions/[txnId].put.ts` (15a), `src/matrix/provisioning.ts` (15b, idempotent on `M_USER_IN_USE`), `server/routes/matrix/token.post.ts` + `src/matrix/token-minting.ts` (15c, KV-cached). No card-binding resolver built (explicitly out of scope, confirmed). |
+| 16 | Room creation | `server/routes/matrix/rooms/index.post.ts` + `src/matrix/room-creation.ts`. Sets `m.room.encryption`, `m.card.policy`, **and `m.room.power_levels`** (new 2026-07-12 requirement — grants the Step 7d enforcement account kick-level power, confirmed via direct test-assertion inspection, correctly handles the Matrix subtlety that an `initial_state` power_levels entry replaces rather than merges with preset defaults). Room index via a new `matrix_room_index` Postgres table (reuses the existing `routing_table`-style pattern). |
+| 16a | Room index endpoint | `server/routes/matrix/room-index.get.ts` — unauthenticated, `Cache-Control: public, max-age=30`, reads live (no server-side cache). |
+| 16b | Client-side discovery | `client-sdk/packages/client-sdk/src/matrix/discovery.ts` — `discoverRooms`/`evaluateRoomPredicate`. Verified: no network call includes `cardHash` or any identity-bound data (explicit test assertion, not just design intent). |
+| 16c | Server-hosted discovery | `server/routes/matrix/discover-rooms.post.ts` + `src/matrix/room-discovery.ts` (ported `evaluateRoomPredicate`, `client-sdk` isn't an importable dependency here) + `src/matrix/card-chain-verifier.ts` (wiring seam, see gap below). Rate-limited via the existing `enforceRateLimit`. No durable per-card query log — confirmed via a test that greps the route source for the write function (`insertRoomIndexEntry`) and asserts it's absent. |
+
+## Checklist (per implementation plan's Phase 4 Milestone Review)
+
+- **`verifyMatrixUserIdBinding` agreement between TS (13) and Python (`attestation.py`, Phase 3):** confirmed — re-ran the Python reference myself (not just trusting the agent's report) against the same fixture the TS test hardcodes; byte-identical. No inverse function exists on either side (grepped both).
+- **End-to-end token → create room → join → discoverable, per both paths:** **partially confirmed, honestly not fully.** Token minting (15c) → room creation with room-index write (16) → appearing in `GET /matrix/room-index` (16a) → discoverable via `discoverRooms` (16b) and `POST /matrix/discover-rooms` (16c) are each individually tested and internally consistent (16c's test suite explicitly confirms it agrees with 16b's algorithm on shared fixtures). **What's not yet exercised:** an actual join using a real join attestation — that requires `client-sdk`'s attestation construction/signing, which is Step 17a, Phase 5, not built yet. The "creator auto-join" checklist item from the plan is therefore not testable until Phase 5. This gap is expected, not a miss — flagging it explicitly rather than implying a false green checkmark.
+- **AS secrets stored via the existing secrets backend:** confirmed — Step 14's `as_token`/`hs_token` follow the exact `generate-matrix-secrets.ts`/gitignore pattern already established for the Synapse signing key and membership registry key (Step 7/7c); verified the gitignore diff and rendered-output cleanup myself.
+- **Step 16c's query log contains no durable per-card record:** confirmed via the grep-based test assertion (not just a design claim).
+
+## One real gap carried forward, not fixed here
+
+`wallet-service/src/matrix/card-chain-verifier.ts` (Step 16c) documents that no component in this codebase implements the verifier package's full `RpcProvider` interface (`getCardEntry`, `isPolicyAuthorizer`, `getPressAuthorization`, `getSubCardEntry`, `getLogEntries` — an IPFS log-walk, not a single contract call — `getEasAnnotations` — needs EAS contract wiring, absent entirely). `discoverEligibleRooms` takes an injected `CardChainVerifier` (same pattern as `client-sdk`'s `discoverRooms`), so the discovery *algorithm* is fully implemented and tested; only the production wiring seam throws `CardChainVerifierNotConfiguredError` today.
+
+**Worth noting for whoever picks this up:** `wallet-service/matrix-policy-module/src/matrix_policy_module/rpc_provider.py` (Phase 3, Step 9a) already solved this exact problem in Python — a full `RpcProvider` implementation mirroring `press/src/context.ts`'s `createRpcProvider` (including the same honest `is_policy_authorizer` → `False` and `get_eas_annotations` → `[]` stand-ins press's own TS code already uses, and the same IPFS `prev_log_root` log-walk for `get_log_entries`). Porting that same approach to TypeScript for `wallet-service` (mirroring `press/src/context.ts` directly, since it's already the TS reference implementation) would close this gap with a known-correct pattern rather than a new design — flagged here rather than done now, since it's a standalone subsystem outside Step 16c's actual scope (the discovery *endpoint*, not chain-walk infrastructure).
+
+## Test coverage
+
+- `wallet-service`: 141 passing overall (16 in the corrected `matrix-discover-rooms.test.ts`, up from 12, including 3 new real-`CardVerifier` end-to-end tests) + 78 pre-existing DB-integration failures, confirmed all `ECONNREFUSED` (Docker Desktop paused in this sandbox), not a regression from this work.
+- `client-sdk`: 14 passing in the corrected `discovery.test.ts` (up from 12, including 2 new real-`CardVerifier` end-to-end tests), full package suite 274/274 passing, no new typecheck errors.
+- `npx tsc --noEmit` clean across all `wallet-service` and `client-sdk` changes, re-verified independently at every step (both the original build and this same-day bugfix).

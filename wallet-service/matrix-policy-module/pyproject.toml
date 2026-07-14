@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "matrix-policy-module"
+version = "0.1.0"
+description = "Synapse spam-checker module enforcing Card Protocol room policy (matrix_synapse_module.md)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    # Path dependency until PyPI publish approval lands for membership-card-verifier
+    # (see plans/matrix-implementation-plan.md Step 9's publish-status note) — confirm
+    # current publish status before switching this to a versioned dependency.
+    "membership-card-verifier @ file:./../../membership_card_verifier/packages/verifier-py",
+    "web3>=6",
+    "httpx",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "ruff",
+    "mypy",
+    # Type-check-only: never imported by module code that runs outside a Synapse process.
+    "matrix-synapse",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/matrix_policy_module"]
+
+[tool.hatch.metadata]
+# Required for the membership-card-verifier file: URL dependency above
+# (path dependency until PyPI publish approval lands).
+allow-direct-references = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["test"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.mypy]
+python_version = "3.11"

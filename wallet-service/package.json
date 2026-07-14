@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-kms": "^3.0.0",
+    "@membership-card-protocol/verifier": "file:../membership_card_verifier/packages/verifier",
     "@noble/ciphers": "^2.2.0",
     "@noble/hashes": "^1.7.2",
     "@noble/post-quantum": "^0.5.4",

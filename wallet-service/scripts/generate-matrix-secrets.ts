@@ -1,12 +1,13 @@
 #!/usr/bin/env -S npx tsx
 /**
  * Generates and stores the Matrix-subsystem credentials from
- * implementation-plan.md's Phase 2 Steps 7, 7b, and 7c:
+ * implementation-plan.md's Phase 2 Steps 7, 7b, and 7c, plus Phase 4 Step 14:
  *
  *   1. Synapse's Ed25519 signing key      (Step 7)
  *   2. Synapse's registration_shared_secret (Step 7)
  *   3. The watcher's Synapse login credential (Step 7b)
  *   4. The membership registry's encryption key (Step 7c)
+ *   5. The Application Service's as_token/hs_token (Step 14)
  *
  * Usage: npx tsx scripts/generate-matrix-secrets.ts
  * Requires: DATABASE_URL + SECRETS_BACKEND config reachable the same way
@@ -116,6 +117,23 @@
  *   defined `MATRIX_MEMBERSHIP_REGISTRY_PATH` (matrix_synapse_module.md's
  *   config schema), passed as a container env var per docker-compose.yml's
  *   existing convention, not fetched from wallet-service at runtime.
+ *
+ * matrix/secrets/appservice-as-token.txt, matrix/secrets/appservice-hs-token.txt
+ *   (Step 14) Bare bearer tokens (32 random bytes, hex, one line — same
+ *   shape as registration-shared-secret.txt above) for wallet-service's
+ *   Application Service registration (`matrix/appservice-registration.yaml.
+ *   template`, rendered by scripts/render-matrix-config.ts). `as_token` is
+ *   what wallet-service presents to Synapse's Client-Server API when acting
+ *   as the AS; `hs_token` is what Synapse presents back to wallet-service's
+ *   AS transaction-push endpoint (Step 15) so it can authenticate inbound
+ *   calls. Written as their own bare files (not inlined directly into a
+ *   pre-built appservice-registration.yaml the way registration-shared-
+ *   secret.yaml is) because, unlike that file, most of
+ *   appservice-registration.yaml's content (namespaces regex, url,
+ *   sender_localpart, id) is ordinary non-secret template structure — it
+ *   goes through the same render-matrix-config.ts template-rendering path
+ *   as homeserver.yaml, with these two files supplying just the two secret
+ *   values that path substitutes in alongside the env-var-sourced ones.
  */
 
 import { randomBytes, randomInt, generateKeyPairSync } from 'node:crypto';
@@ -225,12 +243,40 @@ async function main(): Promise<void> {
       "AES-256 key (raw, base64url in the file) for the membership registry's encryption at rest (matrix_join_attestation_and_revocation.md §2a). Consumed directly by the Python policy module at its own startup via MATRIX_MEMBERSHIP_REGISTRY_KEY_PATH; this DB row is an audit/recovery record only.",
   });
 
+  // --- Step 14: Application Service as_token/hs_token ---
+  // Same shape/generation as Step 7's registration_shared_secret (32 random
+  // bytes, hex) — see this script's header comment for why these are bare
+  // token files rather than a pre-built appservice-registration.yaml.
+  const asTokenPath = path.join(SECRETS_DIR, 'appservice-as-token.txt');
+  const asToken = randomBytes(32).toString('hex');
+  writeSecretFile(asTokenPath, `${asToken}\n`);
+  await recordMatrixCredential(pool, secretsService, {
+    credentialName: 'matrix_appservice_as_token',
+    plaintext: Buffer.from(asToken, 'utf8'),
+    keyFilePath: asTokenPath,
+    description:
+      "as_token for wallet-service's Matrix Application Service registration (matrix/appservice-registration.yaml.template) — presented by wallet-service to Synapse's Client-Server API when acting as the AS. Consumed by scripts/render-matrix-config.ts, which substitutes it into the rendered appservice-registration.yaml; this DB row is an audit/recovery record only.",
+  });
+
+  const hsTokenPath = path.join(SECRETS_DIR, 'appservice-hs-token.txt');
+  const hsToken = randomBytes(32).toString('hex');
+  writeSecretFile(hsTokenPath, `${hsToken}\n`);
+  await recordMatrixCredential(pool, secretsService, {
+    credentialName: 'matrix_appservice_hs_token',
+    plaintext: Buffer.from(hsToken, 'utf8'),
+    keyFilePath: hsTokenPath,
+    description:
+      "hs_token for wallet-service's Matrix Application Service registration (matrix/appservice-registration.yaml.template) — presented by Synapse back to wallet-service's AS transaction-push endpoint (Step 15) so it can authenticate inbound calls. Consumed by scripts/render-matrix-config.ts; this DB row is an audit/recovery record only.",
+  });
+
   console.log('Matrix credentials generated:');
   console.log(`  - ${signingKeyPath}`);
   console.log(`  - ${registrationSecretPath}`);
   console.log(`  - ${registrationSecretYamlPath}`);
   console.log(`  - ${watcherCredentialPath}`);
   console.log(`  - ${registryKeyPath}`);
+  console.log(`  - ${asTokenPath}`);
+  console.log(`  - ${hsTokenPath}`);
   console.log('Audit records upserted into matrix_credentials (encrypted, no plaintext logged).');
   console.log('None of these paths are committed to git — confirm matrix/secrets/ is covered by .gitignore.');
 

@@ -47,6 +47,12 @@ export interface WalletServiceConfig {
   REGISTRY_CONTRACT_ADDRESS: string;
   /** IPFS gateway base URL used to fetch SubCardDocument by sub_card_doc_cid. Defaults to the same Filebase gateway press/ uses (documents are pinned there), but any IPFS gateway serving the same CID works. */
   IPFS_GATEWAY_URL: string;
+  /** The Matrix homeserver's own domain name (matrix-implementation-plan.md §Phase 2), used in shadow-account derivation (src/matrix/account-id.ts) and join-attestation verification. Same value the `synapse` container's MATRIX_SERVER_NAME env var carries — see docker-compose.yml. */
+  MATRIX_SERVER_NAME: string;
+  /** Base URL wallet-service uses to reach Synapse's Client-Server API as the Application Service (Phase 4 Step 15b/15c) — the `synapse` service's internal docker-compose hostname:port (matrix/homeserver.yaml.template's client listener, port 8008), not a publicly exposed address. */
+  MATRIX_SYNAPSE_URL: string;
+  /** Matrix user ID of the dedicated enforcement/moderation account the Synapse policy module's revocation watcher uses as `sender` for force-part (ModuleApi.update_room_membership) — see .env.example's comment. Every card-gated room created by POST /matrix/rooms (Phase 4 Step 16) must grant this account at least kick-level power in that room's m.room.power_levels state, or future force-parts in that room fail with a permission error. */
+  MATRIX_ENFORCEMENT_USER_ID: string;
 }
 
 export interface PeerConfig {
@@ -134,6 +140,9 @@ export function loadConfig(): WalletServiceConfig {
     ARBITRUM_RPC_URL: requireEnv('ARBITRUM_RPC_URL'),
     REGISTRY_CONTRACT_ADDRESS: requireEnv('REGISTRY_CONTRACT_ADDRESS'),
     IPFS_GATEWAY_URL: optionalEnv('IPFS_GATEWAY_URL', 'https://ipfs.filebase.io'),
+    MATRIX_SERVER_NAME: optionalEnv('MATRIX_SERVER_NAME', 'matrix.internal'),
+    MATRIX_SYNAPSE_URL: optionalEnv('MATRIX_SYNAPSE_URL', 'http://synapse:8008'),
+    MATRIX_ENFORCEMENT_USER_ID: optionalEnv('MATRIX_ENFORCEMENT_USER_ID', '@matrix-policy-bot:matrix.internal'),
   };
 
   if (secretsBackend === 'webcrypto' && !config.WEBCRYPTO_MASTER_KEY) {

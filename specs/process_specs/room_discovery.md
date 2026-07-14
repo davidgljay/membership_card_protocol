@@ -71,13 +71,15 @@ For clients that can't run a local RPC/IPFS chain-walk (e.g. constrained mobile 
 
 ```
 POST /matrix/discover-rooms
-{ "card_hash": "<card's registry address>" }
+{ "envelope": <SignedMessageEnvelope, built and signed locally by the client> }
   — authenticated via existing session-token auth, same as other wallet-service endpoints requiring
     an authenticated card holder
 
 Response:
-{ "rooms": [ { "room_id": "...", "policy_id": "..." }, ... ] }
+{ "room_ids": [ "...", ... ] }
 ```
+
+**Corrected 2026-07-12 — the request body originally specified here (`{ "card_hash": "..." }`) was a genuine spec gap, not just an implementation shortcut.** It assumed `wallet-service` could chain-walk from a bare identity alone, the same way it can look up other card state — but a real chain-walk requires decrypting each `CardDocument` in the chain, which requires the card's public key, which `wallet-service` never holds (private keys, and everything derived from holding them, stay client-side by design across this entire protocol). The corrected shape: the client builds and signs a minimal self-attestation envelope locally (this needs only the local private key, no RPC/IPFS access at all, so it doesn't reintroduce the "needs local chain-walk capability" problem this endpoint exists to route around) and submits that envelope instead of a bare `card_hash`. The server verifies the envelope's signature and confirms its recovered signer matches the authenticated session's own `card_hash` (rejecting otherwise) before trusting its chain data — mirroring the same sender-binding discipline `matrix_join_attestation_and_revocation.md`'s join attestation already uses. See `plans/membership_card_verifier_todo.md` item 2 for the full incident writeup.
 
 This endpoint runs exactly the algorithm in §2 — same evaluator, same room index, same chain-walk — just server-side. It is offered because it's a **strict subset of what the client-side path already computes on public data**, not because it needs privileged access to anything the client couldn't compute itself.
 

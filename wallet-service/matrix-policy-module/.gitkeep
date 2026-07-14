@@ -1,5 +1,0 @@
-Placeholder — the real matrix_policy_module Python package is built in
-Phase 3, Step 8 (plans/matrix-implementation-plan.md). This empty directory
-exists only so wallet-service/matrix/Dockerfile's COPY instruction has a
-source to build against during Phase 2's boot validation. Delete this file
-once Step 8 populates the real package.

@@ -14,3 +14,9 @@ matrix/secrets/
 # (the template, with ${VAR} placeholders, IS committed; this concrete,
 # environment-specific rendering is not).
 matrix/homeserver.yaml
+
+# Rendered from matrix/appservice-registration.yaml.template by
+# scripts/render-matrix-config.ts (Step 14) — embeds the real as_token/
+# hs_token values, so like matrix/homeserver.yaml above, only the .template
+# is committed.
+matrix/appservice-registration.yaml
