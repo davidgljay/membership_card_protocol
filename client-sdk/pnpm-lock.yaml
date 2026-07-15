@@ -114,6 +114,9 @@ importers:
 
   packages/client-sdk-web:
     dependencies:
+      '@matrix-org/matrix-sdk-crypto-wasm':
+        specifier: ^18.3.1
+        version: 18.3.1
       '@membership-card-protocol/client-sdk':
         specifier: workspace:*
         version: link:../client-sdk
@@ -1216,6 +1219,10 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
+
+  '@matrix-org/matrix-sdk-crypto-wasm@18.3.1':
+    resolution: {integrity: sha512-VRjWhE1UgHnPpJ3b9B5+8z71ZC/HICFngPPFIN6ktzmUBKI5RusPujzbAQUoB3CgZ0yU58L99AfSQS4YTztSWw==}
+    engines: {node: '>= 18'}
 
   '@membership-card-protocol/verifier-ipfs-provider@file:../membership_card_verifier/packages/verifier-ipfs-provider':
     resolution: {directory: ../membership_card_verifier/packages/verifier-ipfs-provider, type: directory}
@@ -5295,6 +5302,8 @@ snapshots:
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
+
+  '@matrix-org/matrix-sdk-crypto-wasm@18.3.1': {}
 
   '@membership-card-protocol/verifier-ipfs-provider@file:../membership_card_verifier/packages/verifier-ipfs-provider': {}
 
