@@ -28,3 +28,4 @@ contracts/scripts/target/
 contracts/tests/out/
 contracts/tests/cache/
 contracts/tests/lib/
+.aider*
