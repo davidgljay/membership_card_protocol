@@ -1,0 +1,32 @@
+# Root-level .dockerignore for the wallet-service/matrix Synapse build
+# (docker-compose.yml's synapse service now uses the repo root as its build
+# context, not just wallet-service/, so it can COPY both
+# wallet-service/matrix-policy-module and membership_card_verifier/packages/
+# verifier-py into the image — matrix-policy-module's pyproject.toml depends
+# on the latter via a relative `file:` path pending PyPI publish).
+#
+# Scoped broadly: this build only ever needs wallet-service/matrix-policy-module
+# and membership_card_verifier/packages/verifier-py — everything else in this
+# monorepo (other services, other language packages, build caches) should
+# never enter this build context.
+**/node_modules/
+**/.venv/
+**/venv/
+**/__pycache__/
+**/.pytest_cache/
+**/.ruff_cache/
+**/.mypy_cache/
+.git/
+**/target/
+**/dist/
+**/.output/
+**/.nitro/
+**/.wrangler/
+**/*.local
+.env
+**/.env
+wallet-service/matrix/secrets/
+wallet-service/matrix/homeserver.yaml
+wallet-service/matrix/appservice-registration.yaml
+contracts/
+.claude/

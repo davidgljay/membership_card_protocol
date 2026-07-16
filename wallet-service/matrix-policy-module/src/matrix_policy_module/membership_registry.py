@@ -67,7 +67,17 @@ class MembershipRegistry:
 
     @classmethod
     def from_key_path(cls, path: str, key_path: str) -> "MembershipRegistry":
-        key = Path(key_path).read_bytes()
+        # generate-matrix-secrets.ts writes this file as base64url text (its
+        # own comment: "AES-256 key (raw, base64url in the file)"), with a
+        # trailing newline — not raw key bytes. Reading it as raw bytes gave
+        # a 44-byte value (base64url(32 bytes) with padding) instead of the
+        # 32 raw bytes __init__ requires, failing loudly with "must be 32
+        # bytes" rather than silently accepting the wrong length. Found and
+        # fixed during Phase 6 Step 22's first live boot (2026-07-14).
+        import base64
+
+        encoded = Path(key_path).read_text().strip()
+        key = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
         return cls(path, key)
 
     # ---- persistence ----

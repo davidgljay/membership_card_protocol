@@ -18,7 +18,7 @@ const POLICY_ID = 'bafyreih6qivnk...roompredicate';
 const ROOM_ID = '!xyz:matrix.internal';
 
 describe('createMatrixRoomViaSynapse (Step 16)', () => {
-  it('calls Synapse createRoom, authenticated as the creator, with all three expected initial_state entries', async () => {
+  it('calls Synapse createRoom, authenticated as the creator, with all four expected initial_state entries', async () => {
     const fetchImpl = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
       expect(url).toBe(`${SYNAPSE_BASE_URL}/_matrix/client/v3/createRoom`);
       expect(init?.method).toBe('POST');
@@ -27,7 +27,16 @@ describe('createMatrixRoomViaSynapse (Step 16)', () => {
       const body = JSON.parse(init?.body as string);
       expect(body.preset).toBe('private_chat');
       expect(Array.isArray(body.initial_state)).toBe(true);
-      expect(body.initial_state).toHaveLength(3);
+      expect(body.initial_state).toHaveLength(4);
+
+      // Bug fixed 2026-07-16 (Step 20 live-stack test): private_chat's
+      // preset-default join_rules is "invite", which blocked every
+      // non-invited card holder's join before the policy module ever ran
+      // — this explicit override is what makes card-gating (as opposed to
+      // Matrix's own invite system) the actual join gate. See
+      // src/matrix/room-creation.ts's header comment for the full story.
+      const joinRules = body.initial_state.find((e: { type: string }) => e.type === 'm.room.join_rules');
+      expect(joinRules?.content).toEqual({ join_rule: 'public' });
 
       const encryption = body.initial_state.find((e: { type: string }) => e.type === 'm.room.encryption');
       expect(encryption?.content).toEqual({ algorithm: 'm.megolm.v1.aes-sha2' });

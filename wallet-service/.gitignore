@@ -20,3 +20,8 @@ matrix/homeserver.yaml
 # hs_token values, so like matrix/homeserver.yaml above, only the .template
 # is committed.
 matrix/appservice-registration.yaml
+
+# Local-dev-only compose override (Phase 6 Step 22) — exposes Synapse's
+# client API to the host for testing wallet-service outside the Docker
+# network. Never the production topology; never committed.
+docker-compose.override.yml

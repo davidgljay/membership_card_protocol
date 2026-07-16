@@ -15,31 +15,41 @@ see it and is always a permissive pass-through."""
 import os
 
 import pytest
+from immutabledict import immutabledict
 from membership_card_verifier import ChainLink, RevocationStatus
 
 import matrix_policy_module.module as module_mod
 from matrix_policy_module.attestation import AttestationResult
 from matrix_policy_module.module import _JOIN_ATTESTATION_CONTENT_KEY, PolicyModule
 
-NOT_SPAM = object()
-
-
-class _FORBIDDEN:
-    pass
-
-
-class _FakeErrors:
-    Codes = type("Codes", (), {"FORBIDDEN": _FORBIDDEN()})
-
-
+# **Bug found 2026-07-16 (Step 20 live-stack integration test), fixed here
+# alongside module.py:** this fake previously defined `NOT_SPAM` and
+# `errors.Codes.FORBIDDEN` as attributes *on the fake API instance itself*,
+# which module.py's code (at the time) read via `self.api.NOT_SPAM` /
+# `self.api.errors.Codes.FORBIDDEN`. That let every test below pass while
+# the real `synapse.module_api.ModuleApi` class has neither a `NOT_SPAM`
+# nor an `errors` attribute — `NOT_SPAM` is a module-level sentinel
+# exported from `synapse.module_api`, and `Codes` lives at
+# `synapse.api.errors.Codes`, entirely independent of any `ModuleApi`
+# instance. Against a real Synapse process, every join attempt crashed
+# with `AttributeError: 'ModuleApi' object has no attribute 'NOT_SPAM'`
+# before this was caught. `_FakeApi` now deliberately matches the real
+# `ModuleApi` surface (no `NOT_SPAM`, no `errors`) so a future regression
+# of this exact kind fails here again, not just live. Assertions below
+# compare against `module_mod.NOT_SPAM` / `module_mod.Codes.FORBIDDEN` —
+# the same names `module.py` itself now imports and returns.
 class _FakeApi:
-    NOT_SPAM = NOT_SPAM
-    errors = _FakeErrors()
-
     def __init__(self) -> None:
         self.registered: dict = {}
 
     def register_spam_checker_callbacks(self, **kwargs) -> None:
+        self.registered.update(kwargs)
+
+    def register_third_party_rules_callbacks(self, **kwargs) -> None:
+        # check_event_allowed (module.py, added 2026-07-16) — the real join
+        # gate, registered against this separate Synapse callback category
+        # since check_event_for_spam turns out never to be invoked for
+        # joins at all. See module.py's module-level docstring.
         self.registered.update(kwargs)
 
 
@@ -70,8 +80,24 @@ def _config(tmp_path) -> dict:
 
 
 def _write_key(tmp_path) -> "os.PathLike":
+    # **Bug found and fixed 2026-07-16 (Step 20 live-stack integration
+    # test):** this used to write raw random bytes directly
+    # (key_path.write_bytes(os.urandom(32))), but
+    # MembershipRegistry.from_key_path (membership_registry.py) expects the
+    # key file to contain base64url *text* (generate-matrix-secrets.ts's
+    # real output format — see that method's own comment, fixed during
+    # Phase 6 Step 22's first live boot). Every test in this file that
+    # constructs a PolicyModule (i.e. all of them, via _make_module)
+    # crashed with UnicodeDecodeError on Path.read_text() before this fix —
+    # a test-fixture bug, not a module.py bug, but one that made it
+    # impossible to actually run this suite locally to verify the
+    # module.py changes made in this same pass. See
+    # test_membership_registry.py's test_from_key_path_decodes_base64url_key_file
+    # for the same correct pattern used here.
+    import base64
+
     key_path = tmp_path / "registry.key"
-    key_path.write_bytes(os.urandom(32))
+    key_path.write_text(base64.urlsafe_b64encode(os.urandom(32)).decode("ascii").rstrip("=") + "\n")
     return key_path
 
 
@@ -120,10 +146,14 @@ def _async_return(value):
 
 
 @pytest.mark.asyncio
-async def test_registers_both_callbacks(tmp_path) -> None:
+async def test_registers_all_three_callbacks(tmp_path) -> None:
     mod, api = _make_module(tmp_path)
     assert api.registered["user_may_join_room"] == mod.user_may_join_room
     assert api.registered["check_event_for_spam"] == mod.check_event_for_spam
+    # check_event_allowed (2026-07-16) — the real join gate; see
+    # module.py's module-level docstring for why check_event_for_spam
+    # alone (the original design) turned out not to work for joins.
+    assert api.registered["check_event_allowed"] == mod.check_event_allowed
 
 
 @pytest.mark.asyncio
@@ -132,7 +162,7 @@ async def test_user_may_join_room_always_defers(tmp_path) -> None:
     # permissive no-op; check_event_for_spam is the real gate.
     mod, api = _make_module(tmp_path)
     result = await mod.user_may_join_room("@card_x:matrix.internal", "!room:x", False)
-    assert result is api.NOT_SPAM
+    assert result is module_mod.NOT_SPAM
 
 
 # ---- join, via check_event_for_spam on the m.room.member/join event ----
@@ -142,7 +172,7 @@ async def test_user_may_join_room_always_defers(tmp_path) -> None:
 async def test_join_denied_when_no_attestation_in_event_content(tmp_path) -> None:
     mod, api = _make_module(tmp_path)
     result = await mod.check_event_for_spam(_join_event("!room:x", "@card_x:matrix.internal", envelope=None))
-    assert result is api.errors.Codes.FORBIDDEN
+    assert result is module_mod.Codes.FORBIDDEN
 
 
 @pytest.mark.asyncio
@@ -155,7 +185,7 @@ async def test_join_denied_when_attestation_invalid(tmp_path, monkeypatch: pytes
     monkeypatch.setattr(module_mod, "verify_join_attestation", _fake_verify)
     event = _join_event("!room:x", "@card_x:matrix.internal", envelope={"payload": {}, "signatures": []})
     result = await mod.check_event_for_spam(event)
-    assert result is api.errors.Codes.FORBIDDEN
+    assert result is module_mod.Codes.FORBIDDEN
 
 
 @pytest.mark.asyncio
@@ -173,7 +203,7 @@ async def test_join_passthrough_when_room_has_no_policy(tmp_path, monkeypatch: p
     monkeypatch.setattr(module_mod, "verify_join_attestation", _fake_verify)
     event = _join_event("!room:x", "@card_x:matrix.internal", envelope={"payload": {}, "signatures": [{}]})
     result = await mod.check_event_for_spam(event)
-    assert result is api.NOT_SPAM
+    assert result is module_mod.NOT_SPAM
     # And, since this path never reaches _authorize_join_event, no membership
     # is registered for a room the module isn't gating in the first place.
     assert mod._registry.resolve_card_hash("!room:x", "@card_x:matrix.internal") is None
@@ -190,7 +220,7 @@ async def test_join_denied_when_card_does_not_satisfy_policy(tmp_path, monkeypat
     monkeypatch.setattr(mod, "_fetch_predicate_document", _async_return(NON_MATCHING_DOC))
     event = _join_event("!room:x", "@card_x:matrix.internal", envelope={"payload": {}, "signatures": [{}]})
     result = await mod.check_event_for_spam(event)
-    assert result is api.errors.Codes.FORBIDDEN
+    assert result is module_mod.Codes.FORBIDDEN
     assert mod._registry.resolve_card_hash("!room:x", "@card_x:matrix.internal") is None
 
 
@@ -208,7 +238,7 @@ async def test_join_allowed_registers_membership_and_seeds_cache(tmp_path, monke
 
     event = _join_event("!room:x", "@card_x:matrix.internal", envelope={"payload": {}, "signatures": [{}]})
     result = await mod.check_event_for_spam(event)
-    assert result is api.NOT_SPAM
+    assert result is module_mod.NOT_SPAM
     assert mod._registry.resolve_card_hash("!room:x", "@card_x:matrix.internal") == "0xcard"
 
     cached = await mod._cache.get("0xcard")
@@ -232,7 +262,118 @@ async def test_join_denied_when_predicate_evaluator_throws(tmp_path, monkeypatch
 
     event = _join_event("!room:x", "@card_x:matrix.internal", envelope={"payload": {}, "signatures": [{}]})
     result = await mod.check_event_for_spam(event)
-    assert result is api.errors.Codes.FORBIDDEN
+    assert result is module_mod.Codes.FORBIDDEN
+    assert mod._registry.resolve_card_hash("!room:x", "@card_x:matrix.internal") is None
+
+
+# ---- join, via check_event_allowed on the m.room.member/join event ----
+#
+# The real production join gate (module.py, 2026-07-16) — check_event_for_spam
+# turns out never to be invoked for joins by the installed Synapse version
+# (confirmed live during Step 20), so check_event_allowed is what Synapse
+# actually calls. state_events is passed directly by Synapse's
+# ThirdPartyEventRules callback machinery, shaped {(type, state_key): Event}
+# — a _FakePolicyStateEvent stands in for the real synapse.events.EventBase
+# Synapse would pass, exposing only the .content attribute this module reads.
+
+
+class _FakePolicyStateEvent:
+    def __init__(self, content: dict) -> None:
+        # immutabledict, not plain dict — matches a real EventBase.content
+        # (see ModuleApiRoomPolicyResolver.get_policy_id's comment on the
+        # 2026-07-16 isinstance(x, dict) bug this duck-typed check fixed;
+        # using plain dict here would let a regression of that exact bug
+        # slip past this test undetected).
+        self.content = immutabledict(content)
+
+
+def _state_events_with_policy(policy_id: str | None) -> dict:
+    if policy_id is None:
+        return {}
+    return {("m.card.policy", ""): _FakePolicyStateEvent({"policy_id": policy_id})}
+
+
+@pytest.mark.asyncio
+async def test_check_event_allowed_passes_through_non_member_events(tmp_path) -> None:
+    mod, api = _make_module(tmp_path)
+    event = _FakeEvent("!room:x", "@card_x:matrix.internal", event_type="m.room.message", content={"body": "hi"})
+    allowed, replacement = await mod.check_event_allowed(event, _state_events_with_policy(POLICY_ID))
+    assert allowed is True
+    assert replacement is None
+
+
+@pytest.mark.asyncio
+async def test_check_event_allowed_passes_through_non_join_membership(tmp_path) -> None:
+    mod, api = _make_module(tmp_path)
+    event = _FakeEvent("!room:x", "@card_x:matrix.internal", event_type="m.room.member", content={"membership": "leave"})
+    allowed, _ = await mod.check_event_allowed(event, _state_events_with_policy(POLICY_ID))
+    assert allowed is True
+
+
+@pytest.mark.asyncio
+async def test_check_event_allowed_passes_through_ungated_room(tmp_path) -> None:
+    mod, api = _make_module(tmp_path)
+    event = _join_event("!room:x", "@card_x:matrix.internal", envelope=None)
+    allowed, _ = await mod.check_event_allowed(event, _state_events_with_policy(None))
+    assert allowed is True
+    assert mod._registry.resolve_card_hash("!room:x", "@card_x:matrix.internal") is None
+
+
+@pytest.mark.asyncio
+async def test_check_event_allowed_denies_join_with_no_attestation(tmp_path) -> None:
+    mod, api = _make_module(tmp_path)
+    event = _join_event("!room:x", "@card_x:matrix.internal", envelope=None)
+    allowed, _ = await mod.check_event_allowed(event, _state_events_with_policy(POLICY_ID))
+    assert allowed is False
+
+
+@pytest.mark.asyncio
+async def test_check_event_allowed_denies_join_with_malformed_attestation(tmp_path) -> None:
+    # Empty signatures array — attestation.py's own first check, no
+    # verify_join_attestation stubbing needed since this is real behavior
+    # against the real (un-mocked) attestation module.
+    mod, api = _make_module(tmp_path)
+    event = _join_event("!room:x", "@card_x:matrix.internal", envelope={"payload": {}, "signatures": []})
+    allowed, _ = await mod.check_event_allowed(event, _state_events_with_policy(POLICY_ID))
+    assert allowed is False
+    assert mod._registry.resolve_card_hash("!room:x", "@card_x:matrix.internal") is None
+
+
+@pytest.mark.asyncio
+async def test_check_event_allowed_allows_join_and_registers_membership(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    mod, api = _make_module(tmp_path)
+
+    async def _fake_verify(*args, **kwargs):
+        return AttestationResult(
+            valid=True, card_hash="0xcard", chain=_chain(POLICY_ID), revocation=_not_revoked(), is_currently_valid=True
+        )
+
+    monkeypatch.setattr(module_mod, "verify_join_attestation", _fake_verify)
+    monkeypatch.setattr(mod, "_fetch_predicate_document", _async_return(MATCHING_DOC))
+
+    event = _join_event("!room:x", "@card_x:matrix.internal", envelope={"payload": {}, "signatures": [{}]})
+    allowed, _ = await mod.check_event_allowed(event, _state_events_with_policy(POLICY_ID))
+    assert allowed is True
+    assert mod._registry.resolve_card_hash("!room:x", "@card_x:matrix.internal") == "0xcard"
+
+
+@pytest.mark.asyncio
+async def test_check_event_allowed_denies_join_when_card_does_not_satisfy_policy(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod, api = _make_module(tmp_path)
+
+    async def _fake_verify(*args, **kwargs):
+        return AttestationResult(
+            valid=True, card_hash="0xcard", chain=_chain("QmSomeOtherPolicy"), revocation=_not_revoked(), is_currently_valid=True
+        )
+
+    monkeypatch.setattr(module_mod, "verify_join_attestation", _fake_verify)
+    monkeypatch.setattr(mod, "_fetch_predicate_document", _async_return(NON_MATCHING_DOC))
+
+    event = _join_event("!room:x", "@card_x:matrix.internal", envelope={"payload": {}, "signatures": [{}]})
+    allowed, _ = await mod.check_event_allowed(event, _state_events_with_policy(POLICY_ID))
+    assert allowed is False
     assert mod._registry.resolve_card_hash("!room:x", "@card_x:matrix.internal") is None
 
 
@@ -243,21 +384,21 @@ async def test_join_denied_when_predicate_evaluator_throws(tmp_path, monkeypatch
 async def test_post_allowed_for_non_card_gated_room(tmp_path) -> None:
     mod, api = _make_module(tmp_path, room_policy_resolver=_FakeRoomPolicyResolver(None))
     result = await mod.check_event_for_spam(_FakeEvent("!room:x", "@card_x:matrix.internal"))
-    assert result is api.NOT_SPAM
+    assert result is module_mod.NOT_SPAM
 
 
 @pytest.mark.asyncio
 async def test_post_passthrough_for_non_content_bearing_event(tmp_path) -> None:
     mod, api = _make_module(tmp_path)
     result = await mod.check_event_for_spam(_FakeEvent("!room:x", "@card_x:matrix.internal", event_type="m.room.name"))
-    assert result is api.NOT_SPAM
+    assert result is module_mod.NOT_SPAM
 
 
 @pytest.mark.asyncio
 async def test_post_denied_when_membership_not_registered(tmp_path) -> None:
     mod, api = _make_module(tmp_path)
     result = await mod.check_event_for_spam(_FakeEvent("!room:x", "@card_x:matrix.internal"))
-    assert result is api.errors.Codes.FORBIDDEN
+    assert result is module_mod.Codes.FORBIDDEN
 
 
 @pytest.mark.asyncio
@@ -267,7 +408,7 @@ async def test_post_denied_when_cached_revocation_status_is_revoked(tmp_path, mo
     mod._cache.seed_from_join("0xcard", _chain(POLICY_ID), _revoked(), False)
 
     result = await mod.check_event_for_spam(_FakeEvent("!room:x", "@card_x:matrix.internal"))
-    assert result is api.errors.Codes.FORBIDDEN
+    assert result is module_mod.Codes.FORBIDDEN
 
 
 @pytest.mark.asyncio
@@ -278,7 +419,7 @@ async def test_post_denied_when_no_longer_satisfies_policy(tmp_path, monkeypatch
     monkeypatch.setattr(mod, "_fetch_predicate_document", _async_return(NON_MATCHING_DOC))
 
     result = await mod.check_event_for_spam(_FakeEvent("!room:x", "@card_x:matrix.internal"))
-    assert result is api.errors.Codes.FORBIDDEN
+    assert result is module_mod.Codes.FORBIDDEN
 
 
 @pytest.mark.asyncio
@@ -289,7 +430,7 @@ async def test_post_allowed_when_registered_and_satisfies_policy(tmp_path, monke
     monkeypatch.setattr(mod, "_fetch_predicate_document", _async_return(MATCHING_DOC))
 
     result = await mod.check_event_for_spam(_FakeEvent("!room:x", "@card_x:matrix.internal"))
-    assert result is api.NOT_SPAM
+    assert result is module_mod.NOT_SPAM
 
 
 @pytest.mark.asyncio
@@ -305,4 +446,4 @@ async def test_post_denied_when_predicate_evaluator_throws(tmp_path, monkeypatch
     )
 
     result = await mod.check_event_for_spam(_FakeEvent("!room:x", "@card_x:matrix.internal"))
-    assert result is api.errors.Codes.FORBIDDEN
+    assert result is module_mod.Codes.FORBIDDEN

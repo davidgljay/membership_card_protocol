@@ -12,6 +12,7 @@
  * `specs/object_specs/matrix_room.md §Room Creation`:
  *
  *   - preset: "private_chat"
+ *   - m.room.join_rules initial state -> "public" (see bug note below)
  *   - m.room.encryption initial state -> m.megolm.v1.aes-sha2
  *     (specs/object_specs/matrix_encryption.md)
  *   - m.card.policy initial state -> { policy_id }
@@ -19,6 +20,35 @@
  *   - m.room.power_levels initial state granting the enforcement account
  *     (config.MATRIX_ENFORCEMENT_USER_ID / Step 7d) at least kick-level
  *     power
+ *
+ * **Bug found and fixed 2026-07-16 (Step 20 live-stack integration
+ * test):** `preset: "private_chat"` alone sets Synapse's default
+ * `m.room.join_rules` to `"invite"` (Synapse's own
+ * `RoomCreationHandler._presets_dict`). Under an invite-only join rule,
+ * Synapse's core event-authorization (`event_auth.py`, entirely separate
+ * from and prior to any spam-checker callback) rejects a non-invited
+ * user's `/join` with `403 "You are not invited to this room."` — before
+ * `matrix_policy_module`'s `user_may_join_room`/`check_event_for_spam`
+ * callbacks ever run. That silently defeated the entire card-gating
+ * mechanism: `matrix_room_membership.md §1` describes the module deciding
+ * allow/deny for "a card's shadow Matrix account attempt[ing] to join a
+ * room" it was never separately invited to — exactly the case an
+ * invite-only `join_rule` forecloses first. Confirmed live: attempting to
+ * join a room created with the old `private_chat`-only config always
+ * failed with the generic Matrix invite error, regardless of whether a
+ * valid attestation was presented, never reaching the module at all.
+ * Fixed by adding an explicit `m.room.join_rules` initial-state entry —
+ * Synapse only applies a preset's default join-rules event when
+ * `initial_state` doesn't already include one (`room.py`'s
+ * `if (EventTypes.JoinRules, "") not in initial_state:`), so this
+ * override leaves every other `private_chat` default (`history_visibility:
+ * shared`, `guest_access: forbidden`) untouched while making the room
+ * joinable-without-invite — gated instead by the policy module, which is
+ * the whole point. The room remains unlisted in Matrix's public room
+ * directory (`matrix_room.md §Room Creation`'s "not listed... consistent
+ * with... 'not listed in standard Matrix public room directory'"), since
+ * directory listing is controlled by a separate `visibility` `/createRoom`
+ * parameter this code never sets, not by `join_rule`.
  *
  * The power_levels grant is new as of 2026-07-12 (not in the original
  * matrix_room.md text) and is load-bearing: the Synapse policy module's
@@ -124,6 +154,11 @@ export async function createMatrixRoomViaSynapse(
   const fetchImpl = params.fetchImpl ?? fetch;
 
   const initialState = [
+    {
+      type: 'm.room.join_rules',
+      state_key: '',
+      content: { join_rule: 'public' },
+    },
     {
       type: 'm.room.encryption',
       state_key: '',

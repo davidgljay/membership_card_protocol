@@ -89,3 +89,23 @@ def test_first_boot_with_no_file_starts_empty(tmp_path) -> None:
     reg = MembershipRegistry(str(tmp_path / "does-not-exist.enc"), _KEY)
     assert reg.watched_addresses() == set()
     assert reg.resolve_card_hash("!room:x", "@card:x") is None
+
+
+def test_from_key_path_decodes_base64url_key_file(tmp_path) -> None:
+    # Matches generate-matrix-secrets.ts's actual output exactly: base64url
+    # text with a trailing newline, not raw key bytes (Phase 6 Step 22 found
+    # this the hard way — from_key_path used to read the file as raw bytes,
+    # producing a 44-byte "key" and failing "must be 32 bytes" at Synapse
+    # startup).
+    import base64
+
+    key_path = tmp_path / "membership-registry.key"
+    key_path.write_text(base64.urlsafe_b64encode(_KEY).decode("ascii").rstrip("=") + "\n")
+
+    reg = MembershipRegistry.from_key_path(str(tmp_path / "registry.enc"), str(key_path))
+    reg.register("!room:x", "@card:x", "0xcard", ["0xcard"], "2026-07-16T00:00:00Z")
+
+    # Reload via the same key file to confirm the derived key round-trips
+    # (decrypts what it encrypted), not just that construction didn't throw.
+    reg2 = MembershipRegistry.from_key_path(str(tmp_path / "registry.enc"), str(key_path))
+    assert reg2.resolve_card_hash("!room:x", "@card:x") == "0xcard"

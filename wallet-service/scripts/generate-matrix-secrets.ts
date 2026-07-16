@@ -1,13 +1,23 @@
 #!/usr/bin/env -S npx tsx
 /**
  * Generates and stores the Matrix-subsystem credentials from
- * implementation-plan.md's Phase 2 Steps 7, 7b, and 7c, plus Phase 4 Step 14:
+ * implementation-plan.md's Phase 2 Steps 7 and 7c, plus Phase 4 Step 14:
  *
  *   1. Synapse's Ed25519 signing key      (Step 7)
  *   2. Synapse's registration_shared_secret (Step 7)
- *   3. The watcher's Synapse login credential (Step 7b)
- *   4. The membership registry's encryption key (Step 7c)
- *   5. The Application Service's as_token/hs_token (Step 14)
+ *   3. The membership registry's encryption key (Step 7c)
+ *   4. The Application Service's as_token/hs_token (Step 14)
+ *
+ * ~~The watcher's Synapse login credential (Step 7b)~~ was removed
+ * 2026-07-12, before this note was written: research confirmed there is no
+ * Synapse Admin API endpoint for force-removing a room member, so the
+ * watcher never needs to log in as anything — force-part is an in-process
+ * `ModuleApi.update_room_membership` call using `MATRIX_ENFORCEMENT_USER_ID`
+ * (an account identifier, not a credential; see `.env.example`). This
+ * script generated a `watcher-credential.json` login password for a design
+ * that had already been superseded — dead code, found and removed during
+ * Phase 6 Step 22's live-boot verification (2026-07-16), where it was never
+ * actually consumed by anything.
  *
  * Usage: npx tsx scripts/generate-matrix-secrets.ts
  * Requires: DATABASE_URL + SECRETS_BACKEND config reachable the same way
@@ -46,11 +56,10 @@
  *     runtime path: nothing about the `synapse` container's boot sequence
  *     depends on this row existing or being reachable.
  *
- * This keeps one convention across all Matrix credentials (this script,
- * and the AS token in Step 15, and the watcher token in Step 7b) rather
- * than a different one-off scheme per credential, while being honest that
- * the *decrypt* half of SecretsService's usual flow doesn't apply to a
- * process outside wallet-service.
+ * This keeps one convention across all Matrix credentials (this script, and
+ * the AS token in Step 15) rather than a different one-off scheme per
+ * credential, while being honest that the *decrypt* half of SecretsService's
+ * usual flow doesn't apply to a process outside wallet-service.
  *
  * ---------------------------------------------------------------------
  * Cross-language handoff (TypeScript generates, Python/Synapse consumes)
@@ -79,29 +88,14 @@
  *   also written alongside it, for a human/audit reader who wants the raw
  *   value without parsing YAML.
  *
- * matrix/secrets/watcher-credential.json
- *   `{ "matrix_user_id_localpart", "password" }` for a dedicated Matrix
- *   bot account the watcher (Step 11a) logs in as. **Scope decision for
- *   Step 7b's "confirm the minimum required admin-API scope" ask:**
- *   Synapse's admin API has no granular scoping — access is gated by a
- *   single account-wide `is_admin` flag, not per-endpoint permissions
- *   (confirmed against Synapse's admin API docs; there is also no
- *   dedicated admin "force-part a user" endpoint at all). The actual
- *   mechanism for removing a member from a room is the ordinary
- *   Matrix Client-Server `POST /_matrix/client/v3/rooms/{roomId}/kick`
- *   call, which only requires the caller to hold sufficient
- *   *room-level* power (Matrix's power-level model), not server admin.
- *   So rather than granting the watcher a full server-admin token (the
- *   default/obvious choice, and the one the plan explicitly asks to
- *   avoid assuming), the minimum-privilege design is: a dedicated bot
- *   account, granted an elevated power level *only in card-gated rooms*
- *   (via `power_level_content_override` at room creation, matrix_room.md)
- *   and otherwise an ordinary, non-admin account. What's generated here is
- *   that account's login password (Matrix has no way to pre-mint an
- *   arbitrary user's access token the way an Application Service's
- *   `as_token` can be pre-shared — a normal user's token is only minted at
- *   register/login time) — the watcher logs in with it at its own startup
- *   to obtain a token, the same way any Matrix client authenticates.
+ * ~~matrix/secrets/watcher-credential.json~~ — removed 2026-07-12 (see this
+ * file's top-level note). The watcher force-parts a revoked card's shadow
+ * account via an in-process `ModuleApi.update_room_membership(sender=
+ * MATRIX_ENFORCEMENT_USER_ID, ...)` call, not a login — there is no
+ * password to generate. `MATRIX_ENFORCEMENT_USER_ID` still needs kick-level
+ * power in every card-gated room, granted at room creation
+ * (`matrix_room.md`), but that's a Matrix-side permission grant on an
+ * account identifier, not a secret this script produces.
  *
  * matrix/secrets/membership-registry.key
  *   32 raw random bytes, base64url-encoded (one line, no other framing —
@@ -215,22 +209,6 @@ async function main(): Promise<void> {
       "Synapse registration_shared_secret, pre-wrapped as its own YAML config file (Synapse's docker image merges multiple --config-path files, so no entrypoint templating is needed) — Step 6 passes this as a second config path alongside homeserver.yaml. This DB row is an audit/recovery record only.",
   });
 
-  // --- Step 7b: watcher's Synapse login credential ---
-  const watcherCredentialPath = path.join(SECRETS_DIR, 'watcher-credential.json');
-  const watcherPassword = randomBytes(32).toString('base64url');
-  const watcherCredential = {
-    matrix_user_id_localpart: 'matrix-watcher-bot',
-    password: watcherPassword,
-  };
-  writeSecretFile(watcherCredentialPath, `${JSON.stringify(watcherCredential, null, 2)}\n`);
-  await recordMatrixCredential(pool, secretsService, {
-    credentialName: 'matrix_watcher_bot_password',
-    plaintext: Buffer.from(watcherPassword, 'utf8'),
-    keyFilePath: watcherCredentialPath,
-    description:
-      "Login password for the watcher's dedicated Synapse bot account (matrix-watcher-bot), NOT a server-admin token — see this script's header comment for why a room-power-level bot + client-server kick is the minimum-scope design instead of a full admin token. Consumed by the watcher process (Step 11a) at its own startup; this DB row is an audit/recovery record only.",
-  });
-
   // --- Step 7c: membership registry encryption key ---
   const registryKeyPath = path.join(SECRETS_DIR, 'membership-registry.key');
   const registryKey = randomBytes(32);
@@ -273,7 +251,6 @@ async function main(): Promise<void> {
   console.log(`  - ${signingKeyPath}`);
   console.log(`  - ${registrationSecretPath}`);
   console.log(`  - ${registrationSecretYamlPath}`);
-  console.log(`  - ${watcherCredentialPath}`);
   console.log(`  - ${registryKeyPath}`);
   console.log(`  - ${asTokenPath}`);
   console.log(`  - ${hsTokenPath}`);

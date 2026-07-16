@@ -23,17 +23,20 @@ services:
       - card-net
 
   synapse:
-    # Build context is the wallet-service root, not ./matrix — matrix/Dockerfile's
-    # `COPY matrix-policy-module/ ...` needs to reach matrix-policy-module/, which
-    # lives as a sibling of matrix/, not inside it. Docker's COPY can't reach
-    # outside its build context, so context: ./matrix (the original value) could
-    # never have worked. Deliberately no runtime bind-mount for
-    # matrix-policy-module here — per matrix_synapse_module.md, the module is
-    # meant to be pinned into the image at build time, not fetched at runtime;
-    # a bind mount would silently defeat that and shadow whatever's baked in.
+    # Build context is the repo root, not wallet-service/ — corrected
+    # 2026-07-14 (Phase 6 Step 22's first live boot). matrix/Dockerfile pip-
+    # installs matrix-policy-module *and* membership_card_verifier/packages/
+    # verifier-py (the former's dependency, via a relative `file:` path in
+    # its pyproject.toml pending PyPI publish) — the latter lives outside
+    # wallet-service/ entirely, as a sibling directory under the repo root,
+    # so wallet-service/ alone as a build context could never reach it.
+    # Deliberately no runtime bind-mount for matrix-policy-module here — per
+    # matrix_synapse_module.md, the module is meant to be pinned into the
+    # image at build time, not fetched at runtime; a bind mount would
+    # silently defeat that and shadow whatever's baked in.
     build:
-      context: .
-      dockerfile: matrix/Dockerfile
+      context: ..
+      dockerfile: wallet-service/matrix/Dockerfile
     volumes:
       - ./matrix/homeserver.yaml:/data/homeserver.yaml:ro
       - ./matrix/appservice-registration.yaml:/data/appservice-registration.yaml:ro
@@ -41,6 +44,7 @@ services:
       - synapse_media:/data/media
       - synapse_membership_registry:/data/membership_registry
     environment:
+      PYTHONUNBUFFERED: "1"
       SYNAPSE_SERVER_NAME: ${MATRIX_SERVER_NAME}
       ARBITRUM_RPC_URL: ${ARBITRUM_RPC_URL}
       ARBITRUM_RPC_WS_URL: ${ARBITRUM_RPC_WS_URL}
@@ -51,6 +55,7 @@ services:
       WATCHER_BACKSTOP_INTERVAL_SECONDS: ${WATCHER_BACKSTOP_INTERVAL_SECONDS}
       MATRIX_MEMBERSHIP_REGISTRY_PATH: ${MATRIX_MEMBERSHIP_REGISTRY_PATH}
       MATRIX_MEMBERSHIP_REGISTRY_KEY_PATH: ${MATRIX_MEMBERSHIP_REGISTRY_KEY_PATH}
+      MATRIX_ENFORCEMENT_USER_ID: ${MATRIX_ENFORCEMENT_USER_ID}
     # The base image's ENTRYPOINT is /start.py (unchanged by matrix/Dockerfile,
     # which only FROM+COPYs) — command: supplies *arguments to start.py*, not a
     # replacement for it. start.py expects a mode ("run", "generate", ...) as
@@ -58,6 +63,13 @@ services:
     # `python -m synapse.app.homeserver` invocation itself; it does not accept
     # "python" as a mode.
     command: ["run", "--config-path=/data/homeserver.yaml", "--config-path=/data/secrets/registration-shared-secret.yaml"]
+    # Generous start_period: cold module-import time (web3's own import
+    # chain measured 100s+ on this build environment before bytecode
+    # precompilation) can otherwise exceed the base image's default
+    # healthcheck start_period and get marked unhealthy while still
+    # legitimately starting. Found during Phase 6 Step 22 (2026-07-14).
+    healthcheck:
+      start_period: 5m
     depends_on:
       - synapse-postgres
     networks:

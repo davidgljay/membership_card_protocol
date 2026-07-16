@@ -65,10 +65,11 @@ modules:
       registry_contract_address: "${REGISTRY_CONTRACT_ADDRESS}"
       ipfs_gateway_url: "${IPFS_GATEWAY_URL}"
       matrix_server_name: "${MATRIX_SERVER_NAME}"
-      join_attestation_freshness_seconds: 300
-      watcher_backstop_interval_seconds: 3600
+      join_attestation_freshness_seconds: ${JOIN_ATTESTATION_FRESHNESS_SECONDS}
+      watcher_backstop_interval_seconds: ${WATCHER_BACKSTOP_INTERVAL_SECONDS}
       membership_registry_path: "${MATRIX_MEMBERSHIP_REGISTRY_PATH}"
       membership_registry_key_path: "${MATRIX_MEMBERSHIP_REGISTRY_KEY_PATH}"
+      enforcement_matrix_user_id: "${MATRIX_ENFORCEMENT_USER_ID}"
 
 # Suppress warnings about unrecognized config keys from modules
 allow_unknown_config_for_modules: true
