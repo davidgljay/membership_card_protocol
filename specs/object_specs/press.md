@@ -4,11 +4,21 @@
 **Date:** 2026-06-25
 **Status:** Draft
 
+**Amended 2026-07-16:** §5.3 `appendLogEntry` updated for the `LogEntry` full-repost design change (`protocol-objects.md §3`, `object_specs/ipfs_card.md §5`) — the press now fetches/decrypts the current head before assembling a new entry, and each entry carries `card_state` (full current field state) and `history` (flat CID provenance list) rather than only a diff.
+
+**Amended 2026-07-16 (spec-consistency Phase 3, Tier 1 item 1):** §3.2, §3.4 (renamed from "IPFS Pinning — Piñata" to "IPFS Pinning — Filebase"), §3.5, §5.1, §5.0, §7, and §10 corrected to describe **Filebase** (S3-compatible upload + `HeadObject` CID capture + gateway fetch + byte-compare validation + Filebase Pinning API reconciliation), the actual and confirmed-deliberate production IPFS pinning vendor — the prior text describing Piñata was stale/incorrect; the deployed code (`press/src/ipfs/client.ts`, `press/server/tasks/reconcile-cids.ts`) has never used Piñata. See `plans/spec-consistency/inconsistencies/phase-3-consolidated-fixes.md` Tier 1 item 1.
+
+**Amended 2026-07-16 (spec-consistency Phase 1, Step C):** §5.1 `assembleCardDocument` now sets `protocol_version` on the `CardDocument` via `getProtocolVersion()` before signing (Fix #8, `plans/spec-consistency/inconsistencies/phase-1-consolidated-fixes.md`). §5.4 `processSubCardRegistration`/`registerSubCardOnChain` now implement the DNS-admin-card secp256r1 authorization path from `registry_contract.md` v0.6 §4.3 — a `DnsAdminCardKeys` check, two new `POST /sub-card/register` request fields (`adminSecpPayload`/`adminSecpSignature`), the 8-argument `RegisterSubCard` call, and error `E-47` (Fix #2, same source).
+
+**Amended 2026-07-16 (spec-consistency Phase 3, Tier 1 items 16–17):** §2 and §3.2 document two already-implemented, previously-undocumented items: the gas-paying wallet key (`PRESS_GAS_WALLET_PRIVATE_KEY`) is a deliberate, separate key from the on-chain-authorization secp256r1 key, isolating a gas-wallet compromise from write-authorization compromise; `PRESS_OHTTP_PRIVATE_KEY` (the X25519 HPKE key backing the already-documented OHTTP gateway endpoints) is added to the §3.2 config table. See `plans/spec-consistency/inconsistencies/phase-3-consolidated-fixes.md`.
+
+**Amended 2026-07-16 (spec-consistency Phase 2, Step C):** §4 gains `GET /ohttp/key-config` and `POST /ohttp/gateway` (Fix #7). §7's error table now aliases `P-05` to `E-14` (Fix #13). §5.4 `processSubCardDeregistration` now accepts a signature from any of three independent signers — sub-card key, requesting app card key, or master card holder key — for both suspected-compromise (810) and benign (811) deregistration, with the master-key path retained as a recovery fallback (Decision (b), resolved). See `plans/spec-consistency/inconsistencies/phase-2-consolidated-fixes.md`.
+
 **Changes from v0.2:**
 - §3 rewritten: Docker/SQLite container model replaced by Nitro serverless architecture with external persistent storage.
-- §3.4 rewritten: IPFS pinning provider changed from web3.storage (w3up) to Piñata.
+- §3.4 rewritten: IPFS pinning provider changed from web3.storage (w3up) to Piñata (subsequently corrected to Filebase — see 2026-07-16 amendment above).
 - §3.5 added: CID reconciliation — scheduled Nitro task that reads all card CIDs from the storage contract and ensures they are pinned.
-- §4 updated: `PINATA_JWT` replaces `W3UP_KEY` / `W3UP_SPACE`; `EXTERNAL_KV_URL` added for persistent state.
+- §4 updated: `PINATA_JWT` replaces `W3UP_KEY` / `W3UP_SPACE`; `EXTERNAL_KV_URL` added for persistent state. (`PINATA_JWT` subsequently corrected to `FILEBASE_KEY`/`FILEBASE_SECRET`/`FILEBASE_GATEWAY_URL` — see 2026-07-16 amendment above.)
 - §5.0 added: Verifier integration — press instantiates a `CardVerifier` from `@membership-card-protocol/verifier` and delegates all chain walking and revocation checking to it.
 - §5.5 removed: `resolveCard`, `verifyCardChain`, `checkRevocationStatus`, `verifyAppCertificationChain` — these duplicated verifier package functionality and are replaced by `CardVerifier.verifyCard()`.
 - §5.1 `evaluatePredicates` updated: now calls `verifier.verifyCard()` rather than implementing chain walking internally.
@@ -26,7 +36,7 @@
    - 3.1 [Nitro Serverless](#31-nitro-serverless)
    - 3.2 [Configuration](#32-configuration)
    - 3.3 [Persistent State — External KV Store](#33-persistent-state--external-kv-store)
-   - 3.4 [IPFS Pinning — Piñata](#34-ipfs-pinning--piata)
+   - 3.4 [IPFS Pinning — Filebase](#34-ipfs-pinning--filebase)
    - 3.5 [CID Reconciliation](#35-cid-reconciliation)
 4. [HTTP Endpoints](#4-http-endpoints)
 5. [Functions](#5-functions)
@@ -57,7 +67,7 @@ Presses are deployed as **Nitro serverless applications**. Each deployment is a 
 
 Chain validation (chain walking, revocation checking) is delegated to the `@membership-card-protocol/verifier` npm package. The press does not reimplement these verification algorithms.
 
-IPFS pinning is provided by **Piñata**. The press pins all content it publishes and runs a scheduled reconciliation task that reads all card CIDs from the on-chain storage contract and pins any that are not already pinned.
+IPFS pinning is provided by **Filebase**. The press pins all content it publishes and runs a scheduled reconciliation task that reads all card CIDs from the on-chain storage contract and pins any that are not already pinned.
 
 ---
 
@@ -78,7 +88,9 @@ A press has two distinct key pairs, serving distinct roles:
 - Used to sign payloads submitted to the registry contract (`RegisterCard`, `UpdateCardHead`, `ClaimOpenOffer`, `RegisterSubCard`, `DeregisterSubCard`, `BatchUpdateCardHeads`, `RegisterAddressForward`).
 - The public key is registered on-chain in `PressAuthorizations[policy_address][press_address]`.
 - Verified by the contract via the RIP-7212 precompile on every write.
-- The private key is loaded from the environment at startup.
+- The private key is loaded from the environment at startup (`PRESS_SECP256R1_PRIVATE_KEY`). Used **exclusively** for signing press payloads — it never pays gas.
+
+**Gas-paying wallet key (documented 2026-07-16, Phase 3 Tier 1 item 17 — already-implemented, previously-undocumented architecture).** A separate Ethereum wallet private key, `PRESS_GAS_WALLET_PRIVATE_KEY`, holds ETH and pays gas (`msg.sender`) for every on-chain transaction the press submits. This key is never used for press payload signing — that role belongs entirely to the secp256r1 key above. Splitting these two roles means a compromise of the gas-paying hot wallet (which, by its nature, must remain funded and reachable) does not by itself compromise the press's on-chain write-authorization identity; an attacker who steals only the gas wallet's key can drain its ETH but cannot forge a `press_signature` or a `RegisterCard`/`UpdateCardHead` payload signature.
 
 **Press card (IPFS)**
 
@@ -120,11 +132,14 @@ All configuration is via environment variables.
 | `PRESS_CARD_CID` | Yes | CID of this press's `CardDocument` on IPFS |
 | `PRESS_POLICY_CIDS` | Yes | Comma-separated list of policy card CIDs this press is authorized under |
 | `PRESS_MLDSA44_PRIVATE_KEY` | Yes | Base64url-encoded ML-DSA-44 private key (IPFS identity / content signing) |
-| `PRESS_SECP256R1_PRIVATE_KEY` | Yes | Hex-encoded secp256r1 private key (on-chain write authorization) |
+| `PRESS_SECP256R1_PRIVATE_KEY` | Yes | Hex-encoded secp256r1 private key (on-chain write authorization; signs payloads only, never pays gas — see §2) |
+| `PRESS_GAS_WALLET_PRIVATE_KEY` | Yes | Hex-encoded Ethereum wallet private key that holds ETH and pays gas (`msg.sender`) for on-chain transactions. Distinct from `PRESS_SECP256R1_PRIVATE_KEY` — see §2. Added 2026-07-16, Phase 3 Tier 1 item 17. |
+| `PRESS_OHTTP_PRIVATE_KEY` | Yes | Base64url-encoded X25519 HPKE private key backing the OHTTP gateway endpoints (§4). Added 2026-07-16, Phase 3 Tier 1 item 16. |
 | `ARBITRUM_RPC_URL` | Yes | Arbitrum One RPC endpoint (e.g. `https://arb1.arbitrum.io/rpc`) |
 | `REGISTRY_CONTRACT_ADDRESS` | Yes | Address of the registry storage contract on Arbitrum One |
-| `PINATA_JWT` | Yes | Piñata API JWT for IPFS pinning and content upload |
-| `PINATA_GATEWAY_URL` | Yes | Piñata dedicated gateway URL for IPFS content fetches (e.g. `https://<name>.mypinata.cloud`) |
+| `FILEBASE_KEY` | Yes | Filebase S3-compatible access key ID (IPFS pinning and content upload) |
+| `FILEBASE_SECRET` | Yes | Filebase S3-compatible secret access key |
+| `FILEBASE_GATEWAY_URL` | No | Filebase IPFS gateway URL for content fetches. Default: `https://ipfs.filebase.io` |
 | `EXTERNAL_KV_URL` | Yes | Connection URL for the external key-value store (Redis, Upstash, DynamoDB, etc.) |
 | `PORT` | No | HTTP port (self-hosted Node.js only). Default: `3000` |
 | `LOG_LEVEL` | No | `debug`, `info`, `warn`, `error`. Default: `info` |
@@ -169,23 +184,23 @@ press:app_gas:<app_card_address>
 
 ---
 
-### 3.4 IPFS Pinning — Piñata
+### 3.4 IPFS Pinning — Filebase
 
-The press uses **Piñata** for all IPFS content publishing and pinning. Piñata pins content on IPFS and provides a dedicated gateway for reliable content retrieval.
+The press uses **Filebase** for all IPFS content publishing and pinning. Filebase is an S3-compatible object storage service that pins every uploaded object to IPFS and exposes a public IPFS gateway for content retrieval.
 
-**SDK:** `pinata` npm package (official Piñata SDK v2).
+**SDK:** `@aws-sdk/client-s3` (AWS SDK v3), used against the Filebase S3-compatible endpoint (`https://s3.filebase.com`, region `us-east-1`) rather than a Filebase-specific SDK. All protocol content is stored in a single bucket (`membership_card_protocol`), addressed by object key, not by CID — CIDs are recovered from Filebase-assigned object metadata (see below). Governance scripts share the same bucket under a `dns-governance/` key prefix; the press uses the `press/` prefix.
 
 **Initialization (at startup):**
 
-1. The press loads the Piñata JWT from `PINATA_JWT`.
-2. The press connects to its dedicated gateway via `PINATA_GATEWAY_URL`.
-3. The press confirms Piñata is reachable before accepting any traffic (via a test pin health check).
+1. The press loads its Filebase S3 access credentials from `FILEBASE_KEY` and `FILEBASE_SECRET`.
+2. The press configures its gateway base URL via `FILEBASE_GATEWAY_URL` (default `https://ipfs.filebase.io`).
+3. The press confirms Filebase is reachable and its credentials are valid before accepting any traffic, via `checkFilebaseHealth()`: a `HeadObject` call against a known-nonexistent key in the bucket. A `NotFound`/`NoSuchKey` response confirms the press authenticated successfully (it reached Filebase and was correctly rejected only for the object not existing); any other error fails startup.
 
-**Upload and pin pattern:** New content (card documents, log entries, issuance records) is uploaded and pinned in a single Piñata call. Piñata returns the root CID. The press validates the returned CID against the expected hash before recording it in any signed object or on-chain write.
+**Upload and CID-capture pattern:** New content (card documents, log entries, issuance records) is uploaded to the bucket via `PutObject`, keyed by a content-hash-derived key (hex of the first 16 bytes of `SHA-256(content)`, prefixed `press/`) so identical content maps to the same object — uploads are idempotent. The press then issues a `HeadObject` call on that same key; Filebase returns the IPFS CID it assigned to the object in the `cid` object-metadata field. Two round trips (`PutObject` + `HeadObject`) is the implementation's chosen mechanism — it avoids relying on AWS SDK v3 response-header middleware to capture the CID from the `PutObject` response directly. If Filebase does not return a CID via `HeadObject` metadata, the upload is treated as a failure (`P-24`).
 
-**Fetch pattern:** Content fetches (for reading cards during chain validation, policy resolution, etc.) use the press's dedicated Piñata gateway (`PINATA_GATEWAY_URL`). The press's IPFS provider, passed to the `CardVerifier` instance (see §5.0), wraps this gateway.
+**Fetch pattern:** Content fetches (for reading cards during chain validation, policy resolution, etc.) use the press's configured Filebase gateway (`FILEBASE_GATEWAY_URL`), via a plain HTTP `GET` to `<gateway>/ipfs/<cid>`. The press's IPFS provider, passed to the `CardVerifier` instance (see §5.0), wraps this gateway.
 
-**CID validation:** Before any on-chain write that includes a CID, the press re-derives the expected CID from the content bytes and confirms it matches what Piñata returned. A mismatch is a hard error; the on-chain write is not submitted.
+**CID validation:** After every upload, the press re-fetches the content from the Filebase gateway using the CID Filebase returned, and compares the fetched bytes byte-for-byte against the bytes it uploaded. This is a fetch-and-byte-compare round trip, not an independent re-derivation of the CID from the uploaded bytes — the press does not recompute the CID itself from the content's multihash. A mismatch (or a failed re-fetch) is a hard `P-10` error; the CID is never used in any signed object or on-chain write if validation fails. A failure during the initial upload itself (rather than the validation re-fetch) is a `P-24` error.
 
 ---
 
@@ -193,13 +208,13 @@ The press uses **Piñata** for all IPFS content publishing and pinning. Piñata 
 
 Presses are responsible for pinning all card CIDs registered in the storage contract. This extends beyond CIDs the press itself published: when a press joins a policy, it must ensure any existing cards under that policy are pinned, and it must continue to pin cards it did not originally publish.
 
-**Reconciliation job:** A Nitro scheduled task (`nitro/tasks/reconcile-cids.ts`) runs on a configurable schedule (default: every 6 hours). It:
+**Reconciliation job:** A Nitro scheduled task (`press/server/tasks/reconcile-cids.ts`) runs on a configurable schedule (default: every 6 hours). It:
 
-1. Reads all `CardRegistered` and `CardHeadUpdated` events from the Arbitrum One registry contract, starting from the last processed block (stored in the KV store under `press:reconcile:last_block`).
+1. Reads all `CardRegistered` and `CardHeadUpdated` events from the Arbitrum One registry contract, starting from the last processed block (stored in the KV store under `press:reconcile:last_block`), in batches of 2,000 blocks to stay within RPC limits.
 2. For each event, extracts the `log_head_cid` (or `initial_log_cid` for `CardRegistered`) from the event data.
-3. For each CID, calls `pinata.pinByHash(cid)` to ensure Piñata has pinned it. Piñata's `pinByHash` is idempotent — if the CID is already pinned, the call is a no-op.
-4. Advances `press:reconcile:last_block` to the latest processed block on success.
-5. Logs any CIDs that could not be resolved or pinned (content not reachable on the IPFS network) for operator review.
+3. For each CID, calls the **Filebase Pinning API** (`POST https://api.filebase.io/v1/ipfs/pins`, an implementation of the standard IPFS Pinning Services API, authenticated with `Authorization: Bearer base64(FILEBASE_KEY:FILEBASE_SECRET)`) to ensure Filebase has pinned it. The call is treated as idempotent: both a success response and an HTTP 409 (already pinned) count as success.
+4. Advances `press:reconcile:last_block` to the latest processed block, but only if every CID in the batch pinned successfully — a partial failure leaves the checkpoint unadvanced so the batch is retried on the next run rather than silently skipping unresolved CIDs.
+5. Logs any CIDs that could not be resolved or pinned (content not reachable on the IPFS network, or a non-2xx/409 Filebase Pinning API response) for operator review.
 
 **Initial bootstrap:** On first deployment, the press sets `press:reconcile:last_block` to the block at which the registry contract was deployed and runs the reconciliation job to catch up. This ensures the press pins the full history of CIDs for all policies it serves.
 
@@ -217,11 +232,13 @@ The press exposes an HTTP API for inbound requests from issuers, holders, and ad
 | `POST` | `/issue/finalize` | Submit a countersigned offer (holder's `holder_signature`) to complete targeted issuance |
 | `POST` | `/open-offer/claim` | Submit an `OpenOfferClaimSubmission` to claim a card under an open offer |
 | `POST` | `/update` | Submit a signed `UpdateIntentPayload` to update or revoke a card |
-| `POST` | `/sub-card/register` | Submit a signed `SubCardDocument` for press registration on-chain |
+| `POST` | `/sub-card/register` | Submit a signed `SubCardDocument` for press registration on-chain. Body: `{ subCardDoc, holderSignature, adminSecpPayload?, adminSecpSignature? }` — the latter two fields carry the DNS admin card holder's `AdminAuthorizeSubCardPayload` and secp256r1 signature (`registry_contract.md §4.3`), required only when the master card is a DNS admin card (Fix #2). |
 | `POST` | `/sub-card/deregister` | Submit a signed deregistration request for a sub-card |
 | `GET`  | `/press` | Returns press metadata: `press_card_cid`, `policy_cids`, `log_heads`, `address` |
 | `GET`  | `/health` | Liveness check. Returns `200 OK` with `{ "status": "ok" }` if the press is operational |
 | `GET`  | `/app-gas/:address` | Returns the current pre-funded gas balance for an app card address: `{ "app_card_address": "0x...", "balance_wei": "..." }` |
+| `GET`  | `/ohttp/key-config` | Returns the press's current OHTTP HPKE key configuration (per `oblivious_transport.md`), used by devices to encapsulate an oblivious request before dispatch (Fix #7). |
+| `POST` | `/ohttp/gateway` | OHTTP gateway/dispatch endpoint: accepts an encapsulated oblivious request (`message/ohttp-req`-shaped body per `oblivious_transport.md §Request Path`), decapsulates it with the press's HPKE private key, forwards the inner request to the wallet-service/press target it addresses, and returns the encapsulated response. Implemented as `press/server/api/ohttp/{key-config,gateway}.*.ts`, consistent with the Nitro `server/api/` convention used by every other endpoint in this table (Fix #7). |
 
 All `POST` endpoints accept `Content-Type: application/json`. All responses are JSON.
 
@@ -252,10 +269,10 @@ const pressRpcProvider: RpcProvider = {
   getEasAnnotations: () => [],  // press does not perform annotation lookups
 };
 
-// IpfsProvider wraps the press's Piñata dedicated gateway.
+// IpfsProvider wraps the press's Filebase gateway.
 const pressIpfsProvider: IpfsProvider = {
   fetch: async (cid) => {
-    const response = await fetch(`${PINATA_GATEWAY_URL}/ipfs/${cid}`);
+    const response = await fetch(`${FILEBASE_GATEWAY_URL}/ipfs/${cid}`);
     if (!response.ok) throw new Error(`IPFS fetch failed: ${cid} → ${response.status}`);
     return new Uint8Array(await response.arrayBuffer());
   },
@@ -288,7 +305,7 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 **Steps:**
 
 1. Confirm the request includes: `policy_cid`, `requester_card_pointer`, `recipient_card_pointer` (or invitation delivery method), and any required field values.
-2. Resolve the policy card from IPFS using the press's Piñata gateway (the policy card is a public document; the press fetches it directly without decryption).
+2. Resolve the policy card from IPFS using the press's Filebase gateway (the policy card is a public document; the press fetches it directly without decryption).
 3. Confirm the policy's `valid_until` has not passed (if set).
 4. Confirm the press's own `press_card_cid` appears in `policy.approved_presses`.
 5. Call `evaluatePredicates(policy, requester_card_address, recipient_card_address)`.
@@ -332,8 +349,11 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 4. Add `holder_signature` from the countersigned offer.
 5. Populate `ancestry_pubkeys`: resolve the issuer card chain and the press card chain from IPFS (using the verifier's IpfsProvider for consistency); collect ML-DSA-44 public keys in order from the immediate parent toward the root. Use the cached chain resolved during `evaluatePredicates`.
 6. If this card is the result of a master key rotation, include `past_keys` (supplied by the holder in the rotation request).
+7. Call `getProtocolVersion()` on the logic contract and add `protocol_version` (the returned version string) to the document, per `protocol-objects.md §1`'s signing sequence step 5. This must happen before the document is passed to `signCardDocument`, since `protocol_version` is covered by `press_signature`.
 
-**Returns:** Assembled `CardDocument` (all fields except `press_signature`).
+**Returns:** Assembled `CardDocument`, including `protocol_version`, ready for signing (all fields except `press_signature`).
+
+**Fix #8 (`plans/spec-consistency/inconsistencies/phase-1-consolidated-fixes.md`):** added step 7 — this function previously never set `protocol_version` before signing.
 
 ---
 
@@ -355,14 +375,14 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 #### `publishCard(signedCardDocument)`
 
 **Called by:** `/issue/finalize` handler, `processOpenOfferClaim`
-**Purpose:** Encrypt the card, upload it to IPFS via Piñata, and return the CID.
+**Purpose:** Encrypt the card, upload it to IPFS via Filebase, and return the CID.
 
 **Steps:**
 
 1. Derive the content key: `HKDF-SHA3-256(recipient_pubkey, info="card-content-v1")`.
 2. Encrypt the canonical RFC 8785 JSON of the signed card with AES-256-GCM (random 96-bit nonce).
-3. Upload the encrypted bytes to Piñata via `pinToIPFS(encryptedBytes)`.
-4. Validate the returned CID by re-deriving it from the uploaded bytes.
+3. Upload the encrypted bytes to Filebase via `pinToIPFS(encryptedBytes)`.
+4. Validate the returned CID: `pinToIPFS` re-fetches the content from the Filebase gateway by that CID and compares it byte-for-byte against `encryptedBytes` (not an independent re-derivation of the CID from the bytes — see §3.4).
 
 **Returns:** CID of the encrypted card on IPFS.
 
@@ -371,14 +391,14 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 #### `pinToIPFS(content)`
 
 **Called by:** `publishCard`, `appendLogEntry`, `appendIssuanceRecord`
-**Purpose:** Upload bytes to Piñata and return the root CID.
+**Purpose:** Upload bytes to Filebase and return the root CID.
 
 **Steps:**
 
-1. Call `pinata.upload.file(new File([content], 'content'))` using the Piñata SDK.
-2. Receive the root CID from Piñata.
-3. Re-derive the expected CID from `content` using the same hash function (SHA2-256 / multihash).
-4. Confirm the derived CID equals the returned CID. If they differ, abort and return error `P-10`.
+1. Derive an idempotency key from `content`: hex of the first 16 bytes of `SHA-256(content)`, prefixed `press/`.
+2. `PutObject` the content to the Filebase S3-compatible endpoint at that key. On failure, abort and return error `P-24`.
+3. `HeadObject` the same key and read the Filebase-assigned IPFS CID from the `cid` object-metadata field.
+4. Re-fetch the content from the Filebase gateway (`FILEBASE_GATEWAY_URL`) using that CID, and compare the fetched bytes byte-for-byte against `content`. If the fetch fails or the bytes differ, abort and return error `P-10`. (This is a fetch-and-byte-compare validation, not an independent re-derivation of the CID from `content`'s hash — see §3.4.)
 
 **Returns:** CID string.
 
@@ -509,23 +529,30 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 **Called by:** `processUpdateIntent`
 **Purpose:** Build a new `LogEntry`, publish it to IPFS, and update the card's on-chain log head.
 
+**Amended 2026-07-16** (`protocol-objects.md §3`): a `LogEntry` now reposts the card's complete current field state (`card_state`) and carries a flat `history` array of every predecessor CID, so a reader no longer needs to walk `prev_log_root` backward to reconstruct current state or full provenance. This requires the press to fetch and decrypt the current head object (genesis `CardDocument` or prior `LogEntry`) before assembling the new entry, not merely know its CID.
+
 **Steps:**
 
 1. Fetch the current log head CID for the target card (from the KV store under `press:log_head:<policy_cid>`, or on-chain if local state is missing).
-2. Assemble the `LogEntry`:
+2. Fetch and decrypt the current head object from IPFS (via the press's Filebase gateway; content key derived per `ipfs_card.md §3`), to obtain its `card_state` (or, if the head is still the genesis `CardDocument`, its policy-defined and protocol-reserved field values) and, if the head is itself a `LogEntry`, its `history` array.
+3. Assemble the new `LogEntry`:
    - `version`: current log length + 1.
    - `code`: from `updateIntent.code`.
    - `entry_type`: `"field_update"` for 1xx–7xx; `"revocation"` for 8xx–9xx.
    - `prev_log_root`: current log head CID.
+   - `history`: the current head's own `history` array (or `[]` if the head is the genesis document) with the current head's own CID appended.
+   - `card_state`: the current head's field state with `updateIntent.field_updates` applied (field updates only; a revocation entry's `card_state` is unchanged from the current head's, since 8xx–9xx codes carry no `field_updates`).
    - `field_updates` or `revocation`: from `updateIntent`.
    - `notify_holder`, `updater_message`: from `updateIntent`.
    - `intent_signature`: the updater's signature (passed in).
-3. Serialize the `LogEntry` as canonical RFC 8785 JSON excluding `press_signature`.
-4. Sign with the press's ML-DSA-44 key → `press_signature`.
-5. Call `pinToIPFS(logEntryBytes)` → `log_entry_cid`.
-6. Call `updateCardHeadOnChain(card_address, prev_log_cid, log_entry_cid)`.
+4. Serialize the `LogEntry` as canonical RFC 8785 JSON excluding `press_signature`.
+5. Sign with the press's ML-DSA-44 key → `press_signature`.
+6. Call `pinToIPFS(logEntryBytes)` → `log_entry_cid`.
+7. Call `updateCardHeadOnChain(card_address, prev_log_cid, log_entry_cid)`.
 
 **Returns:** `{ log_entry_cid, new_log_head_cid: log_entry_cid }`.
+
+**Note on cost.** Reposting `card_state` in full on every update means each `LogEntry`'s IPFS payload grows with the card's field count (not with log length — `card_state` is always the current snapshot, never a running total), and step 2 adds one IPFS fetch+decrypt to every update that the prior design didn't require. This trades a small, constant per-update cost for eliminating the backward-walk cost a reader previously paid on every read, which is the intended tradeoff (`plans/spec-consistency/` design discussion, 2026-07-16).
 
 ---
 
@@ -559,10 +586,12 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 
 ### 5.4 Sub-Card Registration
 
-#### `processSubCardRegistration(subCardDoc, holderSignature)`
+#### `processSubCardRegistration(subCardDoc, holderSignature, adminSecpPayload?, adminSecpSignature?)`
 
 **Called by:** `/sub-card/register` handler
 **Purpose:** Verify a completed `SubCardDocument` and register the sub-card on-chain.
+
+**Precondition (Fix #2):** if the master card is a DNS admin card (see step 5a below), the request body MUST include `adminSecpPayload` (the DNS admin card holder's `AdminAuthorizeSubCardPayload`, canonical RFC 8785 JSON) and `adminSecpSignature` (the holder's secp256r1 signature over `keccak256(adminSecpPayload)`), per `registry_contract.md §4.3`. The press has no channel to obtain this signature other than the inbound `/sub-card/register` request — the DNS admin holder provides it at the same time as their own countersignature over the sub-card document. When the master card is not a DNS admin card, these fields are omitted (or empty) and the press passes explicit zero-value/empty arguments on-chain.
 
 **Steps:**
 
@@ -571,11 +600,12 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 3. Confirm `keccak256(subCardDoc.app_card_pubkey)` equals the `app_card` pointer address. Reject with `P-13` on mismatch.
 4. Verify `holderSignature` over canonical RFC 8785 JSON of the document including `app_signature`, excluding `holder_signature`, using `subCardDoc.holder_primary_card_pubkey`. Reject with `P-14` on failure.
 5. Call `verifyAppCertificationChain(subCardDoc.app_card_address)`.
+5a. **DNS admin card check (Fix #2).** Read `DnsAdminCardKeys[master_card_address]` via the press's registry contract RPC connection (`GetDnsAdminCardKey(master_card_address)`, `registry_contract.md §5`). If non-zero (the master card is a DNS admin card), confirm the request supplied `adminSecpPayload`/`adminSecpSignature`, that `adminSecpPayload` encodes `sub_card_address`/`sub_card_doc_cid` matching this registration, and pass both through unmodified to `registerSubCardOnChain` for on-chain RIP-7212 verification — the press does not verify the secp256r1 signature itself; the contract does. If the master card is not a DNS admin card, pass explicit zero-value/empty `admin_secp_payload`/`admin_secp_signature` to `registerSubCardOnChain`.
 6. Confirm `attestation_level` is `"T2"` unless the governing policy explicitly accepts `"T1"`. If `"T2"`, verify `attestation_proof` against `hash(recipient_pubkey)`.
 7. Call `checkRateLimits('register_sub_card', holder_card_address, policy_address)`.
 8. Call `checkRateLimits('register_sub_card_app', app_card_address, policy_address)`.
 9. Post the completed `SubCardDocument` to IPFS via `pinToIPFS` → `sub_card_doc_cid`.
-10. Submit `RegisterSubCard` on-chain (see `registerSubCardOnChain`).
+10. Submit `RegisterSubCard` on-chain (see `registerSubCardOnChain`), passing the DNS-admin-path arguments resolved in step 5a.
 11. Notify the holder's wallet service of the successful registration via HTTPS.
 
 **Returns:** `{ sub_card_doc_cid, tx_hash }` on success.
@@ -608,7 +638,7 @@ Implemented in `press/src/functions/notifications.ts` (`diffActiveSubcards` iden
 
 ---
 
-#### `registerSubCardOnChain(subCardAddress, masterCardAddress, registrationLogHead, subCardDocCid)`
+#### `registerSubCardOnChain(subCardAddress, masterCardAddress, registrationLogHead, subCardDocCid, adminSecpPayload, adminSecpSignature)`
 
 **Called by:** `processSubCardRegistration`
 **Purpose:** Submit `RegisterSubCard` to the registry contract.
@@ -617,27 +647,31 @@ Implemented in `press/src/functions/notifications.ts` (`diffActiveSubcards` iden
 
 1. Confirm the requesting app's gas balance is sufficient. Reject with `P-16` if insufficient (do not sponsor; the press does not self-fund sub-card registration).
 2. Build the `RegisterSubCardPayload` and sign with secp256r1.
-3. Call `RegisterSubCard(sub_card_address, master_card_address, registration_log_head, sub_card_doc_cid, master_sig_payload, master_signature)` on the registry.
+3. Call `RegisterSubCard(sub_card_address, master_card_address, registration_log_head, sub_card_doc_cid, master_sig_payload, master_signature, admin_secp_payload, admin_secp_signature)` on the registry — the 8-argument form per `registry_contract.md §4.3` (Fix #2). `admin_secp_payload`/`admin_secp_signature` are the values resolved by `processSubCardRegistration` step 5a: the DNS admin holder's `AdminAuthorizeSubCardPayload` + secp256r1 signature when the master card is a DNS admin card, or explicit zero-value/empty (`bytes[64](0)` / empty bytes) otherwise. On revert with `E-47` (`INVALID_ADMIN_CARD_SIGNATURE`), surface that error to the caller — do not retry.
 
 **Returns:** Transaction hash on success.
 
 ---
 
-#### `processSubCardDeregistration(subCardAddress, masterSignature, sigPayload)`
+#### `processSubCardDeregistration(subCardAddress, signature, sigPayload)`
 
 **Called by:** `/sub-card/deregister` handler
-**Purpose:** Verify the holder's deregistration request and submit `DeregisterSubCard` on-chain.
+**Purpose:** Verify the deregistration request's authorization and submit `DeregisterSubCard` on-chain.
+
+**Authorization (Decision (b), `plans/spec-consistency/inconsistencies/phase-2-consolidated-fixes.md`): three independent valid signer paths.** The press accepts `signature` (ML-DSA-44, over canonical RFC 8785 JSON of `sig_payload`) from **any one** of: (a) the master card's holder key, (b) the requesting app's own card key (`SubCardDocument.app_card_pubkey`), or (c) the sub-card's own key (`SubCardDocument.recipient_pubkey`). Any single valid signature from any one path is sufficient — this applies whether the deregistration is a suspected-compromise (810) or benign/cooperative (811) removal (`subcard_creation_policy.md`/`wallet_sdk.md §6.4`). **The master-key path remains available as a recovery fallback** — e.g. if the app is uninstalled or unreachable and the holder needs to force-deregister a sub-card the app itself can no longer cooperate on.
 
 **Steps:**
 
 1. Resolve the `SubCardEntry` on-chain for `subCardAddress`; confirm it is active.
-2. Fetch the `SubCardDocument` from IPFS using the CID from the on-chain entry (via the Piñata gateway).
-3. Resolve the master card's public key from its `CardEntry` on-chain.
-4. Verify `masterSignature` over canonical RFC 8785 JSON of `sigPayload` using the master card's primary key. Reject with `P-14` on failure.
+2. Fetch the `SubCardDocument` from IPFS using the `sub_card_doc_cid` from the on-chain entry (via the Filebase gateway). This fetch is already required to resolve `master_card_address` for the `DeregisterSubCard` call, so the app-card and sub-card keys it also contains are available at no extra cost.
+3. Attempt verification against the two keys already in hand from step 2, in order (cheapest first, no further fetch required):
+   a. Verify `signature` over canonical RFC 8785 JSON of `sigPayload` using `SubCardDocument.recipient_pubkey` (the sub-card's own key). If valid, accept and proceed to step 5.
+   b. Else, verify `signature` using `SubCardDocument.app_card_pubkey` (the requesting app's own card key). If valid, accept and proceed to step 5.
+4. If neither (a) nor (b) verifies, fall back to the master-key path: resolve the master card's public key from its `CardEntry`/`CardDocument` on-chain/IPFS, then verify `signature` using the master card's primary key. Reject with `P-14` if this also fails.
 5. Check the requesting app's gas balance.
    - If sufficient: deduct the gas cost from the app balance and submit `DeregisterSubCard`.
    - If zero: sponsor from the issuing organization's press balance and submit. Deregistration must never be blocked by a depleted app balance.
-6. Call `DeregisterSubCard(sub_card_address, sig_payload, master_signature)` on the registry.
+6. Call `DeregisterSubCard(sub_card_address, sig_payload, signature)` on the registry — the ML-DSA-44 signature passed through is whichever of the three keys verified in steps 3–4; the contract does not distinguish which path was used (`registry_contract.md §4.4`).
 
 **Note — `active_subcards` is a separate update.** As with registration, this call does not remove the sub-card's pubkey from `active_subcards`; that requires a separate holder-signed code-511 intent via `process_specs/card_updates.md`. When that code-511 `LogEntry` is accepted by any press, all remaining subcards are notified via `subcard_sibling_removed` messages.
 
@@ -667,7 +701,7 @@ Implemented in `press/src/functions/notifications.ts` (`diffActiveSubcards` iden
 
 **Steps:**
 
-1. Resolve the policy card via the Piñata gateway to get `policy.auditors`.
+1. Resolve the policy card via the Filebase gateway to get `policy.auditors`.
 2. If `policy.auditors` is empty or absent, skip — no auditors to notify.
 3. Assemble the `PressIssuanceRecord` plaintext:
    ```json
@@ -780,7 +814,7 @@ Removed. Audit epochs and ML-KEM-based AEK distribution are replaced by direct a
 
 **Steps:**
 
-1. Resolve the policy card from the Piñata gateway to get the granting agency's wallet service endpoint.
+1. Resolve the policy card from the Filebase gateway to get the granting agency's wallet service endpoint.
 2. POST an alert payload to the granting agency's HTTPS endpoint:
    ```json
    {
@@ -854,16 +888,16 @@ Press-side error codes (not on-chain reverts). Returned in the HTTP response bod
 | `P-02` | `requester_predicate` not satisfied, or requester chain does not reach a trusted root |
 | `P-03` | `recipient_predicate` not satisfied, or recipient chain does not reach a trusted root |
 | `P-04` | Card revoked with `effective_date ≤ now` (requester, recipient, or ancestor) |
-| `P-05` | Invalid `issuer_signature` on open offer (binding check failed or ML-DSA-44 sig invalid) |
+| `P-05` (alias `E-14`) | Invalid `issuer_signature` on open offer (binding check failed or ML-DSA-44 sig invalid). This is the same condition `registry_contract.md §8`, `protocol-objects.md §7`, and the open-offer acceptance process specs refer to as `E-14` (`INVALID_ISSUER_SIGNATURE`) — a press-side rejection, never an on-chain revert. `P-05` is this spec's internal name for the identical check; callers should treat `E-14` and `P-05` as the same code (Fix #13). |
 | `P-06` | Invalid `recipient_signature` on open offer claim |
 | `P-07` | Open offer expired (press-side pre-flight before on-chain submission) |
 | `P-08` | Open offer at capacity (press-side pre-flight) |
 | `P-09` | Invalid `intent_signature` on `UpdateIntentPayload` |
-| `P-10` | CID mismatch: CID derived from content bytes does not match CID returned by Piñata |
+| `P-10` | CID mismatch: content re-fetched from the gateway by the CID returned by Filebase does not byte-for-byte match the uploaded content |
 | `P-11` | `update_policy` predicate not satisfied for one or more field updates |
 | `P-12` | `STALE_PREV_CID` revert on retry — concurrent log head conflict not resolvable |
 | `P-13` | Pubkey binding check failed: `keccak256(pubkey) ≠ pointer address` |
-| `P-14` | Invalid master card holder ML-DSA-44 signature (sub-card registration or deregistration) |
+| `P-14` | Invalid ML-DSA-44 signature: for sub-card registration, the master card holder's `holderSignature`; for sub-card deregistration, a signature that fails verification against all three permitted signers (sub-card key, app card key, master card holder key — Decision (b), `§5.4 processSubCardDeregistration`) |
 | `P-15` | App card chain does not reach the governance app-certification policy root |
 | `P-16` | App gas account balance insufficient for `RegisterSubCard` |
 | `P-17` | Revocation data is stale — cannot confirm freshness within staleness window |
@@ -873,7 +907,13 @@ Press-side error codes (not on-chain reverts). Returned in the HTTP response bod
 | `P-21` | Policy `valid_until` has passed; press will not issue new cards under this policy |
 | `P-22` | Offer timestamp is stale (replay prevention) |
 | `P-23` | Code-510/511/512 `active_subcards` update where `updater_card_address` ≠ `target_card_address` (holder-only rule violated) |
-| `P-24` | Piñata upload failed; IPFS pin not confirmed |
+| `P-24` | Filebase upload failed; IPFS pin not confirmed |
+
+**On-chain revert codes this spec surfaces (Fix #2).** These are contract-side reverts (`registry_contract.md §8`), not press-generated codes, but `registerSubCardOnChain` (§5.4) explicitly forwards them to the caller rather than retrying:
+
+| Code | Trigger |
+|---|---|
+| `E-47` | `INVALID_ADMIN_CARD_SIGNATURE` — `RegisterSubCard` failed the DNS admin card secp256r1 check (`registry_contract.md §4.3` precondition 5): missing/invalid `admin_secp_signature` when the master is a DNS admin card, `admin_secp_payload` field mismatch, or a spurious non-zero signature when the master is not a DNS admin card. |
 
 ---
 
@@ -907,10 +947,12 @@ Press-side error codes (not on-chain reverts). Returned in the HTTP response bod
 |---|---|
 | `nitropack` (or `nitro`) | Serverless application framework; HTTP routing, scheduled tasks, storage API |
 | `@membership-card-protocol/verifier` | Chain walking, revocation checking, app certification chain verification |
-| `pinata` | Piñata SDK v2 — IPFS content upload and pinning |
+| `@aws-sdk/client-s3` | AWS SDK v3 S3 client, used against the Filebase S3-compatible endpoint for IPFS content upload and pinning |
 | `viem` or `ethers` | Arbitrum One RPC client for registry contract calls and event indexing |
 | `@noble/post-quantum` | ML-DSA-44 signing (FIPS 204) |
 | `@noble/hashes` | keccak256, HKDF-SHA3-256 |
+
+**Open item (Fix #8):** `assembleCardDocument` (§5.1) calls `getProtocolVersion()` on the logic contract, but `registry_contract.md §5` (Read Operations) currently has no `GetProtocolVersion()` entry. That spec should add one (or cite where the read op actually lives, if it is not the registry contract itself) — flagged here since this file only documents the press's call site, not the contract-side read operation.
 
 ---
 
