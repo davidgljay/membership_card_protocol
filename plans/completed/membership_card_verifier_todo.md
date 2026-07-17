@@ -3,7 +3,9 @@
 Non-urgent improvements to the verifier package (TS + Python), noted while
 building consumers against it rather than acted on immediately, since fixing
 them now would mean refactoring an already-shipped, tested package for a
-distinction no current caller actually needs yet.
+distinction no current caller actually needs yet. Items 5–7 are the
+exception to "non-urgent": each is a protocol-required check the spec
+already documents in detail that the code silently never performs.
 
 ---
 
@@ -69,3 +71,45 @@ These are different failure modes with different operational meaning (one says "
 **Recommendation for whenever this is revisited:** construct and start the `Watcher` from `PolicyModule.__init__` (or an equivalent lifecycle hook Synapse's module loader supports for async startup), using the already-rendered config keys; confirm clean shutdown/reconnect behavior against Synapse's module lifecycle before relying on it in production; then exercise the on-chain-dependent smoke tests (satisfying-card join, revocation force-part) against a live registry contract, which per `plans/matrix-implementation-plan.md` Phase 6 have never actually been run end-to-end in this sandbox.
 
 **Raised:** 2026-07-17, during a status check on whether the matrix configuration currently subscribes to on-chain events (it doesn't — this is a wiring gap, not a design or implementation gap).
+
+---
+
+## 5. Stage 3's chain walk unconditionally parses a fetched ancestor as a `CardDocument`, never checking for a `LogEntry`
+
+**Where:** `verifyStage3` (`stage3.ts` / `stage3.py`), the per-hop ancestor-resolution loop. For each ancestor address, it fetches `cardEntry.log_head_cid` from IPFS, decrypts it, and does `JSON.parse(...) as CardDocument` (TS) / an equivalent unconditional cast (Python) — with no check on whether the fetched object is actually a genesis `CardDocument` or a post-genesis `LogEntry`.
+
+**The problem:** per the `card_state`/`history` full-repost redesign (`protocol-objects.md §3`, `ipfs_card.md §5`), `log_head_cid` points at a `LogEntry` for any card that has ever received a post-genesis update — and a `LogEntry`'s current field values live under `card_state`, not at the document's top level the way a genesis `CardDocument`'s fields do. `ancestry_pubkeys` (which this same loop reads on the next iteration via `currentDoc.ancestry_pubkeys`) is a genesis-only, immutable field per `protocol-objects.md §1`, so it's never present on a `LogEntry` at all — for any ancestor in the chain that has been updated even once, this code silently reads `undefined`/`None` where it expects an array, which (depending on how the surrounding logic handles that) most likely short-circuits the chain walk as if that ancestor were a root, or throws, rather than correctly reading `card_state` for current fields and falling back to the genesis document (reachable via `history[0]`) for `ancestry_pubkeys`.
+
+**Why this hasn't been fixed:** the `card_state`/`history` redesign and the `getCardEventLog`-based Stage 4 fix (item 3, resolved 2026-07-16) both landed in the same pass that surfaced this — Stage 4 was fixed because it directly consumes `history`/`card_state`, but Stage 3's chain walk was flagged as a related, not-yet-fixed gap at the time (`plans/spec-consistency/inconsistencies/code-card.md` Finding 2b) rather than fixed alongside it, since it requires a different code change (branching on fetched-object shape, not just adding a new provider method).
+
+**Recommendation for whenever this is revisited:** in the per-hop fetch, check the decrypted object's shape (e.g. presence of `entry_type`) before treating it as a `CardDocument`. If it's a `LogEntry`, read `card_state` for current field values and resolve `ancestry_pubkeys` from the genesis document instead (fetchable via the entry's own `history[0]`, per the redesign's guarantee that `history` always ends with every predecessor back to genesis) rather than re-fetching the whole chain from scratch. Add a test case exercising the chain walk through an ancestor that has at least one post-genesis update, in both language ports — no such test currently exists, which is why this has shipped undetected alongside the otherwise-complete Stage 4 fix.
+
+**Raised:** 2026-07-17, during a review of open issues in `membership_card_verifier`'s handling of on-chain/IPFS history.
+
+---
+
+## 6. Stage 2's `capabilities`/`valid_until`/`attestation_level` checks are fully specified but never implemented
+
+**Where:** `card_verifier.md §7.2` steps 7, 8, and 14 (and the corresponding `CAPABILITY_NOT_GRANTED`/`SUBCARD_EXPIRED`/`ATTESTATION_LEVEL_INSUFFICIENT` error codes in §9) describe three hard-reject checks a sub-card signature must pass. None of the three appears anywhere in `stage2.ts` or `stage2.py` — confirmed by direct search: zero matches for all three error code names in either file.
+
+**The problem:** a sub-card whose signed message type isn't in its own `capabilities` array, or whose `valid_until` has passed, or whose `attestation_level` is `"T1"` when the governing policy requires `"T2"`, currently passes Stage 2 as long as its signatures and app-certification chain check out — none of the three protocol-required checks actually run. This is the same class of issue as item 5: the spec was updated (2026-07-16, Phase 2 Decision (a)) and both `card_verifier.md` and `card_validation.md` describe the checks in detail, but the code was never updated to match.
+
+**Why this hasn't been fixed:** flagged as a Phase 3 Tier 2 backlog item (spec ahead of code, not a spec error) rather than fixed in that pass — implementing three new hard-reject checks plus their config plumbing (`VerifierConfig.acceptedAttestationLevels`) was scoped as follow-up work, not folded into the same-day fix batch.
+
+**Recommendation for whenever this is revisited:** thread the message type being verified into `verifyStage2` (only relevant for the `verifyEnvelope` path, not `verifyCard`, which has no message to check against), add the three checks per `card_verifier.md §7.2` steps 7/8/14 exactly, and add `acceptedAttestationLevels` to `VerifierConfig` (default `["T2"]`). Add test cases for each of the three rejection conditions in both language ports, plus a confirming test that a sub-card satisfying all three still passes.
+
+**Raised:** 2026-07-17, during a review of open issues in `membership_card_verifier`'s handling of on-chain/IPFS history.
+
+---
+
+## 7. Stage 7 (Recipient-Set Check) doesn't exist — `addressed_to_verifier` is hardcoded `false` everywhere
+
+**Where:** `card_verifier.md §5` (`VerifierConfig.verifierCardAddress`), `§6.1`/`§7.7` (the per-call override and Stage 7 pipeline description), and `§8` (`addressed_to_verifier` on the result type) describe a full mechanism for a verifier to determine whether it was itself an intended recipient of a message. No `stage7.ts`/`stage7.py` file exists in either package, `VerifierConfig` has no `verifierCardAddress` field, `verifyEnvelope`'s TS signature doesn't even accept a per-call options parameter to carry an override, and every one of the five result-construction sites in both `CardVerifier.ts` and `card_verifier.py` sets `addressed_to_verifier: false` unconditionally.
+
+**The problem:** this is the largest single gap between the verifier's spec and its code — a fully-specified config field, per-call override, and pipeline stage with zero code presence, silently reporting a plausible-looking default (`false`) rather than an obviously-broken one (e.g. `undefined` or a thrown error), which is exactly the shape of bug most likely to go unnoticed by a caller who reads `addressed_to_verifier` and trusts it.
+
+**Why this hasn't been fixed:** flagged as a Phase 3 Tier 2 backlog item; this gap actually predates the Phase 2 amendment that added `verifierCardAddress` specifically to serve it — Stage 7 was fully specified before that, with no code ever written against it.
+
+**Recommendation for whenever this is revisited:** add `verifierCardAddress?: string` to `VerifierConfig`, add a per-call override parameter to `verifyEnvelope`'s options (and the equivalent Python signature), and implement Stage 7 per `card_verifier.md §7.7`: confirm the configured (or per-call) address appears in `payload.recipients`, computing `addressed_to_verifier` accordingly instead of the current hardcoded `false`. Add test cases for: no address configured (current behavior, `false`), address configured and present in recipients (`true`), address configured and absent (`false`), and the per-call override taking precedence over construction-time config.
+
+**Raised:** 2026-07-17, during a review of open issues in `membership_card_verifier`'s handling of on-chain/IPFS history.
