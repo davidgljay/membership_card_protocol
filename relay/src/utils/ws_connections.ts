@@ -11,11 +11,11 @@ import type { WebSocket } from "ws";
 // the connection and is never itself the target of a later POST
 // /deliver/{uuid} call — the wallet always delivers to a *different*, still-
 // unused UUID from the device's pool, and the relay must look up "is there a
-// live connection for this device" by device_credential to find it. (The
-// current relay.md §7.3 text describes UUID-keyed addressing instead, but
-// that's tied specifically to the Cloudflare Durable Object model
-// (idFromName(uuid)) and doesn't apply to this single-process deployment —
-// see plans/relay-old-restoration-plan.md Phase B.)
+// live connection for this device" by device_credential to find it.
+// (Corrected 2026-07-16: relay.md §7.3 was updated in this initiative's
+// Phase 2 to describe device_credential-keyed addressing, matching this
+// code — the earlier UUID-keyed description this comment used to reference
+// no longer exists in the spec.)
 const connections = new Map<string, WebSocket>();
 
 export function registerWsConnection(credential: string, ws: WebSocket): void {

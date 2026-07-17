@@ -4,15 +4,17 @@
 **Date:** 2026-07-04
 **Status:** Draft
 
+**Changelog (spec-consistency Phase 2):** Fix #6 — corrected the `relay/server/...` Nitro-style file-path citations in §Relay Target Registry to the actual `relay/src/...` convention (`relay.md`'s v0.9 changelog abandoned the Nitro-style layout); `app_sdk.md §4.7` still needs the same path correction in a future pass, since it wasn't in scope for this edit. Fix #8 — merged §Overview's "sub-card registration/deregistration" and "UUID pool registration/deregistration" wallet-service categories into one, per `wallet.md §7.7` (same endpoint pair). Fix #9 — changed §Request Path's wire format from `Content-Type: message/ohttp-req` (the RFC 9458 Binary HTTP media type, which conflicted with this document's own rejection of RFC 9458 encoding) to a custom `application/x-card-protocol-ohttp+hpke` type. Fix #10 — added a disambiguation note to §Related Specs distinguishing this document's OHTTP usage from `card_protocol_spec.md`'s unrelated wallet↔requesting-site CHAPI usage. See `plans/spec-consistency/inconsistencies/phase-2-consolidated-fixes.md`.
+
 ---
 
 ## Overview
 
-Every sensitive call a device makes — to its wallet service or directly to a press — currently reaches its destination as a direct HTTPS connection. That means the destination operator sees the device's IP address on every such call, regardless of how well the *content* of the call is protected by end-to-end encryption elsewhere in the protocol. For a wallet service, that's account creation, `service_secret` retrieval, keyring reads/writes, backup registration and recovery, sub-card registration/deregistration, and UUID pool registration/deregistration. For a press, it's claim submission, offer finalization, update/revocation intents, and sub-card registration/deregistration submission — traffic the wallet service does not proxy on the device's behalf (`plans/wallet-service/strategic-plan.md`'s "What this service explicitly does NOT do" leaves press communication to the device directly).
+Every sensitive call a device makes — to its wallet service or directly to a press — currently reaches its destination as a direct HTTPS connection. That means the destination operator sees the device's IP address on every such call, regardless of how well the *content* of the call is protected by end-to-end encryption elsewhere in the protocol. For a wallet service, that's account creation, `service_secret` retrieval, keyring reads/writes, backup registration and recovery, and sub-card registration/deregistration (per `wallet.md §7.7`, the same endpoint pair also performs the wallet service's local UUID-pool bookkeeping — this is not a separate endpoint category). For a press, it's claim submission, offer finalization, update/revocation intents, and sub-card registration/deregistration submission — traffic the wallet service does not proxy on the device's behalf (`plans/wallet-service/strategic-plan.md`'s "What this service explicitly does NOT do" leaves press communication to the device directly).
 
 This spec defines a single mechanism that removes that IP exposure for both destination kinds: the device HPKE-encrypts each request to the destination's published key configuration, and sends the opaque, encrypted blob through the relay as a stateless oblivious forwarder. The relay cannot decrypt the request; the destination sees only the relay's IP as the connecting peer. This is the protocol's existing OHTTP precedent (`ARCHITECTURE.md` ADR-007, `message_routing.md §Transport Extensibility`, `transport_flags 0x02`) applied to device-to-wallet-service and device-to-press traffic, rather than only to wallet-to-wallet message routing.
 
-This mechanism addresses **IP-level correlation** only. It is complementary to, and does not substitute for, the **content/timing-level unlinkability** work already specified in `notification_relay.md §Registration Privacy` (per-card session separation, staggered timing) — a device that routes every request through the oblivious path but still batches two cards' UUID registrations into one signed envelope has not achieved unlinkability; the two protections address different halves of the same problem and both are required where applicable.
+This mechanism addresses **IP-level correlation** only. For `registerCardUuids` specifically, this IP-level protection is what satisfies `notification_relay.md §Registration Privacy`'s anonymizing-transport requirement — Tor or another network-level anonymizer is not additionally required for that call (see `notification_relay.md §Process 1` step 6 / §Registration Privacy "Transport"). It remains complementary to, and does not substitute for, the separate **content/timing-level unlinkability** work also specified in `notification_relay.md §Registration Privacy` (per-card session separation, staggered timing) — a device that routes every request through the oblivious path but still batches two cards' UUID registrations into one signed envelope has not achieved unlinkability; those two protections address different halves of the same problem and both are still required where applicable.
 
 ---
 
@@ -45,7 +47,9 @@ The relay already sits between devices and the rest of the system for message de
 }
 ```
 
-This is deliberately simpler than full RFC 9458 Binary HTTP message encoding. The wallet service, press, and client SDK are all parts of the same closed, four-party system (`client-sdk`, `relay`, `wallet-service`, `press`) with no external interoperability requirement — there is no third-party OHTTP relay or gateway this protocol needs to speak Binary HTTP to. Taking on a Binary HTTP codec dependency would buy interop this system doesn't use, at the cost of implementation complexity neither destination gateway needs. This is an explicit, accepted non-interop trade-off: if a future need arises to interoperate with a third-party or public OHTTP relay/gateway, this wire format would need to be revisited at that time.
+This is deliberately simpler than full RFC 9458 Binary HTTP message encoding. The wallet service, press, and client SDKs are all parts of the same closed, five-party system (`app-sdk`, `wallet-sdk`, `relay`, `wallet-service`, `press`) with no external interoperability requirement — there is no third-party OHTTP relay or gateway this protocol needs to speak Binary HTTP to. Taking on a Binary HTTP codec dependency would buy interop this system doesn't use, at the cost of implementation complexity neither destination gateway needs. This is an explicit, accepted non-interop trade-off: if a future need arises to interoperate with a third-party or public OHTTP relay/gateway, this wire format would need to be revisited at that time.
+
+**Changelog (spec-consistency Phase 1):** Fix #27 — updated the retired `client-sdk` name to the current `app-sdk`/`wallet-sdk` split (five-party system, not four). Decision B — §"IP-level correlation" scope note revised to state that this transport's IP-level protection satisfies `notification_relay.md`'s anonymizing-transport requirement for `registerCardUuids`; Tor is not additionally required for that call. See `plans/spec-consistency/inconsistencies/phase-1-consolidated-fixes.md`.
 
 The response is sealed back through the same HPKE context established during request decapsulation — encapsulation and decapsulation of a given request/response pair share one HPKE context, not two independent operations.
 
@@ -72,7 +76,7 @@ Device
   → HPKE-encapsulate { path, method, body } to the destination's cached key config
   → POST the opaque blob to the relay's oblivious-forwarding endpoint:
       POST /ohttp/{target_id}
-      Content-Type: message/ohttp-req
+      Content-Type: application/x-card-protocol-ohttp+hpke
       Body: <opaque HPKE-encapsulated bytes>
 
 Relay
@@ -95,17 +99,19 @@ Destination gateway (wallet service or press)
 
 The relay never sees `path`, `method`, or `body` — those exist only inside the HPKE ciphertext. It sees `target_id` (which destination to forward to) and nothing else about the request's content.
 
+**Note on `Content-Type`:** `application/x-card-protocol-ohttp+hpke` is a custom media type, deliberately not `message/ohttp-req` (the RFC 9458 media type for Binary HTTP). This document's §Envelope Format already rejects strict RFC 9458 Binary HTTP encoding in favor of the lightweight JSON-in-HPKE envelope described there; reusing an RFC 9458-reserved media type for a non-RFC-9458-conformant body would be misleading to any tooling or reader that recognizes that type. The custom type signals unambiguously that the body is this protocol's own envelope shape, not standard Binary HTTP.
+
 ---
 
 ## Relay Target Registry
 
-The relay resolves `target_id → { ohttp_gateway_url }` via a registry that is **structurally independent of the push-notification `AppConfig`** (`relay/server/utils/app-registry.ts`). `AppConfig` carries `apns`/`fcm` fields specific to push delivery that have no meaning for a press, so the oblivious-forwarding registry is its own file (`relay/server/utils/oblivious-targets.ts`), loaded the same way `AppRegistryFile` is today (bundled JSON asset / environment-variable-injected JSON, matching the existing provisional loading pattern rather than inventing a third one). `target_id` is opaque to the relay: it may reuse a wallet service's existing `app_id`, or a press's own identifier (its press-card mutable pointer, or an operator-assigned string) — the relay does not need to know or care which kind of destination a given `target_id` names.
+The relay resolves `target_id → { ohttp_gateway_url }` via a registry that is **structurally independent of the push-notification `AppConfig`** (`relay/src/utils/apps.ts`). `AppConfig` carries `apns`/`fcm` fields specific to push delivery that have no meaning for a press, so the oblivious-forwarding registry is its own file (`relay/src/utils/oblivious-targets.ts`), loaded from `OBLIVIOUS_TARGETS_PATH` the same way `AppRegistryFile` is loaded from `APP_REGISTRY_PATH` today (`relay_data_model.md §6.4`). `target_id` is opaque to the relay: it may reuse a wallet service's existing `app_id`, or a press's own identifier (its press-card mutable pointer, or an operator-assigned string) — the relay does not need to know or care which kind of destination a given `target_id` names.
 
 ---
 
 ## Scope: Which Endpoints Are Oblivious-Routed
 
-**Wallet-service-facing** (all of it, by default): account creation, `service_secret` retrieval, keyring reads/writes, backup registration and recovery, sub-card registration/deregistration, UUID pool registration/deregistration.
+**Wallet-service-facing** (all of it, by default): account creation, `service_secret` retrieval, keyring reads/writes, backup registration and recovery, sub-card registration/deregistration (which, per `wallet.md §7.7`, also carries the wallet service's local UUID-pool bookkeeping — not a separate endpoint).
 
 **Press-facing** (the sensitive/state-changing subset only):
 
@@ -170,3 +176,4 @@ This is the property this section exists to state plainly, because it is easy to
 - `plans/client-sdk/strategic-plan.md` Goal 7, OQ-SDK-4 — the client-side design rationale, the Tor-alternative evaluation, and the press extension
 - `plans/client-sdk/implementation-plan.md` Steps 1.4a–1.4d, CP-0 — the concrete implementation plan spanning `client-sdk/`, `relay/`, `wallet-service/`, and `press/`
 - `plans/wallet-service/strategic-plan.md` — states that the wallet service does not proxy press communication, which is why the press needs its own gateway rather than being reachable only via the wallet service
+- **Disambiguation:** `specs/card_protocol_spec.md` also uses the term OHTTP, but for an unrelated purpose — the wallet↔requesting-site CHAPI authentication flow, not the device↔wallet-service/press IP-hiding transport this spec defines. The two are independent uses of the same underlying primitive with different parties, different trust boundaries, and no shared implementation; do not conflate the two when reading either document.

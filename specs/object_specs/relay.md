@@ -14,6 +14,10 @@ What is dropped, because it was purely serverless-infrastructure-specific: the D
 
 **Amends (v0.6 → v0.8, historical, superseded by this revision):** §7.3/§7.4 described a Cloudflare Durable-Object-backed connection model; §5 described the app registry as having no single startup moment under Workers. See `plans/relay-serverless-migration-strategic-plan.md` and its companion implementation plan for that migration's rationale — both are superseded by this v0.9 reversion.
 
+**Changelog (spec-consistency Phase 2):** Fix #6 — added the `POST /ohttp/{target_id}` oblivious-forwarding endpoint (§7.9) and its `relay/src/...` file citations, which this spec had never documented despite `oblivious_transport.md` assuming it exists; added a `specs/process_specs/oblivious_transport.md` row to the §2 Relationship table. Fix #57 — removed the "UUID pool replenishment lifecycle" overclaim from `wallet_backup_and_recovery.md`'s §2 row; that document does not cover UUID pools. See `plans/spec-consistency/inconsistencies/phase-2-consolidated-fixes.md`.
+
+**Changelog (spec-consistency Phase 3, Tier 1 items 11, 13):** §7.9/§10 error-code strings corrected to match the deployed code (`UNKNOWN_TARGET`→`NOT_FOUND`, `BAD_GATEWAY`→`GATEWAY_UNREACHABLE`; status codes were already correct, only the label strings differed), and §10's master error table gained rows for both; file-path citation typo fixed (`oblivious-targets.ts`→`oblivious_targets.ts`, underscore matching the codebase's actual naming). See `plans/spec-consistency/inconsistencies/phase-3-consolidated-fixes.md`.
+
 ---
 
 ## Table of Contents
@@ -33,6 +37,7 @@ What is dropped, because it was purely serverless-infrastructure-specific: the D
    - 7.6 [POST /ack](#76-post-ack)
    - 7.7 [GET /health](#77-get-health)
    - 7.8 [POST /notify/{uuid} (deprecated)](#78-post-notifyuuid-deprecated)
+   - 7.9 [POST /ohttp/{target_id}](#79-post-ohttptarget_id)
 8. [UUID Lifecycle](#8-uuid-lifecycle)
 9. [Re-registration on Store Reset](#9-re-registration-on-store-reset)
 10. [Error Codes](#10-error-codes)
@@ -65,8 +70,9 @@ The relay runs as a single long-running Node.js process (deployed via Docker Com
 |---|---|
 | `specs/process_specs/notification_relay.md` | Process-level spec this document implements. Defines delivery processes, UUID pools, device credentials, multi-device, and privacy properties. |
 | `specs/process_specs/message_routing.md` | Defines how wallet services route messages to recipient cards and deliver blobs to the relay. |
-| `specs/process_specs/wallet_backup_and_recovery.md` | Device registration and key management; UUID pool replenishment lifecycle. |
+| `specs/process_specs/wallet_backup_and_recovery.md` | Device registration and key management. |
 | `specs/object_specs/relay_data_model.md` | Redis key schema, message store, delete queue, device credential store, UUID state machine, SQLite-backed device registry, and app registry config. |
+| `specs/process_specs/oblivious_transport.md` | Defines the oblivious-forwarding mechanism (`POST /ohttp/{target_id}`, §7.9) that lets devices reach a wallet service or press without exposing their IP to the destination. |
 
 ---
 
@@ -522,6 +528,47 @@ This behavior will be removed in a future version.
 
 ---
 
+### 7.9 POST /ohttp/{target_id}
+
+Stateless oblivious-forwarding endpoint. Accepts an opaque HPKE-encapsulated blob from a device and forwards it, unread, to the wallet service or press gateway identified by `target_id`. This is the mechanism `specs/process_specs/oblivious_transport.md` specifies for hiding a device's IP address from wallet services and presses; see that document for the full envelope format, key-configuration discovery, and scope of which calls are routed this way.
+
+**Called by the device.** No `Authorization` header — the relay does not authenticate this call itself; whatever auth the destination's decapsulated handler requires (session token, master-card signature, sub-card signature) travels inside the HPKE ciphertext and is checked by the destination gateway, not the relay.
+
+#### Request
+
+```
+POST /ohttp/{target_id}
+Content-Type: application/x-card-protocol-ohttp+hpke
+Body: <opaque HPKE-encapsulated bytes>
+```
+
+`target_id` is an opaque string resolved via the oblivious target registry (`relay/src/utils/oblivious_targets.ts`, loaded from a JSON config file the same way the app registry is — see `relay_data_model.md §6.4`). It is structurally independent of the push-notification `app_id`/`AppConfig`, though it may reuse the same string value for a wallet service that also does push delivery.
+
+#### Processing
+
+1. Resolve `target_id` in the oblivious target registry. Return 404 `NOT_FOUND` if not found — do not forward. (Corrected 2026-07-16, Phase 3 Tier 1 item 11: the deployed code, `relay/src/routes/ohttp.ts`, returns `NOT_FOUND`, not `UNKNOWN_TARGET`.)
+2. Forward the request body as-is (no parsing, no interpretation, no decryption) to the resolved `ohttp_gateway_url` via a plain outbound HTTPS POST, preserving `Content-Type`.
+3. Return the destination's response body back to the device unmodified.
+
+The relay never sees `path`, `method`, or `body` — those exist only inside the HPKE ciphertext it forwards. It sees only `target_id` and the size of the encrypted blob.
+
+#### Response
+
+Whatever status code and body the destination gateway returns, passed through unmodified. If the destination is unreachable, the relay returns 502.
+
+#### Error responses
+
+| Status | Code | Condition |
+|---|---|---|
+| 404 | `NOT_FOUND` | `target_id` not found in the oblivious target registry |
+| 502 | `GATEWAY_UNREACHABLE` | Destination gateway unreachable or returned a transport-level error on the relay's outbound leg |
+
+#### Implementation
+
+`relay/src/routes/ohttp.ts` (route handler); `relay/src/utils/oblivious_targets.ts` (target registry loader/resolver) — matching this spec's `relay/src/...` file-layout convention (see the v0.9 changelog at the top of this document; the earlier Nitro-style `relay/server/...` convention was explicitly abandoned).
+
+---
+
 ## 8. UUID Lifecycle
 
 ```
@@ -597,6 +644,8 @@ The device handles this silent push by calling `POST /register` (replenishment i
 | `PUSH_FAILED` | 502 | APNs or FCM returned a delivery error (blob is retained in message store) |
 | `WALLET_REJECTED` | — | *(Removed in v0.5 — relay no longer opens outbound WebSocket to wallet)* |
 | `INTERNAL_ERROR` | 500 | Unexpected error (Redis failure, config inconsistency) |
+| `NOT_FOUND` | 404 | (§7.9) `target_id` not found in the oblivious target registry. Added 2026-07-16, Phase 3 Tier 1 item 11 — this table had never been updated with the OHTTP endpoint's codes. |
+| `GATEWAY_UNREACHABLE` | 502 | (§7.9) Destination gateway unreachable or returned a transport-level error on the relay's outbound leg. Added 2026-07-16, Phase 3 Tier 1 item 11. |
 
 ---
 

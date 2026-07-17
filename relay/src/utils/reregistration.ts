@@ -4,7 +4,6 @@ import { getApp } from "./apps.js";
 import { dispatchPush } from "./push/dispatch.js";
 
 export async function runReregistrationCheck(): Promise<void> {
-  // Stub — implemented in Phase 4 Step 13
   const empty = await isStoreEmpty();
   if (!empty) return;
 

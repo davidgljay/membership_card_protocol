@@ -15,6 +15,10 @@ What *is* dropped, because it was purely serverless-infrastructure-specific with
 
 **Amends (v0.7 → v0.8, historical, superseded by this revision):** device registry moved from a second Redis Cloud database to Cloudflare KV. **Amends (v0.6 → v0.7, historical):** hibernation-eviction test result recorded. **Amends (v0.5 → v0.6, historical):** device registry moved from SQLite/second-Redis to Cloudflare KV. **Amends (v0.4 → v0.5, historical):** replaced the single self-hosted Redis + SQLite topology with Redis Cloud + Durable Objects. All of the above are superseded by this v0.9 reversion; retained here only so the amendment history is traceable.
 
+**Changelog (spec-consistency Phase 2):** Fix #6 — added §6.4 (Oblivious Target Registry Config) and the `OBLIVIOUS_TARGETS_PATH` environment variable (§9), backing `relay.md §7.9`'s new `POST /ohttp/{target_id}` endpoint, which this data-model spec had never documented. See `plans/spec-consistency/inconsistencies/phase-2-consolidated-fixes.md`.
+
+**Changelog (spec-consistency Phase 3, Tier 1 items 12–13):** §9's `OBLIVIOUS_TARGETS_PATH` row corrected from Required: Yes to Required: No, matching the deployed code's deliberately-optional treatment (deploying without OHTTP forwarding configured is supported); file-path citation typo fixed (`oblivious-targets.ts`→`oblivious_targets.ts`). See `plans/spec-consistency/inconsistencies/phase-3-consolidated-fixes.md`.
+
 ---
 
 ## Table of Contents
@@ -39,6 +43,7 @@ What *is* dropped, because it was purely serverless-infrastructure-specific with
    - 6.1 [JSON Schema](#61-json-schema)
    - 6.2 [Example](#62-example)
    - 6.3 [Validation Rules](#63-validation-rules)
+   - 6.4 [Oblivious Target Registry Config](#64-oblivious-target-registry-config)
 7. [UUID State Machine](#7-uuid-state-machine)
    - 7.1 [States](#71-states)
    - 7.2 [Transitions](#72-transitions)
@@ -466,6 +471,40 @@ The service validates the registry on startup and exits with a clear error messa
 - If `platform == "fcm"`: `fcm` object must be present; `service_account_file` must exist at the specified path
 - Cross-field: `apns` object present with `platform == "fcm"` is an error (and vice versa)
 
+### 6.4 Oblivious Target Registry Config
+
+A second static config file, structurally independent of the app registry (§6.1) — `AppConfig`'s `apns`/`fcm` fields have no meaning for a press, so the oblivious-forwarding registry is its own file rather than an extension of `AppRegistryFile`. It backs `POST /ohttp/{target_id}` (`relay.md §7.9`).
+
+Loaded once, synchronously, at process startup from the path in `OBLIVIOUS_TARGETS_PATH` (`relay/src/utils/oblivious_targets.ts`), the same way `APP_REGISTRY_PATH` is loaded (§6.1). Changes require a process restart — there is no hot-reload.
+
+```typescript
+interface ObliviousTargetsFile {
+  targets: ObliviousTarget[];
+}
+
+interface ObliviousTarget {
+  target_id:         string;  // Required. Opaque identifier the device names in POST /ohttp/{target_id}.
+                               // May reuse a wallet service's existing app_id, or a press's own
+                               // identifier — the relay does not need to know which kind of
+                               // destination a given target_id names.
+  ohttp_gateway_url: string;  // Required. Base https:// URL of the destination's OHTTP gateway
+                               // (its POST /ohttp/{target_id}-equivalent dispatch endpoint).
+}
+```
+
+**Example:**
+
+```json
+{
+  "targets": [
+    { "target_id": "mutual-aid-wallet", "ohttp_gateway_url": "https://wallet.mutual-aid.example/ohttp/gateway" },
+    { "target_id": "mutual-aid-press",  "ohttp_gateway_url": "https://press.mutual-aid.example/ohttp/gateway" }
+  ]
+}
+```
+
+**Validation rules** (checked at startup; `process.exit(1)` on violation): `target_id` must be unique across all entries; `ohttp_gateway_url` must be a valid `https://` URL.
+
 ---
 
 ## 7. UUID State Machine
@@ -570,6 +609,7 @@ This ensures that blobs delivered to a UUID are only accessible to the device th
 | `REDIS_URL` | Yes | — | Connection string for the self-hosted Redis container (`redis://redis:6379` in the default Docker Compose topology). No TLS requirement — this is a private container-to-container connection. |
 | `DB_PATH` | No | `/data/registry.db` | Filesystem path (on the mounted Docker volume) to the SQLite device registry file |
 | `APP_REGISTRY_PATH` | Yes | — | Path to the app registry JSON config file, read once at startup |
+| `OBLIVIOUS_TARGETS_PATH` | No | — | Path to the oblivious target registry JSON config file (§6.4), read once at startup. Corrected 2026-07-16 (Phase 3 Tier 1 item 12): unlike `APP_REGISTRY_PATH`, a missing value here is not a fatal startup error — deploying without OHTTP forwarding configured is a supported configuration; the relay simply serves no oblivious targets. |
 | `RELAY_ID` | Yes | — | Unique identifier for this relay deployment, included in re-registration push payloads |
 | `PORT` | No | `3000` | HTTP/WebSocket listen port for the relay process |
 | `UUID_TTL_SECONDS` | No | `2592000` | TTL for UUID records, device credentials, and the message store in Redis (default 30 days) |
