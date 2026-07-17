@@ -64,7 +64,11 @@ Four additional process spec files exist in the repo that weren't named in your 
 2. **Unrequested process specs**: `card_migration.md`, `log_auditing.md`, `notification_relay.md`, and `wallet_backup_and_recovery.md` are **included** in Phase 2 scope, since they reference in-scope object specs.
 3. **Pacing**: phases run as separate batches with a checkpoint between each — Phase 1 (object specs) runs to completion and is presented for review before Phase 2 (process specs) starts; same gate between Phase 2 and Phase 3 (code alignment).
 
+## Design Changes Made Mid-Initiative
+
+1. **2026-07-16 — `LogEntry` full-repost model.** David reviewed the drafted `ipfs_card.md` and requested a design change to reduce read-time latency: instead of each `LogEntry` carrying only its own field diff (requiring a verifier to walk `prev_log_root` backward through the entire log to reconstruct current state or provenance), each `LogEntry` now reposts the card's complete current field state (`card_state`) and carries a flat `history` array of every predecessor CID. Resolved sub-decisions: (a) `history` is validated, when strict assurance is needed, against the registry contract's existing `CardRegistered`/`CardHeadUpdated` events — no new on-chain storage added; (b) `card_state` carries the full merged current state, not just this entry's own history-list addition. Applied to `protocol-objects.md §3` (authoritative), `object_specs/ipfs_card.md §5`, and `object_specs/press.md §5.3` (`appendLogEntry`). Flagged as a Phase 3 code-alignment item: the verifier package's `RpcProvider.getLogEntries()` (`press.md` OQ-B3) currently implements the old backward-walk and needs to change to read `history` directly.
+
 ## Remaining Open Questions
 
-1. **Should `client_sdk.md` be deleted or kept as an archived/marked-superseded reference?** Not blocking — decide before Phase 1 wraps so it doesn't linger ambiguously.
+1. ~~**Should `client_sdk.md` be deleted or kept as an archived/marked-superseded reference?**~~ **Resolved 2026-07-16:** kept, archived. It already carries a `SUPERSEDED` banner pointing to `app_sdk.md`/`wallet_sdk.md`; it remains excluded from the active consistency pass.
 2. **Matrix policy module code location** — `wallet-service/matrix-policy-module/` appears to be the implementation directory; confirm this (vs. some other path) is what Phase 3 should check `matrix_synapse_module.md` against.

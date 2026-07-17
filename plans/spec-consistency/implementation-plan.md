@@ -103,6 +103,8 @@ Done when: fixes implemented and spot-checked; summary at `plans/spec-consistenc
 
 ## Phase 3: Object Spec ↔ Codebase Alignment
 
+_Note: To avoid needing to review the entire codebase, this phase should instead focus on object spec <> test consistency. It should answer the question “is every element of spec adequetly covered by tests?" Then run tests to ensure compliance. Before beginning this phase, please reqrite this section of the plan to reflect this focus on testing._ 
+
 Only starts after the Phase 2 Milestone Review is approved. Same Steps A–C pattern, but Step A is a spec-vs-code diff instead of spec-vs-spec: the reviewer subagent reads the object spec, then reads the corresponding source directory's actual types/endpoints/schemas, and logs every place the code contradicts or has silently diverged from the spec (renamed fields, removed endpoints, extra undocumented behavior, wrong status codes). Recommended resolutions must state which side is correct (spec is outdated → update spec; code is wrong → file it as a separate bug, don't silently "fix" running code as part of a spec-consistency pass) rather than auto-preferring one.
 
 11 units:
