@@ -341,6 +341,35 @@ export async function setupWallet<T = void>(options: WalletSetupOptions<T>): Pro
     // StorageProvider. ---
     await storageProvider.set(storageKey, finalKeyringBlob);
 
+    // --- Steps 7–9: device sub-card generation and registration
+    // (`deviceSubCard.ts`). Uses `masterSecretKey` while it's still in
+    // scope, before the `finally` block below clears it — matching Step
+    // 8's "accessed from the keyring... cleared after signing" (the key
+    // never left this function's scope in the first place, so "accessed
+    // from the keyring" is satisfied by construction rather than by an
+    // actual decrypt-from-storage round trip).
+    //
+    // Reordered 2026-07-16 (spec-consistency Phase 3, Tier 1 item 18) to run
+    // before backup registration below, matching `wallet_sdk.md §5.3` and
+    // `wallet_backup_and_recovery.md §Process 1`'s actual step order
+    // (device sub-card = Steps 7–10, backup registration = Steps 11–15) —
+    // this code previously ran backup registration first, with in-code
+    // comments still carrying the old, pre-correction step numbering. Not a
+    // key-exposure issue either way (both keys stay valid for the whole
+    // function scope, cleared together in the shared `finally` below); this
+    // only affects which partial state a failed setup call leaves behind. ---
+    const deviceSubCard = await registerDeviceSubCard({
+      secureKeyProvider,
+      cardHash,
+      masterPublicKey,
+      masterSecretKey,
+      walletAppCard,
+      registerSubCard,
+      cardVerifier,
+      capabilities,
+      ...(options.subCardKeyId ? { subCardKeyId: options.subCardKeyId } : {}),
+    });
+
     // --- Steps 11–13: synced-passkey backup registration
     // (`backupRegistration.ts`; `wallet_backup_and_recovery.md §Process 1`).
     // Always performed — the spec describes this path as automatic/default,
@@ -413,25 +442,6 @@ export async function setupWallet<T = void>(options: WalletSetupOptions<T>): Pro
       });
       yubiKeyBackupId = yubiKeyBackup.backupId;
     }
-
-    // --- Steps 7–9: device sub-card generation and registration
-    // (`deviceSubCard.ts`). Uses `masterSecretKey` while it's still in
-    // scope, before the `finally` block below clears it — matching Step
-    // 8's "accessed from the keyring... cleared after signing" (the key
-    // never left this function's scope in the first place, so "accessed
-    // from the keyring" is satisfied by construction rather than by an
-    // actual decrypt-from-storage round trip). ---
-    const deviceSubCard = await registerDeviceSubCard({
-      secureKeyProvider,
-      cardHash,
-      masterPublicKey,
-      masterSecretKey,
-      walletAppCard,
-      registerSubCard,
-      cardVerifier,
-      capabilities,
-      ...(options.subCardKeyId ? { subCardKeyId: options.subCardKeyId } : {}),
-    });
 
     // --- Optional post-setup hook (see WalletSetupOptions' doc) — still
     // runs inside this try block, before the finally clears masterSecretKey,

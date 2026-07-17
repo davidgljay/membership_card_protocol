@@ -5,6 +5,16 @@
 **Status:** Draft — describes the wallet service as implemented (`wallet-service/`, all six build phases complete). Production deployment remains blocked on an independent security review (`wallet-service/docs/security-review-cp3.md`); this spec describes current code behavior regardless of that gate.
 **Source of truth:** Every claim in this document traces to `wallet-service/server/` or `wallet-service/src/` as of the review underlying `plans/wallet-service/spec-phase1-*.md`, cross-checked against the process specs it implements (`plans/wallet-service/spec-discrepancies.md`). Where the build plans (`plans/wallet-service/strategic-plan.md`, `implementation-plan.md`) described an earlier design the code has since moved past, this spec describes the current behavior only.
 
+**Changelog (spec-consistency Phase 1):** Fixes #11–#13, #15, #29 — added §7.10 Matrix endpoints, `matrix_credentials` data model row, OQ-WALLET-6/7, and corrected the retired `client-sdk` reference to `app-sdk`. See `plans/spec-consistency/inconsistencies/phase-1-consolidated-fixes.md`.
+
+**Changelog (spec-consistency Phase 3, Tier 3 item (g)):** §7.10's `POST /matrix/rooms` description now documents the load-bearing `m.room.join_rules: "public"` state event — omitted before this correction, though already present and tested in code. See `plans/spec-consistency/inconsistencies/phase-3-consolidated-fixes.md`.
+
+**Changelog (spec-consistency Phase 2):** Fix #52 — added §6.5.1 documenting cardholder-signature verification (including sub-card-chain resolution) for `card_migration`-type `CardBindingAnnouncement`s, and updated §7.5's `POST /bindings/announce` description to cite it. See `plans/spec-consistency/inconsistencies/phase-2-consolidated-fixes.md`.
+
+**Changelog (spec-consistency Phase 3, 2026-07-16):** Corrected Fix #52 — David confirmed migration is a master-card-key-only operation; the code (`wallet-service/src/federation/binding.ts`) never implemented the sub-card-chain path described in old §6.5.1, and that allowance should not have been added to the spec. Folded §6.5.1 back into §6.5 (now "Peer wallet-service and cardholder signatures") describing only the direct master-key check for the `cardholder` signer, and updated §7.5's cross-reference accordingly. See `plans/spec-consistency/inconsistencies/phase-3-consolidated-fixes.md` Tier 3 item (j).
+
+**Changelog (spec-consistency Phase 3, Tier 1 items 9–10):** §7.10 gains documentation for two already-implemented, previously-undocumented Matrix endpoints (`POST /matrix/token`, `PUT /matrix/transactions/{txnId}`); §5's migration count corrected from "8" to "10" (two Matrix migrations were added in Phase 1 but the count was never updated). See `plans/spec-consistency/inconsistencies/phase-3-consolidated-fixes.md`.
+
 ---
 
 ## Table of Contents
@@ -25,6 +35,7 @@
    - 7.7 [Sub-card and UUID Lifecycle](#77-sub-card-and-uuid-lifecycle)
    - 7.8 [Admin](#78-admin)
    - 7.9 [Oblivious Transport (OHTTP)](#79-oblivious-transport-ohttp)
+   - 7.10 [Matrix](#710-matrix)
 8. [Error Codes](#8-error-codes)
 9. [Open Questions](#9-open-questions)
 
@@ -41,9 +52,11 @@ On top of keyring custody, the wallet service is the terminus for inbound messag
 
 The wallet service also runs an OHTTP gateway (`specs/process_specs/oblivious_transport.md`) that lets a device reach any of the endpoints below without exposing its IP address to this service, by routing an HPKE-encapsulated request through the relay.
 
-**What this service does not do:** card offer construction, press communication (the client-sdk talks to a press directly), chain verification at the routing layer, or relay service functions (message buffering, push delivery — that's `specs/object_specs/relay.md`, a separate service). On-device card operations (signing, key generation) stay on-device.
+**What this service does not do:** card offer construction, press communication (the app-sdk talks to a press directly), chain verification at the routing layer, or relay service functions (message buffering, push delivery — that's `specs/object_specs/relay.md`, a separate service). On-device card operations (signing, key generation) stay on-device.
 
 **Deployment model:** built on the [Nitro](https://nitro.unjs.io) server framework, one codebase targeting `cloudflare-module` (default), `node-server`, and `aws-lambda` presets. It is a stateless HTTP API plus one scheduled sweep task family (notification retries, nonce/UUID pruning) — see `wallet-service/docs/operations.md` for the operator-facing deployment reference this spec does not duplicate.
+
+**Open scope question — open-offer hosting/claim-link serving is not implemented here.** `open_offer_creation.md` and `open_offer_acceptance_new_wallet.md` both describe the wallet service as hosting the signed open-offer document and serving a claim link (e.g. `https://<wallet-service>/claim/<offer-id>`); no such route exists in `wallet-service/server/routes/` as of this review (confirmed by search — no `offer`/`claim` route files). It is not yet determined whether this is a planned-but-unbuilt wallet-service feature or was intended to live on a different component (e.g. the press). Inbound targeted-offer delivery and the SCIP/audit-record delivery `card_offering_and_acceptance.md` steps 23–24 describe ("HTTPS to their wallet service endpoint") are not a separate gap — they are ordinary encrypted messages and are already covered by the generic `POST /messages` routing path (§7.6). See **OQ-WALLET-6**.
 
 ---
 
@@ -56,13 +69,18 @@ The wallet service also runs an OHTTP gateway (`specs/process_specs/oblivious_tr
 | `specs/process_specs/notification_relay.md` | UUID pool lifecycle, sub-card registration/deregistration signed-envelope requirements, and the wallet-relay delivery/clearance contract this service implements on the wallet side. |
 | `specs/process_specs/open_offer_acceptance_new_wallet.md` | New-holder wallet creation flow; this service's `POST /accounts` is the account-creation step in that flow. |
 | `specs/process_specs/open_offer_acceptance_existing_wallet.md` | Existing-holder keyring update flow; this service's WebAuthn passkey login and `PUT /accounts/{card_hash}/keyring` implement its Step 6. |
-| `specs/process_specs/card_migration.md` | Dual-signature migration protocol; this service implements the routing-table side (`POST /bindings/announce`, `410 Gone` handling) but not client-side migration initiation. |
+| `specs/process_specs/card_migration.md` | Dual-signature migration protocol; this service implements the routing-table side (`POST /bindings/announce`, `410 Gone` handling) but not client-side migration initiation. **§6's "old wallet service" behavior on receiving a migration announcement (forwarding queued messages to the new wallet service, removing the card from its local store) is not confirmed as implemented — see OQ-WALLET-7.** |
 | `specs/process_specs/subcard_creation_policy.md` | Defines on-chain sub-card revocation (`SubCardEntry.active`), which this service's sub-card UUID registration/deregistration endpoints deliberately do not consult (§6, §7.7). |
 | `specs/subcards.md` | §Step 5 defines the on-chain-registry → IPFS → `recipient_pubkey` resolution chain this service's sub-card signed-envelope verification depends on. |
 | `specs/process_specs/oblivious_transport.md` | Defines the OHTTP envelope, key-configuration discovery, and relay-forwarding protocol this service's `/ohttp/*` endpoints implement on the destination side. |
 | `specs/object_specs/relay.md` | The relay this service calls (`POST /deliver/{uuid}`) and receives clearance calls from (`DELETE /messages/{uuid}`). Not a bridge or WebSocket peer — all communication is HTTPS in both directions. |
 | `specs/messaging_protocol.md` | Defines `SignedMessageEnvelope`, encrypted end-to-end inside the routing envelope's opaque payload. |
 | `specs/ARCHITECTURE.md` | ADR-009-AMEND (keyring storage, no IPFS); ADR-007 (transport, OHTTP precedent); the Wallet Service Registry and message-server design this service is the concrete implementation of. |
+| `specs/object_specs/matrix_room.md` | Defines the room predicate document and the `POST /matrix/rooms` room-creation request/response shape this service implements (§7.10). |
+| `specs/object_specs/matrix_synapse_module.md` | The Synapse policy module this service's Matrix subsystem provisions credentials and configuration for (§5 `matrix_credentials`); the module itself is not part of this service's own request-handling code. |
+| `specs/object_specs/matrix_encryption.md` | Defines shadow-account derivation (`deriveMatrixUserId`) and sender-binding verification; this service provisions the shadow Matrix account (via the Application Service bridge) at room-creation/first-use time as described there. |
+| `specs/process_specs/room_discovery.md` | Defines the room index (`GET /matrix/room-index`) and server-hosted discovery (`POST /matrix/discover-rooms`) this service implements (§7.10), plus the client-side discovery path that consumes the same index. |
+| `specs/process_specs/matrix_join_attestation_and_revocation.md` | Defines the join-attestation and revocation flow the Synapse policy module implements; this service's only role in that flow is the one-time shadow-account provisioning and room creation, not join/post authorization, which never queries this service. |
 
 ---
 
@@ -98,7 +116,7 @@ Concretely:
 
 ## 5. Data Model
 
-PostgreSQL, schema managed via `node-pg-migrate` (`server/db/migrations/`, 8 migrations applied in sequence). Current state:
+PostgreSQL, schema managed via `node-pg-migrate` (`server/db/migrations/`, 10 migrations applied in sequence — the original 8 plus two Matrix-related migrations added in this initiative's Phase 1). Current state:
 
 ### `holder_accounts`
 
@@ -170,6 +188,20 @@ Indexes: `(card_hash, cleared)`, `(card_hash, subcard_hash, cleared)`, `delivery
 
 `subcard_hash`, `nonce`, `action` (`register` | `deregister`), `seen_at`. PK: `(subcard_hash, action, nonce)`. Replay protection for the two sub-card signed-envelope endpoints (§7.7), scoped per sub-card and per action so registration and deregistration nonces never collide.
 
+### `matrix_credentials`
+
+Audit-trail table for the Matrix-subsystem credentials generated by the Matrix bring-up scripts (Synapse's signing key and `registration_shared_secret`, the watcher's Synapse login credential, and the membership registry's encryption key). Not consumed at runtime by this service — the consumers (the `synapse` container / Python policy-module process) read the raw material directly from a mounted file; this table exists purely as an audit/recovery/rotation record, mirroring the envelope-encryption pattern already used for `holder_accounts.service_secret_enc`.
+
+| Column | Type | Notes |
+|---|---|---|
+| `credential_name` | text PK | e.g. `synapse_signing_key`, `synapse_registration_shared_secret` |
+| `ciphertext` | text, not null | AES-256-GCM ciphertext of the raw credential (`SecretsService`) |
+| `dek_enc` | text, not null | Envelope-encrypted DEK (`SecretsService`) |
+| `key_file_path` | text, not null | Where the raw material was actually written, for whichever process reads it directly |
+| `description` | text, not null | |
+| `created_at` | timestamptz, not null | |
+| `rotated_at` | timestamptz, nullable | Set on every re-generation after the first |
+
 ### Historical: `reencryption_keys` (removed)
 
 Created in the initial schema to hold per-sub-card UMBRAL proxy re-encryption keys in plaintext. Dropped when `message_routing.md` v0.4 replaced wallet-side re-encryption with sender-side per-sub-card encryption — the wallet service no longer holds any re-encryption key material, and this table no longer exists.
@@ -206,9 +238,11 @@ Additional replay protection layered on top (checked in the route logic, not the
 
 Used by: `POST /cards/{card_hash}/subcards/{subcard_hash}/uuids`, `DELETE /cards/{card_hash}/subcards/{subcard_hash}`.
 
-### 6.5 Peer wallet-service signature
+### 6.5 Peer wallet-service and cardholder signatures
 
 A peer's `wallet_service_id` is `keccak256(peer_public_key)`. Verification confirms both that the claimed public key hashes to the claimed id and that the message is validly ML-DSA-44-signed by that key. Two independent verification functions implement this pattern for two different message types: `verifyAnnouncementEnvelope` (`src/federation/binding.ts`) for binding announcements, and `verifySignedKeyringMessage` (`src/federation/keyring-sync.ts`) for keyring blob replication/delete messages.
+
+A `card_migration`-type `CardBindingAnnouncement` (`process_specs/card_migration.md §3/§5`) carries two signatures, not one: alongside the peer wallet-service signature above, `verifyAnnouncementEnvelope` also verifies a `cardholder`-role signer over the same canonical RFC 8785 JSON payload. This second signature is mandatory for `card_migration` announcements — an envelope with a valid `wallet_service` signature but a missing or invalid `cardholder` signature is rejected. Verification requires the `cardholder` entry's `public_key` to resolve directly to the payload's `card_hash` (`keccak256(public_key) == card_hash`); there is no sub-card-chain path for this signer — migration is a master-card-key-only operation. `card_registration`-type announcements carry only the `wallet_service` signature.
 
 Used by: `POST /bindings/announce`, `POST /federation/keyrings`, `POST /federation/keyrings/delete`.
 
@@ -269,7 +303,7 @@ Response: `{ service_secret, keyring_id }`.
 
 ### 7.5 Federation and Routing
 
-**`POST /bindings/announce`** — Peer wallet-service signature (§6.5). Receives a `CardBindingAnnouncement` envelope, verifies signatures, checks the nonce hasn't been replayed, applies `message_routing.md §Binding Conflict Resolution`, and updates the local routing table if accepted. Rate limit: 100 per verified peer per minute, applied only after signature verification succeeds (so an unverified claimed identity can't be used to rate-limit a victim peer). Response: `{ applied: boolean }`.
+**`POST /bindings/announce`** — Peer wallet-service signature (§6.5); for `card_migration`-type announcements, also the cardholder signature (§6.5). Receives a `CardBindingAnnouncement` envelope, verifies signatures, checks the nonce hasn't been replayed, applies `message_routing.md §Binding Conflict Resolution`, and updates the local routing table if accepted. Rate limit: 100 per verified peer per minute, applied only after signature verification succeeds (so an unverified claimed identity can't be used to rate-limit a victim peer). Response: `{ applied: boolean }`.
 
 **`GET /bindings`** — No auth (federation peers need this for startup sync by design). Returns the full routing table as a list of signed `CardBindingAnnouncement` envelopes.
 
@@ -311,6 +345,20 @@ All three endpoints require the admin bearer token (§6.6); `401` without it or 
 
 **`POST /ohttp/gateway`** — No auth (the HPKE envelope is the trust boundary). Request: `{ enc, ciphertext }` — an HPKE-encapsulated inner request. Decapsulates the envelope, dispatches in-process to the same logic module the corresponding plaintext route would call (`accounts-challenge`, `accounts-create`, `keyrings-get`, `messages-create`, and the sub-card registration/deregistration handlers all support this dual entry point), and encapsulates the response back through the same HPKE context. The relay forwards to this endpoint as a stateless oblivious forwarder (`POST /ohttp/{target_id}` on the relay side); it never decrypts the request and sees only the relay's IP as the connecting peer, not the device's.
 
+### 7.10 Matrix
+
+Endpoints supporting the Matrix room subsystem (`specs/object_specs/matrix_room.md`, `specs/process_specs/room_discovery.md`). This service provisions shadow Matrix accounts, authors room predicate documents, and hosts a public room index; it never evaluates a predicate or authorizes a Matrix join or post — that is the Synapse policy module's job (`specs/object_specs/matrix_synapse_module.md`), and it never queries this service to do it (`specs/object_specs/matrix_encryption.md §3`).
+
+**`POST /matrix/rooms`** — Existing session-token auth (§6.2), authenticated card holder. Request: `{ card_hash, policy_id, name?, topic? }`, where `card_hash` is the creating card's registry address (must belong to the authenticated session), `policy_id` is the CID of an existing room predicate document (`matrix_room.md §The Room Predicate Document`; parsed only, not validated for well-formedness — the Synapse module is the authority on evaluation), and `name`/`topic` are optional, passed through to Matrix's own `m.room.name`/`m.room.topic` state events. Creates the room (setting initial `m.room.join_rules` — explicitly overridden to `"public"`, **load-bearing for card-gating to function at all**, not a cosmetic default; see below — plus `m.room.encryption` and `m.room.power_levels` state per `matrix_room.md §Room Creation`), provisions/auto-joins the creating card's shadow Matrix account via the Application Service bridge, and appends an entry to the room index (§7.10 `GET /matrix/room-index`). **On the `m.room.join_rules` override (added 2026-07-16):** room creation uses Synapse's `private_chat` preset, which otherwise defaults `join_rules` to `"invite"`-only; without this explicit override, Synapse's core event-authorization rejects any non-invited user's join with a `403` before `matrix_synapse_module.md`'s policy-module callbacks ever run — silently defeating the entire card-gating mechanism this endpoint exists to support, regardless of attestation validity. This is code-and-test-confirmed already-shipped behavior; only this documentation was missing it. Response: `{ room_id, matrix_alias? }` — `matrix_alias` present only if the deployment assigns human-readable aliases.
+
+**`GET /matrix/room-index`** — No auth (deliberately anonymous and identical for every requester; publicly cacheable). Response: `{ rooms: [{ room_id, policy_id, created_at }, ...], updated_at }`. Written by `POST /matrix/rooms` at room-creation time; no separate write path.
+
+**`POST /matrix/discover-rooms`** — Existing session-token auth (§6.2). Request: `{ envelope }`, a `SignedMessageEnvelope` built and signed locally by the client attesting to its own `card_hash` (not a bare `card_hash` field — see `room_discovery.md`'s 2026-07-12 correction). The server verifies the envelope's signature and confirms the recovered signer matches the authenticated session's own `card_hash` before trusting its chain data, then runs the same chain-walk + predicate-evaluation algorithm the client-side discovery path runs, against the same room index. Response: `{ room_ids: [...] }`. This is a secondary, server-hosted path — client SDKs should attempt local discovery first and fall back here only when local RPC/IPFS access isn't available; per `room_discovery.md`, no persistent per-query log is kept beyond abuse rate-limiting.
+
+**`POST /matrix/token`** — Existing session-token auth (§6.2). Added 2026-07-16 (Phase 3 Tier 1 item 9) — already-implemented, previously undocumented. Request: none beyond the session token. Mints (or returns a still-cached, still-valid) Matrix access token scoped to the caller's own shadow Matrix account — always `deriveMatrixUserId(session.card_hash, ...)`, derived entirely from the caller's own verified session, never a request-body parameter, so a caller can never mint a token for any shadow account but their own. First provisions the shadow account if it doesn't already exist (`src/matrix/provisioning.ts`), then mints/caches the token (`src/matrix/token-minting.ts`). Never returns the Application Service token itself, only a token scoped to that one shadow account. Client SDKs use this to talk to Synapse directly (`sync`/`send`) once they hold a token. Response: `{ matrix_access_token, matrix_user_id }`.
+
+**`PUT /matrix/transactions/{txnId}`** — Added 2026-07-16 (Phase 3 Tier 1 item 9) — already-implemented, previously undocumented. This is the wallet service's Matrix Application Service transaction-push endpoint: the `url` the AS registration file points Synapse at, so Synapse `PUT`s every event relevant to this AS's namespaces here. Bearer-`hs_token`-authenticated per the Matrix AS spec (Synapse authenticates itself with a bearer token equal to this AS's own `hs_token`, as either an `Authorization: Bearer <token>` header or an `access_token` query param); rejects with `401` on mismatch. Full event-driven bridge logic (parsing/acting on the pushed transaction body) is explicitly out of scope for the current implementation — clients talk to Synapse directly for `sync`/`send` once they hold a token from `POST /matrix/token` above. This handler only acknowledges receipt (`{}`, `200`) so Synapse doesn't retry the same transaction.
+
 ---
 
 ## 8. Error Codes
@@ -345,3 +393,7 @@ The wallet service does not use a single uniform `{ error: CODE }` shape the way
 **OQ-WALLET-4: Audit-log test coverage gap.** See §4 — `test/audit-log-schema.test.ts`'s scan roots (`server/routes/messages`, `server/routes/cards`) no longer include the files where device-IO logging actually happens post-refactor (`src/routes/*.ts`). Content is currently compliant on manual review; the automated guarantee is narrower than it was designed to be.
 
 **OQ-WALLET-5: `SECRETS_BACKEND=kms` deployments depend on an out-of-repo AWS KMS key policy.** The application-level access pattern is reviewed (`docs/security-review-cp3.md`); the actual IAM restriction to only this service's identity is an operator responsibility this spec cannot verify.
+
+**OQ-WALLET-6: Open-offer hosting and claim-link serving have no implementing endpoint.** `open_offer_creation.md` and `open_offer_acceptance_new_wallet.md` both describe the wallet service as storing the signed open-offer document and serving a claim link (e.g. `https://<wallet-service>/claim/<offer-id>`); no `offer`/`claim` route exists under `wallet-service/server/routes/` as of this review. Not yet determined whether this is a planned-but-unbuilt wallet-service feature or was intended to live on a different component (e.g. the press). (Inbound targeted-offer delivery and the SCIP/audit-record delivery `card_offering_and_acceptance.md` steps 23–24 describe are not part of this gap — both are ordinary encrypted messages already covered by the generic `POST /messages` routing path, §7.6.)
+
+**OQ-WALLET-7: `card_migration.md` §6's "old wallet service" behavior is not confirmed as implemented.** That section requires the old wallet service, on receiving a valid migration announcement, to (a) forward any queued, undelivered messages for the migrated card to the new wallet service by re-posting each routing envelope, and (b) remove the card from its local store. `POST /bindings/announce`'s implementation (§7.5) updates the routing table on acceptance but contains no message-forwarding step, and this service has no per-card "local store" concept distinct from `message_queue`/`uuid_pools` rows keyed by `card_hash` to remove. Worth confirming whether this is a genuine gap against `card_migration.md` §6 or whether the old-wallet-service side of migration was deliberately deferred.
