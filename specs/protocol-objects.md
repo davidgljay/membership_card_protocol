@@ -222,21 +222,33 @@ A policy card is a CardDocument whose content defines the rules for a class of c
 
 ## 3. LogEntry
 
-**Stored on:** IPFS (chained via `prev_log_root`)  
+**Changelog:** Fix #7 (`plans/spec-consistency/inconsistencies/phase-1-consolidated-fixes.md`) — corrected the worked example's `"version"` value below to match this section's own rule that version 1 is the first post-genesis entry.
+
+**Stored on:** IPFS (chained via `prev_log_root`; also self-describing via `history`)  
 **On-chain pointer:** Arbitrum One registry entry for the card points to the current log head CID  
 **Signed by:** Updater (`intent_signature`) then Press (`press_signature`)  
 **Serialized for signing:**
 - `intent_signature` covers canonical RFC 8785 JSON of the `UpdateIntentPayload` (see §4)
 - `press_signature` covers canonical RFC 8785 JSON of the complete `LogEntry` document excluding the `press_signature` field itself
 
-Every post-genesis state change to a card — field updates, annotations, and revocations — is a LogEntry appended to the card's IPFS log. The log is a singly-linked list; each entry points back to the prior head. The Arbitrum One registry tracks only the current head CID.
+**Amended 2026-07-16** (see `plans/spec-consistency/`): a `LogEntry` now reposts the card's complete current field state (`card_state`) and carries a flat `history` array of every predecessor object's CID, rather than requiring a reader to walk `prev_log_root` backward one hop at a time to reconstruct current state or full provenance. `prev_log_root` is retained as the hash-chain integrity link (this entry cryptographically commits to the exact CID it supersedes); `history` is a convenience index over the same chain, always ending in `prev_log_root`'s own value.
+
+Every post-genesis state change to a card — field updates, annotations, and revocations — is a LogEntry appended to the card's IPFS log. The log is a singly-linked list; each entry points back to the prior head via `prev_log_root`, and separately lists every prior CID in `history`. The Arbitrum One registry tracks only the current head CID.
 
 ```json
 {
-  "version":         2,
+  "version":         1,
   "code":            300,
   "entry_type":      "field_update",
-  "prev_log_root":   "<base64url — CID of the prior log entry (or genesis CardDocument for version 2)>",
+  "prev_log_root":   "<base64url — CID of the prior log entry (or genesis CardDocument for version 1)>",
+  "history": [
+    "<base64url — CID of the genesis CardDocument>",
+    "<base64url — CID of LogEntry version 1>",
+    "..."
+  ],
+  "card_state": {
+    "<policy-defined field or protocol-reserved field>": "<its complete current value, post this entry's update>"
+  },
 
   "field_updates": [
     { "field": "<field name>", "value": "<new value>" }
@@ -266,15 +278,17 @@ Every post-genesis state change to a card — field updates, annotations, and re
 | `version` | `integer` | Yes | Monotonically increasing; version 1 is the first post-genesis entry |
 | `code` | `integer` | Yes | 100–999; present in **all** entries, not only revocations. Determines `entry_type`. |
 | `entry_type` | `text` | Yes | `"field_update"` for codes 1xx–7xx; `"revocation"` for codes 8xx–9xx |
-| `prev_log_root` | `cid` | Yes | CID of the prior log entry; genesis CardDocument CID for `version == 1` |
-| `field_updates` | array | Conditional | Present for codes 1xx–7xx; absent for 8xx–9xx |
+| `prev_log_root` | `cid` | Yes | CID of the prior log entry; genesis CardDocument CID for `version == 1`. The hash-chain integrity anchor — this entry's signatures cover this value, so it cannot be forged after signing. |
+| `history` | `array of cid` | Yes | Ordered oldest-first (genesis CID first), listing every predecessor IPFS object's CID for this card **excluding this entry's own CID** (which the reader derives after fetching). For `version == 1`, `history` is `["<genesis CardDocument CID>"]`, identical to `[prev_log_root]`. For every later version, `history = [...prior entry's history, prior entry's own CID]`, so its last element always equals this entry's own `prev_log_root`. Lets a reader reconstruct full provenance (every CID this card has ever had) from a single fetch of the current head, with no backward IPFS walk. See "Provenance verification" below for the on-chain cross-check. |
+| `card_state` | object | Yes | The card's complete current field state — every policy-defined field plus any protocol-reserved field (`active_subcards`, `successor`, etc.) — with this entry's own `field_updates`/`revocation` already applied. Same field *set* as the genesis `CardDocument`'s policy-defined fields, but this object is not itself a `CardDocument`: it carries no `issuer_signature`/`holder_signature`/`press_signature`/`ancestry_pubkeys`/`recipient_pubkey` (those are genesis-only and immutable; see §1). Lets a reader learn a card's current values from the current head object alone, with no need to fold `field_updates` across every entry in the log. |
+| `field_updates` | array | Conditional | Present for codes 1xx–7xx; absent for 8xx–9xx. Retained (alongside `card_state`) as the explicit, minimal record of exactly what this entry changed — useful for audit trails and for evaluating `update_policy` predicates against a single field's before/after, without diffing two full `card_state` snapshots. |
 | `revocation` | object | Conditional | Present for codes 8xx–9xx; absent for 1xx–7xx |
 | `revocation.effective_date` | `timestamp` | Yes (if revocation) | May predate the posting date |
 | `revocation.note` | `text` | No | Human-readable context |
 | `notify_holder` | `boolean` | Yes | Defaults to `true`; set `false` to suppress holder notification |
 | `updater_message` | `text` | No | Forwarded to holder in the HTTPS notification |
 | `intent_signature` | SignatureEntry | Yes | Updater's signature over the UpdateIntentPayload |
-| `press_signature` | SignatureEntry | Yes | Press's signature over the complete LogEntry |
+| `press_signature` | SignatureEntry | Yes | Press's signature over the complete LogEntry, including `history` and `card_state` |
 
 **Code → entry_type mapping:**
 
@@ -282,6 +296,8 @@ Every post-genesis state change to a card — field updates, annotations, and re
 |---|---|---|---|
 | 1xx–7xx | `"field_update"` | Present | Absent |
 | 8xx–9xx | `"revocation"` | Absent | Present |
+
+**Provenance verification.** `history` is a claim made by the press that assembled and signed this `LogEntry` — it is not separately stored on-chain; the registry contract's `CardEntries` mapping (§14) still stores only the current `log_head_cid`, unchanged by this amendment. A verifier or auditor that needs cryptographic assurance the reported `history` is genuine (rather than trusting the press's self-consistency) reconstructs the ground-truth CID sequence by replaying that card's `CardRegistered` (genesis, `initial_log_cid`) and `CardHeadUpdated` (each subsequent entry, `new_log_cid`) events from the registry contract — both events are already emitted per write today (`registry_contract.md §7`) — and confirms the replayed sequence matches `history` plus this entry's own CID, in the same order. This is a strict-verification step for auditors and any verifier that must not merely trust the press; a reader fetching a single card only needs today's existing check (the on-chain `log_head_cid` matches the CID of the object actually fetched) to trust that object's content — `history`/`card_state` do not introduce a new mandatory on-chain check for routine reads.
 
 ---
 
@@ -674,6 +690,8 @@ The content of each issuance notification sent to auditors. The `PressIssuanceRe
 
 ## 14. CardEntry (on-chain)
 
+**Changelog:** Fix #1 (`plans/spec-consistency/inconsistencies/phase-1-consolidated-fixes.md`) — added the `forward_to` field below, bringing this struct in line with `registry_contract.md §3.1`'s 5-field version.
+
 **Stored on:** Arbitrum One (on-chain)  
 **Written by:** Press sub-card key (verified on-chain via secp256r1 / RIP-7212 precompile in Phase 1; upgradeable to ML-DSA-44 via ADR-012 upgrade path)  
 **Authoritative spec:** `specs/object_specs/registry_contract.md §3` — that document takes precedence over this section for all implementation details.
@@ -696,6 +714,9 @@ CardEntry {
                                   signed the most recent write (RegisterCard or UpdateCardHead).
                                   Updated on every successful write. Provides an on-chain
                                   attribution trail independent of IPFS content.
+
+    forward_to         bytes32  — If non-zero, the registry address of the card that supersedes
+                                  this one following a key rotation; immutable once set.
 
     exists             bool     — True once the entry has been created by RegisterCard;
                                   used to distinguish unregistered addresses from cards
@@ -785,6 +806,7 @@ The genesis document for a sub-card — a device-bound, app-specific credential 
     }
   ],
   "recipient_pubkey":           "<base64url — sub-card ML-DSA-44 public key, 1312 bytes raw>",
+  "dns_path_scope":             "<regex string — optional; present only when holder_primary_card is a DNS admin card>",
   "issued_at":                  "<ISO 8601 timestamp>",
   "valid_until":                "<ISO 8601 timestamp — optional; absent means no expiry>",
   "attestation_level":          "T2 | T1",
