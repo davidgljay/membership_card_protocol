@@ -118,9 +118,12 @@ pub fn register_policy(
 /// that cannot be rotated, permanent abandonment of a policy). The governance body must
 /// have a clear plan for migrating all cards to new policies before calling this.
 ///
-/// OPEN QUESTION OQ-20: Whether policy deregistration should even be supported is
-/// still under discussion. This stub exists per the implementation plan but may be
-/// disabled in production pending governance charter resolution.
+/// OQ-20 RESOLVED (2026-07-16, spec-consistency Phase 3): policy deregistration is a
+/// confirmed, intended governance capability — this is not a stub. See
+/// `registry_contract.md §9` OQ-20 and `plans/spec-consistency/inconsistencies/phase-3-consolidated-fixes.md`
+/// Tier 3 item (b). Governance charters that want to foreclose this capability entirely
+/// should call `disable_policy_delete_permanently` (§4.16) instead of relying on this
+/// function remaining unused.
 pub fn deregister_policy(
     contract: &mut LogicContract,
     policy_address: B256,

@@ -6,6 +6,12 @@
 **Contract target:** Arbitrum One (Stylus / WASM-compiled Rust)  
 **Amends:** v0.5 — DNS admin card secp256r1 on-chain signing added. New storage table `DnsAdminCardKeys` (§3.11) maps DNS admin card addresses to secp256r1 public keys. `RegisterDomain` (§4.17) accepts and stores the admin's secp256r1 public key. `DeregisterDomain` (§4.18) clears it. `RegisterSubCard` (§4.3) gains two new parameters and an on-chain RIP-7212 verification step triggered when the master card is a DNS admin card; a compromised press can no longer register fraudulent sub-cards of domain admin cards without the admin's secp256r1 private key. Error code E-47 added. See also v0.4→v0.5: DNS authorization model hardened. `SetPolicyAddress` (§4.19) gains explicit domain-card binding check: `admin_card_address` must match `DomainRegistrations[domain].admin_card_address`; optional `sub_card_address` must be a registered direct sub-card of that admin card (`SubCardRegistrations` one-hop check). Governance-quorum write path split into dedicated `GovernanceSetPolicyAddress` (§4.23) for rollback and fraud remediation. `SetDnsGovernancePolicyAddress` (§4.24) added, making `DnsGovernancePolicyAddress` mutable via `DnsGovernanceBody` quorum rather than write-once. `PolicyAddressSet` event gains `sub_card_address` field. Two new events: `PolicyAddressGovernanceSet` and `DnsGovernancePolicyAddressUpdated`. Error codes E-45–E-46 added. See also v0.3→v0.4: DNS resolution support added. `DnsGovernanceBody` added to `GovernanceBodyId` enum (§3.6). New storage tables `DomainRegistrations` (§3.8), `PolicyAddresses` (§3.9), and global variable `DnsGovernancePolicyAddress` (§3.10). Six new write operations §4.17–4.22. Two new read operations in §5. Six new events in §7. Error codes E-37–E-44 in §8. See also `specs/dns_resolution.md` for the full DNS resolution protocol spec. See also v0.2→v0.3: three-contract architecture adopted (storage / logic / verifier). Logic contract is upgradeable via 7-day timelock `UpgradeLogic` (RootPolicyBody). Storage contract is immutable and enforces unconditional audit-trail invariants. §3.7, §4.14, §6.3 added/rewritten; events, error codes, and read operations updated. See also v0.1→v0.2: on-chain verification changed from ML-DSA-44 to secp256r1/RIP-7212 per ADR-012.
 
+**Changelog (spec-consistency Phase 1):** §2's `CardEntry` field count corrected from "4-field" to "5-field" (Fix #1); §3.1 gains a clarifying note on currently-supported vs. reserved CID hash algorithms (Fix #6). See `plans/spec-consistency/inconsistencies/phase-1-consolidated-fixes.md`.
+
+**Changelog (spec-consistency Phase 3, Tier 1 items 2–3):** documented two already-implemented, previously-undocumented behaviors — §4.25 `SetProtocolVersion` (write op, §5 read op, `ProtocolVersionUpdated` event) and §4.3's new precondition 2a / error `E-48 SUB_CARD_ADDRESS_RETIRED` (a deregistered sub-card address can never be re-registered). See `plans/spec-consistency/inconsistencies/phase-3-consolidated-fixes.md`.
+
+**Changelog (spec-consistency Phase 2, Step C):** §4.4 `DeregisterSubCard`'s off-chain (press-verified) authorization now accepts a valid signature from any of three signers — the master card holder key, the requesting app's own card key, or the sub-card's own key — as independent, sufficient paths, applicable to both suspected-compromise (810) and benign (811) removal scenarios; the master-key path remains available as a recovery fallback (Decision (b), resolved). §8's `E-22` description updated to match. See `plans/spec-consistency/inconsistencies/phase-2-consolidated-fixes.md`.
+
 ---
 
 ## Table of Contents
@@ -84,7 +90,7 @@ The registry is deployed as **three separate contracts** (see §6.3 for full det
 
 ## 2. Relationship to Existing Specs
 
-This spec extends and supersedes the `RegistryEntry` description in `protocol-objects.md §14`. The per-card entry structure defined there — `(address, log_head_cid)` — is expanded here with two additional on-chain fields: `policy_address` and `last_press_address` (§3.1). **`protocol-objects.md §14` has been updated (2026-06-14) to show the full 4-field `CardEntry` struct and reference this spec as authoritative.**
+This spec extends and supersedes the `RegistryEntry` description in `protocol-objects.md §14`. The per-card entry structure defined there — `(address, log_head_cid)` — is expanded here with two additional on-chain fields: `policy_address` and `last_press_address` (§3.1). **`protocol-objects.md §14` has been updated (2026-06-14) to show the full 5-field `CardEntry` struct and reference this spec as authoritative.**
 
 The governance tables (`PolicyAuthorizerKeys`, `PressAuthorizations`, `RegisterPolicy`, `AuthorizePress`, `RevokePress`, `RotateAuthorizerKey`) are adopted from `ARCHITECTURE.md` ADR-011, which is the authoritative source for their original specification. This document extends them with the full function signatures, authorization checks, and storage layout required for implementation.
 
@@ -132,6 +138,8 @@ CardEntry {
 All card addresses are `bytes32` keys derived as `keccak256(recipient_pubkey)`; `log_head_cid` is always stored as plaintext CID bytes.
 
 **Encoding of `log_head_cid`:** The CID is stored as raw bytes (multihash format). Maximum length is 64 bytes, which accommodates SHA2-256 (34 bytes), SHA3-256 (34 bytes), and BLAKE3 (34 bytes) CIDs. The contract does not validate CID format; format is the press's responsibility.
+
+**Note on currently-supported vs. reserved hash algorithms:** the 64-byte size accommodates all three algorithms above for future flexibility, but the reference press implementation (`press.md §5.1`'s `pinToIPFS` CID-rederivation step) currently only produces and validates SHA2-256 CIDs. SHA3-256 and BLAKE3 are reserved for future use and are not currently implemented by any press in this spec set.
 
 ---
 
@@ -649,7 +657,8 @@ The `sub_card_address` and `sub_card_doc_cid` fields in `AdminAuthorizeSubCardPa
 **Preconditions checked by contract:**
 
 1. `master_card_address` exists in `CardEntries`.
-2. `sub_card_address` does not already exist in `SubCardRegistrations` with `active == true`.
+2. `sub_card_address` does not already exist in `SubCardRegistrations` with `active == true`. Error: `SUB_CARD_ALREADY_ACTIVE` (E-11).
+2a. **If `sub_card_address` exists in `SubCardRegistrations` with `deregistered_at != 0` (previously registered, since deregistered), this call is rejected with `SUB_CARD_ADDRESS_RETIRED` (E-48)** — a deregistered sub-card address can never be re-registered, matching the `deregistered_at` write-once-non-zero storage invariant (§3.7). Added 2026-07-16, Phase 3 Tier 1 item 3.
 3. `registration_log_head` matches `CardEntries[master_card_address].log_head_cid` at call time.
 4. Press authorization checks (§6.1) pass for the master card's policy.
 5. **Admin card secp256r1 check (conditional on master card type):**
@@ -690,7 +699,8 @@ The `sub_card_address` and `sub_card_doc_cid` fields in `AdminAuthorizeSubCardPa
 DeregisterSubCard(
     sub_card_address   bytes32,
     sig_payload        bytes,
-    signature          bytes[2420]  — ML-DSA-44 (master card holder key; verified off-chain by press)
+    signature          bytes[2420]  — ML-DSA-44; verified off-chain by press against one of
+                                      three possible signers (see note below)
 ) → void
 ```
 
@@ -699,7 +709,15 @@ DeregisterSubCard(
 1. `sub_card_address` exists in `SubCardRegistrations` with `active == true`.
 2. Press authorization checks (§6.1) pass for the master card's policy.
 
-> **Master signature is press-side only.** The press verifies that `signature` is a valid ML-DSA-44 signature from the master card's primary card key over `sig_payload`, resolving the holder's public key from the master card's `CardDocument` on IPFS before submission. The contract does not re-verify the signature. Sub-card keys cannot authorize their own deregistration. If the primary card key has been lost and not yet recovered, the holder must complete key recovery before deregistering sub-cards.
+> **Signature authorization is press-side only, with three independent valid signer paths (Decision (b), `plans/spec-consistency/inconsistencies/phase-2-consolidated-fixes.md`).** The press verifies `signature` over `sig_payload` against **any one** of the following ML-DSA-44 keys — any single valid signature from any one of the three is sufficient; the contract does not re-verify the signature or care which path was used:
+>
+> - **(a) the master card's holder key** — resolved from the master card's `CardDocument` on IPFS (the `holder_primary_card_pubkey`/`recipient_pubkey` of the master card itself, per §4 note below);
+> - **(b) the requesting app's own card key** — resolved from the `SubCardDocument`'s `app_card_pubkey` at `sub_card_doc_cid`; or
+> - **(c) the sub-card's own key** — resolved from the `SubCardDocument`'s `recipient_pubkey` at `sub_card_doc_cid`.
+>
+> This applies uniformly regardless of whether the deregistration is triggered by a suspected key compromise (code 810) or a benign/cooperative removal such as app uninstall or device retirement (code 811) — both scenarios are valid triggers for any of the three signers (`subcard_creation_policy.md`/`wallet_sdk.md §6.4`).
+>
+> **The master-key path remains available as a recovery fallback.** Paths (b) and (c) exist so the app or the sub-card itself can cooperatively self-deregister without requiring the holder's primary key to be online. The master-key path (a) stays available independently of app/device cooperation — e.g. if the app is uninstalled or unreachable and the holder needs to force-deregister a sub-card the app itself can no longer cooperate on. If the primary card key has been lost and not yet recovered, and neither the app nor the sub-card key is available either, the holder must complete key recovery before deregistering that sub-card.
 
 After recovery from a key compromise, all sub-cards should be deregistered and re-issued.
 
@@ -1841,6 +1859,43 @@ SetDnsGovernancePolicyAddress(
 
 ---
 
+### 4.25 SetProtocolVersion
+
+**Added 2026-07-16 (spec-consistency Phase 3, Tier 1 item 2) — documents an already-implemented operation this spec had omitted.**
+
+**Called by:** Root Policy Governance Body (quorum required)
+**Purpose:** Update the global protocol version string returned by `GetProtocolVersion()` (§5), which the press reads and attaches to every `CardDocument` it assembles (`protocol-objects.md §1`) and which message senders may attach to `SignedMessageEnvelope.payload.protocol_version`.
+
+```
+SetProtocolVersion(
+    new_version          string,    — Must be non-empty. E.g. "0.2".
+    governance_payload   bytes,
+    governance_sigs      bytes[]    — RootPolicyBody quorum
+) → void
+```
+
+**Preconditions:**
+
+1. `new_version` is non-empty. Error: `INVALID_PAYLOAD`.
+2. `RootPolicyBody` quorum signature check (§6.2).
+
+**State changes:**
+
+- Records `old_version` (the previously stored value, or `"0.1"` if the storage slot has never been set — contracts deployed before this operation was added are treated as v0.1).
+- Sets the stored protocol version to `new_version`.
+- Emits `ProtocolVersionUpdated(old_version, new_version, block.timestamp)`.
+
+**Effective immediately.** Presses and message senders should call `GetProtocolVersion()` (§5) before assembling each artifact to pick up the new value. There is no transition window — verifiers continue to accept every version in their own `KNOWN_PROTOCOL_VERSIONS` list regardless of which version is currently live on-chain, until a future logic upgrade removes old entries from that list.
+
+**Acceptance criteria:**
+
+- [ ] A valid governance-quorum call updates the stored version and emits `ProtocolVersionUpdated` with the correct old/new values.
+- [ ] `GetProtocolVersion()` reflects the new value immediately after the call confirms.
+- [ ] Returns `INVALID_PAYLOAD` if `new_version` is empty.
+- [ ] Returns the quorum-insufficiency error if `RootPolicyBody` quorum is not met.
+
+---
+
 ## 5. Read Operations
 
 These are view functions — no state change, no fee beyond RPC costs.
@@ -1861,6 +1916,7 @@ These are view functions — no state change, no fee beyond RPC costs.
 | `LookupPolicyAddress(domain string, path string)` | `bytes32` | Returns `PolicyAddresses[keccak256(domain_bytes \|\| 0x00 \|\| path_bytes)]`. Returns `bytes32(0)` if no entry is registered at this domain/path. The domain is lowercased by the contract before key derivation. |
 | `GetDomainRegistration(domain string)` | `DomainEntry` | Full domain entry including `admin_card_address`, `registered_at`, `fraud_risk`, `suspension_expires_at`, `exists`. Returns zero-value `DomainEntry` (exists = false) if the domain is not registered. |
 | `GetDnsAdminCardKey(card_address bytes32)` | `bytes[64]` | Returns the secp256r1 public key registered for a DNS admin card via `RegisterDomain`. Returns `bytes[64](0)` if `card_address` is not a registered DNS admin card or if its domain has been deregistered. Used by presses to confirm whether a master card requires `admin_secp_signature` before submitting `RegisterSubCard`. |
+| `GetProtocolVersion()` | `string` | The current protocol version (§4.25), e.g. `"0.1"`. Read by presses before assembling each `CardDocument` and by message senders populating `SignedMessageEnvelope.payload.protocol_version`. Returns `"0.1"` if `SetProtocolVersion` has never been called (added 2026-07-16, Phase 3 Tier 1 item 2). |
 
 ---
 
@@ -1898,6 +1954,8 @@ The following check is applied on every call to `RegisterCard`, `UpdateCardHead`
    CardEntries[card_address].log_head_cid.
    → Error: STALE_PREV_CID
 ```
+
+> **Known gap, confirmed 2026-07-16 (spec-consistency Phase 3, Tier 3 item (a)) — pending resolution, not yet fixed.** The write-gate implementation (`contracts/logic-contract/src/write_gate.rs`) verifies the press's signature over the signed payload and checks only `op` and `sequence` from that payload against contract state — it does not cross-check any other signed field (`card_address`, CIDs, `policy_address`, the `updates` array in batch operations, `domain`/`path` in DNS operations) against the actual calldata parameters being written. A valid signature+payload pair does not currently bind the signer to specific written content. The DNS-admin `AdminAuthorizeSubCardPayload` check (§4.3) has the same shape of gap: it confirms `sub_card_address`/`sub_card_doc_cid` are *present* in the payload but not that they *equal* the calldata values, despite this section's error `E-47` being intended to enforce that equality. The intended fix is a real field-by-field equality check — confirming the press is authorized to write the specific card/policy/domain named in the calldata, not just that *some* valid signature with the right sequence number exists — to be designed and implemented as a follow-up, not folded silently into this consistency pass. See `plans/spec-consistency/inconsistencies/phase-3-consolidated-fixes.md` Tier 3 item (a).
 
 ### 6.2 Governance Quorum Verification
 
@@ -2153,6 +2211,12 @@ DnsGovernancePolicyAddressUpdated(
     new_address   bytes32,   — New DnsGovernancePolicyAddress value
     timestamp     uint64
 )
+
+ProtocolVersionUpdated(
+    old_version   string,   — Protocol version string before the update (§4.25)
+    new_version   string,   — New protocol version string
+    timestamp     uint64
+)
 ```
 
 **`AddressTransition` purpose (DNS resolution spec).** This event is the on-chain archive of address changes resulting from master key rotations. Off-chain indexers can build an `old_address → new_address` lookup table from these events, enabling resolution of old addresses even when the old card's IPFS content is no longer pinned and the IPFS-level `successor` field is unreachable. See `key_rotation.md §2.3`.
@@ -2189,7 +2253,7 @@ DnsGovernancePolicyAddressUpdated(
 | E-19 | `QUORUM_TOO_LOW` | `RotateGovernanceKeys` proposes `new_quorum <= len(new_keys)/2` |
 | E-20 | `KEYSET_TOO_SMALL` | `RotateGovernanceKeys` proposes fewer than 3 keys |
 | E-21 | `LOG_CID_TOO_LONG` | CID bytes exceed 64-byte maximum |
-| E-22 | `INVALID_MASTER_SIGNATURE` | **Press-side rejection** — press detected an invalid ML-DSA-44 master card holder signature before submitting `RegisterSubCard` or `DeregisterSubCard`. Not an on-chain revert; the press refuses to submit. |
+| E-22 | `INVALID_MASTER_SIGNATURE` | **Press-side rejection** — press detected an invalid ML-DSA-44 signature before submitting `RegisterSubCard` (master card holder signature only) or `DeregisterSubCard` (master card holder signature, requesting app card signature, or sub-card's own signature — see §4.4, Decision (b)). Not an on-chain revert; the press refuses to submit. |
 | E-23 | `KEY_SCHEME_ALREADY_UPGRADED` | `RotateOnChainKeyScheme` called for a press already on ML-DSA-44 (`key_scheme == 1`) |
 | E-24 | `SCHEME_UPGRADE_NOT_AVAILABLE` | `RotateOnChainKeyScheme` called while contract is still in Phase 1 (`key_scheme_phase == 0`) |
 | E-25 | `ROTATION_PAYLOAD_EXPIRED` | `RotateOnChainKeyScheme` `deadline_block` has passed |
@@ -2215,6 +2279,7 @@ DnsGovernancePolicyAddressUpdated(
 | E-45 | `SUB_CARD_NOT_DOMAIN_ADMIN_SUBCARD` | `sub_card_address` in `SetPolicyAddress` is non-zero but fails the on-chain binding check: either `SubCardRegistrations[sub_card_address]` does not exist, `active == false`, or `master_card_address != admin_card_address`. Sub-sub-cards (depth > 1 from the domain admin) also trigger this error since the one-hop check fails. |
 | E-46 | `ADMIN_CARD_MISMATCH` | `admin_card_address` in `SetPolicyAddress` does not match `DomainRegistrations[domain].admin_card_address`. The caller supplied an admin card that is not the registered admin for this domain. |
 | E-47 | `INVALID_ADMIN_CARD_SIGNATURE` | `RegisterSubCard` failed the admin card secp256r1 check (§4.3 precondition 5). Covers: missing signature when master is a DNS admin card; payload field mismatch (`sub_card_address` or `sub_card_doc_cid` inconsistent with calldata); RIP-7212 signature verification failure; and spurious non-zero signature when master is not a DNS admin card. |
+| E-48 | `SUB_CARD_ADDRESS_RETIRED` | `RegisterSubCard` called for a `sub_card_address` that was previously registered and later deregistered (`SubCardRegistrations[sub_card_address].deregistered_at != 0`). Deregistered sub-card addresses can never be reused — `deregistered_at` is write-once-non-zero (§3.7), so a fresh registration attempt (which would write `deregistered_at = 0`) is rejected by the storage contract's invariant check before it can silently resurrect a retired entry. Added 2026-07-16, Phase 3 Tier 1 item 3 — this behavior was already implemented and intentional (audit-trail preserving); this error code was previously undocumented. |
 
 ---
 
@@ -2232,7 +2297,7 @@ The following questions must be resolved before the contract is deployed or befo
 | ~~**OQ-18**~~ | Engineering | ~~**Contract upgradeability.**~~ **Resolved 2026-06-14.** Modular verifier architecture adopted (option c): immutable storage contract + upgradeable verifier module (§6.3). The verifier module starts as a thin RIP-7212 wrapper (Phase 1) and is upgraded to a ML-DSA-44 Stylus WASM verifier via `UpgradeVerifier` governance operation with 48-hour timelock when the key scheme upgrade occurs. | ~~High~~ |
 | **OQ-3** | Engineering | **Minimum IPFS replication before on-chain write.** When a press calls `RegisterCard` or `UpdateCardHead`, it includes an IPFS CID. If the content is not yet replicated (the CID is not resolvable), verifiers will be unable to fetch the log entry. Should the protocol require presses to confirm a minimum replication count before submitting the on-chain transaction? How is this enforced? | **Medium** |
 | ~~**OQ-19**~~ | Engineering | ~~**Batch write operation.**~~ **Resolved 2026-06-19.** `BatchUpdateCardHeads` added as §4.15. Restricted to a single policy per batch (preserves per-(policy, press) sequence semantics). Atomic execution (all-or-nothing). Single sequence increment for the entire batch. MAX_BATCH_SIZE = 100. Emits individual `CardHeadUpdated` events per item for indexer compatibility. `RegisterCard` batching deferred — open-offer and policy-address permutations make batch registration substantially more complex; revisit if press economics require it. | ~~Medium~~ |
-| **OQ-20** | Governance | **Policy deregistration.** Once a policy is registered via `RegisterPolicy`, can it be deregistered? The current design has no delete operation for `PolicyAuthorizerKeys`. Removing a policy address would cause all presses authorized under it to lose write authority and all cards under it to become non-writable. This may be a desired kill-switch capability for compromised or abandoned policies, but it must be governed carefully. **Note (2026-06-19):** The three-contract model (§6.3) makes `DeregisterPolicy` straightforwardly addable via a future logic upgrade, without a storage migration. The storage invariant that `PolicyAuthorizerKeys` has no delete setter would need to be revisited if a deregistration path is adopted. **Note (resolution path):** `DisablePolicyDeletePermanently` (§4.16) allows governance to resolve OQ-20 in the "no deregistration" direction without a storage contract redeployment. The capability is present at deploy time; governance may permanently disable it once the governance charter decision is made. | **Medium** |
+| ~~**OQ-20**~~ | Governance | ~~**Policy deregistration.**~~ **Resolved 2026-07-16 (spec-consistency Phase 3).** `DeregisterPolicy` is a confirmed, intended governance kill-switch capability for compromised or abandoned policies, gated by `RootPolicyBody` quorum (`governance_ops.rs::deregister_policy`, already implemented and shipped). Removing a policy address causes all presses authorized under it to lose write authority and all cards under it to become permanently non-writable, with no re-registration path — governance must have a migration plan for affected cards before calling it. `DisablePolicyDeletePermanently` (§4.16) remains available as a separate, one-way governance action for charters that want to foreclose this capability entirely; absent that call, `DeregisterPolicy` stays available as designed. See `plans/spec-consistency/inconsistencies/phase-3-consolidated-fixes.md` Tier 3 item (b). | ~~Medium~~ |
 | **OQ-22** | Engineering | **Storage invariant scope.** The five unconditional invariants in §3.7 were chosen to preserve the audit trail (existence, forwards, timestamps). Are there additional invariants worth enforcing in the storage contract now, before the first logic upgrade path is exercised? Candidates: minimum quorum enforcement in `GovernanceKeysets` (currently checked by logic), monotonic `next_sequence` increments (currently checked by logic). Adding more invariants to the storage contract increases blast-radius protection but reduces flexibility of future logic upgrades. | **Low** |
 | **OQ-14** | Governance | **Coercion resistance / governance key holder identity.** Should governance body key holders be pseudonymous (organizations or anonymous participants, harder to coerce) or identifiable (named individuals/organizations with public accountability, easier to hold accountable but more coercible)? Deferred pending governance charter design. Carried forward from `ARCHITECTURE.md` ADR-011. | **Medium** |
 | **OQ-21** | Engineering | **Event indexing and the `approved_presses` sync problem.** ADR-011 notes that the `approved_presses` array in the policy card's IPFS content should be kept in sync with on-chain `PressAuthorizations` by tooling. The contract's `PressAuthorized` and `PressRevoked` events are the trigger. Should the protocol specify a canonical indexer interface (e.g., a subgraph schema) to make this sync reliable across implementations? | **Low** |

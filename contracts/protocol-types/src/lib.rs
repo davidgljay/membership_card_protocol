@@ -46,6 +46,8 @@
 //! | E-32 | UPGRADE_ADDRESS_MISMATCH | Confirmation address != pending address |
 //! | E-33 | BATCH_SIZE_INVALID | BatchUpdateCardHeads: empty or > 100 items |
 //! | E-34 | BATCH_ITEM_INVALID | Duplicate card or cross-policy item in batch |
+//! | E-35 | POLICY_DELETE_DISABLED | delete_policy_authorizer_key called after PolicyDeleteDisabled is set |
+//! | E-36 | POLICY_DELETE_ALREADY_DISABLED | DisablePolicyDeletePermanently called when already disabled |
 //! | E-37 | DOMAIN_NOT_FOUND | Operation targets a domain with exists == false |
 //! | E-38 | DOMAIN_ALREADY_REGISTERED | RegisterDomain when domain already has active admin |
 //! | E-39 | DOMAIN_SUSPENDED | SetPolicyAddress on suspended domain |
@@ -242,6 +244,14 @@ pub enum ContractError {
     BatchSizeInvalid,
     /// E-34: Batch item failed: duplicate card_address or cross-policy card.
     BatchItemInvalid,
+
+    // Policy delete-disable errors (§8; added 2026-07-16, Phase 3 Tier 1 item 5 —
+    // these variants were missing despite E-35/E-36 already being implemented and
+    // enforced by the storage contract).
+    /// E-35: delete_policy_authorizer_key called after PolicyDeleteDisabled has been set true.
+    PolicyDeleteDisabled,
+    /// E-36: DisablePolicyDeletePermanently called when PolicyDeleteDisabled is already true.
+    PolicyDeleteAlreadyDisabled,
 
     // DNS operation errors (§8, E-37–E-47)
     /// E-37: Domain not found in DomainRegistrations (exists == false).

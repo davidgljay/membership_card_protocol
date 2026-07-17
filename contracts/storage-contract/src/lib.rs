@@ -68,17 +68,21 @@ const E_DEREGISTERED_AT_IMMUTABLE: &[u8; 4] = b"\x7a\x1f\x2c\x99";
 /// Selector for InvalidAddress.
 const E_INVALID_ADDRESS: &[u8; 4] = b"\xa2\x3f\x91\x7c";
 
-/// Selector for PolicyDeleteDisabled (E-35).
-/// TODO: Replace with keccak256("PolicyDeleteDisabled()")[0..4] before deployment.
-const E_POLICY_DELETE_DISABLED: &[u8; 4] = b"\x00\x00\x00\x01";
+/// Selector for PolicyDeleteDisabled (E-35). keccak256("PolicyDeleteDisabled()")[0..4],
+/// matching logic-contract/src/lib.rs::errors::POLICY_DELETE_DISABLED's make_error() output.
+/// (Spec-consistency Phase 3, Tier 1 item 4 — was a placeholder, now the real selector.)
+const E_POLICY_DELETE_DISABLED: &[u8; 4] = &[0x62, 0xe2, 0x56, 0x6c];
 
-/// Selector for PolicyDeleteAlreadyDisabled (E-36).
-/// TODO: Replace with keccak256("PolicyDeleteAlreadyDisabled()")[0..4] before deployment.
-const E_POLICY_DELETE_ALREADY_DISABLED: &[u8; 4] = b"\x00\x00\x00\x02";
+/// Selector for PolicyDeleteAlreadyDisabled (E-36). keccak256("PolicyDeleteAlreadyDisabled()")[0..4],
+/// matching logic-contract/src/lib.rs::errors::POLICY_DELETE_ALREADY_DISABLED's make_error() output.
+/// (Spec-consistency Phase 3, Tier 1 item 4 — was a placeholder, now the real selector.)
+const E_POLICY_DELETE_ALREADY_DISABLED: &[u8; 4] = &[0x26, 0xd4, 0x4d, 0xf6];
 
 /// Selector for domain exists write-once invariant (storage-level, not in spec error table).
 /// Fired when set_domain_entry tries to clear exists from true to false.
-const E_DOMAIN_EXISTS_IMMUTABLE: &[u8; 4] = b"\x00\x00\x00\x03";
+/// keccak256("DomainExistsImmutable()")[0..4].
+/// (Spec-consistency Phase 3, Tier 1 item 4 — was a placeholder, now the real selector.)
+const E_DOMAIN_EXISTS_IMMUTABLE: &[u8; 4] = &[0x4c, 0x09, 0x9f, 0x45];
 
 // ─── Storage structs ──────────────────────────────────────────────────────────
 
