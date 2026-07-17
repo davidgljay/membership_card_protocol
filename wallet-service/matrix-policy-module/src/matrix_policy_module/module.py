@@ -187,6 +187,38 @@ class PolicyModule:
             self.config.membership_registry_path, self.config.membership_registry_key_path
         )
         self._cache = ChainWalkCache(refresh_revocation=self._refresh_revocation)
+        # TODO (found during spec-consistency review, 2026-07-16): the event-driven
+        # revocation watcher is fully built and unit-tested (watcher.py's Watcher,
+        # rpc_provider.py's CardHeadEventSubscription over arbitrum_rpc_ws_url — a
+        # real, working web3 WebSocket subscription to the registry contract's
+        # CardHeadUpdated event per registry_contract.md §7, not a stub) but is
+        # never constructed or started here. This is the only production entrypoint
+        # Synapse's module loader calls, so today no watcher process, subscription
+        # loop, backstop loop, or startup reconciliation runs anywhere — a card
+        # revoked on-chain after join is never re-checked (see
+        # matrix_join_attestation_and_revocation.md §3.1 and
+        # plans/spec-consistency/inconsistencies/phase-3-consolidated-fixes.md
+        # Tier 3 item (e)). To close this gap, __init__ needs to:
+        #   1. Build a CardHeadEventSubscription(self.config.arbitrum_rpc_ws_url,
+        #      self.config.registry_contract_address) and a
+        #      ModuleApiForcePartClient(api, self.config.enforcement_matrix_user_id).
+        #   2. Construct Watcher(self._registry, self._cache, admin_client,
+        #      subscription, backstop_interval_seconds=self.config.
+        #      watcher_backstop_interval_seconds).
+        #   3. Call self._registry.reconcile(...) once at startup against Synapse's
+        #      live room-membership list (matrix_join_attestation_and_revocation.md
+        #      §2a), before the watcher starts consuming events.
+        #   4. Start watcher.run_subscription_loop() and watcher.run_backstop_loop()
+        #      as background asyncio tasks — Synapse module __init__ is not itself
+        #      async, so this needs whatever "schedule a background task on the
+        #      running event loop" hook Synapse's ModuleApi exposes for this
+        #      (unconfirmed — needs research, not assumed).
+        # Left as a TODO rather than wired up in this pass: this is a startup/
+        # lifecycle change to the only production entrypoint, not a small,
+        # self-evidently-safe edit, and it deserves its own scoped
+        # implementation + integration test (module.py's own docstring above
+        # documents how easily "looks wired up" and "actually runs against real
+        # Synapse" diverge here) rather than being folded into an unrelated pass.
         api.register_spam_checker_callbacks(
             user_may_join_room=self.user_may_join_room,
             check_event_for_spam=self.check_event_for_spam,

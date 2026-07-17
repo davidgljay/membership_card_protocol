@@ -3,9 +3,11 @@
 **Version:** 0.1 (draft)
 **Date:** 2026-07-10
 **Status:** Draft
-**Companion documents:** `specs/messaging_protocol.md §Common Envelope, §Address Model`, `specs/object_specs/matrix_room.md`, `specs/process_specs/matrix_room_membership.md §5 (Per-Room Card Binding)`, `specs/process_specs/matrix_join_attestation_and_revocation.md` (reuses `verifyMatrixUserIdBinding` for join-time attestation verification, per that document's §2), `plans/matrix-strategic-plan.md §Rationale (why native Matrix E2EE)`
+**Companion documents:** `specs/messaging_protocol.md §Common Envelope, §Address Model`, `specs/object_specs/matrix_room.md`, `specs/object_specs/matrix_synapse_module.md` (cited in §3/§4 — e.g. `matrix_server_name` config), `specs/process_specs/matrix_room_membership.md §5 (Per-Room Card Binding)`, `specs/process_specs/matrix_join_attestation_and_revocation.md` (reuses `verifyMatrixUserIdBinding` for join-time attestation verification, per that document's §2), `plans/matrix-strategic-plan.md §Rationale (why native Matrix E2EE)`
 
 **Note (2026-07-11):** §3's discussion of how the Synapse module resolves a bare Matrix ID to a `card_hash` at authorization time is superseded by `specs/process_specs/matrix_join_attestation_and_revocation.md` — the module no longer queries `wallet-service` for this at all (that resolver endpoint was removed from scope entirely). See §3's updated text below; this note exists so the change is visible without reading the whole section.
+
+**Changelog (spec-consistency Phase 1):** Fix #28 — corrected the retired `client-sdk` signing-call-site citation to `app-sdk`; Fix #37 — added `matrix_synapse_module.md` to companion documents. See `plans/spec-consistency/inconsistencies/phase-1-consolidated-fixes.md`.
 
 **This document supersedes `raw_notes/matrix.md §Message Structure and Encryption` in its entirety.** The note's hybrid AES-256 room-key model, its `unsigned.card_signatures` block, and its "server signature over ciphertext" concept do not appear anywhere below and should not be treated as residual design intent.
 
@@ -55,7 +57,7 @@ The Megolm-encrypted event body's plaintext (i.e., the `content` object of an `m
 
 - The two-part `payload` / `signatures` shape.
 - `type` and `content` follow the same message-type taxonomy (`text`, `reaction`, `reply`, `edit`, etc. — `messaging_protocol.md §Message Type Taxonomy`); a room message is typed and structured exactly like a 1:1 message's payload.
-- Signing: `signatures[].signature` is an ML-DSA-44 signature (`mlDsa44Sign`, `client-sdk/packages/client-sdk/src/crypto/mldsa.ts`) over the canonical RFC 8785 JSON encoding (`canonicalize()`, `wallet-service/src/canonicalize.ts` and its `client-sdk` equivalent) of `payload` — the identical signing call site and canonicalization function used for every other message type, not a new one.
+- Signing: `signatures[].signature` is an ML-DSA-44 signature (`mlDsa44Sign`, `app-sdk/packages/app-sdk/src/crypto/mldsa.ts`) over the canonical RFC 8785 JSON encoding (`canonicalize()`, `app-sdk/packages/app-sdk/src/crypto/canonicalize.ts`, per `app_sdk.md §5`) of `payload` — the identical signing call site and canonicalization function used for every other message type, not a new one.
 - The signer's card hash is derived from `signatures[].public_key` via `keccak256(public_key)`, exactly as in `messaging_protocol.md` — it is not stored redundantly in the envelope.
 - `protocol_version` is required, with the same semantics (read from `getProtocolVersion()`, reject on unknown/missing version).
 

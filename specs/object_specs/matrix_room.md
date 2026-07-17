@@ -1,9 +1,15 @@
 # Matrix Room — Object Spec
 
-**Version:** 0.1 (draft)
-**Date:** 2026-07-10
+**Version:** 0.1 (draft, amended 2026-07-11)
+**Date:** 2026-07-10 (amended 2026-07-11)
 **Status:** Draft
-**Companion documents:** `plans/matrix-strategic-plan.md`, `plans/matrix-implementation-plan.md`, `specs/process_specs/matrix_room_membership.md`, `specs/object_specs/matrix_synapse_module.md`, `specs/object_specs/matrix_encryption.md`
+**Companion documents:** `plans/matrix-strategic-plan.md`, `plans/matrix-implementation-plan.md`, `specs/process_specs/matrix_room_membership.md`, `specs/object_specs/matrix_synapse_module.md`, `specs/object_specs/matrix_encryption.md`, `specs/process_specs/matrix_join_attestation_and_revocation.md`, `specs/process_specs/room_discovery.md`
+
+**Amended 2026-07-11:** incorporates the join-attestation redesign (`matrix_join_attestation_and_revocation.md` replacing the wallet-service resolver call referenced in earlier drafts) and adds the `room_discovery.md` cross-reference for room-index discoverability (§Room Creation).
+
+**Changelog (spec-consistency Phase 1):** Fixes #33–#37 — Room Creation now specifies initial `m.room.encryption`/`m.room.power_levels` state, citation/terminology fixes, and companion-document list completed. See `plans/spec-consistency/inconsistencies/phase-1-consolidated-fixes.md`.
+
+**Changelog (spec-consistency Phase 3, Tier 3 item (g)):** §Room Creation now documents the load-bearing `m.room.join_rules: "public"` initial state event — omitted before this correction, though already present and tested in code. See `plans/spec-consistency/inconsistencies/phase-3-consolidated-fixes.md`.
 
 ---
 
@@ -24,14 +30,14 @@ A room's access rule is a **predicate document**: a JSON object, stored on IPFS,
   "policies": [
     {
       "ref_type": "cid | pointer",
-      "ref":      "<policy_id CID, if ref_type is \"cid\" — or the policy card's mutable pointer registry address, if ref_type is \"pointer\">",
+      "ref":      "<policy_id CID, if ref_type is \"cid\" — or the policy card's mutable pointer registry address (gloss: the same underlying mechanism `registry_contract.md` calls `card_address`/`policy_address` plus `log_head_cid` — this document just uses the protocol-level term \"mutable pointer\"), if ref_type is \"pointer\">",
       "field_match": { "field": "<name>", "regex": "<pattern>" }
     }
   ]
 }
 ```
 
-- `ref_type: "cid"` — `ref` is a `policy_id` CID, an immutable content snapshot, supplied directly by whoever authors the room predicate document. Evaluated with the protocol's existing `issued_under_template` leaf predicate, unchanged: **pinned** to that exact snapshot, matching how `issued_under_template` behaves everywhere else in the protocol (`card_protocol_spec.md §71`: compliance anchored to the CID pinned at issuance, not the policy's current mutable head).
+- `ref_type: "cid"` — `ref` is a `policy_id` CID, an immutable content snapshot, supplied directly by whoever authors the room predicate document. Evaluated with the protocol's existing `issued_under_template` leaf predicate, unchanged: **pinned** to that exact snapshot, matching how `issued_under_template` behaves everywhere else in the protocol (`card_protocol_spec.md §Protocol-Required Fields`: compliance anchored to the CID pinned at issuance, not the policy's current mutable head).
 - `ref_type: "pointer"` — `ref` is the policy card's **mutable pointer** (its on-chain registry address), given purely as an **authoring convenience**: whoever creates the room predicate document doesn't have to look up the policy's current CID by hand. The system resolves the pointer to its current CID **once, at the moment the predicate document is authored and pinned to IPFS**, and bakes that resolved CID into the document exactly as if `ref_type: "cid"` had been used with that value from the start. **There is no live re-resolution at evaluation time** — once the predicate document exists on IPFS, a `pointer`-originated entry is indistinguishable in behavior from a `cid` entry: both are evaluated with the same `issued_under_template` leaf, both pin to whatever policy content was current when the document was created, and a later edit to the policy at that pointer has no effect on rooms already using this document. This matches how `issued_under_template` pins everywhere else in the protocol — a room's access rule references **the policy in effect at the time the room's predicate document was created**, the same way a card's `policy_id` pins the policy in effect at the time the card was issued. `ref_type` is retained in the document purely as provenance metadata (so an author or auditor can tell how a given CID was originally obtained), not because the module branches on it at evaluation time.
 - `field_match` (optional, per entry) — if present, a card must *also* satisfy `card_field_matches` against the same resolved policy CID for that entry, with the given `field`/`regex`, in addition to being issued under that policy. Kept per-entry rather than as one global constraint across the whole list, since `card_field_matches` needs a specific template to check fields against, and different listed policies may have entirely different field schemas.
 
@@ -120,6 +126,12 @@ New `wallet-service` endpoint (implemented in Phase 4, Step 16). Requires an aut
 - `card_hash` — the card whose shadow Matrix account creates and auto-joins the room. Must belong to the authenticated session.
 - `policy_id` — CID of a predicate document, per the shape above. `wallet-service` does not validate that the CID resolves to well-formed predicate content at creation time beyond a basic parse (the Synapse module is the authority on evaluation; see `matrix_room_membership.md` for deny-by-default handling of a malformed or unreachable predicate document at evaluation time).
 - `name`, `topic` — optional, passed through to Matrix's own `m.room.name` / `m.room.topic` state events.
+
+In addition to `m.card.policy`, `m.room.name`, and `m.room.topic`, room creation also sets three further initial state events:
+
+- **an `m.room.join_rules` state event with `content: { "join_rule": "public" }` (added 2026-07-16 — load-bearing, not documented before this correction; see `wallet-service/src/matrix/room-creation.ts`).** Room creation uses Synapse's `private_chat` preset, whose own default (applied whenever `initial_state` doesn't already include a `join_rules` entry) sets `join_rules` to `"invite"`. Under an invite-only join rule, Synapse's core event-authorization (`event_auth.py` — entirely separate from, and prior to, any policy-module callback) rejects a non-invited user's `/join` with a `403` before `matrix_synapse_module.md`'s callbacks ever run at all. Without this explicit override, the entire card-gating mechanism described throughout `matrix_room_membership.md` never executes: every join by a user who was never separately invited — which is the normal case this whole module exists to authorize instead of Matrix's native invite system — would be rejected at the Matrix protocol layer regardless of attestation validity, before policy evaluation ever begins. This override leaves every other `private_chat` default (`history_visibility: shared`, `guest_access: forbidden`) untouched, and does not affect the room's Matrix public-room-directory listing status (controlled by a separate `visibility` `/createRoom` parameter, unrelated to `join_rule`) — the room remains unlisted as intended;
+- an `m.room.encryption` state event with `content: { "algorithm": "m.megolm.v1.aes-sha2" }` (per `matrix_encryption.md §1`), so every card-gated room is Megolm-encrypted from creation — never created as a plaintext room and upgraded later;
+- an `m.room.power_levels` state event granting kick-level (or higher) power to the Matrix user ID configured as `enforcement_matrix_user_id` (`matrix_synapse_module.md`'s Module Config Schema), so the watcher daemon's force-part mechanism (`matrix_synapse_module.md`, `matrix_join_attestation_and_revocation.md §3.1`) has the room-level permission it needs from the moment the room exists, without a separate follow-up grant.
 
 **Response:**
 

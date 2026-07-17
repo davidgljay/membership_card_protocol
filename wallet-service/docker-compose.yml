@@ -76,10 +76,19 @@ services:
       - card-net
     # NOT exposed publicly; not in `ports:` — only the wallet-service AS
     # bridge and, once client-sdk connects directly for E2EE sync, an
-    # internal-only network path reach it. The container also runs a
-    # long-running watcher process (not a separate Compose service) that
-    # needs outbound network access to ARBITRUM_RPC_WS_URL for the
-    # CardHeadUpdated subscription and occasional backstop re-walks.
+    # internal-only network path reach it.
+    # NOTE (corrected 2026-07-16, spec-consistency review): this comment used to
+    # assert that the container "also runs a long-running watcher process" that
+    # needs outbound access to ARBITRUM_RPC_WS_URL. That is not currently true —
+    # matrix_policy_module/watcher.py's Watcher (subscription loop, backstop
+    # loop, catch-up) is fully built and unit-tested, but
+    # matrix_policy_module/module.py's PolicyModule.__init__ — the only
+    # production entrypoint Synapse's module loader calls — never constructs
+    # or starts it (see the TODO there, and
+    # plans/spec-consistency/inconsistencies/phase-3-consolidated-fixes.md
+    # Tier 3 item (e)). ARBITRUM_RPC_WS_URL is still wired into this service's
+    # config below because the watcher will need it once startup wiring lands;
+    # no process here currently uses it.
 
 volumes:
   wallet_pg_data:

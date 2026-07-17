@@ -7,11 +7,13 @@
 
 **This document supersedes `matrix_room.md`'s framing that card-gated rooms are "otherwise unlisted — no public directory entry."** That was correct for the Matrix room directory specifically (rooms still aren't published there), but it left no way for a card holder to learn which rooms their card qualifies for at all. This document adds that capability without adding a public directory, and without requiring a card to reveal itself to any server to get an answer.
 
+**Changelog (spec-consistency Phase 2):** Fix #48 — reworded the Overview's privacy claim to match `matrix_room.md §What the Synapse Operator Can See`'s exact framing (room membership visible, only message content and the `card_hash`↔Matrix-user-ID binding protected). See `plans/spec-consistency/inconsistencies/phase-2-consolidated-fixes.md`.
+
 ---
 
 ## Overview
 
-A card holder should be able to ask "which rooms can my card access" and get an answer. Nothing about that question requires new confidentiality machinery: a room's `policy_id` is already visible in cleartext room state to anyone who can see the room (`matrix_room.md §What the Synapse Operator Can See`), the predicate document at that CID is already public IPFS content by design, and a card's own chain is already public (`card_protocol_spec.md`'s general stance — only message content and room membership are meant to be private, not policy or chain data). Discovery is therefore a **read over public data**, not a privileged query — and the default implementation should reflect that: **a client-side function, not a server endpoint.**
+A card holder should be able to ask "which rooms can my card access" and get an answer. Nothing about that question requires new confidentiality machinery: a room's `policy_id` is already visible in cleartext room state to anyone who can see the room (`matrix_room.md §What the Synapse Operator Can See`), the predicate document at that CID is already public IPFS content by design, and a card's own chain is already public. This matches `matrix_room.md`'s exact framing of the protocol's confidentiality stance (citing the same `card_protocol_spec.md` source): room membership itself is visible to the Synapse operator, not private — only message content is private, and the one thing actually protected is the binding between a `card_hash` and a Matrix user ID (a one-way commitment the operator cannot invert). Discovery is therefore a **read over public data**, not a privileged query — and the default implementation should reflect that: **a client-side function, not a server endpoint.**
 
 A server-hosted convenience endpoint remains available as a secondary path for clients that can't do local RPC/IPFS work (thin mobile clients, primarily), but it is not the default, and it's designed to learn as little as possible when used.
 
