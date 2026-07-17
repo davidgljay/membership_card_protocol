@@ -30,7 +30,7 @@ export type {
   CardEntry,
   PressAuthEntry,
   SubCardEntry,
-  LogEntry,
+  CardChainEvent,
   EasAttestation,
   CardDocument,
   SubCardDocument,

@@ -275,6 +275,12 @@ async def verify_stage2(
                 message="App signature on sub-card document is invalid",
             )
         )
+        return Stage2Result(
+            scope_clean=False,
+            signer_card=signer_card,
+            app_card_chain_valid=False,
+            errors=errors,
+        )
 
     # Step 14: [Planned] sub-card limitations enforcement
     # TODO: Check that the message payload conforms to all limitations in subCardDoc.limitations
@@ -282,6 +288,32 @@ async def verify_stage2(
     # See: protocol-objects.md §16, messaging_protocol.md §9-11, subcards.md §Limitations
 
     # Step 15: app_card chain walk — confirm app_card chains to appCertificationRoot
+    #
+    # We've now confirmed this signer IS a sub-card (valid bindings, valid holder and
+    # app signatures, active on-chain registration) — this is the point at which the
+    # chain walk would otherwise run. If this verifier instance was never configured
+    # with an app_certification_root, that is a hard, loud failure rather than a
+    # silent skip: a verifier scoped to primary-card-only use can omit this config,
+    # but any sub-card signature it actually encounters must be rejected, not waved
+    # through.
+    if not config.app_certification_root:
+        errors.append(
+            VerificationError(
+                stage=2,
+                code="APP_CERTIFICATION_ROOT_NOT_CONFIGURED",
+                message=(
+                    "Sub-card signature encountered but VerifierConfig.app_certification_root "
+                    "is not configured on this verifier instance"
+                ),
+            )
+        )
+        return Stage2Result(
+            scope_clean=False,
+            signer_card=signer_card,
+            app_card_chain_valid=False,
+            errors=errors,
+        )
+
     app_cert_root = config.app_certification_root
     max_depth = config.max_chain_depth or 64
 

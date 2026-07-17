@@ -8,7 +8,20 @@ export interface RpcProvider {
     pressAddress: string
   ): Promise<PressAuthEntry | null>;
   getSubCardEntry(subCardAddress: string): Promise<SubCardEntry | null>;
-  getLogEntries(cardAddress: string): Promise<LogEntry[]>;
+  /**
+   * Replays the on-chain event log for a card address and returns the ground-truth,
+   * oldest-first sequence of every IPFS object CID this card has ever pointed to,
+   * each paired with the authoritative on-chain timestamp it became the head.
+   *
+   * The registry contract has no on-chain-enumerable per-entry log — `CardEntries`
+   * stores only the current `log_head_cid` (`registry_contract.md §3.1`). This
+   * method reconstructs the ground-truth CID sequence by filtering that card
+   * address's `CardRegistered` (genesis, `initial_log_cid`) and `CardHeadUpdated`
+   * (each subsequent entry, `new_log_cid`) events and ordering by block
+   * (`registry_contract.md §7`). It returns CIDs and timestamps only — never
+   * decrypted card content, which lives on IPFS and is fetched via `IpfsProvider`.
+   */
+  getCardEventLog(cardAddress: string): Promise<CardChainEvent[]>;
   getEasAnnotations(
     cardAddress: string,
     annotatorAddresses: string[]
@@ -46,10 +59,17 @@ export interface SubCardEntry {
   deregistered_at: string | null;
 }
 
-export interface LogEntry {
-  update_code: number;
-  effective_date: string;
+/**
+ * One entry in the on-chain event-replay sequence for a card (see
+ * `RpcProvider.getCardEventLog`). `cid` is the IPFS object that became the head
+ * as of `timestamp` — the genesis `CardDocument` CID for the first entry, or a
+ * post-genesis `LogEntry` CID for every subsequent entry. Does not carry
+ * `update_code`/`entry_type` — those live only in the IPFS content itself, not
+ * on chain; see `stages/stage4.ts` for how content and event-replay are combined.
+ */
+export interface CardChainEvent {
   cid: string;
+  timestamp: string; // ISO 8601 — on-chain block timestamp
 }
 
 export interface EasAttestation {
@@ -115,7 +135,16 @@ export interface FieldRequirement {
 export interface VerifierConfig {
   rpc: RpcProvider;
   ipfs: IpfsProvider;
-  appCertificationRoot: string;
+  /**
+   * The on-chain address (bytes32 hex) of the governance authority's
+   * app-certification policy root. Used by Stage 2 to independently re-walk
+   * a sub-card's app_card ancestry_pubkeys chain at runtime. Optional —
+   * required only for verifier instances that expect to verify signatures
+   * from sub-cards. If a sub-card signature is encountered on a verifier
+   * instance where this is not configured, Stage 2 hard-rejects with
+   * APP_CERTIFICATION_ROOT_NOT_CONFIGURED rather than skipping the check.
+   */
+  appCertificationRoot?: string | undefined;
   trustedRoots?: string[];
   revocationFreshnessWindowSeconds?: number;
   rejectStaleRevocation?: boolean;
@@ -177,6 +206,9 @@ export interface SignatureVerificationResult {
   signature_valid: boolean | null;
   scope_clean: boolean | "skipped";
   chain_reaches_trusted_root: boolean | "skipped";
+  chain_card_addresses: string[]; // on-chain addresses resolved during the Stage 3 chain
+  // walk, ordered from the card itself up to the trusted root. Exposed 2026-07-16
+  // (Phase 3, Tier 1 item 6) — previously computed internally but not surfaced here.
   app_card_chain_valid: boolean | "skipped";
   revocation: RevocationStatus;
   was_valid_at_signing_time: boolean | "skipped";

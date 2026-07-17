@@ -3,7 +3,7 @@ import type {
   CardEntry,
   PressAuthEntry,
   SubCardEntry,
-  LogEntry,
+  CardChainEvent,
   EasAttestation,
 } from "@membership-card-protocol/verifier";
 
@@ -38,10 +38,17 @@ export interface RegistryContract {
     registered_at: string;
     deregistered_at: string | null;
   } | null>;
-  getLogEntries(cardAddress: string): Promise<Array<{
-    update_code: number;
-    effective_date: string;
+  /**
+   * Replays the registry contract's `CardRegistered` (genesis, `initial_log_cid`)
+   * and `CardHeadUpdated` (each subsequent entry, `new_log_cid`) events for
+   * `cardAddress` and returns the ground-truth, oldest-first CID sequence with
+   * each entry's authoritative on-chain `timestamp` (`registry_contract.md §7`).
+   * This is the sole responsibility of the caller-supplied ABI/event-querying
+   * layer; `EthersRpcProvider` itself only forwards the result.
+   */
+  getCardEventLog(cardAddress: string): Promise<Array<{
     cid: string;
+    timestamp: string;
   }>>;
   getEasAnnotations(cardAddress: string, annotatorAddresses: string[]): Promise<Array<{
     uid: string;
@@ -82,9 +89,9 @@ export class EthersRpcProvider implements RpcProvider {
     return entry as SubCardEntry | null;
   }
 
-  async getLogEntries(cardAddress: string): Promise<LogEntry[]> {
-    const entries = await this.#contract.getLogEntries(cardAddress);
-    return entries as LogEntry[];
+  async getCardEventLog(cardAddress: string): Promise<CardChainEvent[]> {
+    const entries = await this.#contract.getCardEventLog(cardAddress);
+    return entries as CardChainEvent[];
   }
 
   async getEasAnnotations(

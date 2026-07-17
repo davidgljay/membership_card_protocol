@@ -33,9 +33,12 @@ const DEFAULTS = {
 } as const;
 
 export class CardVerifier {
-  private readonly config: Required<Omit<VerifierConfig, "registryEndpoint" | "conditions">> & {
+  private readonly config: Required<
+    Omit<VerifierConfig, "registryEndpoint" | "conditions" | "appCertificationRoot">
+  > & {
     registryEndpoint: string | undefined;
     conditions: VerifierConfig["conditions"];
+    appCertificationRoot: string | undefined;
   };
 
   constructor(config: VerifierConfig) {
@@ -45,12 +48,10 @@ export class CardVerifier {
     if (!config.ipfs) {
       throw new CardProtocolError("MISSING_IPFS_PROVIDER", "VerifierConfig.ipfs is required");
     }
-    if (!config.appCertificationRoot) {
-      throw new CardProtocolError(
-        "APP_CERTIFICATION_ROOT_NOT_CONFIGURED",
-        "VerifierConfig.appCertificationRoot is required"
-      );
-    }
+    // appCertificationRoot is intentionally NOT required here — it is only needed
+    // whenever this verifier instance actually encounters a sub-card signature.
+    // Stage 2 hard-rejects with APP_CERTIFICATION_ROOT_NOT_CONFIGURED at the point
+    // it would otherwise attempt the app-cert chain walk, if this is unset.
     this.config = {
       rpc: config.rpc,
       ipfs: config.ipfs,
@@ -86,6 +87,7 @@ export class CardVerifier {
           signature_valid: false,
           scope_clean: "skipped",
           chain_reaches_trusted_root: "skipped",
+          chain_card_addresses: [],
           app_card_chain_valid: "skipped",
           revocation: { status: "unknown", code: null, effective_date: null, data_freshness_seconds: 0 },
           was_valid_at_signing_time: "skipped",
@@ -163,9 +165,11 @@ export class CardVerifier {
     // Stage 3 result: simplified chain for verifyCard (can't walk without pubkey)
     const chainAddresses = [cardAddress];
 
-    // Stage 4: revocation check
+    // Stage 4: revocation check. verifyCard has no pubkey, so no card_content can
+    // ever be decrypted here — Stage 4 falls back to `revocation.status: "unknown"`
+    // for this path (see card_verifier.md §7.4 "verifyCard limitation").
     const stage4 = await verifyStage4(
-      chainAddresses,
+      [{ card_address: cardAddress, public_key: "", card_content: {} }],
       signingTimestamp,
       this.config.rpc,
       this.config
@@ -186,6 +190,7 @@ export class CardVerifier {
       protocol_version: PROTOCOL_VERSION_0_1,
       scope_clean: "skipped",
       chain_reaches_trusted_root: isTrustedRoot,
+      chain_card_addresses: chainAddresses,
       app_card_chain_valid: "skipped",
       revocation: stage4.revocation,
       was_valid_at_signing_time: stage4.was_valid_at_signing_time,
@@ -275,9 +280,11 @@ export class CardVerifier {
       });
     }
 
-    // Stage 4
+    // Stage 4. Reuses Stage 3's already-fetched-and-decrypted `chain` (no second
+    // IPFS fetch pass) — see stage4.ts's doc comment for how content + the
+    // on-chain event-log replay are combined.
     const stage4 = await verifyStage4(
-      stage3.chain_card_addresses,
+      stage3.chain,
       signingTimestamp,
       this.config.rpc,
       this.config
@@ -328,6 +335,7 @@ export class CardVerifier {
       signature_valid: signatureValid,
       scope_clean: stage2.scope_clean,
       chain_reaches_trusted_root: stage3.chain_reaches_trusted_root,
+      chain_card_addresses: stage3.chain_card_addresses,
       app_card_chain_valid: stage2.app_card_chain_valid,
       revocation: stage4.revocation,
       was_valid_at_signing_time: stage4.was_valid_at_signing_time,
@@ -365,6 +373,7 @@ export class CardVerifier {
       signature_valid: signatureValid,
       scope_clean: scopeClean,
       chain_reaches_trusted_root: chainReachesTrustedRoot,
+      chain_card_addresses: overrides.chain.map((link) => link.card_address),
       app_card_chain_valid: appCardChainValid,
       revocation: overrides.revocation,
       was_valid_at_signing_time: overrides.was_valid_at_signing_time,
@@ -396,6 +405,7 @@ export class CardVerifier {
       protocol_version: PROTOCOL_VERSION_0_1,
       scope_clean: "skipped",
       chain_reaches_trusted_root: "skipped",
+      chain_card_addresses: [],
       app_card_chain_valid: "skipped",
       revocation: { status: "unknown", code: null, effective_date: null, data_freshness_seconds: 0 },
       was_valid_at_signing_time: "skipped",

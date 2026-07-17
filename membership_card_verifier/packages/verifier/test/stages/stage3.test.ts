@@ -9,7 +9,7 @@ function mockRpc(overrides: Partial<RpcProvider> = {}): RpcProvider {
     isPolicyAuthorizer: vi.fn().mockResolvedValue(false),
     getPressAuthorization: vi.fn().mockResolvedValue(null),
     getSubCardEntry: vi.fn().mockResolvedValue(null),
-    getLogEntries: vi.fn().mockResolvedValue([]),
+    getCardEventLog: vi.fn().mockResolvedValue([]),
     getEasAnnotations: vi.fn().mockResolvedValue([]),
     ...overrides,
   };

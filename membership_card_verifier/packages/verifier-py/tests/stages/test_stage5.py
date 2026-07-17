@@ -12,7 +12,7 @@ def mock_rpc(**overrides) -> AsyncMock:
     rpc.is_policy_authorizer.return_value = False
     rpc.get_press_authorization.return_value = None
     rpc.get_sub_card_entry.return_value = None
-    rpc.get_log_entries.return_value = []
+    rpc.get_card_event_log.return_value = []
     rpc.get_eas_annotations.return_value = []
     for name, value in overrides.items():
         setattr(rpc, name, value)

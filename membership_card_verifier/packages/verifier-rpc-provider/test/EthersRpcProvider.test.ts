@@ -7,7 +7,7 @@ function mockContract(overrides: Partial<RegistryContract> = {}): RegistryContra
     isPolicyAuthorizer: vi.fn().mockResolvedValue(false),
     getPressAuthorization: vi.fn().mockResolvedValue(null),
     getSubCardEntry: vi.fn().mockResolvedValue(null),
-    getLogEntries: vi.fn().mockResolvedValue([]),
+    getCardEventLog: vi.fn().mockResolvedValue([]),
     getEasAnnotations: vi.fn().mockResolvedValue([]),
     ...overrides,
   };
@@ -48,10 +48,26 @@ describe("EthersRpcProvider", () => {
     expect(await provider.getSubCardEntry("0xsub")).toBeNull();
   });
 
-  it("getLogEntries returns empty array", async () => {
+  it("getCardEventLog returns empty array", async () => {
     const contract = mockContract();
     const provider = new EthersRpcProvider(contract);
-    expect(await provider.getLogEntries("0xcard")).toEqual([]);
+    expect(await provider.getCardEventLog("0xcard")).toEqual([]);
+  });
+
+  it("getCardEventLog delegates the on-chain event replay from the contract", async () => {
+    const contract = mockContract({
+      getCardEventLog: vi.fn().mockResolvedValue([
+        { cid: "QmGenesis", timestamp: "2026-05-01T00:00:00Z" },
+        { cid: "QmUpdate", timestamp: "2026-06-01T00:00:00Z" },
+      ]),
+    });
+    const provider = new EthersRpcProvider(contract);
+    const result = await provider.getCardEventLog("0xcard");
+    expect(contract.getCardEventLog).toHaveBeenCalledWith("0xcard");
+    expect(result).toEqual([
+      { cid: "QmGenesis", timestamp: "2026-05-01T00:00:00Z" },
+      { cid: "QmUpdate", timestamp: "2026-06-01T00:00:00Z" },
+    ]);
   });
 
   it("getEasAnnotations delegates with address list", async () => {

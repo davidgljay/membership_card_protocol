@@ -119,7 +119,7 @@ function buildScenario(
     getSubCardEntry: vi.fn().mockImplementation((addr: string) =>
       addr === sub.address ? Promise.resolve(subCardEntry) : Promise.resolve(null)
     ),
-    getLogEntries: vi.fn().mockResolvedValue([]),
+    getCardEventLog: vi.fn().mockResolvedValue([]),
     getEasAnnotations: vi.fn().mockResolvedValue([]),
   };
 
@@ -433,7 +433,7 @@ describe("policy_match", () => {
           r ? r : (scenarioB.rpc.getSubCardEntry as (a: string) => Promise<SubCardEntry | null>)(addr)
         );
       }),
-      getLogEntries: vi.fn().mockResolvedValue([]),
+      getCardEventLog: vi.fn().mockResolvedValue([]),
       getEasAnnotations: vi.fn().mockResolvedValue([]),
     };
 

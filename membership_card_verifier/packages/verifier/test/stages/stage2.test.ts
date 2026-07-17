@@ -13,7 +13,7 @@ function mockRpc(overrides: Partial<RpcProvider> = {}): RpcProvider {
     isPolicyAuthorizer: vi.fn().mockResolvedValue(false),
     getPressAuthorization: vi.fn().mockResolvedValue(null),
     getSubCardEntry: vi.fn().mockResolvedValue(null),
-    getLogEntries: vi.fn().mockResolvedValue([]),
+    getCardEventLog: vi.fn().mockResolvedValue([]),
     getEasAnnotations: vi.fn().mockResolvedValue([]),
     ...overrides,
   };
@@ -95,6 +95,46 @@ describe("stage2 — sub-card to master link", () => {
     const result = await verifyStage2(sub.publicKey, rpc, ipfs, { appCertificationRoot: DUMMY_CERT_ROOT });
     expect(result.scope_clean).toBe(false);
     expect(result.errors[0]?.code).toBe("ADDRESS_BINDING_MISMATCH");
+  });
+
+  it("invalid app_signature returns scope_clean: false and does not fall through to chain walk", async () => {
+    const sub = generateKeypair();
+    const holder = generateKeypair();
+    const app = generateKeypair();
+    const wrongAppSigner = generateKeypair();
+    const certRoot = generateKeypair();
+    const issuer = generateKeypair();
+    const press = generateKeypair();
+
+    // app_card_pubkey points at `app`, but the app_signature is produced by a
+    // different keypair, so ML-DSA-44 verification against app.publicKey fails.
+    // holder_signature is computed over the doc as-is, so it remains valid —
+    // isolating the failure to Step 13 (app_signature) only.
+    const subDoc = makeSubCardDoc(holder.publicKey, holder.secretKey, app.publicKey, wrongAppSigner.secretKey, sub.publicKey);
+    const masterDoc = makeCardDoc(holder.publicKey, issuer.secretKey, holder.secretKey, press.secretKey);
+    masterDoc.active_subcards = [Buffer.from(sub.publicKey).toString("base64url")];
+    // App card would otherwise chain cleanly to certRoot — if the fall-through
+    // bug regresses, this would let scope_clean end up true.
+    const appCardDoc = makeCardDoc(app.publicKey, certRoot.secretKey, app.secretKey, press.secretKey, [Buffer.from(certRoot.publicKey).toString("base64url")]);
+
+    const encSubDoc = encryptForCard(sub.publicKey, new TextEncoder().encode(JSON.stringify(subDoc)));
+    const encMasterDoc = encryptForCard(holder.publicKey, new TextEncoder().encode(JSON.stringify(masterDoc)));
+    const encAppDoc = encryptForCard(app.publicKey, new TextEncoder().encode(JSON.stringify(appCardDoc)));
+
+    const rpc = mockRpc({
+      getCardEntry: vi.fn().mockImplementation((addr: string) => {
+        if (addr === sub.address) return Promise.resolve({ exists: true, log_head_cid: "QmSub", policy_address: "0x", last_press_address: "0x", forward_to: null });
+        if (addr === holder.address) return Promise.resolve({ exists: true, log_head_cid: "QmMaster", policy_address: "0x", last_press_address: "0x", forward_to: null });
+        if (addr === app.address) return Promise.resolve({ exists: true, log_head_cid: "QmApp", policy_address: "0x", last_press_address: "0x", forward_to: null });
+        return Promise.resolve(null);
+      }),
+      getSubCardEntry: vi.fn().mockResolvedValue({ master_card_address: holder.address, registration_log_head: "0x", sub_card_doc_cid: "QmSub", active: true, registered_at: "2026-01-01T00:00:00Z", deregistered_at: null } as SubCardEntry),
+    });
+    const ipfs = mockIpfs({ QmSub: encSubDoc, QmMaster: encMasterDoc, QmApp: encAppDoc });
+    const result = await verifyStage2(sub.publicKey, rpc, ipfs, { appCertificationRoot: certRoot.address });
+    expect(result.scope_clean).toBe(false);
+    expect(result.app_card_chain_valid).toBe(false);
+    expect(result.errors.some((e) => e.code === "INVALID_APP_SIGNATURE")).toBe(true);
   });
 
   it("inactive sub-card returns scope_clean: false", async () => {
@@ -311,9 +351,46 @@ describe("stage2 — app_card chain walk", () => {
     expect(result.errors.some((e) => e.code === "SUB_CARD_NOT_IN_ACTIVE_DIRECTORY")).toBe(true);
   });
 
-  it("constructor rejects missing appCertificationRoot", () => {
+  it("constructor no longer requires appCertificationRoot", () => {
     expect(
-      () => new CardVerifier({ rpc: mockRpc(), ipfs: mockIpfs(), appCertificationRoot: undefined as unknown as string })
-    ).toThrow(CardProtocolError);
+      () => new CardVerifier({ rpc: mockRpc(), ipfs: mockIpfs() })
+    ).not.toThrow();
+  });
+
+  it("sub-card signature on a verifier with no appCertificationRoot hard-rejects with APP_CERTIFICATION_ROOT_NOT_CONFIGURED", async () => {
+    const sub = generateKeypair();
+    const holder = generateKeypair();
+    const app = generateKeypair();
+    const certRoot = generateKeypair();
+    const issuer = generateKeypair();
+    const press = generateKeypair();
+
+    const subDoc = makeSubCardDoc(holder.publicKey, holder.secretKey, app.publicKey, app.secretKey, sub.publicKey);
+    const masterDoc = makeCardDoc(holder.publicKey, issuer.secretKey, holder.secretKey, press.secretKey);
+    masterDoc.active_subcards = [Buffer.from(sub.publicKey).toString("base64url")];
+    // App card would otherwise chain cleanly to certRoot — proves the rejection is due
+    // to the missing config, not an actual chain-walk failure.
+    const appCardDoc = makeCardDoc(app.publicKey, certRoot.secretKey, app.secretKey, press.secretKey, [Buffer.from(certRoot.publicKey).toString("base64url")]);
+
+    const encSubDoc = encryptForCard(sub.publicKey, new TextEncoder().encode(JSON.stringify(subDoc)));
+    const encMasterDoc = encryptForCard(holder.publicKey, new TextEncoder().encode(JSON.stringify(masterDoc)));
+    const encAppDoc = encryptForCard(app.publicKey, new TextEncoder().encode(JSON.stringify(appCardDoc)));
+
+    const rpc = mockRpc({
+      getCardEntry: vi.fn().mockImplementation((addr: string) => {
+        if (addr === sub.address) return Promise.resolve({ exists: true, log_head_cid: "QmSub", policy_address: "0x", last_press_address: "0x", forward_to: null });
+        if (addr === holder.address) return Promise.resolve({ exists: true, log_head_cid: "QmMaster", policy_address: "0x", last_press_address: "0x", forward_to: null });
+        if (addr === app.address) return Promise.resolve({ exists: true, log_head_cid: "QmApp", policy_address: "0x", last_press_address: "0x", forward_to: null });
+        return Promise.resolve(null);
+      }),
+      getSubCardEntry: vi.fn().mockResolvedValue({ master_card_address: holder.address, registration_log_head: "0x", sub_card_doc_cid: "QmSub", active: true, registered_at: "2026-01-01T00:00:00Z", deregistered_at: null } as SubCardEntry),
+    });
+    const ipfs = mockIpfs({ QmSub: encSubDoc, QmMaster: encMasterDoc, QmApp: encAppDoc });
+
+    // No appCertificationRoot configured.
+    const result = await verifyStage2(sub.publicKey, rpc, ipfs, { appCertificationRoot: undefined });
+    expect(result.scope_clean).toBe(false);
+    expect(result.app_card_chain_valid).toBe(false);
+    expect(result.errors.some((e) => e.code === "APP_CERTIFICATION_ROOT_NOT_CONFIGURED")).toBe(true);
   });
 });

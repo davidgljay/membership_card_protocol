@@ -29,7 +29,20 @@ class RpcProvider(Protocol):
     async def get_sub_card_entry(self, sub_card_address: str) -> Optional[SubCardEntry]:
         ...
 
-    async def get_log_entries(self, card_address: str) -> list[LogEntry]:
+    async def get_card_event_log(self, card_address: str) -> list[CardChainEvent]:
+        """
+        Replays the on-chain event log for a card address and returns the ground-truth,
+        oldest-first sequence of every IPFS object CID this card has ever pointed to,
+        each paired with the authoritative on-chain timestamp it became the head.
+
+        The registry contract has no on-chain-enumerable per-entry log — `CardEntries`
+        stores only the current `log_head_cid` (`registry_contract.md §3.1`). This
+        method reconstructs the ground-truth CID sequence by filtering that card
+        address's `CardRegistered` (genesis, `initial_log_cid`) and `CardHeadUpdated`
+        (each subsequent entry, `new_log_cid`) events and ordering by block
+        (`registry_contract.md §7`). It returns CIDs and timestamps only — never
+        decrypted card content, which lives on IPFS and is fetched via `IpfsProvider`.
+        """
         ...
 
     async def get_eas_annotations(
@@ -74,10 +87,17 @@ class SubCardEntry:
 
 
 @dataclass
-class LogEntry:
-    update_code: int
-    effective_date: str
+class CardChainEvent:
+    """
+    One entry in the on-chain event-replay sequence for a card (see
+    `RpcProvider.get_card_event_log`). `cid` is the IPFS object that became the head
+    as of `timestamp` — the genesis `CardDocument` CID for the first entry, or a
+    post-genesis `LogEntry` CID for every subsequent entry. Does not carry
+    `update_code`/`entry_type` — those live only in the IPFS content itself, not
+    on chain; see `stages/stage4.py` for how content and event-replay are combined.
+    """
     cid: str
+    timestamp: str  # ISO 8601 — on-chain block timestamp
 
 
 @dataclass
@@ -161,7 +181,14 @@ class PolicyMatchConditions:
 class VerifierConfig:
     rpc: RpcProvider
     ipfs: IpfsProvider
-    app_certification_root: str
+    # The on-chain address (bytes32 hex) of the governance authority's
+    # app-certification policy root. Used by Stage 2 to independently re-walk
+    # a sub-card's app_card ancestry_pubkeys chain at runtime. Optional —
+    # required only for verifier instances that expect to verify signatures
+    # from sub-cards. If a sub-card signature is encountered on a verifier
+    # instance where this is not configured, Stage 2 hard-rejects with
+    # APP_CERTIFICATION_ROOT_NOT_CONFIGURED rather than skipping the check.
+    app_certification_root: Optional[str] = None
     trusted_roots: Optional[list[str]] = None
     revocation_freshness_window_seconds: Optional[int] = None
     reject_stale_revocation: Optional[bool] = None
@@ -250,6 +277,7 @@ class SignatureVerificationResult:
     signer_card: str
     scope_clean: bool | Literal["skipped"]
     chain_reaches_trusted_root: bool | Literal["skipped"]
+    chain_card_addresses: list[str]
     app_card_chain_valid: bool | Literal["skipped"]
     revocation: RevocationStatus
     was_valid_at_signing_time: bool | Literal["skipped"]
@@ -272,6 +300,7 @@ class CardVerificationResult:
     protocol_version: str
     scope_clean: bool | Literal["skipped"]
     chain_reaches_trusted_root: bool | Literal["skipped"]
+    chain_card_addresses: list[str]
     app_card_chain_valid: bool | Literal["skipped"]
     revocation: RevocationStatus
     was_valid_at_signing_time: bool | Literal["skipped"]

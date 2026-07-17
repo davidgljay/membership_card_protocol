@@ -107,10 +107,10 @@ const ZERO_BYTES32 = "0x" + "00".repeat(32);
  * Wraps an ethers.js Contract to implement the RegistryContract interface.
  *
  * Handles the uint8[] → hex string conversion for CID fields.
- * getLogEntries and getEasAnnotations are not available as contract reads
- * (they require an event indexer) so they return empty arrays; verifyCard()
- * treats empty log arrays as "no revocation events", which is correct for
- * a freshly registered test card.
+ * getCardEventLog and getEasAnnotations are not available as simple contract
+ * reads (they require replaying/indexing events) so they return empty arrays;
+ * verifyCard() treats an empty event log as "no on-chain history", which is
+ * correct for a freshly registered test card.
  */
 /** Ensure an address has a 0x prefix for ethers.js bytes32 encoding. */
 function toBytes32(address: string): string {
@@ -148,7 +148,7 @@ function buildRegistryContract(contract: Contract): RegistryContract {
     async getSubCardEntry() {
       return null;
     },
-    async getLogEntries() {
+    async getCardEventLog() {
       return [];
     },
     async getEasAnnotations() {

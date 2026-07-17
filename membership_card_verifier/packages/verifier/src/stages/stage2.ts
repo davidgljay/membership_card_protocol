@@ -162,6 +162,7 @@ export async function verifyStage2(
   );
   if (!appSigValid) {
     errors.push({ stage: 2, code: "INVALID_APP_SIGNATURE", message: "App signature on sub-card document is invalid" });
+    return { scope_clean: false, signer_card: signerCard, app_card_chain_valid: false, errors };
   }
 
   // Step 14: [Planned] sub-card limitations enforcement
@@ -171,6 +172,23 @@ export async function verifyStage2(
 
   // Step 15: app_card chain walk — confirm app_card chains to appCertificationRoot
   // (APP_CARD_CHAIN_NOT_TRUSTED if the chain does not reach the configured root)
+  //
+  // We've now confirmed this signer IS a sub-card (valid bindings, valid holder and
+  // app signatures, active on-chain registration) — this is the point at which the
+  // chain walk would otherwise run. If this verifier instance was never configured
+  // with an appCertificationRoot, that is a hard, loud failure rather than a silent
+  // skip: a verifier scoped to primary-card-only use can omit this config, but any
+  // sub-card signature it actually encounters must be rejected, not waved through.
+  if (!config.appCertificationRoot) {
+    errors.push({
+      stage: 2,
+      code: "APP_CERTIFICATION_ROOT_NOT_CONFIGURED",
+      message:
+        "Sub-card signature encountered but VerifierConfig.appCertificationRoot is not configured on this verifier instance",
+    });
+    return { scope_clean: false, signer_card: signerCard, app_card_chain_valid: false, errors };
+  }
+
   const appCertRoot = config.appCertificationRoot;
   const maxDepth = config.maxChainDepth ?? 64;
 

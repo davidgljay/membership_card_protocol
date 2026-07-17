@@ -14,7 +14,7 @@ function mockRpc(overrides: Partial<RpcProvider> = {}): RpcProvider {
     isPolicyAuthorizer: vi.fn().mockResolvedValue(false),
     getPressAuthorization: vi.fn().mockResolvedValue(null),
     getSubCardEntry: vi.fn().mockResolvedValue(null),
-    getLogEntries: vi.fn().mockResolvedValue([]),
+    getCardEventLog: vi.fn().mockResolvedValue([]),
     getEasAnnotations: vi.fn().mockResolvedValue([]),
     ...overrides,
   };
@@ -98,13 +98,30 @@ describe("CardVerifier", () => {
     const rpc = mockRpc({
       getCardEntry: vi.fn().mockResolvedValue({ exists: true, log_head_cid: "QmCard", policy_address: "0x", last_press_address: "0x", forward_to: null }),
       isPolicyAuthorizer: vi.fn().mockResolvedValue(true),
-      getLogEntries: vi.fn().mockResolvedValue([]),
+      getCardEventLog: vi.fn().mockResolvedValue([]),
     });
     const verifier = new CardVerifier({ rpc, ipfs: mockIpfs(), appCertificationRoot: DUMMY_APP_CERT_ROOT });
     const result = await verifier.verifyCard(card.address);
     expect(result.signature_valid).toBeNull();
     expect(result.chain_reaches_trusted_root).toBe(true);
     expect(result.scope_clean).toBe("skipped");
+  });
+
+  it("verifier constructed without appCertificationRoot verifies a primary-card (verifyCard) with no error", async () => {
+    // Confirms the friction is actually removed: a verifier scoped to primary-card
+    // checks only (no sub-card path ever triggered) never needs appCertificationRoot.
+    const card = generateKeypair();
+    const rpc = mockRpc({
+      getCardEntry: vi.fn().mockResolvedValue({ exists: true, log_head_cid: "QmCard", policy_address: "0x", last_press_address: "0x", forward_to: null }),
+      isPolicyAuthorizer: vi.fn().mockResolvedValue(true),
+      getCardEventLog: vi.fn().mockResolvedValue([]),
+    });
+    const verifier = new CardVerifier({ rpc, ipfs: mockIpfs() }); // no appCertificationRoot
+    const result = await verifier.verifyCard(card.address);
+    expect(result.signature_valid).toBeNull();
+    expect(result.chain_reaches_trusted_root).toBe(true);
+    expect(result.scope_clean).toBe("skipped");
+    expect(result.errors).toHaveLength(0);
   });
 
   it("stage2 hard rejection propagates skipped to stages 3–5", async () => {

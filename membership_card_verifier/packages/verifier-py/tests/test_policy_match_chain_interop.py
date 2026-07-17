@@ -85,7 +85,7 @@ class DatasetRpcProvider:
             deregistered_at=raw["deregistered_at"],
         )
 
-    async def get_log_entries(self, card_address: str) -> list:
+    async def get_card_event_log(self, card_address: str) -> list:
         return []
 
     async def get_eas_annotations(self, card_address: str, annotator_addresses: list[str]) -> list:

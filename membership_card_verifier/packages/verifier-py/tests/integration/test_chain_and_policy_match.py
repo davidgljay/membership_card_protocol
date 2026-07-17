@@ -59,7 +59,7 @@ def make_mock_rpc(
         side_effect=lambda addr: addr in trusted_roots
     )
     rpc.get_sub_card_entry = AsyncMock(return_value=None)
-    rpc.get_log_entries = AsyncMock(return_value=[])
+    rpc.get_card_event_log = AsyncMock(return_value=[])
     rpc.get_eas_annotations = AsyncMock(return_value=[])
     rpc.get_press_authorization = AsyncMock(return_value=None)
 
@@ -118,6 +118,7 @@ class TestReturnChain:
             signature_valid=True,
             scope_clean=True,
             chain_reaches_trusted_root=True,
+            chain_card_addresses=["0xsigner"],
             app_card_chain_valid=True,
             revocation=RevocationStatus(status="not_revoked"),
             was_valid_at_signing_time=True,

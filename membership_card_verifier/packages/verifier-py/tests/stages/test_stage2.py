@@ -23,7 +23,7 @@ def mock_rpc(**overrides) -> AsyncMock:
     rpc.is_policy_authorizer.return_value = False
     rpc.get_press_authorization.return_value = None
     rpc.get_sub_card_entry.return_value = None
-    rpc.get_log_entries.return_value = []
+    rpc.get_card_event_log.return_value = []
     rpc.get_eas_annotations.return_value = []
     for name, value in overrides.items():
         setattr(rpc, name, value)
@@ -193,6 +193,110 @@ class TestStage2SubCardToMasterLink:
         )
         assert result.scope_clean is False
         assert result.errors[0].code == "ADDRESS_BINDING_MISMATCH"
+
+    @pytest.mark.asyncio
+    async def test_invalid_app_signature_returns_scope_clean_false(self):
+        sub = generate_keypair()
+        holder = generate_keypair()
+        app = generate_keypair()
+        wrong_app_signer = generate_keypair()
+        cert_root = generate_keypair()
+        issuer = generate_keypair()
+        press = generate_keypair()
+
+        # app_card_pubkey points at `app`, but the app_signature is produced by
+        # a different keypair, so ML-DSA-44 verification against app.public_key
+        # fails. holder_signature is computed over the doc as-is, so it remains
+        # valid — isolating the failure to Step 13 (app_signature) only.
+        sub_doc = make_sub_card_doc(
+            holder.public_key,
+            holder.secret_key,
+            app.public_key,
+            wrong_app_signer.secret_key,
+            sub.public_key,
+        )
+        master_doc = make_card_doc(
+            holder.public_key,
+            issuer.secret_key,
+            holder.secret_key,
+            press.secret_key,
+        )
+        import base64
+        master_doc["active_subcards"] = [
+            base64.urlsafe_b64encode(sub.public_key).decode("ascii").rstrip("=")
+        ]
+        # App card would otherwise chain cleanly to cert_root — if the
+        # fall-through bug regresses, this would let scope_clean end up true.
+        app_card_doc = make_card_doc(
+            app.public_key,
+            cert_root.secret_key,
+            app.secret_key,
+            press.secret_key,
+            [base64.urlsafe_b64encode(cert_root.public_key).decode("ascii").rstrip("=")],
+        )
+
+        enc_sub_doc = encrypt_for_card(sub.public_key, json.dumps(sub_doc).encode("utf-8"))
+        enc_master_doc = encrypt_for_card(
+            holder.public_key, json.dumps(master_doc).encode("utf-8")
+        )
+        enc_app_doc = encrypt_for_card(app.public_key, json.dumps(app_card_doc).encode("utf-8"))
+
+        async def get_card_entry_impl(addr: str):
+            if addr == sub.address:
+                return CardEntry(
+                    exists=True,
+                    log_head_cid="QmSub",
+                    policy_address="0x",
+                    last_press_address="0x",
+                    forward_to=None,
+                )
+            if addr == holder.address:
+                return CardEntry(
+                    exists=True,
+                    log_head_cid="QmMaster",
+                    policy_address="0x",
+                    last_press_address="0x",
+                    forward_to=None,
+                )
+            if addr == app.address:
+                return CardEntry(
+                    exists=True,
+                    log_head_cid="QmApp",
+                    policy_address="0x",
+                    last_press_address="0x",
+                    forward_to=None,
+                )
+            return None
+
+        rpc = mock_rpc(
+            get_card_entry=AsyncMock(side_effect=get_card_entry_impl),
+            get_sub_card_entry=AsyncMock(
+                return_value=SubCardEntry(
+                    master_card_address=holder.address,
+                    registration_log_head="0x",
+                    sub_card_doc_cid="QmSub",
+                    active=True,
+                    registered_at="2026-01-01T00:00:00Z",
+                    deregistered_at=None,
+                )
+            ),
+        )
+        ipfs = mock_ipfs(
+            {
+                "QmSub": enc_sub_doc,
+                "QmMaster": enc_master_doc,
+                "QmApp": enc_app_doc,
+            }
+        )
+        result = await verify_stage2(
+            sub.public_key,
+            rpc,
+            ipfs,
+            SimpleNamespace(app_certification_root=cert_root.address, max_chain_depth=None),
+        )
+        assert result.scope_clean is False
+        assert result.app_card_chain_valid is False
+        assert any(e.code == "INVALID_APP_SIGNATURE" for e in result.errors)
 
     @pytest.mark.asyncio
     async def test_inactive_sub_card_returns_scope_clean_false(self):

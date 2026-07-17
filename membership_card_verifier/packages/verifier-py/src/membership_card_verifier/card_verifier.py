@@ -56,11 +56,10 @@ class CardVerifier:
             raise CardProtocolError("MISSING_RPC_PROVIDER", "VerifierConfig.rpc is required")
         if not config.ipfs:
             raise CardProtocolError("MISSING_IPFS_PROVIDER", "VerifierConfig.ipfs is required")
-        if not config.app_certification_root:
-            raise CardProtocolError(
-                "APP_CERTIFICATION_ROOT_NOT_CONFIGURED",
-                "VerifierConfig.appCertificationRoot is required",
-            )
+        # app_certification_root is intentionally NOT required here — it is only
+        # needed whenever this verifier instance actually encounters a sub-card
+        # signature. Stage 2 hard-rejects with APP_CERTIFICATION_ROOT_NOT_CONFIGURED
+        # at the point it would otherwise attempt the app-cert chain walk, if unset.
         self.config = SimpleNamespace(
             rpc=config.rpc,
             ipfs=config.ipfs,
@@ -119,6 +118,7 @@ class CardVerifier:
                 signature_valid=False,
                 scope_clean="skipped",
                 chain_reaches_trusted_root="skipped",
+                chain_card_addresses=[],
                 app_card_chain_valid="skipped",
                 revocation=_unknown_revocation(),
                 was_valid_at_signing_time="skipped",
@@ -198,9 +198,14 @@ class CardVerifier:
         # Stage 3 result: simplified chain for verify_card (can't walk without pubkey)
         chain_addresses = [card_address]
 
-        # Stage 4: revocation check
+        # Stage 4: revocation check. verify_card has no pubkey, so no card_content can
+        # ever be decrypted here — Stage 4 falls back to `revocation.status: "unknown"`
+        # for this path (see card_verifier.md §7.4 "verify_card limitation").
         stage4 = await verify_stage4(
-            chain_addresses, signing_timestamp, self.config.rpc, self.config
+            [ChainLink(card_address=card_address, public_key="", card_content={})],
+            signing_timestamp,
+            self.config.rpc,
+            self.config,
         )
 
         # Stage 6: annotations
@@ -220,6 +225,7 @@ class CardVerifier:
             protocol_version=PROTOCOL_VERSION_0_1,
             scope_clean="skipped",
             chain_reaches_trusted_root=is_trusted_root,
+            chain_card_addresses=chain_addresses,
             app_card_chain_valid="skipped",
             revocation=stage4.revocation,
             was_valid_at_signing_time=stage4.was_valid_at_signing_time,
@@ -322,9 +328,11 @@ class CardVerifier:
                 chain=stage3.chain,
             )
 
-        # Stage 4
+        # Stage 4. Reuses Stage 3's already-fetched-and-decrypted `chain` (no second
+        # IPFS fetch pass) — see stage4.py's doc comment for how content + the
+        # on-chain event-log replay are combined.
         stage4 = await verify_stage4(
-            stage3.chain_card_addresses, signing_timestamp, self.config.rpc, self.config
+            stage3.chain, signing_timestamp, self.config.rpc, self.config
         )
         errors.extend(stage4.errors)
 
@@ -368,6 +376,7 @@ class CardVerifier:
             signature_valid=signature_valid,
             scope_clean=stage2.scope_clean,
             chain_reaches_trusted_root=stage3.chain_reaches_trusted_root,
+            chain_card_addresses=stage3.chain_card_addresses,
             app_card_chain_valid=stage2.app_card_chain_valid,
             revocation=stage4.revocation,
             was_valid_at_signing_time=stage4.was_valid_at_signing_time,
@@ -404,6 +413,7 @@ class CardVerifier:
             signature_valid=signature_valid,
             scope_clean=scope_clean,
             chain_reaches_trusted_root=chain_reaches_trusted_root,
+            chain_card_addresses=[link.card_address for link in chain],
             app_card_chain_valid=app_card_chain_valid,
             revocation=revocation,
             was_valid_at_signing_time=was_valid_at_signing_time,
@@ -428,6 +438,7 @@ class CardVerifier:
             protocol_version=PROTOCOL_VERSION_0_1,
             scope_clean="skipped",
             chain_reaches_trusted_root="skipped",
+            chain_card_addresses=[],
             app_card_chain_valid="skipped",
             revocation=_unknown_revocation(),
             was_valid_at_signing_time="skipped",
