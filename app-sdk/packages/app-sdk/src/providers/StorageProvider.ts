@@ -11,8 +11,8 @@
  * that state.)
  *
  * Default implementations: IndexedDB-backed on web
- * (`@membership-card-protocol/client-sdk-web`), and a Phase 1-selected
- * backend on React Native (`@membership-card-protocol/client-sdk-rn`). A
+ * (`@membership-card-protocol/sdk-providers-web`), and a Phase 1-selected
+ * backend on React Native (`@membership-card-protocol/sdk-providers-rn`). A
  * host app may substitute its own implementation (e.g. one backed by a
  * SQLite/WatermelonDB layer it already runs) as long as it satisfies this
  * contract.

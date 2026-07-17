@@ -9,8 +9,8 @@
  * see `wallet_sdk.md` for the flows that actually use it.
  *
  * Default implementations: `navigator.credentials` on web
- * (`@membership-card-protocol/client-sdk-web`); `react-native-passkey` on
- * React Native (`@membership-card-protocol/client-sdk-rn`) — a host app may
+ * (`@membership-card-protocol/sdk-providers-web`); `react-native-passkey` on
+ * React Native (`@membership-card-protocol/sdk-providers-rn`) — a host app may
  * inject its own RN implementation to override the shipped default.
  */
 export interface PasskeyProvider {

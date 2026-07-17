@@ -37,6 +37,7 @@
     - 9.4 [Replenishment Scheduling](#94-replenishment-scheduling-implemented)
     - 9.5 [Realtime Delivery](#95-realtime-delivery-implemented)
     - 9.6 [UUID Pool Deregistration](#96-uuid-pool-deregistration-implemented)
+    - 9.7 [Room Discovery (Card-Gated Matrix Rooms)](#97-room-discovery-card-gated-matrix-rooms-not-implemented)
 10. [Cross-Platform Hardening and Documentation (Mostly Complete)](#10-cross-platform-hardening-and-documentation-mostly-complete)
 11. [Security Invariants](#11-security-invariants)
 12. [Result and Error Conventions](#12-result-and-error-conventions)
@@ -334,6 +335,8 @@ function handleInboundRoutingEnvelope(options: HandleInboundRoutingEnvelopeOptio
 
 Decrypts a `RoutingEnvelope` via `decryptRoutingEnvelope`, then verifies the recovered `CardMessageEnvelope`'s signature(s) via the shared `CardVerifier`'s `verifyEnvelope()` — never a hand-rolled signature check. Returns a discriminated union: `{ accepted: true, envelope, messageId, verification, duplicate }` or `{ accepted: false, code, reason }`.
 
+**`accepted` gates on raw signature validity only, by design (clarified 2026-07-16, spec-consistency Phase 3, Tier 3 item (d)).** `accepted: true` means at least one signer's raw signature verified — it does not by itself mean the signer's chain reaches a trusted root, is currently non-revoked, or is policy-compliant. `verifyEnvelope()` is always run in full regardless, and its complete result (`chain_reaches_trusted_root`, `revocation`, `policy_compliant`, etc., per `card_verifier.md §8`) is returned unmodified as `verification` on every accepted envelope — this is what "delegated entirely to the shared verifier instance" (§11) means: the verifier computes and reports the full trust picture, it is not silently discarded. The host app decides what to do with a message whose `verification` shows a chain that doesn't reach a trusted root or a revoked signer — a reasonable choice, and the one this SDK is designed to support, is to still show the message but visibly mark it as coming from an unverified or revoked card so the user can choose to disregard it. A message where `accepted: false` (raw signature invalid) must never be displayed; a message where `accepted: true` but `verification` shows a chain/revocation/policy problem may be displayed, but only with that problem surfaced to the user, never silently as if fully trusted.
+
 Deduplication by `messageId(payload)` against a `StorageProvider`-backed history: a retransmitted duplicate is detected and reported via `duplicate: true` on the *second* delivery, with exactly one write ever made for that ID.
 
 Message-type-specific handling helpers — `editTarget`, `reactionTarget`, `retractionTarget`, `resolveEditRoot` — derive the piece of state each type's linking rule needs without owning any durable message-history store themselves.
@@ -393,6 +396,30 @@ function deregisterCardUuids(options: DeregisterCardUuidsOptions): Promise<Dereg
 
 **Explicitly not on-chain sub-card revocation.** This function has no relationship to sub-card revocation (8xx/9xx codes, per `wallet_sdk.md` §6.4) — no shared code, no shared on-chain state. Wallet-service-local deregistration only empties this wallet service's UUID pool for the subcard.
 
+### 9.7 Room Discovery (Card-Gated Matrix Rooms) (Not implemented)
+
+```ts
+interface DiscoverRoomsOptions {
+  cardHash: string;
+  verifier: CardVerifier;          // §6 — shared chain-walk/revocation/predicate-evaluation instance
+  rpc: RpcProvider;                // for the local chain-walk
+  ipfs: IpfsProvider;               // for the room index's predicate-document fetches
+  roomIndexUrl: string;             // GET <wallet-service-public-host>/matrix/room-index
+  fallback?: {                      // server-hosted path, used only when the local path can't run
+    transport: ObliviousProtocolTransport; // §4.7 — this call is sensitive/card-identifying
+    walletServiceBaseUrl: string;
+  };
+}
+
+function discoverRooms(options: DiscoverRoomsOptions): Promise<string[]>; // room_ids
+```
+
+Implements `room_discovery.md §2`'s client-side discovery algorithm as the primary, default path: fetch the room index (§1 there, `GET /matrix/room-index`), chain-walk `cardHash` via the shared `CardVerifier` (§6 — the same walk `card_validation.md` Stages 3–4 define, not a separate implementation), then for each `{room_id, policy_id}` entry fetch the predicate document from IPFS and evaluate it using the same evaluator semantics as Synapse's `predicates.py` (`issued_under_template`, `card_field_matches`, `any_of` — `room_discovery.md §2` step 3b). No query in this path ever leaves the device bound to `cardHash`.
+
+Falls back to the wallet-service's server-hosted path (`POST /matrix/discover-rooms`, `wallet.md §7.10`) only when `options.fallback` is supplied and a local RPC/IPFS read genuinely isn't available — per `room_discovery.md §3`'s "not the default" constraint, this function always attempts the local path first. The fallback builds and signs a minimal self-attestation `SignedMessageEnvelope` locally (never a bare `card_hash` — `room_discovery.md`'s 2026-07-12 correction) and submits it via `ObliviousProtocolTransport` (§4.7), since — unlike the anonymous local path — this call tells `wallet-service` which `card_hash` is asking, a real metadata exposure `room_discovery.md §3` calls out explicitly.
+
+**Does not join a room.** Mirrors `room_discovery.md §2`'s own scope note: this returns the set of `room_id`s the card's chain currently satisfies; actually joining still goes through the Matrix join-attestation flow (`matrix_join_attestation_and_revocation.md §1-2`), which this SDK does not yet implement either.
+
 ---
 
 ## 10. Cross-Platform Hardening and Documentation (Mostly Complete)
@@ -437,6 +464,7 @@ Functions that gate on a verification step return a discriminated union (`{ appr
 | 5 | 5.4 Replenishment scheduling | **Implemented** |
 | 5 | 5.5 Realtime delivery (SSE, WebSocket, push catch-up) | **Implemented** |
 | 5 | 5.6 UUID pool deregistration | **Implemented** |
+| 9 | 9.7 Room discovery (`discoverRooms`, local-first with wallet-service fallback) | **Not started** — spec gap identified in `plans/spec-consistency/inconsistencies/phase-2-consolidated-fixes.md` fix #49; API surface defined in §9.7, no implementation yet |
 | 6 | 6.1 Cross-platform scenario tests against real providers | **Implemented** — `sdk-providers-web`/`sdk-providers-rn` `test/scenarios/` (sub-card request+signing, offer construction) |
 | 6 | 6.2 Real deployed OHTTP endpoint validation | **Not started** — out of this split's scope; belongs to the follow-on wallet-service/press/relay integration plan |
 | 6 | 6.3 Integrator documentation | **Implemented** — `app-sdk/README.md` |
@@ -492,9 +520,17 @@ Carried forward from `plans/sdk-split-strategic-plan.md`'s resolved decisions an
 - `specs/process_specs/card_offering_and_acceptance.md`, `open_offer_creation.md` — §8
 - `specs/subcards.md`, `specs/process_specs/subcard_creation_policy.md` — §7
 - `specs/messaging_protocol.md`, `specs/process_specs/message_routing.md`, `specs/process_specs/notification_relay.md` — §9
+- `specs/process_specs/room_discovery.md` — §9.7; defines the client-side discovery algorithm and the `POST /matrix/discover-rooms` fallback this section's `discoverRooms` implements
+- `specs/object_specs/matrix_room.md`, `specs/process_specs/matrix_join_attestation_and_revocation.md` — §9.7's room-index/predicate-document and join-flow context
 - `specs/object_specs/card_verifier.md` — §6
 - `specs/object_specs/press.md` — the press-side counterpart to §8's press-facing calls
 - `specs/object_specs/wallet_sdk.md` — wallet-side (custody/authorization) counterpart; imports and depends on this package
 - `specs/ARCHITECTURE.md` — ADR-004 (canonicalization/signing), ADR-006 (content encryption), ADR-007 (OHTTP)
 - `plans/sdk-split-strategic-plan.md` — the source plan for this split
 - `plans/client-sdk/strategic-plan.md`, `plans/client-sdk/implementation-plan.md` — the unified-SDK plans both packages derive from
+
+---
+
+## Changelog
+
+- Added §9.7 (Room Discovery), a `discoverRooms` API surface implementing `room_discovery.md §2`'s client-side algorithm with fallback to the wallet-service's `POST /matrix/discover-rooms` (`wallet.md §7.10`) per `room_discovery.md §3` — this SDK previously defined no such function despite `room_discovery.md` repeatedly assigning the responsibility to "client SDKs." Not yet implemented; tracked in §13. See `plans/spec-consistency/inconsistencies/phase-2-consolidated-fixes.md` fix #49.
