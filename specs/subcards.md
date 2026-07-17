@@ -4,6 +4,8 @@
 **Date:** 2026-06-14
 **Status:** Draft
 
+> **Scope note (spec-consistency Phase 2, Step C, Fix #32).** This file is where the actual sub-card creation/acceptance flow lives, and `process_specs/subcard_creation_policy.md` defers to it explicitly. It was not included in either Phase 1's object-spec review list or Phase 2's process-spec review list, so it has not received a formal Step A consistency-review pass. It should be added to the in-scope list for a follow-up review (Phase 3 or a supplemental pass). The targeted edits made alongside `subcard_creation_policy.md`'s Decision (d) rewrite and Fix #33 (see changelog at bottom) do not constitute that full pass.
+
 > **Terminology note.** This spec uses "sub-card" as the canonical term for device-bound, app-specific credentials. All sub-cards follow the same `SubCardDocument` schema (see `protocol-objects.md §16`). The wallet is itself an app that creates sub-cards for its own use.
 
 ---
@@ -122,6 +124,8 @@ The completed `SubCardDocument` is submitted to an approved press for the primar
 This **app-chain verification is press-side and registration-time only**. Runtime verifiers (wallets, relying parties evaluating a sub-card-signed statement) do not independently re-walk the `app_card` certification chain — they rely on the press having validated it here, evidenced by the `sub_card_doc_cid` pointer on the on-chain `SubCardEntry`.
 
 The press then calls `RegisterSubCard` on the Arbitrum One registry contract, creating a `SubCardEntry` (see `protocol-objects.md §15`) that stores `master_card_address`, `registration_log_head`, and `sub_card_doc_cid` (the CID of the IPFS SubCardDocument). The app card address is **not** stored on-chain — it lives in the IPFS document at `sub_card_doc_cid`.
+
+**DNS-admin-card co-authorization (Fix #33).** The narrative above covers the common case, where the master card is an ordinary holder card. `registry_contract.md §4.3`'s current `RegisterSubCard` signature takes two additional parameters beyond the six described above: `admin_secp_payload` and `admin_secp_signature`. These are **required, non-empty** whenever the master card is a DNS admin card (i.e. `DnsAdminCardKeys[master_card_address]` is non-zero on-chain) — in that case the domain admin card holder must separately produce an `AdminAuthorizeSubCardPayload` (encoding `sub_card_address` and `sub_card_doc_cid`) and sign it with their secp256r1 key, and the contract verifies that signature on-chain via the RIP-7212 precompile before registering the sub-card — independently of, and in addition to, the ML-DSA-44 holder/app signatures described in Steps 1–4 above. When the master card is not a DNS admin card, the press passes explicit zero-value/empty arguments for these two parameters and this step is a no-op. See `registry_contract.md §4.3` for the full precondition list and error code `E-47`, and `press.md §5.4`'s `processSubCardRegistration` step 5a for how the press obtains, validates, and forwards this payload (it does not verify the secp256r1 signature itself — the contract does).
 
 **Gas** is paid from the app's pre-funded gas account with the press (see `registry_contract.md §4.12`). The press rejects the registration request if the app's gas balance is insufficient before submitting any transaction. The app is responsible for maintaining a funded balance; the issuing organization's press does not cover sub-card registration costs.
 
@@ -347,3 +351,7 @@ The wallet is the enforcement point. It:
 - **[Trust-and-Safety — SM-CADENCE]** What is the minimum audit cadence for apps to maintain their app card's standing? Per-version? Per-major-version? Time-based (every 90 days)?
 - **[Design — SM-RENEW]** When a user sets `valid_until` on a sub-card, should the wallet send a renewal reminder before expiry, or should the app re-request authorization?
 - **[Security — SM-SPAM]** The app pays gas for sub-card registration. Could a malicious app exploit this to spam the registry? Rate limiting per app card should be considered.
+
+---
+
+**Changelog (spec-consistency Phase 2, Step C):** Added scope note acknowledging this file's out-of-formal-scope status (Fix #32) and updated §Step 5 to describe the DNS-admin-card secp256r1 co-authorization path added to `registry_contract.md §4.3`/`press.md §5.4` in Phase 1 (Fix #33, partial — see `subcard_creation_policy.md`'s companion rewrite for Decision (d)). See `plans/spec-consistency/inconsistencies/phase-2-consolidated-fixes.md`.

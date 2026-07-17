@@ -5,6 +5,8 @@
 **Status:** Current  
 **Source:** Synthesized from `card_protocol_spec.md` (v0.3) and supporting raw notes. v1.1 adds ADR-012 (secp256r1 for on-chain verification; ML-DSA-44 retained for IPFS content signing) and closes OQ-2. v1.2 adds ADR-009-AMEND: the keyring blob moves off IPFS to traditional, deletable storage replicated across the wallet service federation.  
 
+**Amended (spec-consistency Phase 2, Fix #11):** ADR-004's cryptographic-primitives list no longer includes "audit epoch entries" — the audit-epoch/AEK model was removed and replaced by direct E2E-encrypted `PressIssuanceRecord` messaging to each `policy.auditors` address; nothing is posted to IPFS under the new model. See `plans/spec-consistency/inconsistencies/phase-2-consolidated-fixes.md` Fix #11.
+
 ---
 
 ## Table of Contents
@@ -201,7 +203,7 @@ Signature and key encapsulation schemes must be selected for the protocol. The p
 
 The protocol uses a **split signing model** with two distinct signature schemes serving different roles:
 
-- **IPFS / content signatures:** **ML-DSA-44** (FIPS 204, Module Lattice Digital Signature Algorithm). Used for all content signed to IPFS — card documents, log entries, SCIPs, message envelopes, audit epoch entries, and all other IPFS-stored artifacts. Post-quantum resistance is required here because IPFS content is permanent and cannot be re-signed after publish.
+- **IPFS / content signatures:** **ML-DSA-44** (FIPS 204, Module Lattice Digital Signature Algorithm). Used for all content signed to IPFS — card documents, log entries, SCIPs, message envelopes, and all other IPFS-stored artifacts. Post-quantum resistance is required here because IPFS content is permanent and cannot be re-signed after publish.
 - **On-chain write authorization:** **secp256r1 (P-256)** via the **RIP-7212 precompile** on Arbitrum One. Used for press write operations and governance operations. Keys are rotatable; the upgrade path to ML-DSA-44 on-chain is built in. See ADR-012.
 - **Key encapsulation (E2E message encryption):** **ML-KEM-768** (FIPS 203, Module Lattice Key Encapsulation Mechanism, parameter set 768). ML-KEM-768 is the normatively pinned parameter set for this protocol. Used for E2E message transport (ADR-007), including auditor notification messages.
 - **Canonical serialization:** RFC 8785 (JSON Canonicalization Scheme — JCS). Lexicographic key sort, no whitespace, standard JSON escaping, UTF-8 output. See ADR-010.
