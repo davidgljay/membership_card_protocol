@@ -1,125 +1,63 @@
-# Red-Team Strategic Plan — Card Protocol v0.3
+# Strategic Plan — membership-card-verifier Deferred TODOs
 
-**Date:** 2026-05-21  
-**Status:** Draft  
-**Companion document:** [implementation-plan.md](./implementation-plan.md)
-
----
+Source: `plans/membership_card_verifier_todo.md` (4 items, raised 2026-07-12 through 2026-07-17)
+Companion: `implementation-plan.md`
 
 ## Goals
 
-### 1. Surface zero-click infrastructure vulnerabilities before deployment
+**G1. Verifier failure signals carry enough information for callers to explain *why*, not just *whether*, a policy check failed.**
+`evaluate_policy_match` currently returns a bare `bool`/`None`, collapsing "wrong credential entirely" and "right credential, doesn't currently qualify" into the same `False`. No caller can produce a specific deny reason today.
 
-The protocol relies on a small set of infrastructure components — the Arbitrum One registry contract, IPFS pinning, the Nym mixnet gateway, and the press service — each of which is reachable without user interaction. Exploits at this layer can affect all cards across all policies, not just individual holders. We need to identify what an attacker can do by targeting these surfaces before any human approves or countersigns anything.
+**G2. `verifyCard`/`verify_card` can no longer silently mislead a caller into believing it populates chain data when it structurally cannot.**
+The address-only entry point always returns `chain: []`; this already caused a total, silently-shipped functional failure in two call sites (`discoverRooms` in both `client-sdk` and `wallet-service`) before being caught in review. The footgun itself — not just its one confirmed instance — remains unfixed.
 
-### 2. Map the blast radius of key compromise at each tier
+**G3. On-chain event history is actually retrievable, not stubbed everywhere it's called.**
+`RpcProvider.getCardEventLog` has no real implementation anywhere in the codebase; every test suite mocks it. Stage 4's `HISTORY_MISMATCH` cross-check currently provides no real security assurance because it always degrades against an empty event log.
 
-The protocol has a trust hierarchy: policy authorizer → press sub-card → issued card. Key compromise at different points in this hierarchy has wildly different consequences. We need to model each compromise scenario, determine exactly what an attacker gains, and evaluate whether the protocol's revocation and recovery machinery is sufficient to contain the damage.
-
-### 3. Stress-test social and procedural controls against realistic adversaries
-
-The protocol is explicitly aware that some of its enforcement is "a social protocol, not a cryptographic one" (e.g., 9xx propagation). This is honest, but it means we need to evaluate whether adversaries — specifically a state actor, an organized criminal operation, and a technically sophisticated individual abuser — can exploit those social gaps in ways the cryptographic layer cannot detect or prevent.
-
-### 4. Identify whether the protocol can be weaponized against its intended beneficiaries
-
-The protocol is designed to serve activists, journalists, mutual aid communities, and vulnerable individuals. The most serious failure mode is not that the protocol fails to work — it's that it works exactly as designed, but in the hands of an adversary who has learned to operate within its rules. We need to ask whether the protocol inadvertently creates new attack surfaces for the populations it is meant to protect.
-
-### 5. Produce actionable findings with severity ratings and mitigation recommendations
-
-The output of this red-team is not a pass/fail verdict. It is a ranked list of findings — each with a clear description of the attack, the conditions required to mount it, the harm it causes, and the mitigation options available within the current spec. Findings should be specific enough to inform concrete design decisions before v1 deployment.
-
----
+**G4. Matrix deployments actually enforce revocation via live on-chain events, not just via whatever backstop exists independently.**
+The `Watcher` daemon is fully built and unit-tested but is never constructed by `PolicyModule.__init__`. No running deployment today subscribes to `CardHeadUpdated` events at all — revocation has no live event-driven path in production.
 
 ## Rationale
 
-### Why this matters now
+**G1** matters for operational and UX reasons, not correctness: nothing is broken today, but every current consumer (`matrix-policy-module`'s `predicates.py`, `client-sdk`'s `discoverRooms`) is unable to log or surface *why* a card didn't qualify for a room. That gap compounds as audit logging and any future "why was I denied" UI get built — better to close it once, deliberately, than have each consumer invent its own workaround later.
 
-The protocol is at v0.3 draft, before the Arbitrum One contract is deployed and before the npm package API is locked. This is the cheapest moment to find problems. A vulnerability in the on-chain registry contract is a breaking change after deployment; a design flaw in how revocation propagates is a social harm to real users after launch.
+**G2** matters because it isn't hypothetical risk — it already caused a real, shipped, total-failure bug (both discovery paths silently returning zero eligible rooms for every card) that only surfaced because David caught it in a Phase 4 milestone review, not because a test failed (both test suites mocked around the real implementation). The instance was fixed same-day, but the underlying API shape — an entry point that accepts `returnChain: true` and silently ignores it — is still there for the next caller to walk into.
 
-The three attack categories and three adversary personas are not hypothetical — they represent realistic threat actors who have targeted analogous systems. The Tor Project, Signal, and the Let's Encrypt CT log have all faced attacks modeled on at least one of these personas. The Card Protocol's novel combination of decentralized issuance, privacy-preserving transport (Nym), and community-governed credentials creates new possibilities for both the protocol's intended uses and for its abuse.
+**G3** is the most consequential item of the four: it's not a footgun, it's a missing implementation. Stage 4's on-chain history cross-check is part of the verification story described in `registry_contract.md §7`, but today it verifies nothing, because there's no real `eth_getLogs`-backed event querying anywhere in the codebase. Any caller currently trusting `HISTORY_MISMATCH` for real freshness/tamper assurance is getting a pass-through no-op, not a check.
 
-### The protocol's meaningful attack surface
-
-After reading the full spec, the most interesting attack surfaces are:
-
-**Infrastructure layer.** The Arbitrum One Stylus contract verifies ML-DSA-44 signatures on every write. The IPFS pinning model has no enforcement — presses are contractually required to pin, but the protocol has no mechanism to verify they are doing so or to prevent targeted de-pinning of specific card histories. The Nym gateway is a real-time network endpoint with no authentication at the transport layer.
-
-**Key hierarchy.** The press key is the bottleneck for all issuance writes to the chain. Compromising the press sub-card key allows an attacker to register arbitrary cards under any policy the press serves, forge update log entries (including backdated revocations and 9xx loud revocations against victims), and brick an entire policy's issuance pipeline. Press key compromise is explicitly noted in the risk register with "Low" likelihood — this assessment should be stress-tested.
-
-**Social engineering surface.** `requester_predicate` and `recipient_predicate` are powerful but their evaluation depends on the honesty of the chain they're walking. A sufficiently sophisticated attacker who can obtain real credentials (or whose community contact has real credentials) can satisfy predicates legitimately and then use the resulting card for purposes the policy intended to prevent. The open card offer mechanism (`allow_open_offers: true`) is particularly interesting here — it decouples issuance from individual review.
-
-**Holder notification suppression.** The spec explicitly notes that `notify_holder: false` exists for "adversarial scenarios — such as a 9xx revocation where tipping off the holder would be harmful." This feature cuts both ways. A malicious issuer can revoke a target's card with a 9xx code and `notify_holder: false`, silently destroying the target's standing across communities, with the target having no way to know until they try to authenticate somewhere.
-
-**Erasure.** The `erasable: true` policy flag allows revocation entries to redact prior log history. This is a powerful capability for harm survivors who need to remove records. It is also a powerful capability for anyone who controls a policy and wants to destroy evidence.
-
-### Why these three adversaries
-
-**Autocratic government.** State actors have the resources to compromise infrastructure, compel press operators (legal process, coercion), and run long-duration intelligence operations to build dossiers on card chains. They may control portions of the Nym mixnet or be able to perform traffic correlation. The protocol's privacy model explicitly addresses "selectively shared" and "fully private" modes — but these require the user to have chosen them correctly and to hold their capability bundles securely under active surveillance.
-
-**Sophisticated criminal organization.** Criminal organizations need fraud-proof-enough credentials to extract money. They are unlikely to attack infrastructure (high cost, high exposure) but are highly motivated to find policy-social-engineering paths that produce legitimate-looking cards. They will probe the open offer mechanism, the `allow_open_offers` flag, and any press whose compliance checks can be gamed at scale.
-
-**Technical abuser.** An individual with software engineering skills and motivation to surveil, control, and harm a specific person is the highest-precision attacker. They are not trying to affect many people — they are trying to affect one person. This means they can invest disproportionate effort per target. Their key questions are: can they obtain a card that gives them visibility into their target's activity? Can they silently modify or revoke their target's credentials? Can they use the protocol's notification and authentication flows as a tracking mechanism?
-
----
+**G4** is the other consequential item: the entire event-driven revocation design in `matrix_join_attestation_and_revocation.md §3.1` — built, unit-tested, config-wired into `homeserver.yaml` rendering — is inert in every real deployment because of a one-line wiring gap (a TODO at the construction site). This is the difference between "revocation works" and "revocation is fully implemented but never runs."
 
 ## Key Objectives
 
-### Goal 1: Surface zero-click infrastructure vulnerabilities
+**G1**
+- `evaluate_policy_match`/TS equivalent returns a discriminated result (e.g. `{ matched, reason? }`) distinguishing `no_policy_match` from `field_mismatch`, in both languages.
+- A boolean-coercion path exists so all 101 TS / 130 Python existing tests continue to pass unmodified (or with only mechanical updates, not semantic rewrites).
+- `matrix-policy-module`'s `predicates.py` surfaces the specific reason in its deny logs.
+- New reason-specific test cases exist in both language suites and the cross-language interop vectors.
 
-- Identify at least one concrete attack path (or confirm absence) for each infrastructure component: registry contract, IPFS layer, Nym gateway, press service endpoint.
-- Evaluate whether the Stylus ML-DSA-44 verification is susceptible to known implementation attacks (key substitution, fault injection at the calldata level, gas griefing).
-- Determine whether targeted IPFS de-pinning of a specific card's history is achievable and what the protocol-level consequences are.
-- Assess the Nym gateway endpoint's exposure to denial-of-service and traffic-correlation attacks.
+**G2**
+- `verifyCard`/`verify_card` accepts an optional caller-supplied pubkey or `CardDocument`, and populates a real `chain` when provided — falling back to today's `chain: []` only when it isn't.
+- Existing callers (`client-sdk`'s corrected `discoverRooms` envelope path, `wallet-service`'s signed-envelope endpoint) are unaffected — no regression to the Phase 4 same-day fix.
+- Test coverage exists proving `returnChain: true` + supplied pubkey/document produces a non-empty chain, and that the no-extra-input path is unchanged.
 
-### Goal 2: Map key compromise blast radius
+**G3**
+- A real `RegistryContract.getCardEventLog` implementation exists (in `verifier-rpc-provider` or a companion helper) performing chunked `eth_getLogs` queries for `CardRegistered`/`CardHeadUpdated`, starting from the registry's deploy block or a caller-supplied starting block.
+- Provider block-range-limit errors are handled by retrying with a smaller window.
+- `press.md`'s Open Question OQ-B3 is updated to reflect the current `getCardEventLog` interface (not the pre-redesign `getLogEntries()` naming).
+- Stage 4's `HISTORY_MISMATCH` check is exercised against real event data in at least one integration test.
 
-- For each key tier (policy authorizer, press sub-card, holder master, holder sub-card, auditor, backup service), document: what an attacker gains on compromise, what the revocation response is, and what the residual damage is after revocation.
-- Evaluate the 72-hour YubiKey recovery cancellation window against an adversary with simultaneous access to the YubiKey and the target's notification channels.
-- Assess whether a compromised press can forge backdated log entries that survive post-hoc verification.
+**G4**
+- `PolicyModule.__init__` constructs and starts a `Watcher` using the already-rendered config keys, with clean startup/shutdown/reconnect behavior matching Synapse's module lifecycle.
+- The satisfying-card-join and revocation-force-part smoke tests referenced in `plans/matrix-implementation-plan.md` Phase 6 run end-to-end against a live (or realistic test) registry contract at least once.
+- No currently-passing unit test for `Watcher`/`CardHeadEventSubscription` needs semantic changes — only the wiring at the construction site changes.
 
-### Goal 3: Stress-test social controls against realistic adversaries
+## Open Questions
 
-- Identify at least two realistic social-engineering paths to obtaining a card under false pretenses for each of the three adversary types.
-- Evaluate whether the protocol's existing tooling (9xx revocation, safety annotator layer, loud revocation propagation) is sufficient to remediate each scenario after discovery.
-- Assess how long an attacker can operate with a fraudulently-obtained card before detection is likely.
+1. **G1 — result shape:** should the discriminated result be a plain object (`{ matched, reason? }`) or a proper tagged union/enum type per language? This affects the boolean-coercion strategy and how much of the 101+130 existing tests can stay untouched vs. need mechanical updates.
+2. **G2 — API shape:** should the optional parameter be a raw pubkey, an already-fetched `CardDocument`, or both accepted as alternatives? Whichever is chosen needs to match how `client-sdk`/`wallet-service` already have this data available post-Phase-4-fix, to avoid introducing a second, unused way to get a chain.
+3. **G3 — caching ownership:** does per-card starting-block caching (to avoid re-scanning full history every verification) belong inside `verifier-rpc-provider`, or is it a caller concern per the existing "thin package, caller supplies transport/caching" design principle? This determines whether G3's work touches the shared package's public surface or only its reference/example implementation.
+4. **G3 — test environment:** implementing and validating chunked `eth_getLogs` needs *some* live or realistic Arbitrum RPC endpoint (mainnet, testnet, or a local fork). None is confirmed available in this sandbox. Does David have a testnet/fork endpoint and a deployed registry contract address to test against, or should this phase stop at implementation + mocked-provider tests and flag live validation as a follow-up?
+5. **G4 — lifecycle hook:** does Synapse's module loader support an async startup hook, or does `Watcher` need to be started from a synchronous `__init__` (e.g. via `asyncio.create_task`)? This is a Synapse-API question that needs a definitive answer before the wiring step is written, not assumed.
+6. **G4 — live validation:** per `plans/matrix-implementation-plan.md` Phase 6, the on-chain-dependent smoke tests have never been run end-to-end in this sandbox. Same question as #4 — is there a live/test registry contract and Matrix homeserver environment available, or does this phase stop at "wired and unit-tested" with live validation flagged as a follow-up requiring David to provision test infra?
 
-### Goal 4: Identify weaponization against intended beneficiaries
-
-- Document the protocol behaviors that could be used against activists, journalists, or abuse survivors — specifically: silent 9xx revocation with `notify_holder: false`, the erasure capability, and the authentication flow's card-pointer metadata.
-- Evaluate whether the privacy modes ("selectively shared," "fully private") are meaningfully protective against a state-level adversary with access to the Nym gateway infrastructure or Arbitrum One chain analysis capabilities.
-- Determine whether the authentication flow leaks correlatable metadata that could de-anonymize users.
-
-### Goal 5: Produce actionable findings
-
-- Every finding receives a severity rating (Critical / High / Medium / Low) and a feasibility rating (Practical / Theoretical).
-- Every Critical or High finding includes at least one concrete mitigation option, with an assessment of whether it can be addressed within the current spec or requires a protocol change.
-- Findings are organized by attack category, not by adversary, to support prioritization across the full threat landscape.
-
----
-
-## Resolved Design Questions
-
-The following questions were clarified by the protocol author and should inform findings throughout the red-team work.
-
-**1. Trust root control — split state-actor scenario into two tracks.**
-
-The state-actor scenario should be analyzed separately depending on whether the adversary controls the community's trust root or not. These are qualitatively different threat profiles:
-
-- **Without trust root control:** The adversary cannot issue policy cards that appear legitimate to verifiers using the community's configured root. Their attack surface is limited to infrastructure coercion, chain analysis, and insider operations.
-- **With trust root control:** The adversary can issue legitimately-verifiable policy cards and press sub-cards, making the entire credential hierarchy they issue cryptographically indistinguishable from genuine issuance. This is a fundamentally more powerful position. The implementation plan should evaluate each sub-scenario under both conditions.
-
-**2. The press does not hold audit log decryption keys — but legal compulsion is still a real threat.**
-
-The press encrypts each issuance log entry to auditor public keys using ML-KEM, but never holds the corresponding decryption keys. A compelled press therefore cannot hand over audit log contents. However, legal compulsion can require the press to operate normally while under surveillance — logging which update intents arrive, from which Nym addresses or IPs, and when. The press observes: the timing and frequency of issuance requests, which card pointers are submitting update intents, and (for HTTPS submissions) IP address metadata. This is meaningful intelligence even without decrypting audit content. Separately: the press cannot issue cards that appear valid because it cannot forge holder countersignatures. A compelled press can refuse to process legitimate requests or selectively forward valid intents — it cannot forge credentials.
-
-**3. `notify_holder: false` is an intentional design feature, confirmed weaponizable.**
-
-The feature exists to allow issuers to act against bad actors without alerting them. This is a considered design choice. However, the same mechanism allows a malicious issuer to silently revoke a legitimate holder's credentials — posting a 9xx entry with `notify_holder: false` and a backdated `effective_date` — with the target having no way to know until they attempt to authenticate and are rejected. This is not an oversight; it is an accepted tradeoff. Red-team findings in this area should be rated as High and should include mitigation options (e.g., holder-initiated log polling, verifier-side "last checked" freshness indicators, or requiring two-party authorization for silent 9xx entries).
-
-**4. Safety annotators post to a separate contract with distinct discovery semantics.**
-
-Safety annotators publish annotations to a separate on-chain contract (not the main card registry). Each annotator's mutable pointer points to their annotation records, not directly to the cards they are annotating. Evidence is required for annotations: valid evidence includes a signed statement using the card being annotated, or a signed statement from a card holder who is themselves trusted. This requirement changes the attack surface: a false annotation campaign requires fabricating or obtaining signed evidence, not merely asserting harm. The key failure mode is annotator compromise (attacker gains control of a trusted annotator card) rather than trivial false claims.
-
-**5. Nym de-anonymization — adversary capability tiering is an explicit research question.**
-
-Not all adversaries can de-anonymize Nym. The implementation plan should specifically investigate which adversary categories have realistic de-anonymization capability and what that capability enables. A state actor with significant Nym node infrastructure or global passive surveillance capability is a different threat than an individual abuser. The question to answer: if an adversary can de-anonymize a Nym message to learn the sender's IP, what does that give them? (It links a card identity to a physical network location — potentially identifying a device, its owner, or their geographic position.)
+**Assumption if unresolved:** absent answers, the implementation plan will default to (1) a plain discriminated object per language, (2) accepting either a pubkey or a `CardDocument` as alternatives, (3) caching left as a caller concern (consistent with existing package philosophy), and (4)/(6) implementation + mocked/unit-test validation only, with live end-to-end validation called out as a blocked follow-up needing David to provision RPC/contract access.

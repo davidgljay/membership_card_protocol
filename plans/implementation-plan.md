@@ -1,364 +1,305 @@
-# Red-Team Implementation Plan — Card Protocol v0.3
+Strategic plan: [strategic-plan.md](./strategic-plan.md)
 
-**Date:** 2026-05-21  
-**Status:** Draft  
-**Strategic plan:** [strategic-plan.md](./strategic-plan.md)
+# Implementation Plan — membership-card-verifier Deferred TODOs
 
-This plan is organized into three phases corresponding to the three attack categories. Each phase produces findings that feed into a final synthesis report. Phases can be executed in parallel by separate reviewers; each phase's milestone review should be completed before findings are merged into the synthesis.
+Decisions locked in from strategic-plan.md open questions: G1 uses a plain discriminated
+object (not a tagged-union type); G2 accepts a pubkey only (not a CardDocument alternative);
+G3/G4 have no live RPC/registry/homeserver test environment available, so both phases stop at
+implementation + mocked/unit-test validation, with live end-to-end validation flagged as a
+blocked follow-up for David to provision later. Caching ownership for G3 (open question #3)
+defaults to "caller concern," consistent with the package's existing thin-package philosophy,
+unless Phase 3's research step finds that assumption doesn't hold.
 
----
-
-## Phase 1: Zero-Click Infrastructure Attacks
-
-**Objective:** Identify attacks that require no user interaction — attacks on the Arbitrum One contract, the IPFS layer, the Nym gateway, and the press service itself.
-
----
-
-### Step 1.1 — Audit the Arbitrum One Stylus contract's write-gate logic
-
-**What:** Review the registry contract's enforcement of ML-DSA-44 signature verification. Specifically: (a) confirm that the contract correctly rejects writes from press sub-card keys that do not appear in the policy card's `approved_presses` field; (b) evaluate whether the on-chain ML-DSA-44 verification is susceptible to key-substitution or malleability attacks; (c) assess whether an attacker can gas-grief the contract by submitting transactions with valid signatures but malformed calldata that causes expensive reversion.
-
-**Who:** Reviewer (smart contract focus)
-
-**Context needed:** `specs/ARCHITECTURE.md` §ADR-001, §ADR-004; `specs/card_protocol_spec.md` §2 (press authorization flow); `specs/protocol-objects.md` §12 (RegistryEntry). Key fact: the contract rejects writes unless the signer's press sub-card pointer appears in `approved_presses` — this is the primary write gate. ML-DSA-44 public keys are 1,312 bytes; signatures are 2,420 bytes.
-
-**Done when:** A written finding describes: (1) whether any identified attack path allows unauthorized writes to the registry, (2) whether gas-griefing is feasible and what its impact would be, (3) whether the ML-DSA-44 Stylus verification is susceptible to known implementation vulnerabilities. Finding includes severity and feasibility ratings.
+**Agent assignment principle (token economy):** design/decision steps and anything
+correctness-critical or novel (chunked `eth_getLogs` logic, Synapse lifecycle wiring) run
+inline under the main session (Sonnet), since they need judgment and the full surrounding
+context. Mechanical, fully-specified work — implementing a change once its exact shape is
+written down, writing tests that follow an existing pattern, doc-string updates — is delegated
+to Haiku subagents with a self-contained prompt (exact file paths, exact signatures, exact
+logic), so those tokens run on the cheaper model instead of Sonnet.
 
 ---
 
-### Step 1.2 — Assess targeted IPFS content availability attacks
+## Phase 1: G1 — `evaluate_policy_match` reason codes
 
-**What:** Evaluate what happens when an adversary causes specific IPFS content to become unavailable. Three sub-scenarios: (a) **de-pinning attack** — an adversary who controls the press (or has compromised it) stops pinning specific cards, making their history unresolvable by verifiers; (b) **policy card availability** — what happens to all cards issued under a policy if the policy card's IPFS content becomes unavailable (the on-chain pointer survives but the content does not); (c) **revocation record suppression** — is it possible to make a 9xx revocation entry unresolvable while leaving the card's active state intact, such that verifiers see the card as valid?
+**1.1 — Design spec** (Who: Claude, inline)
+What: Read `policy_match.py`, the TS equivalent, and every type that surfaces `policy_match`
+(`EnvelopeVerificationResult`/`SignatureVerificationResult`/`CardVerificationResult` in both
+languages), plus `matrix-policy-module/predicates.py` and the existing 101 TS / 130 Python
+test files that assert on today's boolean contract. Write a spec doc fully specifying: the new
+result shape (`{ matched: bool, reason?: "no_policy_match" | "field_mismatch" }` per language),
+exactly where in `evaluate_policy_match` each reason is determined, the boolean-coercion path
+for existing callers, and which existing tests need only mechanical updates (return-shape
+unwrap) vs. none at all.
+Context needed: `packages/verifier-py/.../policy_match.py`, TS equivalent path, both languages'
+verification-result type definitions, `matrix-policy-module/predicates.py`,
+`plans/membership_card_verifier_todo.md` item 1, strategic-plan.md §G1.
+Done when: `plans/g1-policy-match-reason-spec.md` exists with exact file paths, function
+signatures, and reason-determination logic — specific enough that an agent with no other
+context can implement it correctly.
 
-**Who:** Reviewer
+**1.2 — Implement Python side** (Who: Haiku agent)
+What: Implement the spec from 1.1 in the Python package only.
+Context needed: `plans/g1-policy-match-reason-spec.md` (full spec — no other context should be
+required).
+Done when: Python `evaluate_policy_match` and the surfacing result fields match the spec;
+existing Python test suite still passes or is updated exactly as the spec directs.
 
-**Context needed:** `specs/ARCHITECTURE.md` §ADR-002, §ADR-003; `specs/card_protocol_spec.md` §5 (updating cards, log arcardecture); `specs/ARCHITECTURE.md` Risk Register (IPFS content not pinned). Key fact: the on-chain registry holds only the head CID pointer; the content lives on IPFS and persists only as long as someone pins it. Presses are "contractually responsible for pinning" — there is no on-chain enforcement.
+**1.3 — Implement TS side** (Who: Haiku agent, run in parallel with 1.2)
+What: Implement the spec from 1.1 in the TS package only.
+Context needed: `plans/g1-policy-match-reason-spec.md`.
+Done when: TS `evaluate_policy_match` and the surfacing result fields match the spec; existing
+TS test suite still passes or is updated exactly as the spec directs.
 
-**Done when:** A finding describes which content availability failures are exploitable by a determined adversary vs. which are mitigated by the on-chain anchor, whether selective de-pinning of revocation records is a viable attack, and what the user-visible consequence of each scenario is.
+**1.4 — Surface reason in matrix-policy-module deny logs** (Who: Haiku agent)
+What: Update `predicates.py` to log the specific `reason` value instead of a bare "didn't
+match," per the spec.
+Context needed: `plans/g1-policy-match-reason-spec.md`, `matrix-policy-module/predicates.py`.
+Done when: deny-path logging includes the reason string; no change to `predicates.py`'s
+matching behavior, only its logging.
 
----
+**1.5 — Reason-specific test cases** (Who: Haiku agent)
+What: Add new test cases (both languages + cross-language interop vectors) exercising
+`no_policy_match` vs `field_mismatch` specifically, per the spec's test-case list.
+Context needed: `plans/g1-policy-match-reason-spec.md`, both languages' test directories,
+interop vector location.
+Done when: new tests exist and pass locally against the 1.2/1.3 implementations.
 
-### Step 1.3 — Assess the Nym gateway as an attack surface
-
-**What:** Evaluate four attack vectors against the Nym transport, with explicit adversary-capability tiering for each:
-
-**(a) Denial-of-service.** Can an attacker flood a card's Nym gateway to prevent delivery of offers, SCIPs, and authentication responses? What is the user-visible consequence — does the protocol degrade gracefully (fall back to HTTPS) or fail closed? Evaluate whether the HTTPS fallback itself leaks IP metadata that Nym was meant to hide.
-
-**(b) Traffic correlation — adversary capability tiering.** Not all adversaries can de-anonymize Nym. Evaluate each adversary category separately:
-- *State actor with significant Nym node infrastructure or global passive surveillance:* Can correlate entry and exit timing across the mixnet with sufficient node coverage. Evaluate the minimum node fraction needed to de-anonymize a given message, and what de-anonymization reveals — specifically, it links a card identity to a physical network address (IP), which may in turn identify a device, its owner, or their geographic position.
-- *Criminal organization without state-level infrastructure:* Can operate Nym nodes to attempt partial de-anonymization, but lacks global coverage. Evaluate feasibility of targeted de-anonymization if the adversary can predict when a specific card holder will authenticate (e.g., they control the relying party site).
-- *Individual abuser:* Realistically cannot de-anonymize Nym without access to node infrastructure. Their threat model against the transport layer is limited to the gateway endpoint and HTTPS fallback.
-
-**(c) Gateway endpoint exposure.** The Nym gateway address is stored in card metadata. For "fully private" cards this metadata is encrypted, but for "fully public" cards it is plaintext and directly linkable to the card identity. Evaluate: does a public gateway address allow an adversary to observe when a holder is receiving messages (even without reading content)? Can the press's observable knowledge of a holder's Nym gateway address (from HTTPS submissions or prior interactions) be used to track activity?
-
-**(d) What de-anonymization enables.** If an adversary succeeds in linking a Nym message to an IP address, what does that give them beyond the IP? Cross-reference with the authentication flow (§8): an authentication response sent via Nym contains the holder's card pointer, signed statement, and session ID. A de-anonymized authentication response links: a physical IP → a card identity → the site being authenticated to → the timing of the authentication. For a journalist or activist authenticating to a community platform, this is a significant intelligence gain.
-
-**Who:** Reviewer
-
-**Context needed:** `specs/ARCHITECTURE.md` §ADR-007 (Nym mixnet, message server design); `specs/card_protocol_spec.md` §8 (authentication flow, Nym/OHTTP/HTTPS fallback chain); `specs/ARCHITECTURE.md` §ADR-006 (privacy modes, gateway address in metadata). Key facts: the spec acknowledges the message server "observes that messages arrived and approximately when, but not their content"; the Nym gateway address is "a field in card metadata"; the authentication flow sends responses via Nym preferred → OHTTP → HTTPS.
-
-**Done when:** A finding rates the feasibility of each attack path explicitly by adversary category (not a single aggregate rating), specifies what de-anonymization enables beyond an IP address, and identifies whether any protocol changes (e.g., rotating Nym gateway addresses, mandatory OHTTP for all authentication responses) would meaningfully reduce exposure.
-
----
-
-### Step 1.4 — Evaluate press service attack surface
-
-**What:** The press is a networked service that holds a funded Arbitrum One wallet, accepts HTTPS and Nym submissions, and has write authority to the registry contract. Evaluate four attack paths:
-
-**(a) Press key exfiltration.** What does an attacker with the press's private key gain? The press cannot forge holder countersignatures — user-sovereign key custody means a completed card requires the holder's own keypair, so the press cannot mint arbitrary valid credentials. But with the press key it can: post backdated log entries (including 9xx revocations with any `effective_date` and `notify_holder: false`), register new registry entries for attacker-controlled keypairs, and suppress or delay legitimate update intents. Evaluate the practical harm of each.
-
-**(b) Legal compulsion to operate under surveillance.** A state actor can compel a press to continue operating normally while the press logs all submission metadata. Critically, the press cannot hand over audit log contents — it encrypts each issuance log entry to auditor public keys using ML-KEM and never holds the corresponding decryption keys. But the press does observe: timing and frequency of all issuance requests, which card pointers submit update intents, IP addresses of HTTPS submissions, and Nym gateway addresses from Nym-routed submissions. Evaluate what this metadata stream enables for a state-level adversary and whether Nym-only submission to presses would materially reduce the exposure.
-
-**(c) Press as single point of failure.** What happens if the only approved press for a community's policy is taken down — by legal seizure, infrastructure failure, or targeted attack? Evaluate whether the "list multiple presses in `approved_presses`" recommendation is realistic for small community deployments and whether the spec should treat it as a requirement rather than a suggestion.
-
-**(d) Selective censorship by a malicious press operator.** A press operator can silently drop specific valid intents without key compromise — selectively refusing 810 self-revocation requests (preventing a compromised holder from invalidating their key), suppressing legitimate positive updates, or refusing issuance requests from specific requesters. This is censorship within the press's legitimate operational authority, not forgery. Evaluate how detectable this behavior is and what the holder's recourse is.
-
-**Who:** Reviewer
-
-**Context needed:** `specs/ARCHITECTURE.md` §ADR-005, §ADR-007; `specs/card_protocol_spec.md` §2 (issuance flow), §5 (update flow, 810 self-revocation); `specs/ARCHITECTURE.md` Risk Register (Press key compromise). Key facts: the press encrypts audit entries to auditor public keys and never holds decryption material; the spec recommends (but does not require) multiple presses in `approved_presses`.
-
-**Done when:** A finding clearly separates what a press can do (registry writes, log entry posting, metadata observation) from what it cannot (forge holder countersignatures, decrypt audit logs), rates each of the four attack paths separately, and addresses whether the "list multiple presses" mitigation is sufficient in practice.
-
----
-
-### Phase 1 Milestone Review
-
-**Context needed:** Findings from Steps 1.1–1.4; `specs/ARCHITECTURE.md` Risk Register; `plans/strategic-plan.md` §Goals 1 and 5.
-
-**Done when:** All Phase 1 findings reviewed for consistency (no contradictions in severity ratings, no duplicate coverage); any findings from one step that are relevant to another step cross-referenced; a one-paragraph Phase 1 summary written to `plans/milestones/phase-1-summary.md` naming the top 1–2 infrastructure findings by severity; and the reviewer has confirmed no infrastructure finding was missed that would materially affect Phase 2 or Phase 3 work.
-
-**Clarification checkpoint:** If any Phase 1 step surfaces a Critical finding — an attack that appears to allow arbitrary writes to the registry, mass revocation of cards, or complete suppression of revocation records — **pause and notify the author before continuing**. A Critical infrastructure finding may require spec changes that affect the Phase 2 and Phase 3 analyses.
+**Phase 1 Milestone Review** (Who: Claude, inline)
+Context needed: `plans/g1-policy-match-reason-spec.md`, outputs of 1.2–1.5 (diffs), full
+Python + TS test run output.
+Done when: Python and TS implementations are consistent with each other and the spec, the full
+existing suite (101 TS / 130 Python + new cases) passes, `predicates.py` logging verified
+manually against a constructed `field_mismatch` case, and any spec gaps found during
+implementation are resolved in-place before Phase 2 starts.
 
 ---
 
-## Phase 2: Key Compromise Scenarios
+## Phase 2: G2 — `verifyCard`/`verify_card` chain-population footgun
 
-**Objective:** For each key tier in the trust hierarchy, model the attacker's capabilities after compromise and evaluate whether the protocol's revocation and recovery machinery contains the damage.
+**2.1 — Design spec** (Who: Claude, inline)
+What: Read `CardVerifier.ts`, `card_verifier.py`, and how `client-sdk`'s corrected
+`discoverRooms` and `wallet-service`'s signed-envelope endpoint currently obtain a pubkey
+post-Phase-4-fix. Write a spec for an optional pubkey parameter (decision: pubkey only, not
+`CardDocument`) that, when supplied, lets `verifyCard`/`verify_card` decrypt and populate a
+real `chain` from Stage 3, falling back to `chain: []` when omitted — mirroring how
+`verifyEnvelope`/`verify_envelope` already populates it.
+Context needed: `packages/verifier/src/CardVerifier.ts`, Python equivalent,
+`client-sdk/packages/client-sdk/src/matrix/discovery.ts`, `wallet-service`'s
+`/matrix/discover-rooms` handler, `plans/membership_card_verifier_todo.md` item 2,
+strategic-plan.md §G2.
+Done when: `plans/g2-verifycard-chain-spec.md` exists with the exact parameter name, type,
+Stage-3 decrypt/populate logic, and fallback behavior for both languages.
 
----
+**2.2 — Implement TS side** (Who: Haiku agent)
+What: Implement the spec from 2.1 in `CardVerifier.ts`.
+Context needed: `plans/g2-verifycard-chain-spec.md`.
+Done when: `verifyCard` accepts the optional pubkey and populates `chain` when supplied;
+unchanged behavior (empty chain) when omitted.
 
-### Step 2.1 — Model policy authorizer key compromise
+**2.3 — Implement Python side** (Who: Haiku agent, run in parallel with 2.2)
+What: Implement the spec from 2.1 in `card_verifier.py`.
+Context needed: `plans/g2-verifycard-chain-spec.md`.
+Done when: `verify_card` accepts the optional pubkey and populates `chain` when supplied;
+unchanged behavior when omitted.
 
-**What:** The policy authorizer holds the key that signs policy cards and authorizes press sub-cards. This is the root of trust for all cards issued under their policies. Model: (a) what an attacker with the authorizer's key can do — modify existing policy fields (if `update_policy` allows it), issue new press sub-cards to attacker-controlled presses, revoke existing press sub-cards; (b) whether the attacker can modify field definitions retroactively and whether this would invalidate existing cards; (c) how the legitimate authorizer detects the compromise and what the recovery path is (the append-only log means the compromise is visible, but the attacker can post entries before revocation).
+**2.4 — Tests** (Who: Haiku agent)
+What: Add tests proving (a) `returnChain: true` + supplied pubkey produces a non-empty,
+correct chain, and (b) the no-pubkey path is byte-for-byte unchanged from today.
+Context needed: `plans/g2-verifycard-chain-spec.md`, both languages' `CardVerifier` test files.
+Done when: both test cases exist and pass.
 
-**Who:** Reviewer
+**2.5 — Regression check against the Phase 4 fix** (Who: Claude, inline)
+What: Grep `client-sdk` and `wallet-service` for all `verifyCard`/`verify_card` call sites,
+confirm none of them start relying on the new parameter in a way that reintroduces the
+"wallet-service can't sign, so don't expect it to have a pubkey either" problem the Phase 4 fix
+was built around. Run both packages' existing test suites.
+Context needed: `client-sdk/packages/client-sdk/src/matrix/discovery.ts`, `wallet-service`'s
+`/matrix/discover-rooms` handler, `plans/membership_card_verifier_todo.md` item 2's "Fixed
+same-day" section (for what NOT to regress).
+Done when: no call site regressed; both suites pass unchanged.
 
-**Context needed:** `specs/card_protocol_spec.md` §1 (policy creation, `approved_presses`, `revocation_permissions`), §5 (update flow, predicate system); `specs/ARCHITECTURE.md` §ADR-005. Key facts: the policy card's `update_policy` fields control what each key can change. The authorizer key signs the initial policy but may delegate update authority granularly. Revoking a press sub-card "removes the press's write authority; previously-issued cards are unaffected."
-
-**Done when:** A finding maps the complete capability set of an attacker with the policy authorizer key, describes the minimum time-to-detection under realistic conditions, and rates the severity with justification.
-
----
-
-### Step 2.2 — Model press sub-card key compromise
-
-**What:** The press sub-card key has write authority to the Arbitrum One registry for all cards governed by its policy. Model three capabilities:
-
-**(a) Credential forgery scope.** The press cannot forge a card that appears valid to a careful verifier, because the holder countersignature requires the holder's private key. However, the press can register a new card entry using a keypair it controls — producing a card with a press signature but a holder signature from an attacker-controlled key. Evaluate whether verifiers in practice would detect this (does the verification flow require the holder's public key to be verified against some prior registration, or only against the card document itself?). This is the precise boundary of "cannot forge cards that appear valid."
-
-**(b) Backdated 9xx revocation as a weaponized attack.** The press key can post a 9xx log entry with any `effective_date` in the past, paired with `notify_holder: false`. This is a confirmed design feature — intentional for issuer-side action against bad actors — but it means a compromised or compelled press can silently revoke any card in its scope, with the revocation backdated to appear as though the holder was a bad actor before any specific authentication event. The victim learns of the revocation only when they attempt to authenticate and are rejected. Evaluate the minimum time-to-detection and the victim's recourse (successor card + supersession note, but this requires the issuer's cooperation or the original press).
-
-**(c) Adversary-type mapping.** Apply all of the above to each adversary type: state actor who has compelled the press via legal process (the press continues operating; the state directs which intents to process and can instruct specific 9xx entries); criminal organization that has infiltrated or set up a press operation; individual abuser who operates a small community press.
-
-**Who:** Reviewer
-
-**Context needed:** `specs/card_protocol_spec.md` §2 (press signing authority, completed card structure), §5 (update flow, code semantics, `notify_holder`); `specs/protocol-objects.md` §1 (CardDocument — both `offer_signature` and `holder_signature` required), §3 (LogEntry, `effective_date`); `specs/ARCHITECTURE.md` §ADR-005. Key facts: a valid CardDocument requires both the press's `offer_signature` and the holder's `holder_signature`; backdated effective dates are explicitly supported by the spec; `notify_holder: false` is a confirmed design feature, not an oversight.
-
-**Done when:** A finding precisely states the boundary of what a compromised press key can and cannot forge, rates the backdated-silent-9xx scenario as High severity with justification, and describes the victim's recourse for each adversary type.
-
----
-
-### Step 2.3 — Model holder master key and sub-card key compromise
-
-**What:** Evaluate the consequence to a holder whose keys are compromised. Three sub-scenarios: (a) **sub-card key only** — attacker has the device sub-card key but not the master key. What can they sign, and how does the holder revoke? (Note: 810 self-revocation requires the holder's key, which may be the compromised key.); (b) **master key only** — attacker has the master key. What can they do that they couldn't with a sub-card key? (c) **full keyring compromise** — attacker obtains the keyring blob and the decryption key (passkey + service secret). What is the complete scope of the breach, and what is the recovery path via YubiKey? Evaluate the 72-hour cancellation window: what if the attacker also has the holder's notification channels (email, phone) — can they suppress all cancellation signals?
-
-**Who:** Reviewer
-
-**Context needed:** `specs/card_protocol_spec.md` §3 (keychain setup, YubiKey recovery flow); `specs/ARCHITECTURE.md` §ADR-009; `specs/card_protocol_spec.md` §5 (810 self-revocation code). Key facts: "All routine signing operations use sub-card keys; the master key is cold." The 72-hour window sends notifications "to all configured channels (Nym gateway, email, SMS, secondary contacts)." Recovery is via YubiKey + PIN.
-
-**Done when:** A finding maps the full capability set at each compromise level, rates the feasibility of the 72-hour bypass attack for each adversary type, and evaluates whether the recovery flow is sufficient given realistic attacker capabilities.
-
----
-
-### Step 2.4 — Model auditor key compromise
-
-**What:** Auditor cards receive ML-KEM-encrypted copies of every issuance log entry. Evaluate: (a) **what an attacker gains** from a compromised auditor key — specifically, they gain the issuance log for every card issued under that policy, which may include requester identity, recipient public key, and timing metadata; (b) **forward secrecy** — if the auditor key is compromised today, does the attacker gain access to historical issuance records, or are past entries protected by separate per-entry key encapsulation? (c) **correlation attack** — even if individual entries are encrypted, can a compromised auditor key be used to correlate issuance timing across multiple cards belonging to the same holder?
-
-**Who:** Reviewer
-
-**Context needed:** `specs/card_protocol_spec.md` §2 (audit log encryption via ML-KEM); `specs/ARCHITECTURE.md` §ADR-004, §ADR-006; `specs/protocol-objects.md` §11 (PressIssuanceRecord content). Key fact: "Each auditor card's current public key (resolved via mutable pointer) is used by the press to encrypt a copy of each issuance log entry via ML-KEM (FIPS 203)." Policy key and audit key are explicitly kept separate.
-
-**Done when:** A finding describes the scope of an auditor key breach, rates the forward-secrecy properties of the current design, and identifies whether auditor compromise is a high-value target for any of the three adversary types.
+**Phase 2 Milestone Review** (Who: Claude, inline)
+Context needed: `plans/g2-verifycard-chain-spec.md`, outputs of 2.2–2.5.
+Done when: TS/Python implementations are consistent, all tests pass, 2.5's regression check is
+clean, and any spec gaps are resolved before Phase 3 starts.
 
 ---
 
-### Step 2.5 — Model backup service and YubiKey-specific attacks
+## Phase 3: G3 — real `getCardEventLog` implementation
 
-**What:** The backup service holds the wrapped keyring decryption key. Evaluate: (a) **backup service compromise** — if an attacker gains access to the backup service's storage (database breach, insider threat), can they recover the keyring decryption key? (b) **YubiKey theft + notification suppression** — model a sophisticated attacker who steals the YubiKey and simultaneously controls the holder's notification channels (via SIM swap, email account takeover, or physical access). Can they complete recovery within the 72-hour window before the holder can cancel? (c) **backup service coercion** — a state actor with legal authority can compel the backup service to release data. What does a compelled release give them?
+**Clarification checkpoint:** no live Arbitrum RPC endpoint or deployed registry contract is
+available in this environment (per strategic-plan.md open question #4/assumption). This phase
+stops at implementation + mocked-provider tests. Do not represent this phase as "verified
+against a live chain" anywhere in status updates or commit messages — flag live validation
+explicitly as a blocked follow-up in the Phase 3 Milestone Review.
 
-**Who:** Reviewer
+**3.1 — Research and design spec** (Who: Claude, inline — correctness-critical, keep in main
+session)
+What: Read `types.ts`/`types.py` (`RpcProvider.getCardEventLog`), `verifier-rpc-provider`'s
+`EthersRpcProvider` and its existing mocked test suite, `registry_contract.md §7`
+(`CardRegistered`/`CardHeadUpdated` event shapes), and Stage 4's `HISTORY_MISMATCH` logic in
+`stage4.ts`/`stage4.py`. Decide and document: chunking strategy (block-range window size,
+default and configurable), starting-block source (registry deploy block constant vs.
+caller-supplied), retry-on-range-limit-error behavior, and confirm/override the caching-is-a-
+caller-concern assumption from strategic-plan.md open question #3 — if research shows caching
+needs to live inside the package, stop and flag this to David before proceeding (this
+contradicts the plan's working assumption and changes the package's public surface).
+Context needed: `verifier-rpc-provider` source and tests, `registry_contract.md §7`,
+`stage4.ts`/`stage4.py`, `plans/membership_card_verifier_todo.md` item 3, strategic-plan.md
+§G3, `plans/spec-consistency/inconsistencies/phase-3-consolidated-fixes.md` Tier 3 item (i).
+Done when: `plans/g3-event-log-spec.md` exists specifying the exact chunking/retry algorithm,
+function signature, and starting-block handling for both languages — and the caching-ownership
+question is either confirmed or explicitly escalated.
 
-**Context needed:** `specs/card_protocol_spec.md` §3 (recovery flow); `specs/ARCHITECTURE.md` §ADR-009. Key fact: "The backup service stores an encrypted blob containing the keyring decryption key, wrapped under the YubiKey-derived key. The service never sees the decryption key in plaintext." The wrapped blob requires YubiKey PIN to unwrap locally.
+**3.2 — Implement TS chunked event-log retrieval** (Who: Claude, inline — not delegated;
+pagination/retry correctness against real RPC semantics is exactly the kind of logic where a
+subtle off-by-one or missed-retry bug is expensive to catch later)
+What: Implement `RegistryContract.getCardEventLog` (or the companion helper decided in 3.1) in
+`verifier-rpc-provider`, per the 3.1 spec.
+Context needed: `plans/g3-event-log-spec.md`, `verifier-rpc-provider` source.
+Done when: implementation matches spec; existing mocked tests still pass.
 
-**Done when:** A finding rates whether the backup service's design is sound against realistic adversarial conditions and whether the 72-hour window is appropriate given the notification suppression attack.
+**3.3 — Implement Python equivalent** (Who: Claude, inline, same rationale as 3.2)
+What: Python-side equivalent of 3.2.
+Context needed: `plans/g3-event-log-spec.md`, Python `verifier-rpc-provider` equivalent source.
+Done when: implementation matches spec; existing mocked tests still pass.
 
----
+**3.4 — Mocked-provider tests for chunking/retry** (Who: Haiku agent — mechanical once 3.1's
+spec fixes the exact algorithm)
+What: Write unit tests with a mocked RPC provider simulating: a range spanning multiple chunks,
+a provider-imposed range-limit error mid-scan (verifying retry-with-smaller-window), and a
+no-starting-block-cached case defaulting to the registry deploy block.
+Context needed: `plans/g3-event-log-spec.md`, outputs of 3.2/3.3 (the actual implementation),
+existing `EthersRpcProvider` test file as a pattern reference.
+Done when: all three scenarios are covered and pass against the 3.2/3.3 implementations.
 
-### Phase 2 Milestone Review
+**3.5 — Update `press.md` OQ-B3** (Who: Haiku agent)
+What: Update `press.md`'s Open Question OQ-B3 to reflect the current `getCardEventLog`
+interface naming, replacing references to the pre-redesign `getLogEntries()` name.
+Context needed: `press.md` (locate OQ-B3), `plans/g3-event-log-spec.md` for the correct current
+signature/name.
+Done when: OQ-B3 text matches the current interface; no other content in `press.md` altered.
 
-**Context needed:** Findings from Steps 2.1–2.5; `plans/milestones/phase-1-summary.md`; `plans/strategic-plan.md` §Goal 2.
+**3.6 — Stage 4 integration check** (Who: Claude, inline)
+What: Run Stage 4's `HISTORY_MISMATCH` cross-check against mocked-but-realistic event data
+(from 3.4's fixtures) to confirm it now exercises real comparison logic instead of always
+degrading against an empty log.
+Context needed: `stage4.ts`/`stage4.py`, 3.4's test fixtures.
+Done when: at least one integration test demonstrates `HISTORY_MISMATCH` correctly firing on a
+genuine mismatch and correctly passing on a genuine match, using real (non-empty) event data.
 
-**Done when:** Phase 2 findings reviewed for consistency; the blast-radius hierarchy is confirmed (which key tier breach has the widest consequences); a one-paragraph Phase 2 summary written to `plans/milestones/phase-2-summary.md`; any Phase 1 findings that are relevant to key compromise cross-referenced.
-
-**Clarification checkpoint:** If Step 2.2 finds that a compromised press key can issue a backdated 9xx revocation with `notify_holder: false` against any card in its scope — and the spec does not provide a technical counter to this — **pause and flag this finding explicitly to the author**. This is the most direct path to weaponizing the protocol against its intended beneficiaries and warrants design discussion before proceeding.
-
----
-
-## Phase 3: Social Engineering and Adversary-Specific Scenarios
-
-**Objective:** Model how each of the three adversary types exploits social and procedural gaps to obtain cards under false pretenses, surveil targets, or perpetuate harm through the protocol.
-
----
-
-### Step 3.1 — Scenario: Autocratic government repressing activists and journalists
-
-**What:** Model how an autocratic government uses the Card Protocol to surveil, expose, or silence activists and journalists. This scenario must be evaluated under **two distinct conditions** that produce qualitatively different threat profiles.
-
-**Condition A: Government does NOT control the community's trust root.**
-
-The government cannot issue policy cards or cards that verifiers in the community will accept as legitimate. Their attack surface is limited to infrastructure-layer operations:
-
-**(A1) Chain analysis via Arbitrum One.** Even "fully private" cards have registry writes visible on-chain. Evaluate whether ledger analysis can identify which presses serve which communities, correlate issuance timing to known activist events, or link multiple cards to the same holder via timing or press-wallet patterns. Cross-reference with Nym de-anonymization findings from Step 1.3.
-
-**(A2) Press coercion.** The government can compel a press operator via legal process to: operate normally while logging submission metadata (Step 1.4 covers what this metadata reveals), selectively suppress update intents from specific targets, or post 9xx revocations with `notify_holder: false` against specific targets. Evaluate whether a community that lists multiple presses in `approved_presses` is protected if the government can reach all press operators within its jurisdiction, and whether self-hosted presses in other jurisdictions are a realistic safeguard.
-
-**(A3) Credential-based infiltration.** If an informant genuinely satisfies a policy's `recipient_predicate`, they receive a card through legitimate channels. Evaluate what a valid card reveals to its holder about other community members — does participation in shared authentication flows, community platforms, or card-pointer-based messaging expose the identity or activity of other holders?
-
-**Condition B: Government controls or has captured the community's trust root.**
-
-This is a fundamentally more powerful position. The government can issue policy cards and press sub-cards that are cryptographically indistinguishable from genuine community issuance. Evaluate:
-
-**(B1) Fake credential hierarchy.** The government creates a policy card under a captured root and issues cards to informants. These cards satisfy `required_predicate` checks in community authentication flows. Community members who verify the chain reach a trusted root — but the root is compromised. Evaluate whether there is any way for a holder or verifier to detect that the root they trust has been captured.
-
-**(B2) Retroactive de-platforming.** With control over the trust root, the government can add an adversary-controlled press to `approved_presses`, then use that press to post 9xx revocations against activist cards — silently, with backdated effective dates. Evaluate the blast radius: how many cards can be simultaneously revoked, and how quickly can the community respond with successor cards under a new, clean root?
-
-**(B3) Surveillance via forged authentication flows.** With a legitimate-appearing card, the government can operate community services that request authentication, collecting card pointers, signing timestamps, and authentication payload content from anyone who authenticates. Evaluate what this enables in aggregate.
-
-**Who:** Reviewer, with particular attention to the trust root configuration gap (OQ-9 in ARCHITECTURE.md is unresolved)
-
-**Context needed:** `specs/ARCHITECTURE.md` §ADR-006 (privacy model), §ADR-007 (Nym); `specs/card_protocol_spec.md` §1 (policy creation, `approved_presses`), §2 (press compulsion model), §5 (`notify_holder: false`, backdated revocation), §8 (authentication flow metadata); Step 1.3 findings (Nym de-anonymization by adversary tier); Step 1.4 findings (press metadata surveillance).
-
-**Done when:** A finding for each sub-scenario under each condition describes feasibility, what protocol features provide resistance, and where resistance fails. The Condition A vs. Condition B distinction must be explicit in the findings — they are different attacks requiring different mitigations.
-
----
-
-### Step 3.2 — Scenario: Criminal organization perpetuating fraud
-
-**What:** Model how an organized criminal operation uses the Card Protocol to establish fraudulent credentials and use them to defraud victims. Three attack paths:
-
-**(a) Policy capture — establishing a fraudulent policy tree.** The protocol allows anyone to create a policy card and become a "root" for a credential hierarchy. Evaluate: what stops a criminal organization from creating a convincing policy (e.g., "Certified Financial Advisor" or "Licensed Medical Professional"), issuing policy cards to themselves, and presenting these credentials to victims who don't know how to verify the root? This is the "fake CA" problem — the protocol's trust model requires users to independently evaluate the root, which requires a level of literacy that most users will not have.
-
-**(b) Open offer exploitation — mass-issuing fraudulent credentials.** The `allow_open_offers: true` policy flag enables mass issuance without per-recipient review. Evaluate whether a criminal organization can use this to issue large numbers of fraudulent cards rapidly, and whether the on-chain counter enforcement (`max_acceptances`) is actually a meaningful control or merely a rate limiter that slows rather than stops the attack.
-
-**(c) Predicate gaming — obtaining legitimate-looking credentials to satisfy downstream predicates.** Many sophisticated deployments will use `required_predicate` in authentication flows. Evaluate whether a criminal organization can systematically find and exploit policies with weak predicates, use obtained cards as the basis for satisfying predicates in more valuable contexts, and chain their way up the trust hierarchy to high-value credentials.
-
-**Who:** Reviewer
-
-**Context needed:** `specs/card_protocol_spec.md` §1 (policy creation flow, `policy_creation` constraints), §2 (open offer flow, on-chain enforcement), §7 (verification, policy compliance check, open questions around trusted roots). Note: the `policy_creation` field constrains what policies *holders* can create, but does not prevent anyone from creating a root-level policy with any content they choose.
-
-**Done when:** A finding for each sub-scenario describes the attack's feasibility, the minimum resources required to mount it, and whether any protocol mechanism constrains it. Finding addresses whether the "trusted root" problem is in scope for the protocol or is explicitly deferred to the application layer.
+**Phase 3 Milestone Review** (Who: Claude, inline)
+Context needed: `plans/g3-event-log-spec.md`, outputs of 3.2–3.6.
+Done when: TS/Python implementations are consistent, all mocked/unit tests pass, `press.md`
+OQ-B3 is corrected, and the review explicitly records — in
+`milestones/phase-3-summary.md` — that live-chain validation remains unvalidated and is a
+follow-up blocked on David providing an RPC endpoint + deployed registry contract address.
 
 ---
 
-### Step 3.3 — Scenario: Technical abuser surveilling and harassing a target
+## Phase 4: G4 — wire `Watcher` into `PolicyModule`
 
-**What:** Model how a technically sophisticated individual abuser uses the Card Protocol to track, control, expose, or harm a specific target. Four attack paths:
+**Clarification checkpoint:** same as Phase 3 — no live Matrix homeserver or registry contract
+is available for end-to-end validation. This phase stops at "wired and unit-tested."
 
-**(a) Surveillance via authentication metadata.** The authentication flow (§8) requires the holder to present their card pointer to the requesting site. Evaluate: whether a site controlled by the abuser can request authentication in a way that reveals the target's card pointer; whether the card pointer can then be used to monitor the target's Arbitrum One registry activity (is the target issuing sub-cards, receiving updates?); and whether repeated authentication requests to the same site leak timing metadata about the target's activity patterns.
+**4.1 — Research Synapse lifecycle hook and resolve open question #5** (Who: Claude, inline)
+What: Read `module.py`'s `PolicyModule.__init__`, `watcher.py`'s `Watcher` class,
+`rpc_provider.py`'s `CardHeadEventSubscription`, and the vendored/installed Synapse module API
+(check `.venv`/`site-packages` for Synapse's module interface docs or examples of other modules
+performing async startup) to determine whether Synapse's module loader supports an async
+startup hook, or whether `Watcher` must be started via `asyncio.create_task` from the
+synchronous `__init__`. If the codebase and vendored Synapse source don't yield a definitive
+answer, stop and ask David rather than guessing at production wiring semantics — this directly
+affects production reliability (start/stop/reconnect behavior).
+Context needed: `wallet-service/matrix-policy-module/src/matrix_policy_module/module.py`
+(~lines 190-216), `watcher.py`, `rpc_provider.py`, Synapse's module API (search installed
+package), `specs/object_specs/matrix_synapse_module.md` (~lines 90-118) for the config schema,
+`plans/membership_card_verifier_todo.md` item 4, strategic-plan.md §G4.
+Done when: a definitive answer on the lifecycle hook mechanism is documented (either found in
+source, or confirmed by David), recorded at the top of `plans/g4-watcher-wiring-spec.md`.
 
-**(b) Credential revocation as harassment.** If the abuser has ever been in a trust relationship with the target (e.g., both participated in a shared community, the abuser was a press operator, or the abuser is in the target's card issuance chain), evaluate what residual authority the abuser may have retained — specifically, whether they can issue update intents, 6xx negative annotations, or (if authorized) revocation entries against the target's card. Focus on the `notify_holder: false` path and whether the target can detect a silent 9xx revocation before it causes harm.
+**4.2 — Implement Watcher construction/start in PolicyModule** (Who: Claude, inline — not
+delegated; wiring a long-lived subscription into a production module's lifecycle is exactly the
+kind of change where getting reconnect/shutdown semantics wrong causes a silent production
+outage, which is what this whole item exists to fix)
+What: Construct and start the `Watcher` from `PolicyModule.__init__` (or the resolved lifecycle
+hook from 4.1), using the already-rendered config keys (`arbitrum_rpc_ws_url`,
+`registry_contract_address`, `watcher_backstop_interval_seconds`, etc.). Remove the existing
+TODO at the construction site. Confirm clean shutdown/reconnect behavior against whatever
+Synapse lifecycle mechanism 4.1 resolved.
+Context needed: `plans/g4-watcher-wiring-spec.md`, `module.py`, `watcher.py`,
+`specs/object_specs/matrix_synapse_module.md`.
+Done when: `Watcher` is constructed and started on module init with no TODO remaining; existing
+`Watcher`/`CardHeadEventSubscription` unit tests still pass unmodified (per strategic-plan.md
+§G4 objective).
 
-**(c) Keyring compromise through intimate partner access.** The keyring is encrypted with `passkey + service_secret`. Evaluate the attack surface for an abuser with physical access to the target's device — specifically, whether device access at an unlocked moment allows them to extract the keyring blob, exfiltrate a sub-card key from the Secure Enclave (probably not, but confirm), or plant a monitoring mechanism in the wallet app. Evaluate the recovery path for a target who discovers their keyring may be compromised.
+**4.3 — Unit tests for construction wiring** (Who: Haiku agent)
+What: Write a unit test confirming `PolicyModule.__init__` constructs a `Watcher` with the
+correct config values, mocking `Watcher.start` itself (not re-testing `Watcher`'s internal
+logic, which is already covered).
+Context needed: `plans/g4-watcher-wiring-spec.md`, outputs of 4.2, existing `PolicyModule` test
+file as a pattern reference.
+Done when: the test exists and passes, and fails if the construction call or a config key is
+removed (sanity-check by temporarily breaking the wiring and confirming the test catches it).
 
-**(d) Using the protocol to expose a pseudonymous identity.** The spec's "fully private" mode hides the card's content from chain observers. But the Nym gateway address is metadata that, once observed in an authentication flow, links the card to a real-time network endpoint. Evaluate whether an adversary can use a single authentication interaction to correlate a pseudonymous card identity to a Nym gateway address, and from there use traffic analysis to link the identity to a physical device.
+**4.4 — Attempt smoke tests within sandbox constraints** (Who: Claude, inline)
+What: Run the satisfying-card-join and revocation-force-part smoke tests referenced in
+`plans/matrix-implementation-plan.md` Phase 6 against whatever mocked/sandbox test harness
+exists today (not a live registry/homeserver, which isn't available). Document precisely what
+was and wasn't exercised.
+Context needed: `plans/matrix-implementation-plan.md` Phase 6, existing test harness for
+`matrix-policy-module`.
+Done when: sandbox-level smoke tests pass (or their absence/blockers are documented), and it's
+explicitly recorded that live end-to-end validation against a real registry contract + Matrix
+homeserver has not occurred.
 
-**Who:** Reviewer, with particular attention to §8 (authentication flow) and §ADR-007 (Nym)
-
-**Context needed:** `specs/card_protocol_spec.md` §5 (`notify_holder: false`, 6xx/9xx codes), §6 (message signing), §7 (verification), §8 (authentication flow, CHAPI, single-use URL pattern); `specs/ARCHITECTURE.md` §ADR-006, §ADR-007; `raw_notes/Third party attestations when card holders cause harm.md` (annotator accountability). Key question: can the `right of reply` (counter-annotation) mechanism protect a target against a false annotation campaign?
-
-**Done when:** A finding for each sub-scenario describes the feasibility of the attack against a target who is using the protocol with reasonable care, the protocol features that provide resistance, and whether those features are sufficient or require additional design work.
-
----
-
-### Step 3.4 — Cross-cutting: Evaluate the third-party safety annotator layer as an attack surface
-
-**What:** The safety annotator layer is designed to allow trusted outside parties to flag bad actors. The arcardecture has specific properties that shape its attack surface: annotators post to a *separate* on-chain contract (not the main registry); each annotator's mutable pointer points to their annotation records, not directly to the cards being annotated; and valid annotations require signed evidence — either a statement signed by the card in question, or a statement signed by a card holder who is themselves trusted. Evaluate three attack paths with this arcardecture in mind:
-
-**(a) False annotation campaigns.** The evidence requirement is the primary defense against trivial false claims. Evaluate the minimum evidence needed to publish an annotation: can an adversary fabricate a signed statement using a card in question (requires access to the card holder's key — unlikely), or can they obtain a statement from a trusted card holder who is deceived into signing it (social engineering — more realistic)? Assess which of the three adversary types has the resources and motivation to satisfy the evidence bar, and what the false annotation's practical consequence is (annotations are filtered by trusted roots, so impact is bounded by how many communities trust that annotator).
-
-**(b) Annotator compromise or capture.** If an adversary gains control of a widely-trusted annotator's mutable pointer and signing key, they inherit all the credibility that annotator has accumulated. Evaluate: the blast radius of a compromised annotator (all annotations from that annotator become suspect; previously published annotations cannot be retracted from the separate contract without a new entry); whether the annotator's own mutable pointer can be quickly revoked once compromise is detected; and whether the discovery model (annotators have "easily discoverable mutable pointers") makes high-value annotators easy to identify as targets. Specifically consider the state-actor scenario: a government that compels a credible safety annotator to publish false annotations against activists.
-
-**(c) Annotation suppression as a censorship vector.** Because annotation lookup is optional and filtered by trusted roots, an issuer, press, or community operator can configure their systems to exclude specific annotator roots — effectively hiding safety signals from their users. Evaluate whether this is a legitimate design choice (communities should control their own trust configuration) or a censorship vector (bad actors create insular communities that systematically exclude outside accountability). Consider the criminal fraud scenario: a fraudulent community that suppresses annotator roots to hide fraud warnings from victims.
-
-**(d) Discovery-based targeting.** The "easily discoverable mutable pointers" for annotators create a publicly enumerable list of annotator identities. Evaluate whether this enumeration makes safety annotators — who may themselves be activists, journalists, or abuse survivors — into targets for the same adversaries they monitor.
-
-**Who:** Reviewer
-
-**Context needed:** `raw_notes/Third party attestations when card holders cause harm.md` (annotator arcardecture, evidence requirements, restorative annotation model); `specs/card_protocol_spec.md` §7 (annotation lookup, step 6 — "optional," filtered by trusted roots); `specs/ARCHITECTURE.md` §ADR-008 (EAS as the separate annotation contract). Key arcardectural facts: annotators post to a separate contract; mutable pointers point to annotation records, not to the cards annotated; evidence (signed statement from the card in question or from a trusted card holder) is required.
-
-**Done when:** A finding for each sub-scenario assesses feasibility by adversary type, accounts for the evidence requirement as a meaningful (though not absolute) barrier to false claims, and evaluates whether annotator compromise is a High or Critical risk given the annotator layer's design.
-
----
-
-### Phase 3 Milestone Review
-
-**Context needed:** Findings from Steps 3.1–3.4; `plans/milestones/phase-1-summary.md`; `plans/milestones/phase-2-summary.md`; `plans/strategic-plan.md` §Goals 3, 4, and 5.
-
-**Done when:** Phase 3 findings reviewed for consistency; cross-adversary patterns identified (which protocol weaknesses appear across multiple adversary types?); a one-paragraph Phase 3 summary written to `plans/milestones/phase-3-summary.md`.
-
----
-
-## Phase 4: Synthesis and Report
-
-**Objective:** Consolidate findings from all three phases into a single, prioritized report that can inform design decisions.
-
----
-
-### Step 4.1 — Consolidate and deduplicate findings
-
-**What:** Review all Phase 1–3 findings. Identify findings that describe the same underlying vulnerability from different angles; merge these into single finding entries with multiple adversary-specific impact descriptions. Confirm no finding in Phase 1–3 is missing a severity rating, feasibility rating, or mitigation section.
-
-**Who:** Reviewer
-
-**Context needed:** All Phase 1–3 findings; `plans/milestones/phase-1-summary.md`, `phase-2-summary.md`, `phase-3-summary.md`.
-
-**Done when:** A consolidated findings list exists with no duplicates, each finding has consistent severity/feasibility/mitigation fields, and findings are sorted by severity (Critical → High → Medium → Low).
-
----
-
-### Step 4.2 — Answer the open questions from the strategic plan
-
-**What:** For each of the five open questions in `plans/strategic-plan.md`, write a brief (1–3 paragraph) answer based on what the red-team discovered. If the question was not answered by the red-team work (e.g., trusted root configuration is a product design question, not a security finding), note what would be needed to answer it and flag it for the author.
-
-**Who:** Reviewer
-
-**Context needed:** `plans/strategic-plan.md` §Open Questions; all Phase findings.
-
-**Done when:** All five open questions have written responses attached to the findings report.
+**Phase 4 Milestone Review** (Who: Claude, inline)
+Context needed: `plans/g4-watcher-wiring-spec.md`, outputs of 4.1–4.4.
+Done when: the wiring is consistent with 4.1's resolved lifecycle mechanism, all sandbox-level
+tests pass, and `milestones/phase-4-summary.md` explicitly records that live end-to-end
+validation (satisfying-card join, revocation force-part against a real chain) remains a
+follow-up blocked on David provisioning a test registry contract and Matrix homeserver.
 
 ---
 
-### Step 4.3 — Write the red-team report
+## Phase 5: Close-out
 
-**What:** Produce the final report at `plans/red-team-report.md`. Structure:
+**5.1 — Update the source TODO doc** (Who: Claude, inline)
+What: Update `plans/membership_card_verifier_todo.md` to mark items 1–4 with their resolution
+status: items 1 and 2 as implemented and fully tested; items 3 and 4 as implemented and
+unit/mock-tested, with live validation flagged as blocked/pending David's infra. Link each item
+to the relevant spec doc (`g1-...-spec.md` etc.) and milestone summary.
+Context needed: outputs of Phases 1–4, `plans/membership_card_verifier_todo.md`.
+Done when: the doc accurately reflects current status per item — do not mark anything "done"
+that only has mock/unit validation as if it were live-validated.
 
-1. Executive summary (half page): the three highest-severity findings and their mitigations.
-2. Findings by category (zero-click / key compromise / social engineering), each with: description, adversary applicability, conditions required, harm caused, mitigation options.
-3. Protocol strengths (what the red-team found that works well — these are real and should be documented alongside the vulnerabilities).
-4. Open questions and deferred issues.
-5. Recommended priority order for addressing findings before v1 deployment.
+**Clarification checkpoint:** confirm with David before editing `membership_card_verifier_todo.md` directly, since it's his tracking doc — show the proposed diff first.
 
-**Who:** Reviewer
-
-**Context needed:** All Phase findings; `plans/strategic-plan.md` §Goals; consolidated findings from Step 4.1; open question answers from Step 4.2.
-
-**Done when:** The report exists, is internally consistent, and each Critical or High finding has a concrete mitigation option stated.
-
----
-
-### Phase 4 Milestone Review (Final Verification)
-
-**Context needed:** `plans/red-team-report.md`; `plans/strategic-plan.md`.
-
-**Done when:** Every goal from the strategic plan has at least one corresponding finding or confirmed absence in the report. Every Critical finding either has an assigned mitigation or has been explicitly flagged as requiring author input. The report is ready to share with the protocol author.
+**5.2 — Full-suite verification pass** (Who: Claude, inline)
+What: Run the complete test suites for `verifier` (TS + Python), `client-sdk`, `wallet-service`,
+and `matrix-policy-module` in one pass to confirm nothing across the four phases regressed
+anything outside its own scope.
+Context needed: none beyond running each package's existing test command.
+Done when: all suites pass; a one-paragraph summary of the full change set (what shipped fully
+tested vs. what's implemented-but-blocked-on-live-validation) is presented to David.
 
 ---
 
-## Clarification Checkpoints Summary
+## Clarification Checkpoints (summary)
 
-The following are the explicit pause points in this plan where work should stop pending human input:
-
-1. **After Phase 1 Milestone Review:** If any Critical infrastructure finding is identified (arbitrary registry writes, mass revocation, revocation suppression), pause and notify the author before proceeding.
-
-2. **After Step 2.2:** If a compromised press key can issue a backdated 9xx revocation with `notify_holder: false` without a technical counter in the spec, pause and flag explicitly.
-
-3. **Before writing the red-team report (Step 4.3):** Present the consolidated findings list and open question answers to the author. Get confirmation that the severity ratings reflect the author's intent for the protocol's threat model before finalizing the report.
-
-4. **At any point:** If any finding suggests the protocol creates a qualitatively new and serious risk for the populations it intends to protect (activists, journalists, abuse survivors) that was not already acknowledged in the spec's risk register, pause and flag immediately rather than waiting for the report.
-
----
-
-## Severity Ratings Reference
-
-| Rating | Meaning |
-|---|---|
-| **Critical** | Attack achievable with modest resources; causes widespread or irreversible harm (e.g., arbitrary registry writes, mass silent revocation of community credentials) |
-| **High** | Attack achievable with significant but realistic resources; causes serious harm to specific individuals or communities |
-| **Medium** | Attack requires substantial resources or favorable conditions; causes meaningful but recoverable harm |
-| **Low** | Attack is theoretical or requires unrealistic conditions; harm is limited or detectable before it escalates |
-
-## Feasibility Ratings Reference
-
-| Rating | Meaning |
-|---|---|
-| **Practical** | An attacker with the described resources and motivation could execute this today |
-| **Theoretical** | The attack is logically sound but requires capabilities or conditions that are unlikely in practice |
+- **Phase 3, step 3.1:** if research shows event-log caching must live inside the shared
+  package (not the caller), stop and confirm with David before implementing — this changes the
+  package's public surface beyond what's currently assumed.
+- **Phase 4, step 4.1:** if Synapse's module lifecycle hook mechanism isn't unambiguous from
+  source, stop and ask David rather than guessing — this is production wiring, not a test-only
+  concern.
+- **End of Phase 3 and end of Phase 4:** explicitly present what was/wasn't live-validated
+  before considering either phase "done" — neither should be described as fully verified given
+  no live RPC/registry/homeserver access in this environment.
+- **Phase 5, step 5.1:** show David the proposed diff to `membership_card_verifier_todo.md`
+  before writing it, since it's his tracking document.
+- **Any point:** if a Haiku agent's output doesn't match its spec doc closely enough to trust
+  without a careful re-read, escalate that step to inline (Sonnet) rather than iterating with
+  another Haiku round-trip — a second cheap-but-wrong attempt costs more in aggregate than doing
+  it once, correctly, inline.
