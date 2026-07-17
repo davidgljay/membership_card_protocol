@@ -6,6 +6,15 @@
 
 > **Terminology note.** This spec now uses "card" as the canonical term per the Naming Convention.
 
+**Changelog (spec-consistency Phase 2, Step C — `plans/spec-consistency/inconsistencies/phase-2-consolidated-fixes.md`):**
+- Fix #17: Postconditions rewritten — current field state comes from the head `LogEntry`'s `card_state`, not a full genesis-to-head walk; the notes array still requires visiting every entry, now in parallel via `history`.
+- Fix #18: Step 9 (LogEntry assembly) rewritten to mirror `press.md §5.3 appendLogEntry` — adds the fetch/decrypt-current-head precondition and the `entry_type`, `history`, `card_state` fields that were previously omitted.
+- Fix #19: Step 11 split into two named operations — posting the ML-DSA-44-signed `LogEntry` to IPFS, and separately calling `UpdateCardHead` authorized by the press's secp256r1 on-chain key.
+- Fix #20: Notes Array mechanism description updated — head fetch + parallel predecessor fetches via `history`, not a sequential genesis-to-head walk.
+- Fix #21: Sub-Card Directory Updates section now cross-references `press.md §5.3`'s sibling sub-card notification behavior.
+- Fix #22: Concurrency section and Error Paths table row reworded — `UpdateIntentPayload` carries no `prev_log_root`; the actual race is press-side head staleness or the on-chain `prev_log_cid` check in `UpdateCardHead`.
+- Fix #24 (partial): Step 7's immutable-fields list expanded to the complete protocol-required/reserved set.
+
 ---
 
 ## Overview
@@ -87,7 +96,7 @@ Updates are classified by a three-digit code (1xx–9xx) that signals the semant
    - **Authorization — field updates (codes 1xx–7xx):** For each field in `field_updates`, confirm the updater's card chain satisfies that field's `update_policy` predicate (from the policy's `field_definitions`). All predicates must be satisfied by the same updater.
    - **Authorization — sub-card directory updates (codes 510/511/512):** The press MUST confirm the intent is signed by the target card's own holder key (`{ "is_holder": true }`), regardless of what the governing policy's `update_policy` states for `active_subcards` or any other field. This authorization is hardcoded per `protocol-objects.md §1.1` and `update_codes.md §5xx` — a policy cannot grant this authority to an issuer or any other party, and the press MUST reject any 510/511/512 intent not signed by the holder even if the policy's `update_policy` would otherwise permit it.
    - **Authorization — revocations (codes 8xx–9xx):** Confirm the updater's card chain satisfies `revocation_permissions` for the given code range. If `revocation_permissions` is absent from the policy, the default applies: 8xx by holder or issuer, 9xx by issuer only.
-   - **Immutable fields:** Confirm no `field_updates` entry targets a protocol-required immutable field (`policy_id`, `issuer_card`, `press_card`, `recipient_pubkey`, `issued_at`, `ancestry_pubkeys`, `past_keys`, `issuer_signature`, `holder_signature`, `press_signature`). Note: `successor` (codes 100/101/102), `supersedes`, and `supersession_note` are protocol-reserved fields that may be set post-issuance via the defined update-code mechanisms and are NOT in this immutable list.
+   - **Immutable fields:** Confirm no `field_updates` entry targets a protocol-required immutable field: `policy_id, issuer_card, press_card, recipient_pubkey, issued_at, issuer_signature, holder_signature, press_signature, ancestry_pubkeys, past_keys, protocol_version, active_subcards, successor, supersedes, supersession_note` (per `protocol-objects.md §1`/§1.1). Note: `active_subcards` (codes 510/511/512, per the dedicated authorization path below), `successor` (codes 100/101/102), `supersedes`, and `supersession_note` are protocol-reserved fields that may be set post-issuance via their defined update-code mechanisms and are listed here only to flag that they are otherwise off-limits to ordinary `field_updates` — a generic 1xx–7xx intent may not target them outside those specific mechanisms.
    - **Code consistency:** 8xx–9xx entries must include `revocation` and no `field_updates`; 1xx–7xx entries must include `field_updates` and no `revocation`.
    - **Timestamp freshness:** Reject intents with timestamps outside the acceptable replay-prevention window.
 
@@ -95,15 +104,23 @@ Updates are classified by a three-digit code (1xx–9xx) that signals the semant
 
 ### Phase 4: Entry Assembly and Posting
 
-9. The press assembles the complete `LogEntry`:
-   - Copies the intent payload verbatim.
+9. The press assembles the complete `LogEntry` (mirrors `press.md §5.3 appendLogEntry` — see there for the canonical implementation-level steps):
+   - Fetches and decrypts the current log head object from IPFS (the genesis `CardDocument`, or the prior `LogEntry` if one exists) to obtain its current field state and, if it is itself a `LogEntry`, its `history` array.
    - Adds `version` — the current log head's version plus one.
+   - Adds `code` — from the intent.
+   - Adds `entry_type` — `"field_update"` for codes 1xx–7xx; `"revocation"` for codes 8xx–9xx (derived from the code range).
    - Adds `prev_log_root` — the CID of the current log head.
-   - Signs the canonical serialization of the complete `LogEntry` (excluding `press_signature`) with the press sub-card key → `press_signature`.
+   - Adds `history` — the current head's own `history` array (or `[]` if the head is the genesis document) with the current head's own CID appended.
+   - Adds `card_state` — the current head's field state with the intent's `field_updates` applied (unchanged from the current head's `card_state` for 8xx–9xx codes, which carry no `field_updates`).
+   - Copies `field_updates`/`revocation`, `notify_holder`, and `updater_message` from the intent payload verbatim.
+   - Copies `intent_signature` from the submitted intent.
+   - Signs the canonical serialization of the complete `LogEntry` (excluding `press_signature`) with the press's ML-DSA-44 IPFS identity key → `press_signature`.
 
 10. The press posts the new log entry to IPFS.
 
-11. The press updates the Arbitrum One registry pointer for the target card to the CID of the new log entry, signed with the press sub-card key.
+11. The press updates the on-chain registry pointer for the target card. This is a separate operation from step 9's signing and uses the press's other key (see `protocol-objects.md §1`'s "Press dual-key model" and `registry_contract.md §4.2`): the `LogEntry` itself was already signed end-to-end with the press's ML-DSA-44 IPFS identity key in step 9 (`press_signature`); the on-chain write is a distinct `UpdateCardHead` call authorized by the press's separate secp256r1 on-chain write-authorization key, verified by the registry contract via the RIP-7212 precompile. Concretely:
+    - **Post to IPFS:** the CID from step 10 becomes `new_log_cid`.
+    - **Call `UpdateCardHead`:** the press builds an `UpdateCardHeadPayload` (`card_address`, `prev_log_cid` = the CID of the log head read in step 9, `new_log_cid`, `press_address`, `sequence`, `timestamp`), signs `keccak256(payload_bytes)` with its secp256r1 key, and submits `UpdateCardHead(card_address, new_log_cid, payload_bytes, press_signature)` to the registry contract. The contract checks `prev_log_cid` against its stored `log_head_cid` before accepting the write (see Concurrency below).
 
 ### Phase 5: Notification and Confirmation
 
@@ -125,12 +142,13 @@ These codes are a special case of the 1xx–7xx field-update flow above (they us
 - **Code 512 (key rotation):** `field_updates` is `[{ "field": "active_subcards", "value": <full new array, with exactly one pubkey swapped for its replacement> }]` — a single atomic entry, not a paired 511+510.
 - **Press validation (step 7):** In addition to the standard signature and freshness checks, the press MUST confirm the intent is signed by the target card's own holder key before posting (see Phase 3, step 7 above). No other authorization path is accepted for these three codes.
 - **Verifier requirement:** Any verifier or press encountering a 510/511/512 entry not signed by the card's own holder key MUST reject it, independent of the card's governing policy. This is a MUST, not a SHOULD — see `card_validation.md`.
+- **Sibling sub-card notification:** When a press accepts a 510 (addition), 511 (removal), or 512 (rotation) entry, it also notifies the holder's *other* active sub-cards of the change — `subcard_sibling_added`, `subcard_sibling_removed`, or `subcard_sibling_rotated` respectively (per `messaging_protocol.md §9`), so the holder's other devices/apps can detect unauthorized additions. This notification is best-effort and does not block or fail the underlying update. See `press.md §5.3` for the full mechanism (`diffActiveSubcards`/`notifySubcardSiblings`).
 
 ---
 
 ## Notes Array
 
-A card's notes array is not stored as a mutable field. It is derived by verifiers and clients by walking the append-only log from genesis to the current head and collecting every `LogEntry` whose intent payload contains a non-empty `note` field. The result is an ordered list of note objects, one per qualifying entry, in chronological order.
+A card's notes array is not stored as a mutable field. It is derived by verifiers and clients by fetching the current head `LogEntry` and, from its `history` array (`protocol-objects.md §3`), reading every predecessor object in the log — the head's own CID plus its full `history` gives the complete set of CIDs to fetch, all resolvable in a single round of parallel fetches rather than a sequential genesis-to-head walk — and collecting every entry whose intent payload contains a non-empty `note` field. The result is an ordered list of note objects, one per qualifying entry, in chronological order (readers sort by `timestamp` or by position in `history` once all entries are fetched, since fetching in parallel does not preserve chronological order on arrival).
 
 Each entry in the derived notes array has the following shape:
 
@@ -155,13 +173,18 @@ Notes are immutable once posted — they are part of the signed log and cannot b
 - The updater's identity and intent signature are permanently recorded in the log entry.
 - If the intent payload included a `note`, it is now part of the immutable log and will appear in the card's derived notes array, attributed to `updater_card` with the intent timestamp.
 - If `notify_holder` was true, an HTTPS notification was sent to the holder's wallet service endpoint.
-- Any verifier can re-derive the complete current state of the card — including the full notes array — by reading the append-only log from the genesis document to the current head.
+- Any verifier can obtain the card's current field state directly from the head `LogEntry`'s `card_state` field — no genesis-to-head walk is required (`protocol-objects.md §3`). Deriving the full notes array still requires visiting every entry in the log, but the head's `history` array (see Notes Array above) lets a reader fetch every predecessor CID in parallel from a single fetch of the head, rather than walking the chain sequentially.
 
 ---
 
 ## Concurrency
 
-If two update intents are submitted concurrently and one is posted first, the second intent will reference a stale `prev_log_root` when the press validates. The press rejects the stale intent with a clear error. The updater must re-fetch the current log head and resubmit against the new head.
+`UpdateIntentPayload` does not itself carry a `prev_log_root` — that field is assembled by the press at entry-assembly time (Phase 4, step 9), not supplied by the updater (`protocol-objects.md §4`). The race instead surfaces in one of two places when two update intents targeting the same card are processed concurrently and one is posted first:
+
+- **Press-side staleness:** the press that processes the second intent may have fetched the target card's log head (step 6) before the first intent's entry was posted, so the head object it reads and the `prev_log_root`/`history`/`card_state` it assembles in step 9 are already stale by the time it attempts to post.
+- **On-chain rejection:** even if the press's local view was current when it built the entry, the registry contract's `UpdateCardHead` precondition (`registry_contract.md §4.2` step 5) checks that the submitted `prev_log_cid` still matches the on-chain `log_head_cid` at call time. If the first intent's entry was registered on-chain in the interim, this check fails (`E-08`/`STALE_PREV_CID`) and the second press's write is rejected.
+
+Either way, the press re-fetches the current log head and retries entry assembly against it (see `press.md §5.3 updateCardHeadOnChain` step 5, which retries once before returning `P-12`). If the underlying `field_updates`/`revocation` is still valid against the new head, the press resubmits automatically; if retried assembly still conflicts, the updater is notified to resubmit their original intent so the press can reassemble against the new head.
 
 ---
 
@@ -182,7 +205,7 @@ If two update intents are submitted concurrently and one is posted first, the se
 | Updater's card revoked with `effective_date` ≤ now | Updater is not eligible; must use a different authorized party |
 | `update_policy` predicate not satisfied for one or more fields | Updater does not have authority; request must come from an authorized party |
 | `revocation_permissions` not satisfied | Updater does not have revocation authority; requester must use an authorized party |
-| `prev_log_root` is stale (concurrent update race) | Updater re-fetches current log head and resubmits |
+| Concurrent update race — press re-fetches a now-stale head at validation time, or the on-chain `prev_log_cid` check in `UpdateCardHead` fails (`E-08`/`STALE_PREV_CID`) | Press re-fetches the current log head and retries entry assembly (see Concurrency above); if still conflicting, updater resubmits their original intent |
 | IPFS post fails | Press retries; does not write on-chain until IPFS CID is confirmed |
 
 ---

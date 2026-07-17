@@ -30,6 +30,8 @@ For recipients who already have a wallet, see `open_offer_acceptance_existing_wa
 
 ## Preconditions
 
+> **Open architecture question.** Which component actually hosts the `OpenCardOffer` document and serves the claim link (wallet service, press, or a new component) is currently undecided — see `open_offer_creation.md` Phase 3 and `wallet.md`'s `OQ-WALLET-6`. The precondition and Step 1 below assume wallet-service hosting as a working placeholder.
+
 - The recipient has followed a valid claim link — a URL hosted by the wallet service (e.g., `https://<wallet-service>/claim/<offer-id>`). This is the wallet service around which the new user's wallet will be initialized; in most cases it is the same service the issuer used to create the open offer.
 - The open offer has not expired (`expires_at` is null or in the future).
 - The open offer has not reached `max_acceptances` (or `max_acceptances` is null).
@@ -122,7 +124,7 @@ For recipients who already have a wallet, see `open_offer_acceptance_existing_wa
     - Verify `recipient_signature` over the canonical RFC 8785 JSON of `claim_payload`.
     - Confirm `claim_payload.offer.press_card` matches the receiving press's own sub-card pointer.
     - Confirm the policy has `allow_open_offers: true`.
-    - Submit an atomic Arbitrum One transaction that: checks `block.timestamp < expires_at` (if set); checks `openOfferUseCounts[offer_id] < max_acceptances` (if set); atomically increments the counter and registers the card. (Issuer-signature verification is press-side only — the contract does not receive or re-verify it.) If any check fails, the transaction reverts.
+    - Submit an atomic Arbitrum One transaction that: checks `block.timestamp < expires_at` (if set); checks `OpenOfferUseCounts[offer_id] < max_acceptances` (if set); atomically increments the counter and registers the card. (Issuer-signature verification is press-side only — the contract does not receive or re-verify it.) If any check fails, the transaction reverts.
 
 17. If validation succeeds, the press assembles the `CardDocument` from `proposed_fields` plus `recipient_pubkey`, signs it with the press sub-card key (`press_signature`), and posts it to IPFS **encrypted** under the ADR-006 content key (`HKDF-SHA3-256(recipient_pubkey, info="card-content-v1")`, AES-256-GCM). (The offerer's `issuer_signature` on the `OpenCardOffer` and the recipient's `holder_signature` are the other two signatures.) This is the first point at which content encryption applies — the open offer document was not content-encrypted because no `recipient_pubkey` was present at offer-creation time.
 
@@ -179,3 +181,7 @@ For recipients who already have a wallet, see `open_offer_acceptance_existing_wa
 - `protocol-objects.md §6` — `OpenCardOffer` object reference
 - `protocol-objects.md §7` — `OpenOfferClaimSubmission` object reference
 - `specs/object_specs/wallet.md` — wallet service wire protocol for account creation and keyring storage
+
+---
+
+**Changelog:** Fix #12 (`plans/spec-consistency/inconsistencies/phase-2-consolidated-fixes.md`) — corrected `openOfferUseCounts` to the PascalCase `OpenOfferUseCounts` used by `registry_contract.md §3.5`. Fix #14 — flagged the Precondition/Step 1 claim-link hosting assumption as an open architecture question; cross-referenced `wallet.md`'s `OQ-WALLET-6`.

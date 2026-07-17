@@ -3,8 +3,11 @@
 **Version:** 0.5 (draft)
 **Date:** 2026-07-04
 **Status:** Draft
+**Changelog (spec-consistency Phase 2):** Fix #1 — corrected the sub-card-list resolution mechanism (four occurrences) from a nonexistent "storage contract" read to fetching/decrypting the recipient's card head from IPFS and reading `active_subcards`; Fix #3 — removed the stale "(design deferred to the wallet service spec)" parenthetical in §Local Routing Tables, cross-referencing §Wallet Service Registry by name; Fix #4 — expanded the Peer List `endpoint` field description to note its dual use for keyring-federation calls; Fix #53 — updated the §Binding Announcements cardholder-signer verification rule to explicitly allow the sub-card-chain-resolution case. See `plans/spec-consistency/inconsistencies/phase-2-consolidated-fixes.md`.
+
+**Changelog (spec-consistency Phase 3, 2026-07-16):** Corrected Fix #53 — David confirmed migration is a master-card-key-only operation, so the sub-card-chain-resolution allowance never should have been added. The `cardholder`-signer rule (scoped only to `card_migration` announcements — `card_registration` has no `cardholder` signer) now requires the direct master-key check only, matching `card_migration.md`'s corrected §3/§5 and `wallet.md`'s corrected §6.5. See `plans/spec-consistency/inconsistencies/phase-3-consolidated-fixes.md` Tier 3 item (j).
 **Changes from v0.4:** Corrected the relay delivery failure-handling step (§Message Delivery, Relay Delivery and Multi-Device Fan-out) to match the implemented UUID-pool behavior on delivery failure.
-**Changes from v0.3:** Replaced wallet-service UMBRAL proxy re-encryption with sender-side per-subcard encryption (see §Message Delivery). The wallet service no longer holds re-encryption key material or performs any ciphertext transform — the sender resolves the recipient's current sub-card list from the storage contract and sends one independently-encrypted routing envelope per sub-card. The routing envelope gains a `subcard_hash` field. `reencryption_keys` storage and the `POST /accounts/{card_hash}/subcards` re-encryption-key registration endpoint are removed; sub-card UUID pool registration (`POST /cards/{card_hash}/subcards/{subcard_hash}/uuids`) is unchanged and is now sufficient on its own for a device to begin receiving messages.
+**Changes from v0.3:** Replaced wallet-service UMBRAL proxy re-encryption with sender-side per-subcard encryption (see §Message Delivery). The wallet service no longer holds re-encryption key material or performs any ciphertext transform — the sender fetches and decrypts the recipient's current card head from IPFS (via the on-chain `log_head_cid` pointer) and reads `active_subcards` from it, then sends one independently-encrypted routing envelope per sub-card. The routing envelope gains a `subcard_hash` field. `reencryption_keys` storage and the `POST /accounts/{card_hash}/subcards` re-encryption-key registration endpoint are removed; sub-card UUID pool registration (`POST /cards/{card_hash}/subcards/{subcard_hash}/uuids`) is unchanged and is now sufficient on its own for a device to begin receiving messages.
 **Changes from v0.2:** Multi-device fan-out model changed from device_key hash to per-subcard pools. The `device_key` concept is removed from the routing layer. UUID registration endpoint updated from `POST /cards/{card_hash}/devices/{device_key}/uuids` to `POST /cards/{card_hash}/subcards/{subcard_hash}/uuids`.
 
 ---
@@ -43,7 +46,7 @@ Because the total number of wallet services in the network is small, each wallet
 | Field | Description |
 |---|---|
 | `wallet_service_id` | Mutable pointer of the wallet service card |
-| `endpoint` | Base HTTPS URL for inbound routing envelopes and binding announcements |
+| `endpoint` | Base HTTPS URL for inbound routing envelopes and binding announcements. The same base URL is also used for keyring-federation calls (`POST /federation/keyrings`, `POST /federation/keyrings/delete` — `wallet.md §7.5`), which replicate/delete keyring blobs across the federation using this peer list rather than a separate endpoint registry. |
 | `transport_flags` | Bitmask of supported transports (see Transport Extensibility below) |
 | `pubkey_hash` | `keccak256` of the wallet service card's ML-DSA-44 public key (for announcement verification) |
 
@@ -83,7 +86,7 @@ When a wallet service acquires a card — through new card registration or migra
 
 `card_registration` announcements carry a single `wallet_service` signature. `card_migration` announcements require dual signatures — `wallet_service` and `cardholder` — before peers will accept them. See `process_specs/card_migration.md` for the migration protocol.
 
-Receiving wallet services verify all signatures before updating their routing table. The `wallet_service` signer is verified by checking that `keccak256(public_key)` resolves to the `wallet_service_id` in the payload. The `cardholder` signer is verified by checking that `keccak256(public_key)` matches the `card_hash` in the payload.
+Receiving wallet services verify all signatures before updating their routing table. The `wallet_service` signer is verified by checking that `keccak256(public_key)` resolves to the `wallet_service_id` in the payload. The `cardholder` signer (present only on `card_migration` announcements) is verified by checking that `keccak256(public_key)` matches the `card_hash` in the payload directly — migration is a master-card-key-only operation, and no sub-card-chain-resolution path is accepted for this signer (mirroring `card_migration.md §5`'s direct-only verification rule).
 
 ### Binding Conflict Resolution
 
@@ -110,11 +113,11 @@ routing_table: card_hash → wallet_service_id
 
 This table is populated and kept current off-chain:
 
-1. **Card registration binding** — when a press registers a new card, the wallet service that holds the card's keys announces the card-to-wallet-service binding through the off-chain Wallet Service Registry mechanism (design deferred to the wallet service spec). Other wallet services receive this binding and update their routing tables.
+1. **Card registration binding** — when a press registers a new card, the wallet service that holds the card's keys announces the card-to-wallet-service binding through the off-chain Wallet Service Registry mechanism (see §Wallet Service Registry above, which fully specifies this mechanism). Other wallet services receive this binding and update their routing tables.
 
-2. **Card migration binding** — when a card migrates from one wallet service to another, the new wallet service announces the updated binding through the same off-chain mechanism, updating `routing_table[card_hash]` for all observers.
+2. **Card migration binding** — when a card migrates from one wallet service to another, the new wallet service announces the updated binding through the same §Wallet Service Registry mechanism, updating `routing_table[card_hash]` for all observers.
 
-3. **Startup sync** — a wallet service that has been offline or is starting fresh fetches the current routing state from the off-chain Wallet Service Registry to rebuild its routing table.
+3. **Startup sync** — a wallet service that has been offline or is starting fresh fetches the current routing state from the §Wallet Service Registry (see §Startup Sync above) to rebuild its routing table.
 
 Because the routing table is maintained off-chain and replicated across wallet services via the Wallet Service Registry, it is eventually consistent. A stale routing table entry (card migrated but binding not yet processed) results in delivery to the old wallet service, which returns a `410 Gone` response with the new wallet service's `wallet_service_id`; the sender retries against the correct destination.
 
@@ -122,7 +125,7 @@ Because the routing table is maintained off-chain and replicated across wallet s
 
 ## Message Delivery
 
-**Changes from v0.3:** Per-device delivery no longer uses UMBRAL proxy re-encryption at the wallet service (the prior ADR-007 design). The wallet service does not hold any re-encryption key material and cannot transform ciphertext at all — it only ever stores and forwards opaque blobs. Instead, the **sender** encrypts independently to each of the recipient's currently-registered sub-card public keys (visible in the on-chain storage contract) and sends one routing envelope per sub-card. This trades a small amount of extra sender-side computation and wire traffic (proportional to device count, typically 2-5) for removing an entire cryptographic subsystem and its key-custody surface from the wallet service.
+**Changes from v0.3:** Per-device delivery no longer uses UMBRAL proxy re-encryption at the wallet service (the prior ADR-007 design). The wallet service does not hold any re-encryption key material and cannot transform ciphertext at all — it only ever stores and forwards opaque blobs. Instead, the **sender** fetches and decrypts the recipient card's current head from IPFS (via the on-chain `log_head_cid` pointer) to read `active_subcards` (`ipfs_card.md §5`; `protocol-objects.md §1.1`), encrypts independently to each of those currently-registered sub-card public keys, and sends one routing envelope per sub-card. This trades a small amount of extra sender-side computation and wire traffic (proportional to device count, typically 2-5) for removing an entire cryptographic subsystem and its key-custody surface from the wallet service.
 
 ### Routing Envelope
 
@@ -140,11 +143,12 @@ Messages between wallet services are wrapped in a **routing envelope** — a thi
 
 ### Sender-Side Fan-out
 
-Before sending, the sender's client resolves the recipient card's current sub-card list from the on-chain storage contract and constructs one routing envelope per registered sub-card, each encrypted independently to that sub-card's public key:
+Before sending, the sender's client fetches the recipient card's current head object from IPFS — resolving the on-chain `log_head_cid` pointer for `recipient_hash` and decrypting the fetched object (`ipfs_card.md §3`) — and reads its `active_subcards` field (`protocol-objects.md §1.1`) to obtain the recipient's current sub-card list. It then constructs one routing envelope per registered sub-card, each encrypted independently to that sub-card's public key:
 
 ```
 Sender's client
-  → resolve recipient_hash's registered sub-cards from the storage contract
+  → resolve recipient_hash's on-chain log_head_cid → fetch and decrypt the current card head from IPFS
+  → read active_subcards from the decrypted head
   → for each subcard_hash: encrypt SignedMessageEnvelope to that subcard's ML-KEM public key
   → hand each { to: recipient_hash, subcard_hash, payload } envelope to the sender's wallet service
 ```

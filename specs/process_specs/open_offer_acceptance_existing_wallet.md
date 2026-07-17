@@ -106,7 +106,7 @@ For first-time recipients who need to create a wallet, see `open_offer_acceptanc
     - Verify `recipient_signature` over the canonical RFC 8785 JSON of `claim_payload`.
     - Confirm `claim_payload.offer.press_card` matches the receiving press's own sub-card pointer.
     - Confirm the policy has `allow_open_offers: true`.
-    - Submit an atomic Arbitrum One transaction that: checks `block.timestamp < expires_at` (if set); checks `openOfferUseCounts[offer_id] < max_acceptances` (if set); atomically increments the counter and registers the card. (Issuer-signature verification is press-side only — the contract does not receive or re-verify it.) If any check fails, the transaction reverts.
+    - Submit an atomic Arbitrum One transaction that: checks `block.timestamp < expires_at` (if set); checks `OpenOfferUseCounts[offer_id] < max_acceptances` (if set); atomically increments the counter and registers the card. (Issuer-signature verification is press-side only — the contract does not receive or re-verify it.) If any check fails, the transaction reverts.
 
 12. If validation succeeds, the press assembles the `CardDocument` from `proposed_fields` plus `recipient_pubkey`, signs it with the press sub-card key (`press_signature`), and posts it to IPFS **encrypted** under the ADR-006 content key (`HKDF-SHA3-256(recipient_pubkey, info="card-content-v1")`, AES-256-GCM). (The offerer's `issuer_signature` on the `OpenCardOffer` and the recipient's `holder_signature` are the other two signatures.) This is the first point at which content encryption applies — the open offer document was not content-encrypted because no `recipient_pubkey` was present at offer-creation time.
 
@@ -176,3 +176,7 @@ For first-time recipients who need to create a wallet, see `open_offer_acceptanc
 - `protocol-objects.md §6` — `OpenCardOffer` object reference
 - `protocol-objects.md §7` — `OpenOfferClaimSubmission` object reference
 - `specs/object_specs/wallet.md` — wallet service wire protocol for keyring updates and WebAuthn passkey login
+
+---
+
+**Changelog:** Fix #12 (`plans/spec-consistency/inconsistencies/phase-2-consolidated-fixes.md`) — corrected `openOfferUseCounts` to the PascalCase `OpenOfferUseCounts` used by `registry_contract.md §3.5`.

@@ -1,18 +1,22 @@
 # Log Auditing — Process Spec
 
-**Version:** 0.1 (draft)  
+**Version:** 0.2 (draft)  
 **Date:** 2026-05-25  
 **Status:** Draft  
 
 > **Terminology note.** This spec now uses "card" as the canonical term per the Naming Convention.
 
+**Amended 2026-07-16 (spec-consistency Phase 2, Fix #11):** full rewrite. The audit-epoch / Audit Encryption Key (AEK) / ML-KEM key-wrapping model this document previously described has been **removed** from the protocol (`press.md §5.6`, `protocol-objects.md §12–13`) and replaced by direct E2E-encrypted `PressIssuanceRecord` messaging to each address in `policy.auditors` (`press.md §5.5` `appendIssuanceRecord`, `protocol-objects.md §11`). This document now describes that direct-messaging model: how an auditor receives a `PressIssuanceRecord`, confirms receipt, locally records it, and later inspects the referenced issued card for policy compliance. See `plans/spec-consistency/inconsistencies/phase-2-consolidated-fixes.md` Fix #11.
+
 ---
 
 ## Overview
 
-Every card issuance is recorded in an encrypted press log appended to the policy card. Audit access is organized into time-bounded **epochs**, each secured by a single Audit Encryption Key (AEK). At epoch close, the auditor decrypts all entries, produces a signed commitment, and destroys the AEK — providing forward secrecy bounded at the epoch level. Once an epoch is closed, its entries are permanently undecryptable by anyone.
+Every targeted or open-offer card issuance under a policy is reported directly to the policy's auditors. Immediately after a press assembles and signs the completed `CardDocument`, it sends a `PressIssuanceRecord` — an E2E-encrypted message, not an IPFS-posted artifact — to each card address listed in the policy's `auditors` array. There is no epoch structure, no shared symmetric key, and no key-wrapping step: each auditor receives their own independently-encrypted copy of each record via the normal message routing layer, encrypted directly to that auditor card's public key.
 
-This spec covers three processes: opening an epoch, auditing and closing an epoch, and the special cases that trigger early epoch closure (auditor changes, key rotations).
+Auditors maintain their own local records of the issuance notifications they receive. There is no press-side audit log artifact posted to IPFS under this model — auditing is a point-to-point notification relationship between the press and each auditor, not a shared encrypted ledger.
+
+This spec covers two processes: the press delivering a `PressIssuanceRecord` and the auditor confirming receipt (Process 1), and the auditor's later inspection of an issued card for policy compliance (Process 2).
 
 ---
 
@@ -20,182 +24,96 @@ This spec covers three processes: opening an epoch, auditing and closing an epoc
 
 | Actor | Role |
 |---|---|
-| **Press** | Generates and distributes the epoch AEK; encrypts issuance records; posts epoch entries to the policy log |
-| **Auditor** | Holds a card whose pointer appears in the policy's `auditors` array; receives wrapped AEK; decrypts and audits entries at epoch close; produces the `AuditEpochCommitment` |
-| **Administrator** | Manages auditor membership in the policy's `auditors` field; receives the commitment CID |
+| **Press** | Assembles and delivers a `PressIssuanceRecord` to each active auditor immediately after signing a completed `CardDocument`; tracks per-auditor confirmation state locally |
+| **Auditor** | Holds a card whose pointer appears in the policy's `auditors` array; receives each `PressIssuanceRecord` via E2E-encrypted message, confirms receipt back to the press, records it locally, and inspects the referenced issued card for policy compliance |
+| **Administrator** | Manages auditor membership in the policy's `auditors` field; is alerted if an auditor fails to confirm receipt within the press's timeout |
 
 ---
 
 ## Preconditions
 
-- A valid policy card is live with at least one entry in its `auditors` array.
-- Each auditor holds an active ML-KEM (FIPS 203) keypair. The auditor's public key is resolvable from their card.
-- The press has a live audit epoch (or is prepared to open one) before logging any issuance.
+- A valid policy card is live with zero or more entries in its `auditors` array. If `auditors` is empty or absent, no auditor notifications are sent for issuances under this policy.
+- Each auditor holds an active card whose public key is resolvable from their card (used both for message routing and for the press to encrypt to).
 
 ---
 
-## Process 1: Opening an Epoch
+## Process 1: Issuance Notification, Delivery, and Confirmation
 
-An epoch must be opened before the first issuance record can be posted. A new epoch must also be opened whenever the current epoch closes.
-
-### Steps
-
-1. The press generates a fresh 256-bit random AEK for the new epoch.
-
-2. For each active auditor in the policy's `auditors` array:
-   - Run `ML-KEM.Encaps(auditor_pubkey)` → `(kem_ciphertext, kem_shared_secret)`.
-   - Derive a wrapping key: `HKDF-SHA3-256(kem_shared_secret, "audit-epoch-aek-v1")`.
-   - Compute `wrapped_aek = AES-GCM.Encrypt(wrapping_key, AEK)` with a fresh nonce.
-   - Record the `auditor_card` pointer, `kem_ciphertext`, and `wrapped_aek` as one entry in `auditor_key_packages`.
-
-3. The press assembles and signs an `AuditEpochEntry` with `status: "open"`:
-   ```json
-   {
-     "type":           "audit_epoch_entry",
-     "status":         "open",
-     "epoch_id":       "<string — e.g. ISO year '2026' for annual, or sequential integer>",
-     "epoch_start":    "<ISO 8601 timestamp>",
-     "auditor_key_packages": [ ... ],
-     "press_signature": "<ML-DSA-44 sig over canonical RFC 8785 JSON of all above fields>"
-   }
-   ```
-
-4. The press posts the `AuditEpochEntry` to the policy card's IPFS append-only log and updates the policy card's Arbitrum One registry pointer to the new log head.
-
-5. The press retains the AEK in process memory throughout the open epoch — it is needed to encrypt each subsequent `PressIssuanceRecord`. The AEK is never persisted to disk or database; it exists only in the press's runtime memory. At epoch close, the press zeroes the in-memory AEK (see Process 2, Press side, step 6 in `press.md §5.7`). After that point the press cannot read the AEK in plaintext.
-
-6. The epoch is now open. The press encrypts each subsequent `PressIssuanceRecord` under this AEK:
-   ```
-   nonce = fresh 96-bit random value
-   ciphertext = AES-GCM.Encrypt(AEK, PressIssuanceRecord, nonce)
-   ```
-   Each encrypted entry stored on IPFS carries `epoch_id` in plaintext (so auditors know which epoch key to use) alongside `nonce` and `ciphertext`.
-
----
-
-## Process 2: Auditing and Closing an Epoch
-
-### Epoch close triggers
-
-An epoch closes on any of the following:
-- **Calendar boundary:** The epoch's defined period ends (annual epochs close 31 December UTC).
-- **Auditor key rotation:** An auditor updates their ML-KEM public key.
-- **Auditor added or removed:** Any change to the `auditors` array closes the current epoch and opens a new one with the updated auditor set.
+This process runs once per card issuance under a policy with a non-empty `auditors` array — for both targeted issuance (`card_offering_and_acceptance.md` steps 20–22) and open-offer issuance (`open_offer_creation.md`/`open_offer_acceptance_*.md`).
 
 ### Steps
-
-**Auditor side:**
-
-1. Upon receiving a close signal (from the press via HTTPS, or upon detecting the trigger condition), the auditor fetches all encrypted `PressIssuanceRecord` entries for the closing epoch from the policy log.
-
-2. For each entry, the auditor decrypts:
-   - Locate their own `auditor_key_packages` entry in the epoch's `AuditEpochEntry`.
-   - Decapsulate: `kem_shared_secret = ML-KEM.Decaps(kem_ciphertext, auditor_private_key)`.
-   - Derive wrapping key: `HKDF-SHA3-256(kem_shared_secret, "audit-epoch-aek-v1")`.
-   - Unwrap: `AEK = AES-GCM.Decrypt(wrapping_key, wrapped_aek)`.
-   - Decrypt each entry: `PressIssuanceRecord = AES-GCM.Decrypt(AEK, ciphertext, nonce)`.
-
-3. The auditor reviews the decrypted records for policy compliance. For each decrypted `PressIssuanceRecord`:
-   a. Derive the issued card's content key: `content_key = HKDF-SHA3-256(recipient_pubkey, info="card-content-v1")`.
-   b. Fetch the issued `CardDocument` at `card_cid` from IPFS and decrypt it using `content_key`. An AES-GCM authentication failure is a hard rejection — flag the record in `findings` and do not treat it as a valid issuance.
-   c. SHOULD confirm `keccak256(recipient_pubkey)` equals the card's on-chain registry address (the card's mutable pointer). A mismatch indicates a malformed or forged record and MUST be flagged.
-   d. Inspect the decrypted card's field values against the policy's `field_definitions`, `recipient_predicate`, and `requester_predicate` to verify predicate compliance.
-   e. If further chain verification is needed, the decrypted card's `ancestry_pubkeys` array provides the ordered ancestor public keys for walking the issuer and press chains to a trusted root.
-   f. Verify that no unauthorized press wrote to the log, and that entry counts are consistent.
-
-4. The auditor produces an `AuditEpochCommitment`:
-   ```json
-   {
-     "type":             "audit_epoch_commitment",
-     "epoch_id":         "<matches the closing epoch>",
-     "policy_card":      "<mutable pointer of the policy card>",
-     "auditor_card":     "<mutable pointer of this auditor's card>",
-     "period_start":     "<ISO 8601 — matches epoch_start from the opening AuditEpochEntry>",
-     "period_end":       "<ISO 8601>",
-     "entry_count":      <integer — number of PressIssuanceRecord entries decrypted>,
-     "entries_hash":     "<base64url — SHA3-256 of concatenated CIDs of all decrypted entries in log order>",
-     "findings":         "<free text — 'no issues found' if clean; otherwise describe anomalies>",
-     "auditor_signature":"<ML-DSA-44 sig over canonical RFC 8785 JSON of all above fields>"
-   }
-   ```
-
-5. The auditor publishes the `AuditEpochCommitment` to IPFS.
-
-6. The auditor sends the commitment CID to the press via HTTPS.
-
-7. **The auditor destroys the epoch AEK.** This step is irreversible. Entries from this epoch are now permanently undecryptable by anyone, including the auditor.
 
 **Press side:**
 
-8. On receiving the commitment CID from the auditor, the press posts an `AuditEpochEntry` with `status: "closed"` to the policy log:
+1. Immediately after assembling, signing, and publishing the completed `CardDocument` (and producing its SCIP), the press resolves `policy.auditors` from the policy card. If the array is empty or absent, the press skips the remaining steps — there is nothing to notify.
+
+2. For each active auditor card address in `policy.auditors`, the press assembles a `PressIssuanceRecord` plaintext:
    ```json
    {
-     "type":           "audit_epoch_entry",
-     "status":         "closed",
-     "epoch_id":       "<matching epoch>",
-     "epoch_end":      "<ISO 8601>",
-     "commitment_cid": "<CID of the AuditEpochCommitment>",
-     "close_reason":   "calendar_boundary | key_rotation | auditor_change",
-     "press_signature":"<ML-DSA-44 sig>"
+     "card_cid":         "<base64url — CID of the issued CardDocument>",
+     "recipient_pubkey": "<base64url — ML-DSA-44 public key of the issued CardDocument, 1312 bytes raw>",
+     "scip_cid":         "<base64url — CID of the SCIP posted to IPFS>",
+     "issued_at":        "<ISO 8601 timestamp>",
+     "offer_type":       "targeted | open"
    }
    ```
+   The press already holds every one of these values at this point — no additional lookups are required (`protocol-objects.md §11`).
 
-9. The press opens a new epoch immediately if issuances are ongoing (Process 1 above).
+3. The press sends the `PressIssuanceRecord` to each auditor as an E2E-encrypted message via the normal message routing layer (HTTPS to the auditor's wallet service endpoint, encrypted to that auditor card's public key). Each auditor receives their own independently-encrypted copy — there is no shared symmetric key and no key-wrapping step.
+
+4. The press awaits a confirmation message from each auditor acknowledging receipt and local recording, applying a configurable timeout (default: 30 seconds per auditor).
+
+5. If an auditor confirms within the timeout, the press records the confirmation locally (KV store or equivalent — not on IPFS).
+
+6. If an auditor does not confirm within the timeout, the press logs a warning and alerts the policy administrator, but does not block or retry the issuance — an unresponsive auditor never blocks card issuance. The press records the timeout locally alongside which auditors did confirm.
+
+**Auditor side:**
+
+7. The auditor's wallet service receives the E2E-encrypted `PressIssuanceRecord` message and decrypts it using the auditor card's private key.
+
+8. The auditor locally records the decrypted `PressIssuanceRecord` (e.g., appended to a local database or log keyed by policy and `card_cid`). This local record is the auditor's own durable copy — there is no shared, press-hosted, or IPFS-hosted audit log the auditor depends on.
+
+9. The auditor sends a confirmation message back to the press acknowledging receipt and recording.
 
 ---
 
-## Process 3: Special Close Triggers
+## Process 2: Inspecting an Issued Card for Compliance
 
-### Auditor key rotation
+An auditor may inspect any `PressIssuanceRecord` they have recorded — immediately upon receipt, or at any later time — to verify the referenced card complies with the policy. This is the same card-inspection logic the prior epoch-based model used at epoch close; under the direct-messaging model it runs per-record, whenever the auditor chooses to review it, with no epoch boundary gating access.
 
-When an auditor rotates their ML-KEM public key:
+### Steps
 
-1. The auditor updates their card via the standard update flow (see `card_updates.md`). The press observes the key update on Arbitrum One.
-2. The press stops posting new issuance entries under the old epoch AEK.
-3. The epoch closes per Process 2 above. The rotating auditor produces the commitment under their old key before the AEK is destroyed.
-4. The press opens a new epoch with key packages generated under the auditor's new public key (Process 1).
-5. The press must not post any new issuance entries under the old epoch AEK after observing the key update.
+1. Derive the issued card's content key: `content_key = HKDF-SHA3-256(recipient_pubkey, info="card-content-v1")`, using the `recipient_pubkey` field from the `PressIssuanceRecord`.
 
-### Auditor added
+2. Fetch the issued `CardDocument` at `card_cid` from IPFS and decrypt it using `content_key`. An AES-GCM authentication failure is a hard rejection — flag the record in the auditor's findings and do not treat it as a valid issuance.
 
-When a new auditor is added to `auditors` via a policy field update:
+3. **Binding and consistency check.** Confirm `keccak256(recipient_pubkey)` equals the card's on-chain registry address (the card's mutable pointer). A mismatch indicates a malformed or forged record and MUST be flagged (`protocol-objects.md §11`, "Binding and consistency check").
 
-1. The current epoch closes. All existing auditors produce commitments; AEKs are destroyed.
-2. The press opens a new epoch with key packages for all active auditors, including the new one.
-3. The new auditor has no access to prior epochs — their AEKs were destroyed before the auditor joined. This is by design: audit access is not retroactively granted.
+4. Inspect the decrypted card's field values against the policy's `field_definitions`, `recipient_predicate`, and `requester_predicate` (from the policy snapshot at `policy_id` CID) to verify predicate compliance.
 
-### Auditor removed
+5. If further chain verification is needed, the decrypted card's `ancestry_pubkeys` array provides the ordered ancestor public keys for walking the issuer and press chains to a trusted root — the same binding check applies at each link (`keccak256(entry_pubkey)` must equal the on-chain address being resolved).
 
-When an auditor is removed from `auditors` via a policy field update:
+6. Verify that no unauthorized press wrote to the card (the `press_card` pointer resolves to a press listed in the policy's `approved_presses` at the time of issuance).
 
-1. The current epoch closes. The departing auditor must produce a final commitment for the closing epoch.
-2. The press opens a new epoch with key packages for the remaining auditors only.
-3. The departing auditor receives no wrapped AEK for the new epoch and cannot decrypt any subsequent entries.
+7. The auditor records any findings (anomalies, non-compliance, or "no issues found") in their local records alongside the stored `PressIssuanceRecord`. There is no protocol-defined signed commitment object for this inspection — findings remain local to the auditor unless the auditor's own operational practice requires publishing them elsewhere.
 
 ---
 
 ## Postconditions
 
-- Each closed epoch's `AuditEpochCommitment` is published on IPFS and its CID is recorded in the policy log.
-- The epoch AEK is destroyed; entries from the closed epoch are permanently undecryptable.
-- A verifier who later obtains the decrypted entries can compute `SHA3-256(concat of entry CIDs)` and confirm it matches `entries_hash` in the commitment.
-- The commitment proves the auditor processed all entries in sequence but does not prove they correctly classified each one.
+- Every active auditor listed in `policy.auditors` at issuance time has received (or, for a timed-out auditor, has been attempted delivery of) a `PressIssuanceRecord` for the issuance, encrypted to their own card's public key.
+- Each confirming auditor holds a local record of the `PressIssuanceRecord`, independent of any press-hosted or IPFS-hosted artifact.
+- An auditor who inspects a `PressIssuanceRecord`'s referenced card can independently confirm content decryption, the `keccak256(recipient_pubkey)` binding, and predicate compliance, using only publicly resolvable IPFS and on-chain data plus their own card's private key.
+- Auditor access to a `PressIssuanceRecord` is not time-bounded or epoch-scoped — an auditor may inspect any record they have received and recorded at any later time, so long as they retain their own local copy (there is no protocol mechanism for re-fetching a `PressIssuanceRecord` from the press after initial delivery).
 
 ## Acceptance Criteria
 
-- [ ] An auditor can decrypt every `PressIssuanceRecord` in a closed epoch using only their wrapped epoch AEK copy.
-- [ ] For every decrypted record, the auditor can derive `content_key = HKDF-SHA3-256(recipient_pubkey, info="card-content-v1")`, fetch the issued card at `card_cid`, and successfully decrypt it (AES-GCM tag must pass).
-- [ ] For every decrypted record, the auditor can inspect the issued card's field values and verify they satisfy the policy's `field_definitions`, `recipient_predicate`, and `requester_predicate`.
-- [ ] Any record whose `keccak256(recipient_pubkey)` does not match the card's on-chain registry address, or whose issued card fails AES-GCM decryption, is flagged in `findings` and not counted as a valid issuance.
-- [ ] `recipient_pubkey` is never present in the outer IPFS envelope (`epoch_id` / `nonce` / `ciphertext`) — it appears only inside the AEK-encrypted plaintext.
-
----
-
-## Forward Secrecy Boundary
-
-- A compromised auditor key exposes only the **current open epoch's** AEK.
-- Prior epochs' AEKs have been destroyed; those entries are permanently inaccessible.
-- Shorter epoch durations (e.g., quarterly) reduce the maximum exposure window at the cost of more frequent commitment operations.
+- [ ] An auditor listed in `policy.auditors` receives a `PressIssuanceRecord` via E2E-encrypted message for every card issued under the policy while they are an active auditor.
+- [ ] The auditor can decrypt the message using only their own card's private key — no shared or wrapped key material is involved.
+- [ ] The auditor can derive `content_key = HKDF-SHA3-256(recipient_pubkey, info="card-content-v1")` from the record, fetch the issued card at `card_cid`, and successfully decrypt it (AES-GCM tag must pass).
+- [ ] The auditor can inspect the issued card's field values and verify they satisfy the policy's `field_definitions`, `recipient_predicate`, and `requester_predicate`.
+- [ ] A `PressIssuanceRecord` whose `keccak256(recipient_pubkey)` does not match the card's on-chain registry address, or whose issued card fails AES-GCM decryption, is flagged in the auditor's local findings and not counted as a valid issuance.
+- [ ] The press does not block or retry issuance when an auditor fails to confirm receipt within the timeout; the administrator is alerted instead.
 
 ---
 
@@ -203,19 +121,19 @@ When an auditor is removed from `auditors` via a policy field update:
 
 | Condition | Resolution |
 |---|---|
-| Auditor cannot decapsulate the AEK (wrong private key or corrupted package) | Press re-wraps and reposts an `AuditEpochEntry` update with a corrected key package for that auditor |
-| Auditor finds entry count in log does not match expected issuance count | Record in `findings`; notify the administrator; do not destroy the AEK until discrepancy is resolved |
-| Press posts issuance entries after epoch close signal | Protocol violation; those entries are not covered by any commitment; the press must correct with a new open epoch |
-| Commitment CID never received from auditor (auditor unresponsive) | Press escalates to administrator; administrator may remove the unresponsive auditor via a policy update, which triggers an epoch close with a new auditor set |
+| Auditor's wallet service unreachable or message delivery fails | Press logs a warning, alerts the administrator, and continues — issuance is never blocked by auditor delivery failure |
+| Auditor does not send a confirmation within the timeout (default 30s) | Press records the timeout locally and alerts the administrator; the press does not retry indefinitely, and issuance proceeds regardless |
+| Auditor cannot decrypt the received message (corrupted transport payload, stale keyring state) | Auditor requests redelivery from the press out of band; the press has no protocol-defined re-send mechanism beyond the original delivery attempt, so this is an operational/administrator-mediated recovery |
+| Auditor finds `keccak256(recipient_pubkey)` mismatch or issued-card decryption failure during inspection | Auditor flags the record in local findings; notifies the administrator per the auditor's own operational practice |
+| Auditor removed from `policy.auditors` | The press stops sending them future `PressIssuanceRecord`s (resolved from the updated policy snapshot on the next issuance); no retroactive access change to records already delivered to them |
 
 ---
 
 ## Related Specs
 
-- `card_offering_and_acceptance.md` — where issuance records are generated and encrypted
+- `card_offering_and_acceptance.md` — where issuance records are generated and delivered (steps 20–22)
+- `open_offer_creation.md` / `open_offer_acceptance_new_wallet.md` / `open_offer_acceptance_existing_wallet.md` — open-offer issuance paths that also trigger auditor notification
 - `policy_creation.md` — where auditors are defined in the policy
-- `card_updates.md` — used to add/remove auditors and trigger epoch close
-- `card_protocol_spec.md §2` — Audit Epoch Lifecycle section
+- `card_updates.md` — used to add/remove auditors from the policy's `auditors` array
+- `press.md §5.5` — `appendIssuanceRecord`, the press-side implementation of Process 1
 - `protocol-objects.md §11` — `PressIssuanceRecord` object reference
-- `protocol-objects.md §12` — `AuditEpochEntry` object reference
-- `protocol-objects.md §13` — `AuditEpochCommitment` object reference

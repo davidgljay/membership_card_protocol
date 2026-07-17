@@ -6,6 +6,8 @@
 
 > **Terminology note.** This spec now uses "card" as the canonical term per the Naming Convention.
 
+**Changelog (spec-consistency Phase 2):** Fix #2 — reworded §Keyring Storage and Replication to say keyring broadcast reuses the same peer list (not the same channel/endpoint) as `CardBindingAnnouncement` fanout, citing `wallet.md §7.5`'s actual separate `/federation/keyrings*` endpoints; Fix #56 — added a UUID registration step to Process 3 for newly-registered device sub-cards (`notification_relay.md §Process 1`); Fix #60 — updated Process 1 Steps 3-6 and Process 3 Step 10 to describe the real two-call service_secret/keyring bootstrap sequence (`wallet.md §7.2-7.3`; `wallet_sdk.md §5.3/§5.6`); Fix #61 — reworded the Error Paths "attacker completed recovery" row to reflect the default issuer-only 9xx authorization model; Fix #62 — corrected Process 3 Step 12's sub-card revocation code selection (811 vs. 810) per `subcard_creation_policy.md`/`wallet_sdk.md §6.4`. See `plans/spec-consistency/inconsistencies/phase-2-consolidated-fixes.md`.
+
 **Changes from v0.3:** Corrected the backup-registration wire format (Process 1, Steps 13-14) to match the implemented field names (`wrapped_blob`, `cancellation_pubkey`), and named the master card key as the cancellation credential.
 
 **Changes from v0.2:** The keyring blob no longer lives on IPFS (see `ARCHITECTURE.md` ADR-009-AMEND). It is stored in traditional, deletable storage and replicated across every wallet service in the federation, identified by `keyring_id` (a content hash) instead of an IPFS CID. Rotation now triggers a synchronized delete of the superseded version across the federation, rather than relying on IPFS unpinning.
@@ -25,7 +27,7 @@ The security model: the wallet is encrypted with a key that requires both a pass
 The keyring blob (the append-only encrypted store of the holder's master card private keys, ADR-009) is stored using ordinary, deletable storage — not IPFS — at **every wallet service in the federation**:
 
 - The blob is identified by `keyring_id = keccak256(encrypted_blob)`, a content hash used as a lookup key and integrity check, not an IPFS CID.
-- Whenever a holder's primary service creates or updates the keyring (initial setup, or re-encryption after rotation/recovery), it stores the blob locally and broadcasts it — alongside its `keyring_id` — to every other wallet service in the federation, using the same broadcast channel already used for `CardBindingAnnouncement` fanout (`specs/process_specs/message_routing.md`). Each receiving operator stores its own copy, keyed by `keyring_id` and associated with the holder's `card_hash`.
+- Whenever a holder's primary service creates or updates the keyring (initial setup, or re-encryption after rotation/recovery), it stores the blob locally and broadcasts it — alongside its `keyring_id` — to every other wallet service in the federation. This broadcast reuses the same **peer list** already maintained for `CardBindingAnnouncement` fanout (`specs/process_specs/message_routing.md §Wallet Service Registry`), but is structurally separate from that fanout: it is sent via its own dedicated endpoints, `POST /federation/keyrings` (replicate) and `POST /federation/keyrings/delete` (delete the superseded version), each authenticated by the same peer-wallet-service signature scheme (`wallet.md §6.5`) and documented as distinct message shapes/verification functions in `wallet.md §7.5`. Each receiving operator stores its own copy, keyed by `keyring_id` and associated with the holder's `card_hash`.
 - When the keyring is replaced (re-encrypted under a new `decryption_key`, e.g. during post-recovery re-registration), the broadcast also instructs every federation member to **delete its copy of the previous `keyring_id`**. Unlike the prior IPFS-based design, this deletion is a deliberate, synchronized operation across the whole federation, not a best-effort unpin that other parties may have already cached around.
 - At recovery time, the holder's client may fetch the keyring blob by `keyring_id` from **any** reachable wallet service holding a replica — not necessarily the original primary service. This is what preserves the "recovery is independent of the primary service" property without using IPFS.
 
@@ -66,18 +68,18 @@ This flow runs when a new holder creates their first wallet, or when an existing
 
 2. The user creates a **device-bound passkey** via the device authenticator (WebAuthn platform authenticator — Face ID, Touch ID, Windows Hello, etc.). This passkey is bound to this device and this application origin; it is used for daily operations and is not backed up.
 
-3. The primary service generates a `service_secret` — a random 256-bit value stored server-side, associated with the holder's account. The service never sees any key material.
+3. The client calls `POST /accounts/challenge` to obtain a challenge, then signs it with the freshly generated master card key and calls `POST /accounts` — the first call of a required **two-call bootstrap sequence** (`wallet.md §7.2-7.3`). This call registers the account and WebAuthn credential and submits a provisional `encrypted_keyring_blob` (necessarily provisional — see Step 4 — since the real `decryption_key` cannot be computed until this call returns). The primary service generates a `service_secret` — a random 256-bit value stored server-side, associated with the holder's account — and returns it, along with `keyring_id` and a session token, in the response. The service never sees any key material.
 
 4. The **keyring decryption key** is derived:
    ```
    decryption_key = KDF(device_passkey_output, service_secret)
    ```
-   Neither `device_passkey_output` alone nor `service_secret` alone can reconstruct `decryption_key`.
+   Neither `device_passkey_output` alone nor `service_secret` alone can reconstruct `decryption_key`. This is the real `decryption_key`; it cannot be computed until Step 3's `service_secret` is known, which is why Step 3's submitted blob was provisional.
 
-5. The keyring is initialized as an append-only encrypted blob:
+5. The keyring is finalized as an append-only encrypted blob:
    - The blob contains the master card private key, keyed by card address.
-   - The blob is encrypted with `decryption_key` (AES-GCM).
-   - The primary service computes `keyring_id = keccak256(encrypted_blob)`, stores the blob, and broadcasts it to every other wallet service in the federation (see "Keyring Storage and Replication" above).
+   - The blob is re-encrypted with the real `decryption_key` from Step 4 (AES-GCM).
+   - The client makes the **second** bootstrap call, `PUT /accounts/{card_hash}/keyring`, with the re-encrypted blob and `rotate_service_secret: false` — installing the final blob under a new `keyring_id` without triggering a second, uninvited `service_secret` rotation (`wallet.md §7.3`). The primary service stores the blob and broadcasts it to every other wallet service in the federation (see "Keyring Storage and Replication" above).
    - `keyring_id` is stored by the primary service, associated with the holder's account.
 
 6. The master card private key is cleared from memory after the keyring is posted.
@@ -252,20 +254,21 @@ After either recovery path, the holder re-establishes their wallet on a new prim
 
 ### Steps
 
-10. The holder registers with a **new primary service**:
+10. The holder registers with a **new primary service**, via the same two-call bootstrap sequence used in Process 1 Steps 3–5 (`wallet.md §7.2-7.3`; `wallet_sdk.md §5.3/§5.6`):
     - Creates a new device-bound passkey on the new device.
-    - The new service generates a new `service_secret`.
-    - A new `decryption_key` is derived from the new passkey and service secret.
-    - The keyring blob is re-encrypted with the new `decryption_key`, assigned a new `keyring_id`, and broadcast to every wallet service in the federation. The broadcast also instructs all federation members to delete their copy of the previous `keyring_id`.
+    - First call: registers/re-registers with the new service, which mints a new `service_secret` (`rotate_service_secret: true`, the default), invalidating every session token previously issued for this `card_hash`.
+    - A new `decryption_key` is derived from the new passkey and the new `service_secret`.
+    - The keyring blob is re-encrypted under the new `decryption_key`. Second call: `PUT /accounts/{card_hash}/keyring` with `rotate_service_secret: false` installs this re-encrypted blob under a new `keyring_id` without triggering a further, uninvited rotation of the `service_secret` it was just encrypted under. This second call also broadcasts the new blob to every wallet service in the federation and instructs all federation members to delete their copy of the previous `keyring_id`.
 
 11. The holder registers new **device sub-cards** for their new device(s):
     - Generate a new device sub-card keypair in the new device's secure storage.
     - Access the master key from the recovered keyring.
     - Sign a new sub-card registration and post it on Arbitrum One.
     - Clear the master key from memory.
+    - For each newly-registered sub-card, run UUID pool registration against the new wallet service (`notification_relay.md §Process 1`, `POST /cards/{card_hash}/subcards/{subcard_hash}/uuids`). Without this step, the new sub-card is active on-chain but has no UUID pool at any wallet service and cannot receive messages.
 
 12. **Deregister potentially-compromised sub-cards:**
-    - For each device sub-card that was active on the lost device: submit a revocation intent (code 811 — device sub-card lost or stolen) via the card update flow (see `card_updates.md`).
+    - For each device sub-card that was active on the lost device: submit a revocation intent via the card update flow (see `card_updates.md`), selecting the code based on the scenario (`subcard_creation_policy.md`; `wallet_sdk.md §6.4`) — code **811** ("app installation lost or uninstalled") if there is no reason to suspect the sub-card's signing key was extracted before the device was lost, or code **810** ("sub-card's signing key compromised") if key compromise is suspected. A lost-or-stolen device more often warrants 810 than 811, since the device leaving the holder's control is itself grounds for suspecting key exposure; the holder should default to 810 unless they have specific reason for confidence the key was never at risk.
 
 13. **Update backup registrations:**
     - Register a new synced passkey blob under the new `decryption_key` (Process 1, Steps 11–13).
@@ -308,7 +311,7 @@ After either recovery path, the holder re-establishes their wallet on a new prim
 | YubiKey PIN forgotten | YubiKey recovery is blocked; use synced passkey recovery path instead |
 | Keyring blob unavailable from any federation member | Retry against other wallet services in the federation holding a replica; if no federation member has it (last resort), the keyring blob must be re-derived from any surviving private key material (manual recovery) |
 | Cancellation window expires and holder did not intend recovery | Holder must immediately rotate all card sub-cards that may have been exposed; treat master keys as compromised; issue successor cards as needed |
-| Recovery completed by attacker before holder notices | Holder must issue 910 (full wallet compromise suspected) revocations on all cards and work with each policy's issuer to obtain successor cards |
+| Recovery completed by attacker before holder notices | Under the default authorization model (`card_updates.md §Phase 3 Step 7`: 9xx by issuer only, absent a policy override), the holder cannot unilaterally post a 910 revocation. The holder must request a 910 (full wallet compromise suspected) revocation from each affected card's policy issuer and work with them to obtain successor cards; this may differ if a specific policy's `revocation_permissions` grants broader 9xx authority. |
 
 ---
 

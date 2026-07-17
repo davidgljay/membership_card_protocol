@@ -1,8 +1,10 @@
 # Card Offering and Acceptance — Process Spec
 
-**Version:** 0.1 (draft)  
+**Version:** 0.2 (draft)  
 **Date:** 2026-05-25  
 **Status:** Draft  
+
+**Amended 2026-07-16 (spec-consistency Phase 2, Fix #11):** dropped the stale audit-epoch/AEK precondition and rewrote steps 19–21 (issuance-notification assembly and delivery), step 24 (administrator courtesy copy), the Actors table, and the Postconditions bullet on audit recording — all to match the direct E2E-encrypted `PressIssuanceRecord`-to-`policy.auditors` model in `press.md §5.5` and `protocol-objects.md §11`. See `plans/spec-consistency/inconsistencies/phase-2-consolidated-fixes.md` Fix #11.
 
 > **Terminology note.** This spec now uses "card" as the canonical term per the Naming Convention.
 
@@ -22,7 +24,8 @@ Card offering and acceptance is the process by which a press issues a targeted c
 | **Issuer (offerer) / their wallet service** | Constructs the card offer and signs it with the **offerer's own card key** (`issuer_signature`); presents it to the recipient for countersignature; validates the countersigned result before forwarding it to the press |
 | **Press** | Verifies predicates and policy compliance; signs the completed, countersigned card with the **press sub-card key** (`press_signature`); posts to IPFS and registers on-chain |
 | **Recipient** | Reviews the offer, generates a keypair, countersigns to accept ownership (`holder_signature`) |
-| **Administrator** | Receives SCIP courtesy copy; may be notified of issuance |
+| **Administrator** | Receives the SCIP courtesy copy; does not receive the `PressIssuanceRecord` itself (that goes to auditors, see below) |
+| **Auditor** | A card address listed in the policy's `auditors` array; receives a `PressIssuanceRecord` via E2E-encrypted message for every issuance under the policy, confirms receipt, and locally records it (see `log_auditing.md`) |
 
 ---
 
@@ -31,7 +34,6 @@ Card offering and acceptance is the process by which a press issues a targeted c
 - A valid policy card is published on IPFS and registered on Arbitrum One with `valid_until` in the future (if set).
 - The press has a press sub-card whose pointer appears in the policy's `approved_presses`.
 - The press's Arbitrum One wallet is funded for gas.
-- An audit epoch is open for this policy, or the press is prepared to open one before logging the issuance.
 
 ---
 
@@ -106,27 +108,29 @@ Card offering and acceptance is the process by which a press issues a targeted c
 
 18. The press creates a new Arbitrum One registry entry for the card, with the genesis CID as the initial log head. This write is authorized on-chain by the press's secp256r1 key registered in `PressAuthorizations` (see `ARCHITECTURE.md` ADR-011).
 
-19. The press ensures an audit epoch is open for this policy. If not, it opens one first (see `log_auditing.md`).
-
-20. The press constructs a `PressIssuanceRecord` containing:
-    - `epoch_id` — identifier of the current open audit epoch.
-    - `card_cid` — CID of the completed card document.
-    - `issued_at` — matching the card's `issued_at` field.
-    - `requester_card` — mutable pointer of the requester (if present).
-    - `offer_type: "targeted"`.
-
-21. The press encrypts the record with the current epoch AEK (AES-GCM, fresh 96-bit nonce per entry) and appends it to the policy card's IPFS log, then updates the policy card's Arbitrum One registry pointer to the new log head.
-
-22. The press produces a **Signed Card Inclusion Proof (SCIP)**:
+19. The press produces a **Signed Card Inclusion Proof (SCIP)**:
     - `card_cid` — CID of the completed card document.
     - `policy_log_entry_index` — position in the policy press log.
     - `policy_log_root_at_inclusion` — CID of the policy log head at time of issuance.
     - `issued_at` — matching the card's `issued_at`.
     - `press_signature` — ML-DSA-44 signature over all above fields.
 
+20. The press resolves `policy.auditors` from the policy card (fetched via its own IPFS gateway; the policy card is a public document). If `policy.auditors` is empty or absent, the press skips steps 21–23 below — there are no auditors to notify.
+
+21. For each auditor listed in `policy.auditors`, the press assembles a `PressIssuanceRecord`:
+    - `card_cid` — CID of the completed card document.
+    - `recipient_pubkey` — the recipient's ML-DSA-44 public key from the completed card.
+    - `scip_cid` — CID of the SCIP posted to IPFS.
+    - `issued_at` — matching the card's `issued_at` field.
+    - `offer_type: "targeted"`.
+
+    (See `protocol-objects.md §11` for the full schema.)
+
+22. The press delivers the `PressIssuanceRecord` to each auditor as an E2E-encrypted message via the normal message routing layer (HTTPS to the auditor's wallet service endpoint, encrypted to the auditor card's public key), per `press.md §5.5`'s `appendIssuanceRecord`. The press awaits a confirmation message from each auditor acknowledging receipt and local recording, applying a configurable timeout (default: 30 seconds per auditor). An auditor that does not confirm within the timeout does not block issuance — the press logs a warning, alerts the policy administrator, and continues; which auditors confirmed and which timed out is recorded in the press's local state (not on IPFS).
+
 23. The press sends the SCIP and a confirmation to the recipient via HTTPS to their wallet service endpoint.
 
-24. The press sends an audit record (card CID + SCIP) to the administrator via HTTPS to their wallet service endpoint.
+24. The press sends the SCIP as a courtesy copy to the administrator via HTTPS to their wallet service endpoint (if configured in the policy). The `PressIssuanceRecord` itself is not sent to the administrator — it goes only to the addresses in `policy.auditors` per steps 20–22 above.
 
 ---
 
@@ -136,7 +140,7 @@ Card offering and acceptance is the process by which a press issues a targeted c
 - The card's Arbitrum One registry entry points to the genesis card document.
 - The recipient holds the private key for `recipient_pubkey` in their keyring.
 - The recipient holds the SCIP as proof of issuance.
-- The issuance is recorded in the policy's encrypted audit log.
+- Every card address in `policy.auditors` (if any) has received a `PressIssuanceRecord` for this issuance via E2E-encrypted message and has (or, for a timed-out auditor, has not yet) confirmed receipt; confirmations are tracked in the press's local state.
 - The completed card carries all three signatures: `issuer_signature` (offerer), `holder_signature` (recipient), and `press_signature` (press).
 - Any verifier can confirm: all three signatures verify, card content conforms to the policy schema, the press that signed it is registered in `PressAuthorizations` for the policy, and the recipient's chain satisfied `recipient_predicate` — all from publicly available data.
 
@@ -153,6 +157,7 @@ Card offering and acceptance is the process by which a press issues a targeted c
 | Recipient declines offer | No action; the unsigned offer expires per press retention policy |
 | IPFS post fails before on-chain write | Retry IPFS post; do not write on-chain until CID is confirmed pinned |
 | Arbitrum transaction reverts | Press retries; if press sub-card was revoked between steps, administrator must authorize a replacement press |
+| Auditor does not confirm `PressIssuanceRecord` receipt within timeout | Issuance is not blocked; press logs a warning and alerts the policy administrator; unresponsive auditor is tracked in press local state |
 
 ---
 
@@ -162,7 +167,7 @@ Card offering and acceptance is the process by which a press issues a targeted c
 - `open_offer_creation.md` — alternative issuance path for batch/open offers
 - `open_offer_acceptance_new_wallet.md` — open offer path for first-time recipients
 - `open_offer_acceptance_existing_wallet.md` — open offer path for existing holders
-- `log_auditing.md` — audit epoch management
+- `log_auditing.md` — auditor-side receipt, confirmation, and inspection of `PressIssuanceRecord`s
 - `wallet_backup_and_recovery.md` — keyring setup for first-time recipients
 - `card_protocol_spec.md §2` — full feature spec for pressing cards
 - `card_protocol_spec.md §4` — full feature spec for receiving a card as a user

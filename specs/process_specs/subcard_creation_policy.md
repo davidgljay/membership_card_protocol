@@ -1,144 +1,106 @@
-# Sub-Card Creation Policy
+# Sub-Card Governance
 
-**Version:** 0.1 (draft)
-**Date:** 2026-05-25
+**Version:** 0.2 (draft)
+**Date:** 2026-07-16
 **Status:** Draft
 **Applies to:** All sub-cards created under the card protocol
+
+**Changelog (spec-consistency Phase 2, Step C, Decision (d)):** Full rewrite. This document previously presented itself as a governing `PolicyCardDocument` whose `revocation_permissions`/`field_definitions` predicates the press enforced "mechanically at update time" against a sub-card's own append-only log. That model has no attachment point in the actual object model: `SubCardDocument` (`protocol-objects.md §16`) has no `policy_id` field — unlike every other card type — and sub-cards are registered on-chain in `SubCardRegistrations` (`registry_contract.md §3.4`), a mapping structurally separate from the `CardEntry` mapping that policy-governed cards use. The generic update pathway (`press.md §5.3`'s "resolve the target card's policy from the on-chain `CardEntry`") cannot run for a sub-card, and no verifier reads a sub-card's own log for update or revocation codes — the only verifier-facing sub-card state is the on-chain `SubCardEntry.active` flag and the master card's `active_subcards` directory. This rewrite instead documents the three mechanisms that actually govern a sub-card today. See `plans/spec-consistency/inconsistencies/phase-2-consolidated-fixes.md` Decision (d) and Fixes #31, #39, #40.
 
 ---
 
 ## Purpose
 
-This policy governs the rights and constraints of the two parties involved in a sub-card's lifecycle: the **user** (the holder of the parent card, who authorized the sub-card) and the **application** (the installed app that holds the sub-card's private key). It specifies what each party may do to the sub-card's log after issuance.
+Unlike an ordinary `CardDocument`, a sub-card is not issued under a `PolicyCardDocument` and has no `policy_id`. There is no separate policy object whose `revocation_permissions`/`field_definitions` predicates a press resolves and enforces against a sub-card's log, because a sub-card has no `CardEntry` and no such log is ever read by a verifier or a press.
 
-This policy complements `specs/subcards.md`, which defines the sub-card creation flow. The creation flow specifies *how* sub-cards are established; this policy specifies *what may be done with them afterward*.
+What actually governs a sub-card's lifecycle is three independent, narrower mechanisms:
+
+1. **The app-certification chain** — governs which applications are even eligible to hold a sub-card at all (§Mechanism 1).
+2. **`capabilities` and `limitations`, fixed once at issuance in the `SubCardDocument` itself** — govern what a sub-card may sign, for the sub-card's entire lifetime (§Mechanism 2).
+3. **On-chain deregistration (`DeregisterSubCard`)** — the sole mechanism by which a sub-card stops being valid (§Mechanism 3).
+
+This document describes each of the three as they actually work, and cross-references `specs/subcards.md` (the creation/acceptance flow), `protocol-objects.md §16` (the `SubCardDocument` schema and runtime verifier chain walk), `registry_contract.md §4.3`/`§4.4` (the on-chain calls), and `press.md §5.4` (the press-side registration function) as the authoritative sources for each.
 
 ---
 
 ## Parties
 
-**User:** The holder of the parent card. At issuance, the user authorized the sub-card via their wallet. After issuance, the user's wallet acts on the user's behalf for all sub-card lifecycle operations.
+**Holder:** The holder of the master (primary) card, who authorized the sub-card by countersigning its `SubCardDocument` with their primary card key. After issuance, the holder's wallet acts on the holder's behalf for lifecycle operations that require the holder's signature (notably, one of the three valid deregistration signer paths — see §Mechanism 3).
 
-**Application:** The installed app that requested the sub-card and holds the sub-card private key in its hardware-scoped keystore. The application acts under the constraints of its approved keystore library and platform attestation.
-
----
-
-## Privileges
-
-### Note Writing
-
-Both the **user** and the **application** have note-writing privileges on the sub-card.
-
-Specifically, both parties may submit log entries with codes in the following ranges:
-
-- **2xx** — Positive annotation (commendation, trust endorsement)
-- **4xx** — Neutral annotation (informational note for verifiers)
-
-These annotations are appended to the sub-card's append-only log and are visible to any verifier who reads the log. Notes do not change the sub-card's active status.
-
-**Rationale:** Both parties have legitimate standing to annotate the sub-card's history. The user may note context about how the app is being used (e.g., "authorized for limited test use only"). The application may note its own operational events (e.g., "device migration initiated"). Neither party's note-writing privilege supersedes the other's; both are recorded and independently verifiable.
-
-### Update Card Content
-
-**Neither** the user nor the application has privileges to update the sub-card's content fields after issuance.
-
-Specifically, neither party may submit log entries with codes in the following ranges for the purpose of modifying sub-card field values:
-
-- **1xx** — Positive update (linked successor / additional card)
-- **3xx** — Neutral field update
-- **5xx** — Programmatic field update
-- **7xx** — Privilege reduction / field change
-
-**Rationale:** Sub-cards are intentionally immutable after issuance. Their capabilities (what the app may do, which parent card is delegated) are fixed at creation. Allowing post-issuance field updates would create ambiguity about what the user originally authorized and would undermine the auditable consent model. If the user wishes to change the capabilities granted to an app, the correct path is to revoke the existing sub-card (8xx) and create a new one with the desired capability set.
-
-The one exception is `valid_until` refresh (code 301, neutral field update). This is explicitly **not permitted** under this policy. If a sub-card expires, it must be re-created through the full sub-card request flow; it cannot be silently extended.
-
-**Disambiguation: 5xx on the sub-card vs. 510/511/512 on the parent card.** The prohibition above covers 5xx entries **on the sub-card's own log** — no party may post them there, full stop. This is a separate matter from codes 510 (subcard addition), 511 (subcard removal), and 512 (subcard key rotation), which are posted to the **holder's master/parent card's log** to maintain that card's `active_subcards` directory (`protocol-objects.md §1.1`). The holder posting a 510/511/512 entry on their own master card is not an exception to this policy — it is a different log entirely, governed by the hardcoded holder-only authorization rule in `update_codes.md §5xx`, not by this sub-card creation policy.
-
-### Revocation — 8xx (Quiet)
-
-Both the **user** and the **application** have 8xx (quiet) revocation privileges on the sub-card.
-
-Either party may submit a revocation log entry with any code in the 8xx range:
-
-| Code | Meaning in sub-card context |
-|---|---|
-| 800 | Sub-card authorization ended; app departed in good standing |
-| 801 | Voluntary surrender by holder (user revoked the app's authorization) |
-| 810 | Sub-card's signing key compromised |
-| 811 | App installation lost or uninstalled; this sub-card only |
-
-**Rationale:**
-
-The user may revoke at any time without cause — this is equivalent to revoking an OAuth grant. The application may also revoke its own sub-card (e.g., on uninstall), which is a cooperative act that keeps the card ecosystem clean. An 8xx revocation signals "authorization has ended; the holder is not considered a risk." Historical statements signed with the sub-card before the revocation's `effective_date` remain trusted.
-
-### Revocation — 9xx (Loud)
-
-**Neither** the user nor the application has 9xx (loud) revocation privileges on the sub-card.
-
-9xx revocations ("bad actor / harmful conduct") on sub-cards are reserved exclusively for the **trust-and-safety governance body** or the **parent card's policy authorizer**, not for the two direct parties.
-
-**Rationale:**
-
-A 9xx revocation is a loud public signal that may harm the reputations of other cards the holder uses. Neither the user nor the application is a neutral party: the user might issue a false 9xx against an app in retaliation, and an app might issue a false 9xx against a user to harm their reputation. Only the trust-and-safety governance body, operating under its published criteria, has the standing and accountability to make that determination. 9xx revocations for sub-cards are therefore governed exclusively by the trust-and-safety annotation escalation process (see `specs/subcards.md §Trust-and-Safety Integration`).
+**Application:** The installed app that requested the sub-card, holds an **app card** issued by a governance-approved certifier (`specs/subcards.md §App Cards and the Trust Chain`), and holds the sub-card's private key in its hardware-scoped keystore.
 
 ---
 
-## Formal Policy Expression
+## Mechanism 1: The App-Certification Chain
 
-The following is the machine-readable expression of the above privileges, in the predicate syntax defined in `card_protocol_spec.md §Background`:
+A sub-card can only be issued to (and remain valid for) an application whose **app card** chains to the governance authority's app-certification policy root. This is checked twice, independently:
 
-```json
-{
-  "revocation_permissions": {
-    "8xx": {
-      "any_of": [
-        { "is_holder": true },
-        { "is_issuer": true }
-      ]
-    },
-    "9xx": {
-      "issued_under_template": "<trust-and-safety-governance-policy-id>"
-    }
-  },
-  "field_definitions": [
-    {
-      "name": "notes",
-      "type": "append-only-array",
-      "item_type": "text",
-      "required": false,
-      "description": "Annotations from authorized parties (user or application).",
-      "update_policy": {
-        "any_of": [
-          { "is_holder": true },
-          { "is_issuer": true }
-        ]
-      }
-    }
-  ],
-  "default_field_update_policy": "none"
-}
-```
+- **At registration, by the press.** Before submitting `RegisterSubCard`, the press walks the `app_card` chain using `app_card_pubkey` (deriving the content key via `HKDF-SHA3-256(app_card_pubkey, info="card-content-v1")` to decrypt the app card, then following its `ancestry_pubkeys`) to confirm it reaches the governance authority's app-certification policy root, rejecting registration if it does not. See `press.md §5.4 verifyAppCertificationChain` and `registry_contract.md §4.3`.
+- **At verification time, by every runtime verifier.** Per `protocol-objects.md §16`'s runtime chain-walk procedure (step 12), a verifier independently re-walks the `app_card` chain from `app_card_pubkey` up to the configured `appCertificationRoot`, hard-rejecting with `APP_CARD_CHAIN_NOT_TRUSTED` if the chain does not reach it — regardless of whether the press accepted the sub-card at registration time. Per-link on-chain addresses are authoritative; `app_card_pubkey` (like `holder_primary_card_pubkey`) is an untrusted hint whose validity is established by the `keccak256` binding check before use.
 
-**Notes:**
-- `"is_holder": true` matches the user (the holder of the sub-card, which is the user's wallet acting for the parent card holder).
-- `"is_issuer": true` matches the application (which signed the sub-card acceptance and submitted it to the press, and is therefore the issuance-time signatory for the sub-card's lifecycle operations).
-- `"default_field_update_policy": "none"` means no other fields may be updated by any party after issuance unless explicitly defined here. This is not a standard field in the current spec and should be treated as a policy-level declaration that the press enforces.
-- The 9xx revocation predicate references a dedicated trust-and-safety governance policy whose `policy_id` CID must be specified before this policy goes live.
+This is the mechanism that keeps an unapproved or decertified application from being able to hold a valid sub-card at all, independent of anything the application itself declares. See `specs/subcards.md §App Cards and the Trust Chain` for the full trust-chain diagram (governance authority → app-certification policy → certifier card → app card → `SubCardDocument`).
+
+**Ongoing compliance.** Third-party annotations on the app's card (via the EAS annotation layer) can escalate after a sub-card has already been issued. A blocking annotation (8xx/9xx-equivalent) on the app's card triggers automatic revocation of all of that app's active sub-cards on the wallet's next sync — see §Mechanism 3's "Automatic revocation on annotation escalation" and `specs/subcards.md §Ongoing Compliance`. This is a wallet-enforced response to the app card's own annotation state, not a separate predicate evaluated against the sub-card.
 
 ---
 
-## Enforcement
+## Mechanism 2: Capabilities and Limitations, Fixed at Issuance
 
-The press enforces this policy mechanically at update time:
+`capabilities` (a whitelist of message-type strings) and `limitations` (additional content constraints on what a sub-card may sign, expressed in the protocol's existing predicate/`field_requirements` grammar) are both fields on the `SubCardDocument` itself (`protocol-objects.md §16`). They are set once, at issuance, and covered by both `app_signature` and `holder_signature`.
 
-- An 8xx revocation intent signed by either the user's active sub-card or the app's installation card satisfies the `revocation_permissions.8xx` predicate and is accepted.
-- A 9xx revocation intent not signed by a card issued under the trust-and-safety governance policy is rejected.
-- A field update intent (codes 1xx–7xx) for any field other than `notes` is rejected regardless of signer.
-- A `notes` append intent signed by either the user or the application satisfies the `notes.update_policy` predicate and is accepted.
+**These fields are immutable after issuance — there is no update path for them.** This follows the same logic that bars 1xx–7xx field changes on an ordinary card's log: a sub-card has no `policy_id` and no `CardEntry`, so there is no update-intent pathway (`press.md §5.3`) that could even target a `SubCardDocument`'s fields in the first place. If a holder or app wants a sub-card to have different `capabilities`/`limitations`, the only path is to revoke the existing sub-card (see §Mechanism 3) and issue a new one with the desired set — exactly as `specs/subcards.md` describes for capability changes. There is no "silent extension" or in-place field update for a sub-card, for `valid_until` or for anything else.
+
+See `specs/subcards.md §Capabilities` and `§Limitations` for the field semantics and worked examples (whitelist checks, `field_requirements` regex constraints, and the explicit out-of-scope note on count-based rate limiting).
+
+**A note on sub-card annotations.** Earlier drafts of this document described a per-sub-card "notes" mechanism (2xx/4xx codes posted to the sub-card's own log). No such log exists: a sub-card has no append-only IPFS log that a press appends to or a verifier reads, unlike an ordinary card. Any annotation about how an app is using a sub-card belongs on the **app's own card** via the EAS annotation layer (`specs/subcards.md §Trust-and-Safety Integration`), not on the sub-card itself. Annotations about the master card holder belong on the holder's own master card log, using the standard 2xx/4xx codes there (`update_codes.md`) — a separate log from the sub-card entirely.
 
 ---
 
-## Policy Lifecycle
+## Mechanism 3: Revocation
 
-This policy itself is a card, governed by the standard card update model. Changes to this policy require the policy authorizer's signature. Policy updates do not retroactively change the privileges of already-issued sub-cards; those cards are anchored to the `policy_id` CID at their time of issuance per the standard policy compliance rule in `card_protocol_spec.md §Background`.
+A sub-card's validity is a single on-chain boolean: `SubCardRegistrations[sub_card_address].active` (`registry_contract.md §3.4`). There is no separate "quiet" vs. "loud" revocation state for a sub-card the way there is for an ordinary card's log — the only revocation operation is the on-chain `DeregisterSubCard` call (`registry_contract.md §4.4`), which sets `active` to `false`. Signatures produced by the sub-card before deregistration remain verifiable; signatures produced after are rejected by any verifier checking `SubCardRegistrations[sub_card_address].active`.
+
+### Who can trigger deregistration
+
+Per `registry_contract.md §4.4` (Decision (b), resolved), the press verifies `DeregisterSubCard`'s `signature` off-chain against **any one** of three independent, sufficient signer paths — the contract does not care which was used:
+
+- **(a) the master card's holder key** — the holder's primary card, resolved from the master `CardDocument` on IPFS;
+- **(b) the requesting app's own card key** — resolved from the `SubCardDocument`'s `app_card_pubkey`; or
+- **(c) the sub-card's own key** — resolved from the `SubCardDocument`'s `recipient_pubkey`.
+
+Any single valid signature from any one of these three is sufficient, for either a suspected-compromise scenario or a benign/cooperative removal. This is a change from an earlier (never-implemented) model in which only the master holder key could deregister a sub-card; that model is superseded by `registry_contract.md §4.4`'s current three-signer text.
+
+Gas for `DeregisterSubCard` is paid from the requesting app's pre-funded gas account with the press; if that balance is insufficient, the issuing organization's press sponsors the cost, so that deregistration is never blocked by a depleted balance (`registry_contract.md §4.12`).
+
+Deregistration should be paired with a code-511 `UpdateIntentPayload` against the holder's master card, removing the sub-card's pubkey from `active_subcards` — see `specs/subcards.md §Authorization for Deregistration`.
+
+### Revocation scenario codes (informational)
+
+The codes below label *why* a `DeregisterSubCard` call was made, for human/audit legibility. They are not separately enforced on-chain — the contract only ever sets `active` to `false` regardless of code — and they are the standard protocol-wide revocation codes defined canonically in `specs/update_codes.md §8xx — Quiet Revocations`, cited here (not restated with independent wording) per that document's `§Adding New Codes` step 3:
+
+| Code | Canonical meaning (`update_codes.md §8xx`) | Typical sub-card trigger |
+|---|---|---|
+| 800 | Role ended; departed in good standing | App's certified role or agreement with the holder concluded normally |
+| 801 | Voluntary surrender by holder | Holder revokes the app's authorization, unconditionally, at will (equivalent to revoking an OAuth grant) |
+| 810 | Signing key compromised | Sub-card's private key suspected compromised |
+| 811 | Sub-card lost or stolen (this card only) | App uninstalled, device retired, or device lost — this sub-card only; does not affect the holder's master card or other sub-cards |
+
+`update_codes.md §8xx` is the canonical source for these descriptions; do not restate them with independently drifting wording elsewhere.
+
+### Automatic revocation on annotation escalation
+
+There is no 9xx ("loud") revocation pathway specific to sub-cards, distinct from the mechanism above — `SubCardEntry.active` is a single boolean with no code attached on-chain. What functions as an escalation path is: when the requesting app's own card receives a blocking annotation (8xx/9xx-equivalent, per `specs/subcards.md §Ongoing Compliance`) after sub-card issuance, the wallet SHOULD automatically call `DeregisterSubCard` (using signer path (a), the master holder key, which the wallet holds) for every active sub-card issued to that app, and notify the holder. This is a wallet-enforced policy response to the app card's annotation state — not a distinct sub-card revocation code, and not something a trust-and-safety governance body calls directly against a sub-card (there is no contract entry point for that).
+
+### Deregistration after key recovery
+
+If the holder's primary card key is lost and later recovered, the holder should treat all previously authorized sub-cards as potentially suspect and deregister them using the recovered key, prompting each app to re-request a new sub-card. See `specs/subcards.md §Deregistration After Key Recovery` for the full sequence.
+
+---
+
+## Cross-References
+
+- `specs/subcards.md` — the sub-card creation/acceptance flow (Steps 1–5c), key management, capabilities/limitations worked examples, revocation authorization, and trust-and-safety integration. This document defers to it for anything not specific to governance/enforcement semantics.
+- `protocol-objects.md §16` — the `SubCardDocument` schema and the authoritative 12-step runtime verifier chain walk.
+- `registry_contract.md §4.3` (`RegisterSubCard`) and `§4.4` (`DeregisterSubCard`) — the on-chain calls underlying issuance and revocation.
+- `press.md §5.4` — the press-side `processSubCardRegistration`/`verifyAppCertificationChain` functions.
+- `specs/update_codes.md §8xx` — canonical revocation code descriptions.

@@ -83,9 +83,11 @@ Open offers are only permitted when the policy card has `allow_open_offers: true
 
 5. The issuer signs the canonical serialization with their sub-card private key → `issuer_signature`.
 
-6. The **offer ID** is computed as: `hash(canonical RFC 8785 JSON of the complete document including issuer_signature)`. This is the key used in the Arbitrum One on-chain acceptance counter (`openOfferUseCounts`). It is unforgeable and unique per issuer.
+6. The **offer ID** is computed as: `hash(canonical RFC 8785 JSON of the complete document including issuer_signature)`. This is the key used in the Arbitrum One on-chain acceptance counter (`OpenOfferUseCounts`). It is unforgeable and unique per issuer.
 
 ### Phase 3: Publishing
+
+> **Open architecture question.** Steps 7–9 describe the wallet service as the component that stores the offer and serves the hosted-form claim link. Neither `wallet.md` nor `press.md` currently defines a hosting endpoint or claim-link-resolution mechanism for `OpenCardOffer` documents — which component (wallet service, press, or a new component) actually owns this is undecided. See `wallet.md`'s own `OQ-WALLET-6` for the same gap documented from the wallet-service side. This spec's use of "wallet service" below is the working assumption, not a settled design; once decided, the hosting/claim-link-serving endpoint should be added to whichever component owns it and these steps updated to cite it.
 
 7. The issuer submits the signed `OpenCardOffer` document to a wallet service via HTTPS POST.
 
@@ -109,7 +111,7 @@ Open offers are only permitted when the policy card has `allow_open_offers: true
 
 ## On-Chain Counter Initialization
 
-The Arbitrum One acceptance counter for this offer (`openOfferUseCounts[offer_id]`) is **lazily initialized** — no pre-registration transaction is required. The counter is created and atomically incremented on the first successful claim. The press verifies the issuer's ML-DSA-44 signature off-chain as part of its pre-flight validation before submitting any transaction. The press then includes the `offer_id`, `max_acceptances`, and `expires_at` in calldata alongside each card registration so the contract can enforce capacity and expiry constraints atomically. The `issuer_signature` is not passed to the contract.
+The Arbitrum One acceptance counter for this offer (`OpenOfferUseCounts[offer_id]`) is **lazily initialized** — no pre-registration transaction is required. The counter is created and atomically incremented on the first successful claim. The press verifies the issuer's ML-DSA-44 signature off-chain as part of its pre-flight validation before submitting any transaction. The press then includes the `offer_id`, `max_acceptances`, and `expires_at` in calldata alongside each card registration so the contract can enforce capacity and expiry constraints atomically. The `issuer_signature` is not passed to the contract.
 
 ---
 
@@ -143,4 +145,10 @@ The Arbitrum One acceptance counter for this offer (`openOfferUseCounts[offer_id
 - `policy_creation.md` — where `allow_open_offers` is set
 - `card_protocol_spec.md §2` — Open offer issuance flow section
 - `protocol-objects.md §6` — `OpenCardOffer` object reference
-- `protocol-objects.md §14` — `RegistryEntry` (open offer counter) object reference
+- `protocol-objects.md §14` — CardEntry (on-chain) object reference
+
+---
+
+**Changelog:** Fix #3 / Fix #5 (`plans/spec-consistency/inconsistencies/phase-1-consolidated-fixes.md`) — updated the superseded `RegistryEntry` citation to `CardEntry (on-chain)` and corrected `openOfferUseCounts` to the PascalCase `OpenOfferUseCounts` used by `registry_contract.md §3.5`.
+
+**Changelog:** Fix #14 (`plans/spec-consistency/inconsistencies/phase-2-consolidated-fixes.md`) — flagged Phase 3 steps 7–9 as depending on an undecided open-offer hosting/claim-link architecture question; cross-referenced `wallet.md`'s `OQ-WALLET-6`.
