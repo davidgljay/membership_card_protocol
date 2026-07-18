@@ -26,6 +26,8 @@ These are different failure modes with different operational meaning (one says "
 
 **Raised:** 2026-07-12, during Phase 3 (`matrix-policy-module`) build-out.
 
+**Status (2026-07-17): Implemented and fully tested**, both languages. `evaluate_policy_match`/`evaluate_policy_match` now returns a discriminated `PolicyMatchResult { matched, reason? }` (`"no_policy_match"` | `"field_mismatch"`), and `matrix-policy-module`'s deny logs surface the specific reason instead of a bare "policy_violation". Spec: [`plans/g1-policy-match-reason-spec.md`](../g1-policy-match-reason-spec.md).
+
 ---
 
 ## 2. `verifyCard`/`verify_card` can never return chain data — even with `returnChain: true` — and this caused a real, shipped bug
@@ -44,6 +46,8 @@ These are different failure modes with different operational meaning (one says "
 
 **Raised:** 2026-07-12, during Phase 4 (`discoverRooms`/`discover-rooms` bugfix) — David's request.
 
+**Status (2026-07-17): Implemented and fully tested**, both languages. `verifyCard`/`verify_card` now accept an optional `pubkey` on `VerifyCardOptions` that, when supplied and address-verified, populates a real Stage-3-walked chain; omitting it reproduces today's `chain: []` behavior exactly. Spec: [`plans/g2-verifycard-chain-spec.md`](../g2-verifycard-chain-spec.md).
+
 ---
 
 ## 3. `RpcProvider.getCardEventLog` has no real implementation anywhere — every caller stubs it
@@ -58,6 +62,8 @@ These are different failure modes with different operational meaning (one says "
 
 **Raised:** 2026-07-16, during spec-consistency Phase 3 code-alignment work, prompted by David's question about open issues around on-chain event-log retrieval.
 
+**Status (2026-07-17): Implemented and mock/unit-tested**, both languages — including a scope gap found during implementation: the Python side (`matrix-policy-module`'s `Web3RpcProvider`) had no `get_card_event_log` at all, not just TS. Both now do chunked, retrying `CardRegistered`/`CardHeadUpdated` event replay. **Live validation against a real Arbitrum RPC/registry contract has not occurred** — no such endpoint is available in this environment; this is a follow-up blocked on you provisioning one. Spec: [`plans/g3-event-log-spec.md`](../g3-event-log-spec.md), milestone: [`plans/milestones/phase-3-summary.md`](../milestones/phase-3-summary.md).
+
 ---
 
 ## 4. `matrix-policy-module`'s on-chain event `Watcher` is implemented and unit-tested, but never constructed — no running deployment actually subscribes to on-chain events
@@ -71,6 +77,8 @@ These are different failure modes with different operational meaning (one says "
 **Recommendation for whenever this is revisited:** construct and start the `Watcher` from `PolicyModule.__init__` (or an equivalent lifecycle hook Synapse's module loader supports for async startup), using the already-rendered config keys; confirm clean shutdown/reconnect behavior against Synapse's module lifecycle before relying on it in production; then exercise the on-chain-dependent smoke tests (satisfying-card join, revocation force-part) against a live registry contract, which per `plans/matrix-implementation-plan.md` Phase 6 have never actually been run end-to-end in this sandbox.
 
 **Raised:** 2026-07-17, during a status check on whether the matrix configuration currently subscribes to on-chain events (it doesn't — this is a wiring gap, not a design or implementation gap).
+
+**Status (2026-07-17): Implemented and unit-tested.** `PolicyModule.__init__` now constructs and starts the `Watcher` via `ModuleApi.run_as_background_process` (confirmed from Synapse source as the correct lifecycle mechanism). One related gap found and explicitly *not* closed: startup reconciliation against Synapse's live room-membership list has no `ModuleApi` enumeration method to build it from — flagged as a separate open gap, not silently dropped. **Live end-to-end validation (satisfying-card join, revocation force-part against a real chain + homeserver) has not occurred** — blocked on you provisioning a test registry contract and Matrix homeserver. Spec: [`plans/g4-watcher-wiring-spec.md`](../g4-watcher-wiring-spec.md), milestone: [`plans/milestones/phase-4-summary.md`](../milestones/phase-4-summary.md).
 
 ---
 
