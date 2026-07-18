@@ -25,8 +25,12 @@ function setEnv(env: Record<string, string>) {
   }
 }
 
+// Vars a test may set beyond validEnv's keys (e.g. to exercise the kubo
+// provider path) — cleared alongside validEnv so tests stay isolated.
+const EXTRA_CLEARABLE_KEYS = ['IPFS_PROVIDER', 'KUBO_API_URL', 'KUBO_GATEWAY_URL'];
+
 function clearEnv() {
-  for (const k of Object.keys(validEnv)) {
+  for (const k of [...Object.keys(validEnv), ...EXTRA_CLEARABLE_KEYS]) {
     delete process.env[k];
   }
 }
@@ -104,5 +108,44 @@ describe('loadConfig', () => {
     expect(config.PORT).toBe(3000);
     expect(config.LOG_LEVEL).toBe('info');
     expect(config.STALENESS_WINDOW_SECONDS).toBe(300);
+  });
+
+  it('defaults IPFS_PROVIDER to filebase, preserving existing-deployment behavior', () => {
+    const { FILEBASE_BUCKET: _b, ...env } = validEnv;
+    setEnv(env);
+    const config = loadConfig();
+    expect(config.IPFS_PROVIDER).toBe('filebase');
+    expect(config.FILEBASE_BUCKET).toBe('membership_card_protocol');
+    expect(config.FILEBASE_ENDPOINT).toBe('https://s3.filebase.com');
+  });
+
+  it('exits non-zero for an unrecognized IPFS_PROVIDER', () => {
+    setEnv({ ...validEnv, IPFS_PROVIDER: 'not-a-provider' });
+    expect(() => loadConfig()).toThrow('process.exit called');
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    const errorMessages = errSpy.mock.calls.map((c) => c.join(' ')).join('\n');
+    expect(errorMessages).toContain('IPFS_PROVIDER');
+  });
+
+  it('does not require FILEBASE_KEY/SECRET when IPFS_PROVIDER is kubo', () => {
+    const { FILEBASE_KEY: _k, FILEBASE_SECRET: _s, ...env } = validEnv;
+    setEnv({
+      ...env,
+      IPFS_PROVIDER: 'kubo',
+      KUBO_API_URL: 'http://ipfs:5001',
+      KUBO_GATEWAY_URL: 'http://ipfs:8080',
+    });
+    const config = loadConfig();
+    expect(config.IPFS_PROVIDER).toBe('kubo');
+    expect(config.KUBO_API_URL).toBe('http://ipfs:5001');
+  });
+
+  it('exits non-zero when IPFS_PROVIDER is kubo but KUBO_API_URL is missing', () => {
+    const { FILEBASE_KEY: _k, FILEBASE_SECRET: _s, ...env } = validEnv;
+    setEnv({ ...env, IPFS_PROVIDER: 'kubo', KUBO_GATEWAY_URL: 'http://ipfs:8080' });
+    expect(() => loadConfig()).toThrow('process.exit called');
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    const errorMessages = errSpy.mock.calls.map((c) => c.join(' ')).join('\n');
+    expect(errorMessages).toContain('KUBO_API_URL');
   });
 });

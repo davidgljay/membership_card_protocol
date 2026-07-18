@@ -9,7 +9,7 @@ import { CardVerifier } from '@membership-card-protocol/verifier';
 import type { RpcProvider, IpfsProvider, CardEntry, PressAuthEntry, SubCardEntry, LogEntry } from '@membership-card-protocol/verifier';
 import type { PressConfig } from './config.js';
 import type { KvStore } from './kv.js';
-import type { IpfsClient } from './ipfs/client.js';
+import type { IpfsPinningProvider } from './ipfs/provider.js';
 import type { RegistryClient } from './chain/registry.js';
 import type { GasManager } from './chain/gas.js';
 import { mlDsa44PublicKeyFromPrivate } from './functions/crypto.js';
@@ -21,7 +21,7 @@ export interface PressContext {
   kv: KvStore;
   verifier: CardVerifier;
   registry: RegistryClient;
-  ipfs: IpfsClient;
+  ipfs: IpfsPinningProvider;
   gas: GasManager;
   /** ML-DSA-44 public key (1312 bytes) derived from the private key at startup. */
   pressPublicKey: Uint8Array;
@@ -54,7 +54,7 @@ export function getPressContext(): PressContext {
  */
 export function createRpcProvider(
   registry: RegistryClient,
-  ipfs: IpfsClient
+  ipfs: IpfsPinningProvider
 ): RpcProvider {
   return {
     async getCardEntry(address: string): Promise<CardEntry | null> {
@@ -170,7 +170,7 @@ export function createRpcProvider(
   };
 }
 
-export function createIpfsProviderAdapter(ipfsClient: IpfsClient): IpfsProvider {
+export function createIpfsProviderAdapter(ipfsClient: IpfsPinningProvider): IpfsProvider {
   return {
     async fetch(cid: string): Promise<Uint8Array> {
       return ipfsClient.fetchFromIPFS(cid);
@@ -185,7 +185,7 @@ export function createIpfsProviderAdapter(ipfsClient: IpfsClient): IpfsProvider 
 export function buildCardVerifier(
   config: PressConfig,
   registry: RegistryClient,
-  ipfsClient: IpfsClient
+  ipfsClient: IpfsPinningProvider
 ): CardVerifier {
   const rpc = createRpcProvider(registry, ipfsClient);
   const ipfsProvider = createIpfsProviderAdapter(ipfsClient);

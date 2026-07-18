@@ -3,7 +3,7 @@
  *
  * Startup sequence (per spec §3 Goal 4):
  *   1. Validate all required env vars and key material — loadConfig()
- *   2. Check Filebase bucket is reachable — checkFilebaseHealth()
+ *   2. Check the configured IPFS provider is reachable — ipfs.checkHealth()
  *   3. Check Arbitrum One RPC is responsive — eth_chainId
  *   4. Verify press is active under at least one configured policy (warning only)
  *   5. Mark ready — HTTP listener begins accepting traffic
@@ -12,7 +12,7 @@
  */
 
 import { loadConfig, type PressConfig } from '../../src/config.js';
-import { checkFilebaseHealth, createIpfsClient } from '../../src/ipfs/client.js';
+import { createIpfsClient } from '../../src/ipfs/index.js';
 import { createRegistryClient } from '../../src/chain/registry.js';
 import { createGasManager } from '../../src/chain/gas.js';
 import { createPublicClient, http } from 'viem';
@@ -52,12 +52,12 @@ export default defineNitroPlugin(async () => {
     return;
   }
 
-  // ── Step 2: Filebase reachability ───────────────────────────────────────────
+  // ── Step 2: IPFS provider reachability ──────────────────────────────────────
   const ipfs = createIpfsClient(config);
   try {
-    await checkFilebaseHealth(config);
+    await ipfs.checkHealth();
   } catch (err) {
-    pressStartupError = `Filebase: ${String(err)}`;
+    pressStartupError = `IPFS provider (${config.IPFS_PROVIDER}): ${String(err)}`;
     return;
   }
 

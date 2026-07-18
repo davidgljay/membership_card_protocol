@@ -113,7 +113,7 @@ describe('publishCard', () => {
       press_signature: { public_key: toBase64url(PRESS_PK), signature: toBase64url(new Uint8Array(2420)) },
     };
 
-    const cid = await publishCard(doc, mockIpfs as import('../../src/ipfs/client.js').IpfsClient);
+    const cid = await publishCard(doc, mockIpfs as import('../../src/ipfs/provider.js').IpfsPinningProvider);
     expect(cid).toBe(mockCid);
 
     // Verify the uploaded bytes can be decrypted back to the original doc.

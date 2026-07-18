@@ -9,7 +9,7 @@
 import type { PressConfig } from '../config.js';
 import type { KvStore, LogHeadRecord } from '../kv.js';
 import { kvKeys } from '../kv.js';
-import type { IpfsClient } from '../ipfs/client.js';
+import type { IpfsPinningProvider } from '../ipfs/provider.js';
 import type { RegistryClient } from '../chain/registry.js';
 import { canonicalize, canonicalizeExcluding } from '../serialization.js';
 import {
@@ -68,7 +68,7 @@ export async function appendLogEntry(
   config: PressConfig,
   kv: KvStore,
   registry: RegistryClient,
-  ipfs: IpfsClient,
+  ipfs: IpfsPinningProvider,
   targetCardAddress: Hex,
   updateIntent: UpdateIntentPayload,
   intentSignature: { public_key: string; signature: string }
@@ -139,7 +139,7 @@ const AUDITOR_TIMEOUT_MS = 30_000;
 
 export async function appendIssuanceRecord(
   config: PressConfig,
-  ipfs: IpfsClient,
+  ipfs: IpfsPinningProvider,
   policyCid: string,
   cardCid: string,
   recipientPubkey: string,

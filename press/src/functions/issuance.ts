@@ -9,7 +9,7 @@ import type { CardVerifier } from '@membership-card-protocol/verifier';
 import type { PressConfig } from '../config.js';
 import type { KvStore } from '../kv.js';
 import { kvKeys, type OfferRecord } from '../kv.js';
-import type { IpfsClient } from '../ipfs/client.js';
+import type { IpfsPinningProvider } from '../ipfs/provider.js';
 import type { RegistryClient } from '../chain/registry.js';
 import type { GasManager } from '../chain/gas.js';
 import { canonicalize, canonicalizeExcluding } from '../serialization.js';
@@ -40,7 +40,7 @@ import type { Hex } from 'viem';
 // ---------------------------------------------------------------------------
 
 export async function fetchPolicyCard(
-  ipfs: IpfsClient,
+  ipfs: IpfsPinningProvider,
   policyCid: string
 ): Promise<PolicyDocument> {
   const bytes = await ipfs.fetchFromIPFS(policyCid);
@@ -56,7 +56,7 @@ export async function validateIssuanceRequest(
   config: PressConfig,
   kv: KvStore,
   verifier: CardVerifier,
-  ipfs: IpfsClient
+  ipfs: IpfsPinningProvider
 ): Promise<{ policy: PolicyDocument; policyAddress: string }> {
   // 1. Required fields.
   if (!request.policy_cid || !request.requester_card_address || !request.offer) {
@@ -170,7 +170,7 @@ export function signCardDocument(
 
 export async function publishCard(
   signedCardDocument: Record<string, unknown>,
-  ipfs: IpfsClient
+  ipfs: IpfsPinningProvider
 ): Promise<string> {
   const recipientPubkeyB64 = signedCardDocument['recipient_pubkey'] as string;
   const recipientPubkey = fromBase64url(recipientPubkeyB64);

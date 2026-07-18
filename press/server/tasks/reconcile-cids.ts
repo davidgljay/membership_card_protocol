@@ -35,6 +35,18 @@ export default defineTask({
   },
   async run() {
     const config = loadConfig();
+
+    // The Filebase Pinning API is Filebase-specific — there's no equivalent
+    // reconciliation mechanism for the other IpfsPinningProvider
+    // implementations (kubo/mock, used for local/integration testing), so
+    // this task is a no-op unless Filebase is the active provider.
+    if (config.IPFS_PROVIDER !== 'filebase') {
+      console.info(
+        `[reconcile] Skipped — IPFS_PROVIDER is "${config.IPFS_PROVIDER}", not "filebase".`
+      );
+      return { result: 'skipped-non-filebase-provider' };
+    }
+
     const kv = createNitroKvStore();
 
     const client = createPublicClient({

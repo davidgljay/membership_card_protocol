@@ -6,6 +6,8 @@
 
 **Amended 2026-07-16:** §5.3 `appendLogEntry` updated for the `LogEntry` full-repost design change (`protocol-objects.md §3`, `object_specs/ipfs_card.md §5`) — the press now fetches/decrypts the current head before assembling a new entry, and each entry carries `card_state` (full current field state) and `history` (flat CID provenance list) rather than only a diff.
 
+**Amended 2026-07-18:** §3.2, §3.4 updated — IPFS pinning is now behind a provider abstraction (`IpfsPinningProvider`, `press/src/ipfs/provider.ts`) selected at startup via the new `IPFS_PROVIDER` config variable (default `filebase`, preserving all existing-deployment behavior unchanged). Filebase remains the production implementation and everything below describing its mechanics is still accurate for `IPFS_PROVIDER=filebase`; the change only removes the previous hardcoding of the Filebase endpoint/bucket and makes the interface pluggable. Two additional implementations exist for non-production use: `kubo` (talks directly to a local Kubo node's HTTP API — for local/integration testing) and `mock` (in-memory — for unit tests). §3.5's CID reconciliation task is Filebase-Pinning-API-specific and is a no-op when `IPFS_PROVIDER` is not `filebase`.
+
 **Amended 2026-07-16 (spec-consistency Phase 3, Tier 1 item 1):** §3.2, §3.4 (renamed from "IPFS Pinning — Piñata" to "IPFS Pinning — Filebase"), §3.5, §5.1, §5.0, §7, and §10 corrected to describe **Filebase** (S3-compatible upload + `HeadObject` CID capture + gateway fetch + byte-compare validation + Filebase Pinning API reconciliation), the actual and confirmed-deliberate production IPFS pinning vendor — the prior text describing Piñata was stale/incorrect; the deployed code (`press/src/ipfs/client.ts`, `press/server/tasks/reconcile-cids.ts`) has never used Piñata. See `plans/spec-consistency/inconsistencies/phase-3-consolidated-fixes.md` Tier 1 item 1.
 
 **Amended 2026-07-16 (spec-consistency Phase 1, Step C):** §5.1 `assembleCardDocument` now sets `protocol_version` on the `CardDocument` via `getProtocolVersion()` before signing (Fix #8, `plans/spec-consistency/inconsistencies/phase-1-consolidated-fixes.md`). §5.4 `processSubCardRegistration`/`registerSubCardOnChain` now implement the DNS-admin-card secp256r1 authorization path from `registry_contract.md` v0.6 §4.3 — a `DnsAdminCardKeys` check, two new `POST /sub-card/register` request fields (`adminSecpPayload`/`adminSecpSignature`), the 8-argument `RegisterSubCard` call, and error `E-47` (Fix #2, same source).
@@ -137,9 +139,15 @@ All configuration is via environment variables.
 | `PRESS_OHTTP_PRIVATE_KEY` | Yes | Base64url-encoded X25519 HPKE private key backing the OHTTP gateway endpoints (§4). Added 2026-07-16, Phase 3 Tier 1 item 16. |
 | `ARBITRUM_RPC_URL` | Yes | Arbitrum One RPC endpoint (e.g. `https://arb1.arbitrum.io/rpc`) |
 | `REGISTRY_CONTRACT_ADDRESS` | Yes | Address of the registry storage contract on Arbitrum One |
-| `FILEBASE_KEY` | Yes | Filebase S3-compatible access key ID (IPFS pinning and content upload) |
-| `FILEBASE_SECRET` | Yes | Filebase S3-compatible secret access key |
+| `IPFS_PROVIDER` | No | Which `IpfsPinningProvider` to construct: `filebase`, `kubo`, or `mock`. Default: `filebase`. Added 2026-07-18. |
+| `FILEBASE_KEY` | If `IPFS_PROVIDER=filebase` | Filebase S3-compatible access key ID (IPFS pinning and content upload) |
+| `FILEBASE_SECRET` | If `IPFS_PROVIDER=filebase` | Filebase S3-compatible secret access key |
 | `FILEBASE_GATEWAY_URL` | No | Filebase IPFS gateway URL for content fetches. Default: `https://ipfs.filebase.io` |
+| `FILEBASE_ENDPOINT` | No | Filebase S3-compatible API endpoint. Default: `https://s3.filebase.com`. Added 2026-07-18 (previously hardcoded). |
+| `FILEBASE_REGION` | No | Filebase S3-compatible region. Default: `us-east-1`. Added 2026-07-18 (previously hardcoded). |
+| `FILEBASE_BUCKET` | No | Filebase bucket name. Default: `membership_card_protocol`. Added 2026-07-18 (previously hardcoded). |
+| `KUBO_API_URL` | If `IPFS_PROVIDER=kubo` | Base URL of a Kubo node's HTTP API (e.g. `http://ipfs:5001`). Added 2026-07-18. |
+| `KUBO_GATEWAY_URL` | If `IPFS_PROVIDER=kubo` | Base URL of that Kubo node's IPFS gateway (e.g. `http://ipfs:8080`). Added 2026-07-18. |
 | `EXTERNAL_KV_URL` | Yes | Connection URL for the external key-value store (Redis, Upstash, DynamoDB, etc.) |
 | `PORT` | No | HTTP port (self-hosted Node.js only). Default: `3000` |
 | `LOG_LEVEL` | No | `debug`, `info`, `warn`, `error`. Default: `info` |
@@ -184,17 +192,19 @@ press:app_gas:<app_card_address>
 
 ---
 
-### 3.4 IPFS Pinning — Filebase
+### 3.4 IPFS Pinning — Filebase (production), pluggable via `IpfsPinningProvider`
+
+IPFS pinning is provided through the `IpfsPinningProvider` interface (`press/src/ipfs/provider.ts`: `pinToIPFS`, `fetchFromIPFS`, `checkHealth`), constructed at startup by `createIpfsClient()` (`press/src/ipfs/index.ts`) based on the `IPFS_PROVIDER` config variable (§3.2). The production implementation, and the only one described in detail below, is **Filebase** (`IPFS_PROVIDER=filebase`, the default). Two other implementations exist purely for non-production use: `kubo` (`press/src/ipfs/kubo.ts`, talks directly to a local Kubo node's HTTP API — local/integration testing) and `mock` (`press/src/ipfs/mock.ts`, in-memory — unit tests). Everything else in this section describes the Filebase implementation.
 
 The press uses **Filebase** for all IPFS content publishing and pinning. Filebase is an S3-compatible object storage service that pins every uploaded object to IPFS and exposes a public IPFS gateway for content retrieval.
 
-**SDK:** `@aws-sdk/client-s3` (AWS SDK v3), used against the Filebase S3-compatible endpoint (`https://s3.filebase.com`, region `us-east-1`) rather than a Filebase-specific SDK. All protocol content is stored in a single bucket (`membership_card_protocol`), addressed by object key, not by CID — CIDs are recovered from Filebase-assigned object metadata (see below). Governance scripts share the same bucket under a `dns-governance/` key prefix; the press uses the `press/` prefix.
+**SDK:** `@aws-sdk/client-s3` (AWS SDK v3), used against the Filebase S3-compatible endpoint (`FILEBASE_ENDPOINT`, default `https://s3.filebase.com`, region `FILEBASE_REGION`, default `us-east-1`) rather than a Filebase-specific SDK. All protocol content is stored in a single bucket (`FILEBASE_BUCKET`, default `membership_card_protocol`), addressed by object key, not by CID — CIDs are recovered from Filebase-assigned object metadata (see below). Governance scripts share the same bucket under a `dns-governance/` key prefix; the press uses the `press/` prefix.
 
 **Initialization (at startup):**
 
 1. The press loads its Filebase S3 access credentials from `FILEBASE_KEY` and `FILEBASE_SECRET`.
 2. The press configures its gateway base URL via `FILEBASE_GATEWAY_URL` (default `https://ipfs.filebase.io`).
-3. The press confirms Filebase is reachable and its credentials are valid before accepting any traffic, via `checkFilebaseHealth()`: a `HeadObject` call against a known-nonexistent key in the bucket. A `NotFound`/`NoSuchKey` response confirms the press authenticated successfully (it reached Filebase and was correctly rejected only for the object not existing); any other error fails startup.
+3. The press confirms the configured IPFS provider is reachable before accepting any traffic, via `ipfs.checkHealth()`. For the Filebase provider this is a `HeadObject` call against a known-nonexistent key in the bucket — a `NotFound`/`NoSuchKey` response confirms the press authenticated successfully (it reached Filebase and was correctly rejected only for the object not existing); any other error fails startup.
 
 **Upload and CID-capture pattern:** New content (card documents, log entries, issuance records) is uploaded to the bucket via `PutObject`, keyed by a content-hash-derived key (hex of the first 16 bytes of `SHA-256(content)`, prefixed `press/`) so identical content maps to the same object — uploads are idempotent. The press then issues a `HeadObject` call on that same key; Filebase returns the IPFS CID it assigned to the object in the `cid` object-metadata field. Two round trips (`PutObject` + `HeadObject`) is the implementation's chosen mechanism — it avoids relying on AWS SDK v3 response-header middleware to capture the CID from the `PutObject` response directly. If Filebase does not return a CID via `HeadObject` metadata, the upload is treated as a failure (`P-24`).
 

@@ -1,5 +1,5 @@
 /**
- * IPFS pinning client backed by Filebase (S3-compatible object storage).
+ * IPFS pinning provider backed by Filebase (S3-compatible object storage).
  *
  * Filebase pins every uploaded object to IPFS and returns the CID in the
  * `x-amz-meta-cid` response header. Content is publicly accessible through
@@ -22,24 +22,12 @@ import {
   HeadObjectCommand,
 } from '@aws-sdk/client-s3';
 import type { PressConfig } from '../config.js';
+import type { IpfsPinningProvider } from './provider.js';
 
-const FILEBASE_ENDPOINT = 'https://s3.filebase.com';
-const FILEBASE_REGION = 'us-east-1';
-// All protocol content lives in this single bucket, addressed only by CID.
-// The S3 interface is used purely as a pinning mechanism; retrieval always goes
-// through the public IPFS gateway. Governance scripts use the same bucket under
-// the `dns-governance/` prefix; the press uses `press/`.
-const FILEBASE_BUCKET = 'membership_card_protocol';
-
-export interface IpfsClient {
-  pinToIPFS(content: Uint8Array): Promise<string>;
-  fetchFromIPFS(cid: string): Promise<Uint8Array>;
-}
-
-export function createIpfsClient(config: PressConfig): IpfsClient {
+export function createFilebaseProvider(config: PressConfig): IpfsPinningProvider {
   const s3 = new S3Client({
-    endpoint: FILEBASE_ENDPOINT,
-    region: FILEBASE_REGION,
+    endpoint: config.FILEBASE_ENDPOINT,
+    region: config.FILEBASE_REGION,
     credentials: {
       accessKeyId: config.FILEBASE_KEY,
       secretAccessKey: config.FILEBASE_SECRET,
@@ -57,7 +45,7 @@ export function createIpfsClient(config: PressConfig): IpfsClient {
 
       let cid: string;
       try {
-        cid = await uploadAndCaptureCid(s3, FILEBASE_BUCKET, key, content);
+        cid = await uploadAndCaptureCid(s3, config.FILEBASE_BUCKET, key, content);
       } catch (err) {
         throw Object.assign(
           new Error(`Filebase upload failed: ${String(err)}`),
@@ -91,17 +79,28 @@ export function createIpfsClient(config: PressConfig): IpfsClient {
     async fetchFromIPFS(cid: string): Promise<Uint8Array> {
       return fetchByCid(config.FILEBASE_GATEWAY_URL, cid);
     },
+
+    /**
+     * Verify Filebase credentials and bucket access. A HeadObject on a
+     * non-existent key: 404 means auth worked; any other error is a problem.
+     */
+    async checkHealth(): Promise<void> {
+      try {
+        await s3.send(
+          new HeadObjectCommand({ Bucket: config.FILEBASE_BUCKET, Key: '__health_check__' })
+        );
+      } catch (err) {
+        const errName = (err as { name?: string }).name;
+        // 404 (NotFound) is fine — it means we reached Filebase and authenticated.
+        if (errName === 'NotFound' || errName === 'NoSuchKey') return;
+        throw new Error(
+          `Filebase health check failed for bucket "${config.FILEBASE_BUCKET}": ${String(err)}`
+        );
+      }
+    },
   };
 }
 
-/**
- * Upload `content` to Filebase and return the IPFS CID.
- *
- * Filebase returns the CID in the `x-amz-meta-cid` response header on
- * PutObject. We capture it via an AWS SDK v3 middleware. If the header is
- * absent (shouldn't happen with Filebase, but defensive), we fall back to
- * a HeadObject call which returns it in object metadata.
- */
 /**
  * Upload content and retrieve the Filebase-assigned IPFS CID via HeadObject metadata.
  * Two round trips (PUT + HEAD) is reliable and avoids AWS SDK middleware typing issues.
@@ -148,34 +147,4 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
 async function sha256Hex(data: Uint8Array): Promise<string> {
   const hash = await crypto.subtle.digest('SHA-256', data as unknown as BufferSource);
   return Buffer.from(hash).toString('hex');
-}
-
-/**
- * Verify Filebase credentials and bucket access at startup.
- * Called during startup before the press opens its HTTP listener.
- */
-export async function checkFilebaseHealth(config: PressConfig): Promise<void> {
-  const s3 = new S3Client({
-    endpoint: FILEBASE_ENDPOINT,
-    region: FILEBASE_REGION,
-    credentials: {
-      accessKeyId: config.FILEBASE_KEY,
-      secretAccessKey: config.FILEBASE_SECRET,
-    },
-    forcePathStyle: true,
-  });
-
-  // HeadObject on a non-existent key: 404 means auth worked; any other error is a problem.
-  try {
-    await s3.send(
-      new HeadObjectCommand({ Bucket: FILEBASE_BUCKET, Key: '__health_check__' })
-    );
-  } catch (err) {
-    const errName = (err as { name?: string }).name;
-    // 404 (NotFound) is fine — it means we reached Filebase and authenticated.
-    if (errName === 'NotFound' || errName === 'NoSuchKey') return;
-    throw new Error(
-      `Filebase health check failed for bucket "${FILEBASE_BUCKET}": ${String(err)}`
-    );
-  }
 }

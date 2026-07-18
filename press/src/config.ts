@@ -30,9 +30,21 @@ export interface PressConfig {
   PRESS_OHTTP_PRIVATE_KEY: Uint8Array;
   ARBITRUM_RPC_URL: string;
   REGISTRY_CONTRACT_ADDRESS: string;
+  /**
+   * Which IpfsPinningProvider implementation to construct (src/ipfs/index.ts).
+   * Defaults to 'filebase' — the production pinning vendor — so existing
+   * deployments need no env changes. 'kubo' talks to a local Kubo node's
+   * HTTP API directly (integration testing); 'mock' is in-memory only.
+   */
+  IPFS_PROVIDER: 'filebase' | 'kubo' | 'mock';
   FILEBASE_KEY: string;
   FILEBASE_SECRET: string;
   FILEBASE_GATEWAY_URL: string;
+  FILEBASE_ENDPOINT: string;
+  FILEBASE_REGION: string;
+  FILEBASE_BUCKET: string;
+  KUBO_API_URL: string;
+  KUBO_GATEWAY_URL: string;
   EXTERNAL_KV_URL: string;
   PORT: number;
   LOG_LEVEL: 'debug' | 'info' | 'warn' | 'error';
@@ -86,6 +98,14 @@ function validateLogLevel(raw: string): 'debug' | 'info' | 'warn' | 'error' {
   process.exit(1);
 }
 
+function validateIpfsProvider(raw: string): 'filebase' | 'kubo' | 'mock' {
+  if (raw === 'filebase' || raw === 'kubo' || raw === 'mock') return raw;
+  console.error(
+    `Press startup error: IPFS_PROVIDER must be one of filebase, kubo, mock (got "${raw}").`
+  );
+  process.exit(1);
+}
+
 export function loadConfig(): PressConfig {
   const PRESS_CARD_CID = requireEnv('PRESS_CARD_CID');
   const PRESS_POLICY_CIDS_RAW = requireEnv('PRESS_POLICY_CIDS');
@@ -124,13 +144,22 @@ export function loadConfig(): PressConfig {
 
   const ARBITRUM_RPC_URL = requireEnv('ARBITRUM_RPC_URL');
   const REGISTRY_CONTRACT_ADDRESS = requireEnv('REGISTRY_CONTRACT_ADDRESS');
-  const FILEBASE_KEY = requireEnv('FILEBASE_KEY');
-  const FILEBASE_SECRET = requireEnv('FILEBASE_SECRET');
-  // Bucket is hardcoded to 'membership_card_protocol' in ipfs/client.ts.
-  const FILEBASE_GATEWAY_URL = optionalEnv(
-    'FILEBASE_GATEWAY_URL',
-    'https://ipfs.filebase.io'
-  );
+
+  const IPFS_PROVIDER = validateIpfsProvider(optionalEnv('IPFS_PROVIDER', 'filebase'));
+
+  // Filebase vars are only required when they're actually the active
+  // provider — 'kubo'/'mock' environments (e.g. integration_tests) don't
+  // need Filebase credentials at all.
+  const FILEBASE_KEY = IPFS_PROVIDER === 'filebase' ? requireEnv('FILEBASE_KEY') : optionalEnv('FILEBASE_KEY', '');
+  const FILEBASE_SECRET = IPFS_PROVIDER === 'filebase' ? requireEnv('FILEBASE_SECRET') : optionalEnv('FILEBASE_SECRET', '');
+  const FILEBASE_GATEWAY_URL = optionalEnv('FILEBASE_GATEWAY_URL', 'https://ipfs.filebase.io');
+  const FILEBASE_ENDPOINT = optionalEnv('FILEBASE_ENDPOINT', 'https://s3.filebase.com');
+  const FILEBASE_REGION = optionalEnv('FILEBASE_REGION', 'us-east-1');
+  const FILEBASE_BUCKET = optionalEnv('FILEBASE_BUCKET', 'membership_card_protocol');
+
+  const KUBO_API_URL = IPFS_PROVIDER === 'kubo' ? requireEnv('KUBO_API_URL') : optionalEnv('KUBO_API_URL', '');
+  const KUBO_GATEWAY_URL = IPFS_PROVIDER === 'kubo' ? requireEnv('KUBO_GATEWAY_URL') : optionalEnv('KUBO_GATEWAY_URL', '');
+
   const EXTERNAL_KV_URL = requireEnv('EXTERNAL_KV_URL');
 
   const PORT = parseInt(optionalEnv('PORT', '3000'), 10);
@@ -150,9 +179,15 @@ export function loadConfig(): PressConfig {
     PRESS_OHTTP_PRIVATE_KEY,
     ARBITRUM_RPC_URL,
     REGISTRY_CONTRACT_ADDRESS,
+    IPFS_PROVIDER,
     FILEBASE_KEY,
     FILEBASE_SECRET,
     FILEBASE_GATEWAY_URL,
+    FILEBASE_ENDPOINT,
+    FILEBASE_REGION,
+    FILEBASE_BUCKET,
+    KUBO_API_URL,
+    KUBO_GATEWAY_URL,
     EXTERNAL_KV_URL,
     PORT,
     LOG_LEVEL,
