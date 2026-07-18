@@ -1,0 +1,239 @@
+# Integration environment for the card protocol. See ./README.md and
+# plans/integration-testing-implementation-plan.md for the phased build-out
+# — services are added phase by phase; this file is not yet the full stack.
+#
+# Services that need files from outside their own env/ directory (e.g.
+# deploy-contracts needs contracts/) pull them in via a named
+# `additional_contexts` entry rather than a repo-root build context, so
+# these builds aren't affected by the root .dockerignore (which is scoped
+# for the unrelated Synapse build — see wallet-service/docker-compose.yml).
+#
+# Chain component: the stack points at the existing Arbitrum Sepolia
+# deployment (contracts/deployments/sepolia.json) rather than a local
+# devnode — see reports/phase-1-environment-notes.md for why. Services that
+# need chain access (press, wallet-service, suites, in later phases) should
+# read ARBITRUM_RPC_URL and the three contract addresses from that file /
+# contracts/.env, not from a local-only source.
+#
+# The local-devnode path (nitro-devnode + deploy-contracts, below) is kept
+# working but not part of the default stack — deployment onto it works
+# (confirmed end-to-end), but calling deployed contracts on it doesn't yet
+# (see the environment note). Bring it up explicitly with
+# `docker compose --profile local-chain up` to pick that investigation back
+# up later.
+
+services:
+  # ── Phase 1.3: IPFS ─────────────────────────────────────────────────────────
+  # Single local Kubo node (per strategic plan §Open Questions 5 — replication
+  # out of scope). Press talks to it directly via its native `kubo`
+  # IpfsPinningProvider (press/src/ipfs/kubo.ts) — no S3/MinIO shim needed,
+  # since that provider was built specifically to avoid faking Filebase's
+  # S3-with-CID-metadata behavior (see the IPFS-provider-abstraction commit).
+  # This supersedes the strategic plan's original §Open Questions 2 answer,
+  # which assumed a MinIO-backed S3 shim for press before that abstraction
+  # existed.
+  ipfs:
+    image: ipfs/kubo:latest
+    ports:
+      - "5001:5001" # HTTP API — press's KUBO_API_URL
+      - "8080:8080" # gateway — press's KUBO_GATEWAY_URL
+    volumes:
+      - ipfs-data:/data/ipfs
+      # Kubo's official image runs any *.sh script here (after `ipfs init`,
+      # before the daemon starts) — see env/ipfs/001-gateway-config.sh.
+      - ./env/ipfs:/container-init.d:ro
+    healthcheck:
+      # No curl/wget-with-POST in the kubo image; the ipfs CLI itself is the
+      # simplest way to confirm the daemon is actually serving requests.
+      test: ["CMD", "ipfs", "id"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+
+  # ── Phase 1.4: relay + redis ─────────────────────────────────────────────────
+  # Adapted from relay/docker-compose.yml. env/relay/apps.json is a minimal
+  # valid app registry (empty `apps` array) — enough for the relay to start;
+  # suites that need to exercise push-notification routing will add a fake
+  # app entry when they're authored (Wave 2).
+  relay:
+    build: ../relay
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./env/relay/apps.json:/app/config/apps.json:ro
+      - relay-db:/data
+    environment:
+      REDIS_URL: redis://redis:6379
+      APP_REGISTRY_PATH: /app/config/apps.json
+      DB_PATH: /data/registry.db
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --save "" --appendonly no --maxmemory-policy noeviction
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── Phase 1.5: Synapse + policy module ──────────────────────────────────────
+  # Build context is the repo root, not wallet-service/ — the Dockerfile
+  # pip-installs matrix-policy-module *and* its file: dependency
+  # membership_card_verifier/packages/verifier-py, a sibling directory
+  # outside wallet-service/ entirely (see wallet-service/matrix/Dockerfile's
+  # own comment). Root .dockerignore excludes contracts/, which this build
+  # doesn't need, so unlike deploy-contracts this one doesn't need a named
+  # additional context.
+  synapse-postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: synapse
+      POSTGRES_PASSWORD: synapse
+      POSTGRES_DB: synapse
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - synapse-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U synapse"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  # One-shot: generates Synapse's signing key + registration shared secret +
+  # the policy module's membership-registry key, then renders
+  # homeserver.yaml from env/synapse/homeserver.yaml.template. See
+  # env/synapse/init.sh. Idempotent against the shared synapse-data volume.
+  synapse-init:
+    image: integration_tests-synapse
+    build:
+      context: ..
+      dockerfile: wallet-service/matrix/Dockerfile
+    entrypoint: ["bash", "/env/init.sh"]
+    environment:
+      MATRIX_SERVER_NAME: matrix.integration-tests.local
+      # Chain component: Sepolia (see docker-compose.yml's top-of-file note
+      # and reports/phase-1-environment-notes.md) — logic_contract from
+      # contracts/deployments/sepolia.json (registry_contract_address is
+      # the upgradeable logic contract, which emits the events the policy
+      # module/watcher subscribe to — specs/object_specs/
+      # matrix_synapse_module.md).
+      ARBITRUM_RPC_URL: https://sepolia-rollup.arbitrum.io/rpc
+      # Required by matrix_policy_module's config parsing even though the
+      # watcher that would actually use it isn't constructed yet
+      # (PolicyModule.__init__ doesn't start it — see the comment below).
+      # Arbitrum's own public RPC has no websocket support; PublicNode's
+      # free, unauthenticated endpoint is used here as a placeholder.
+      ARBITRUM_RPC_WS_URL: wss://arbitrum-sepolia-rpc.publicnode.com
+      # web3.py's contract() rejects non-EIP-55-checksummed addresses —
+      # deployments/sepolia.json's lowercase logic_contract address needed
+      # `cast to-checksum` applied.
+      REGISTRY_CONTRACT_ADDRESS: "0xc9D2439C1cc3575DC4f57b9CAA1C8130c4B60fc9"
+      IPFS_GATEWAY_URL: http://ipfs:8080
+      JOIN_ATTESTATION_FRESHNESS_SECONDS: "300"
+      WATCHER_BACKSTOP_INTERVAL_SECONDS: "60"
+      MATRIX_MEMBERSHIP_REGISTRY_PATH: /data/membership_registry/registry.json
+      MATRIX_MEMBERSHIP_REGISTRY_KEY_PATH: /data/secrets/membership-registry.key
+      # Inert for now: PolicyModule.__init__ doesn't construct/start the
+      # Watcher yet (same gap wallet-service/docker-compose.yml notes), so
+      # nothing resolves this as a real account until that lands.
+      MATRIX_ENFORCEMENT_USER_ID: "@enforcement:matrix.integration-tests.local"
+    volumes:
+      - synapse-data:/data
+      - ./env/synapse/homeserver.yaml.template:/template/homeserver.yaml.template:ro
+      - ./env/synapse/init.sh:/env/init.sh:ro
+
+  synapse:
+    image: integration_tests-synapse
+    build:
+      context: ..
+      dockerfile: wallet-service/matrix/Dockerfile
+    volumes:
+      - synapse-data:/data
+    command: ["run", "--config-path=/data/homeserver.yaml", "--config-path=/data/secrets/registration-shared-secret.yaml"]
+    ports:
+      - "8008:8008"
+    # Generous start_period: cold module-import time (web3's own import
+    # chain) can exceed the default healthcheck start_period while still
+    # legitimately starting — same finding as wallet-service/docker-
+    # compose.yml's synapse service.
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8008/_matrix/client/versions')\" || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 90
+      start_period: 5m
+    depends_on:
+      synapse-postgres:
+        condition: service_healthy
+      synapse-init:
+        condition: service_completed_successfully
+
+  # ── Phase 1.2 (deferred — see reports/phase-1-environment-notes.md) ────────
+  nitro-devnode:
+    profiles: ["local-chain"]
+    # v3.7.1 (OffchainLabs/nitro-devnode's own pinned default) genesis-boots
+    # at ArbOS 40 and refuses to run past ArbOS 41 — too old to support
+    # multi-fragment Stylus contract activation at all (see deploy.sh's
+    # local-network bootstrap comment). v3.11.2 genesis-boots at ArbOS 59
+    # and supports upgrading to (at least) ArbOS 61, which does support it.
+    image: offchainlabs/nitro-node:v3.11.2-3599aca
+    command:
+      - --dev
+      - --http.addr=0.0.0.0
+      - --http.port=8547
+      - --http.api=net,web3,eth,debug
+      # go-ethereum's RPC server rejects requests whose Host header isn't in
+      # its vhosts allowlist (defaults to localhost only) — other compose
+      # services reach this container via the service name `nitro-devnode`,
+      # not localhost, so that name (and the host-exposed alias) must be
+      # explicitly allowed.
+      - --http.vhosts=localhost,nitro-devnode
+      # Arbitrum's default max contract code size is 24KB (EIP-170,
+      # inherited for L1 compatibility) — logic-contract's compiled WASM is
+      # ~56KB, so cargo-stylus's activation check reverts against the
+      # default. 98304 (96KB) is the documented max this can be raised to.
+      # Init-time-only (baked into genesis), which is fine here since --dev
+      # resets chain state on every container restart anyway.
+      - --init.dev-max-code-size=98304
+    ports:
+      - "8547:8547"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl -s -X POST -H 'Content-Type: application/json'
+          --data '{"jsonrpc":"2.0","method":"net_version","params":[],"id":1}'
+          http://127.0.0.1:8547 | grep -q result
+      interval: 2s
+      timeout: 2s
+      retries: 60
+
+  deploy-contracts:
+    profiles: ["local-chain"]
+    build:
+      context: env/deploy-contracts
+      dockerfile: Dockerfile
+      additional_contexts:
+        contracts-src: ../contracts
+    environment:
+      NITRO_DEV_RPC: http://nitro-devnode:8547
+    volumes:
+      - contracts-deployments:/repo/contracts/deployments
+    depends_on:
+      nitro-devnode:
+        condition: service_healthy
+
+volumes:
+  contracts-deployments:
+  ipfs-data:
+  relay-db:
+  synapse-pg-data:
+  synapse-data:

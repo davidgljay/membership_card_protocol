@@ -1,0 +1,6 @@
+# Applies to any build using contracts/ as a (named or default) build
+# context — currently integration_tests/env/deploy-contracts's
+# `contracts-src` additional context. Keeps Rust build artifacts out of the
+# context sent to the daemon.
+target/
+**/target/

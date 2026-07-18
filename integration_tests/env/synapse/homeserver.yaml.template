@@ -1,0 +1,80 @@
+# Synapse homeserver configuration for integration_tests.
+#
+# Deliberately NOT wallet-service/matrix/homeserver.yaml.template verbatim:
+# that template disables registration and requires an Application Service
+# registration file (wallet-service's shadow-account bridge, not part of the
+# stack until Phase 1.7) — Synapse refuses to start if
+# app_service_config_files points at a missing file. This variant enables
+# registration via shared secret instead, so Phase 1.5 can stand up and
+# exercise Synapse + the policy module on their own. Once wallet-service
+# joins the stack, this can gain app_service_config_files back.
+#
+# Rendered by env/synapse/render-config.sh (${VAR} substitution, since
+# Synapse's docker image has no such templating natively).
+
+server_name: "${MATRIX_SERVER_NAME}"
+pid_file: /data/synapse.pid
+
+listeners:
+  - port: 8008
+    bind_addresses:
+      - '0.0.0.0'
+    type: http
+    x_forwarded: true
+    resources:
+      - names:
+          - client
+          - federation
+        compress: false
+
+database:
+  name: psycopg2
+  args:
+    user: synapse
+    password: synapse
+    database: synapse
+    host: synapse-postgres
+    port: 5432
+    cp_min: 5
+    cp_max: 10
+
+media_store_path: /data/media
+signing_key_path: /data/secrets/homeserver.signing.key
+
+federation_domain_whitelist: []
+
+# Integration-tests only: open (shared-secret) registration, so suites can
+# create test users without a wallet-service Application Service bridge.
+# registration_shared_secret has no `_path` config variant (confirmed
+# against Synapse's own sample config, same finding wallet-service's setup
+# hit) — it's supplied as a literal value via a second --config-path file,
+# /data/secrets/registration-shared-secret.yaml (see docker-compose.yml's
+# synapse command).
+enable_registration: true
+# Integration-tests only: no email/captcha/token verification available in
+# this environment, and this is a local, non-federating test homeserver —
+# Synapse otherwise refuses to start with open registration at all.
+enable_registration_without_verification: true
+
+report_stats: false
+
+trusted_key_servers:
+  - server_name: matrix.org
+
+# Matrix Policy Module for card-gated room authorization
+# (specs/object_specs/matrix_synapse_module.md).
+modules:
+  - module: "matrix_policy_module.module.PolicyModule"
+    config:
+      arbitrum_rpc_url: "${ARBITRUM_RPC_URL}"
+      arbitrum_rpc_ws_url: "${ARBITRUM_RPC_WS_URL}"
+      registry_contract_address: "${REGISTRY_CONTRACT_ADDRESS}"
+      ipfs_gateway_url: "${IPFS_GATEWAY_URL}"
+      matrix_server_name: "${MATRIX_SERVER_NAME}"
+      join_attestation_freshness_seconds: ${JOIN_ATTESTATION_FRESHNESS_SECONDS}
+      watcher_backstop_interval_seconds: ${WATCHER_BACKSTOP_INTERVAL_SECONDS}
+      membership_registry_path: "${MATRIX_MEMBERSHIP_REGISTRY_PATH}"
+      membership_registry_key_path: "${MATRIX_MEMBERSHIP_REGISTRY_KEY_PATH}"
+      enforcement_matrix_user_id: "${MATRIX_ENFORCEMENT_USER_ID}"
+
+allow_unknown_config_for_modules: true

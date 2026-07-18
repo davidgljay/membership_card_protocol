@@ -38,6 +38,18 @@ CONTRACTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEPLOYMENTS_DIR="$CONTRACTS_DIR/deployments"
 
 case "$NETWORK" in
+  local)
+    # Arbitrum Nitro dev node (offchainlabs/nitro-node --dev), as run by the
+    # integration_tests stack (see integration_tests/docker-compose.yml and
+    # env/deploy-contracts/). --dev mode resets chain state on every
+    # container restart, so this network case is only ever used against a
+    # fresh devnode.
+    RPC_URL="${NITRO_DEV_RPC:-http://nitro-devnode:8547}"
+    # Well-known pre-funded devnode account from OffchainLabs/nitro-devnode's
+    # run-dev-node.sh — not a secret, deliberately public/shared across every
+    # nitro --dev instance.
+    PRIVATE_KEY="${PRIVATE_KEY:-0xb6b15c8cb491557369f3c7d2c287b053eb229daa9c22138887752191c9520659}"
+    ;;
   sepolia)
     RPC_URL="${ARBITRUM_SEPOLIA_RPC:-}"
     if [[ -z "$RPC_URL" ]]; then
@@ -55,7 +67,7 @@ case "$NETWORK" in
     read -r
     ;;
   *)
-    echo "ERROR: Unknown network '$NETWORK'. Use 'sepolia' or 'mainnet'."
+    echo "ERROR: Unknown network '$NETWORK'. Use 'local', 'sepolia', or 'mainnet'."
     exit 1
     ;;
 esac
@@ -71,6 +83,74 @@ echo "=== Card Protocol Registry Deployment ==="
 echo "Network: $NETWORK"
 echo "RPC:     $RPC_URL"
 echo ""
+
+# ─── Local devnode bootstrap ───────────────────────────────────────────────────
+# A fresh `nitro-node --dev` container starts with no chain owner, a nonzero
+# L1 data fee component in its gas estimates (throws off cargo-stylus's gas
+# estimation), no registered WASM cache manager, an ArbOS version too old to
+# support multi-fragment Stylus contracts at all, and (separately) a max
+# decompressed-WASM size too small for logic-contract's ~210KB uncompressed
+# WASM. All five must be fixed before any of the three contracts can be
+# checked/deployed; safe to rerun (each step is idempotent or resets to the
+# same value).
+#
+# The ArbOS version gate was the hard one to find: logic-contract (56KB
+# compressed, split into 3 calldata fragments — the other two contracts are
+# single-fragment) reverted at activation with a bare
+# "execution reverted, data: 0x" no matter what ArbOwner size/cache-manager
+# params were tuned. Root cause, found by reading cargo-stylus's actual
+# source (stylus-tools' core/deployment/mod.rs): multi-fragment deployment
+# calls `ArbOwnerPublic.getMaxStylusContractFragments()` first, and "failing
+# this call likely means the chain does not support fragments (old ArbOS)"
+# per that code's own comment — confirmed by calling it directly here and
+# getting the same bare revert. It only starts working once the chain is
+# running ArbOS 61+ (nitro-node v3.7.1's default ArbOS 40 caps out at
+# ArbOS 41 and can't even be upgraded that far; v3.11.2's default ArbOS 59
+# can be upgraded to 61 cleanly). Real Arbitrum Sepolia is far newer than
+# either, which is why logic-contract deployed there fine (deployments/
+# sepolia.json) while every local devnode attempt failed until this fix.
+if [[ "$NETWORK" == "local" ]]; then
+  echo "[0/7] Bootstrapping local devnode (chain ownership, L1 price, ArbOS version, WASM cache manager, WASM max size)..."
+  cast send 0x00000000000000000000000000000000000000FF "becomeChainOwner()" \
+    --private-key "$PRIV_KEY" --rpc-url "$RPC_URL" >/dev/null
+  cast send 0x0000000000000000000000000000000000000070 "setL1PricePerUnit(uint256)" 0x0 \
+    --private-key "$PRIV_KEY" --rpc-url "$RPC_URL" >/dev/null
+
+  # Upgrade ArbOS to 61 (the highest version this nitro-node build, v3.11.2,
+  # supports; anything from 61 up to that ceiling works — see comment
+  # above). timestamp=0 means
+  # "apply at the next block"; the follow-up becomeChainOwner-address no-op
+  # send is what actually advances a block so the upgrade takes effect.
+  cast send 0x0000000000000000000000000000000000000070 "scheduleArbOSUpgrade(uint64,uint64)" 61 0 \
+    --private-key "$PRIV_KEY" --rpc-url "$RPC_URL" >/dev/null
+  cast send "$(cast wallet address --private-key "$PRIV_KEY")" --value 0 \
+    --private-key "$PRIV_KEY" --rpc-url "$RPC_URL" >/dev/null
+
+  # Cache Manager bytecode + registration, copied verbatim from
+  # OffchainLabs/nitro-devnode's run-dev-node.sh (a fixed init-code blob
+  # deploying the CacheManager contract used across all nitro-devnode
+  # instances, not project-specific).
+  CACHE_MANAGER_DEPLOY_OUTPUT=$(cast send --private-key "$PRIV_KEY" \
+    --rpc-url "$RPC_URL" --json \
+    --create 0x60a06040523060805234801561001457600080fd5b50608051611d1c61003060003960006105260152611d1c6000f3fe)
+  CACHE_MANAGER_ADDRESS=$(echo "$CACHE_MANAGER_DEPLOY_OUTPUT" | grep -o '"contractAddress":"[^"]*"' | cut -d'"' -f4)
+  if [[ -z "$CACHE_MANAGER_ADDRESS" ]]; then
+    echo "ERROR: failed to deploy WASM cache manager. Output:" >&2
+    echo "$CACHE_MANAGER_DEPLOY_OUTPUT" >&2
+    exit 1
+  fi
+  cast send --private-key "$PRIV_KEY" --rpc-url "$RPC_URL" \
+    0x0000000000000000000000000000000000000070 \
+    "addWasmCacheManager(address)" "$CACHE_MANAGER_ADDRESS" >/dev/null
+
+  # Default max decompressed-WASM size is 128KB; logic-contract's WASM is
+  # ~210KB uncompressed.
+  cast send --private-key "$PRIV_KEY" --rpc-url "$RPC_URL" \
+    0x0000000000000000000000000000000000000070 \
+    "setWasmMaxSize(uint32)" 500000 >/dev/null
+
+  echo "  Devnode bootstrapped (cache manager at $CACHE_MANAGER_ADDRESS)."
+fi
 
 # ─── Helper: extract gas cost from a transaction receipt ─────────────────────
 # Prints "gas_used:gas_price_wei:cost_eth" for a given tx hash.
