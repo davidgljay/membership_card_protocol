@@ -25,12 +25,21 @@ design (matrix_synapse_module.md's package layout section says as much).
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Optional
 
 import httpx
-from membership_card_verifier import CardEntry, EasAttestation, LogUpdate, PressAuthEntry, SubCardEntry
+from membership_card_verifier import (
+    CardChainEvent,
+    CardEntry,
+    EasAttestation,
+    LogUpdate,
+    PressAuthEntry,
+    SubCardEntry,
+)
 from web3 import AsyncWeb3
 from web3.providers.persistent import WebSocketProvider
 
@@ -97,6 +106,19 @@ _CARD_HEAD_UPDATED_ABI: dict[str, Any] = {
     ],
 }
 
+_CARD_REGISTERED_ABI: dict[str, Any] = {
+    "anonymous": False,
+    "type": "event",
+    "name": "CardRegistered",
+    "inputs": [
+        {"name": "card_address", "type": "bytes32", "indexed": True},
+        {"name": "policy_address", "type": "bytes32", "indexed": False},
+        {"name": "press_address", "type": "bytes32", "indexed": False},
+        {"name": "initial_log_cid", "type": "bytes", "indexed": False},
+        {"name": "timestamp", "type": "uint64", "indexed": False},
+    ],
+}
+
 _LOGIC_UPGRADE_CONFIRMED_ABI: dict[str, Any] = {
     "anonymous": False,
     "type": "event",
@@ -114,6 +136,23 @@ def _cid_bytes_to_string(raw: bytes) -> str:
     if not raw:
         return ""
     return raw.decode("utf-8")
+
+
+_RANGE_LIMIT_ERROR_PATTERNS = (
+    "block range",
+    "range limit",
+    "query returned more than",
+    "exceeds range",
+    "exceed maximum",
+    "too many results",
+    "limited to a",
+    "-32005",  # common JSON-RPC "limit exceeded" error code, sometimes surfaced in the message
+)
+
+
+def _is_range_limit_error(e: Exception) -> bool:
+    message = str(e).lower()
+    return any(p in message for p in _RANGE_LIMIT_ERROR_PATTERNS)
 
 
 class Web3RpcProvider:
@@ -225,6 +264,76 @@ class Web3RpcProvider:
                 cid = doc.get("prev_log_root", "")
                 depth += 1
         return entries
+
+    async def get_card_event_log(self, card_address: str) -> list[CardChainEvent]:
+        """Chunked, retrying CardRegistered/CardHeadUpdated replay for one card
+        address, oldest-first — see plans/g3-event-log-spec.md §3 for the
+        chunking/retry algorithm. Always scans from block 0 (no per-card
+        starting-block cache — that's a caller concern per the spec; this
+        provider has no persistence layer to keep one in)."""
+        registered_contract = self._w3.eth.contract(address=self._contract_address, abi=[_CARD_REGISTERED_ABI])
+        updated_contract = self._w3.eth.contract(address=self._contract_address, abi=[_CARD_HEAD_UPDATED_ABI])
+
+        latest_block = await self._w3.eth.block_number
+
+        min_window = 1
+        window_size = 2000
+        from_block = 0
+
+        registered_logs: list[Any] = []
+        updated_logs: list[Any] = []
+
+        while from_block <= latest_block:
+            to_block = min(from_block + window_size - 1, latest_block)
+            try:
+                registered, updated = await asyncio.gather(
+                    registered_contract.events.CardRegistered().get_logs(
+                        from_block=from_block, to_block=to_block, argument_filters={"card_address": card_address}
+                    ),
+                    updated_contract.events.CardHeadUpdated().get_logs(
+                        from_block=from_block, to_block=to_block, argument_filters={"card_address": card_address}
+                    ),
+                )
+                registered_logs.extend(registered)
+                updated_logs.extend(updated)
+                from_block = to_block + 1
+            except Exception as e:
+                if _is_range_limit_error(e) and window_size > min_window:
+                    # Window forced smaller by a range-limit rejection — retry
+                    # the same from_block with the smaller window. The window
+                    # is not grown back afterward even if later chunks
+                    # succeed; see this method's doc comment / the spec for why.
+                    window_size = max(min_window, window_size // 2)
+                    continue
+                raise
+
+        def _sort_key(log: Any) -> tuple[int, int]:
+            return (log["blockNumber"], log["logIndex"])
+
+        registered_logs.sort(key=_sort_key)
+        updated_logs.sort(key=_sort_key)
+
+        def _timestamp_iso(raw: int) -> str:
+            return datetime.fromtimestamp(raw, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+        genesis = (
+            [
+                CardChainEvent(
+                    cid=_cid_bytes_to_string(registered_logs[0]["args"]["initial_log_cid"]),
+                    timestamp=_timestamp_iso(registered_logs[0]["args"]["timestamp"]),
+                )
+            ]
+            if registered_logs
+            else []
+        )
+        updates = [
+            CardChainEvent(
+                cid=_cid_bytes_to_string(log["args"]["new_log_cid"]),
+                timestamp=_timestamp_iso(log["args"]["timestamp"]),
+            )
+            for log in updated_logs
+        ]
+        return genesis + updates
 
     async def get_eas_annotations(
         self, card_address: str, annotator_addresses: list[str]

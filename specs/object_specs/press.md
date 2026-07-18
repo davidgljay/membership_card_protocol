@@ -265,7 +265,7 @@ const pressRpcProvider: RpcProvider = {
   getPressAuthorization: (policyAddress, pressAddress) =>
     registryContract.getPressAuthorization(policyAddress, pressAddress),
   getSubCardEntry: (address) => registryContract.getSubCardEntry(address),
-  getLogEntries: (cardAddress) => registryContract.getLogEntries(cardAddress),
+  getCardEventLog: (cardAddress) => registryContract.getCardEventLog(cardAddress),
   getEasAnnotations: () => [],  // press does not perform annotation lookups
 };
 
@@ -937,7 +937,7 @@ Press-side error codes (not on-chain reverts). Returned in the HTTP response bod
 | ~~**OQ-A4**~~ | Serialization | **Closed.** `ARCHITECTURE.md` ADR-010 is Accepted — RFC 8785 (JCS) adopted. |
 | **OQ-B1** | KV backend | The external KV store driver is operator-selected (Redis, Upstash, Cloudflare KV, DynamoDB, etc.) via Nitro's `useStorage()` API. The press spec is storage-driver-agnostic; the operator's Nitro configuration specifies the driver. No specific backend is prescribed here. |
 | **OQ-B2** | Reconciliation catch-up | The CID reconciliation job (§3.5) bootstraps by setting `press:reconcile:last_block` to the registry contract's deploy block. For large deployments with many historical cards, the initial catch-up may require multiple runs or a higher-frequency schedule until caught up. The appropriate schedule is operator-configurable. |
-| **OQ-B3** | Verifier RpcProvider for log entries | The verifier's `RpcProvider.getLogEntries()` must return the full ordered log for a card address. The current registry contract stores only the head CID (not the full log); the press's RPC provider must walk the CID-linked chain from the head to reconstruct the ordered log. This is the same log-walking logic the press previously implemented in `checkRevocationStatus`. It now lives exclusively in the RPC provider implementation, not in the press itself. |
+| **OQ-B3** | Verifier RpcProvider for log entries | The verifier's `RpcProvider.getCardEventLog(cardAddress)` must return the full ordered log (as `CardChainEvent[]`, where each event contains `{cid, timestamp}`) for a card address. The registry contract stores only the head CID (not the full log); the press's RPC provider reconstructs the ordered log by replaying on-chain CardRegistered and CardHeadUpdated events from the registry. This log-reconstruction logic now lives exclusively in the RPC provider implementation, not in the press itself. |
 
 ---
 

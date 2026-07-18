@@ -105,3 +105,5 @@ export class EthersRpcProvider implements RpcProvider {
 
 export { getNetworkConfig } from "./networkConfig.js";
 export type { NetworkConfig, NetworkEnv } from "./networkConfig.js";
+export { getCardEventLogChunked } from "./chunkedEventLog.js";
+export type { ChunkedEventLogOptions } from "./chunkedEventLog.js";
