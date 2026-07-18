@@ -21,6 +21,8 @@ from membership_card_verifier import ChainLink, RevocationStatus
 import matrix_policy_module.module as module_mod
 from matrix_policy_module.attestation import AttestationResult
 from matrix_policy_module.module import _JOIN_ATTESTATION_CONTENT_KEY, PolicyModule
+from matrix_policy_module.rpc_provider import CardHeadEventSubscription
+from matrix_policy_module.watcher import ModuleApiForcePartClient
 
 # **Bug found 2026-07-16 (Step 20 live-stack integration test), fixed here
 # alongside module.py:** this fake previously defined `NOT_SPAM` and
@@ -41,6 +43,7 @@ from matrix_policy_module.module import _JOIN_ATTESTATION_CONTENT_KEY, PolicyMod
 class _FakeApi:
     def __init__(self) -> None:
         self.registered: dict = {}
+        self.background_processes: list = []
 
     def register_spam_checker_callbacks(self, **kwargs) -> None:
         self.registered.update(kwargs)
@@ -51,6 +54,15 @@ class _FakeApi:
         # since check_event_for_spam turns out never to be invoked for
         # joins at all. See module.py's module-level docstring.
         self.registered.update(kwargs)
+
+    def run_as_background_process(self, desc, func, *args, **kwargs) -> None:
+        # Real ModuleApi.run_as_background_process fires `func` off as a
+        # long-running background task (see plans/g4-watcher-wiring-spec.md
+        # §1) — the watcher's loops (run_subscription_loop/run_backstop_loop)
+        # never return, so this fake deliberately does NOT call `func`; it
+        # only records the call so tests can assert *that* construction
+        # wired the watcher up to start, without actually running it.
+        self.background_processes.append((desc, func))
 
 
 class _FakeRoomPolicyResolver:
@@ -121,6 +133,31 @@ def _make_module(tmp_path, room_policy_resolver=None) -> tuple[PolicyModule, _Fa
         room_policy_resolver=room_policy_resolver or _FakeRoomPolicyResolver(POLICY_ID),
     )
     return mod, api
+
+
+def test_policy_module_constructs_watcher_with_correct_config(tmp_path) -> None:
+    """Confirms __init__ constructs a Watcher wired to this module's own
+    config values, and starts both loops via ModuleApi.run_as_background_process
+    — mocking run_as_background_process itself (not re-testing Watcher's
+    internal loop logic, already covered in test_watcher.py). See
+    plans/g4-watcher-wiring-spec.md §4."""
+    mod, api = _make_module(tmp_path)
+
+    assert mod._watcher is not None
+    assert mod._watcher._backstop_interval_seconds == mod.config.watcher_backstop_interval_seconds
+    assert isinstance(mod._watcher._subscription, CardHeadEventSubscription)
+    assert mod._watcher._subscription._ws_url == mod.config.arbitrum_rpc_ws_url
+    assert mod._watcher._subscription._contract_address == mod.config.registry_contract_address
+    assert isinstance(mod._watcher._admin_client, ModuleApiForcePartClient)
+    assert mod._watcher._admin_client._enforcement_sender == mod.config.enforcement_matrix_user_id
+
+    # Both loops started via run_as_background_process, not called directly (would block forever).
+    descs = [c[0] for c in api.background_processes]
+    assert "card-protocol-watcher-subscription" in descs
+    assert "card-protocol-watcher-backstop" in descs
+    funcs = {desc: func for desc, func in api.background_processes}
+    assert funcs["card-protocol-watcher-subscription"] == mod._watcher.run_subscription_loop
+    assert funcs["card-protocol-watcher-backstop"] == mod._watcher.run_backstop_loop
 
 
 class _FakeEvent:
