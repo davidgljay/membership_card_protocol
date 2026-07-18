@@ -599,3 +599,90 @@ describe("policy_match", () => {
     expect(result.policy_match).toEqual({ matched: true });
   });
 });
+
+describe("verifyCard with pubkey", () => {
+  it("correct pubkey populates a real chain when returnChain is true", async () => {
+    const { rpc, ipfs, root, holder, parent, appCertRoot, POLICY_CID } = buildScenario();
+    const holderPubkeyB64url = Buffer.from(holder.publicKey).toString("base64url");
+
+    const verifier = new CardVerifier({
+      rpc,
+      ipfs,
+      trustedRoots: [root.address],
+      appCertificationRoot: appCertRoot.address,
+      returnChain: true,
+    });
+
+    // Call verifyCard with the holder's correct pubkey
+    const result = await verifier.verifyCard(holder.address, { pubkey: holderPubkeyB64url });
+
+    // Chain should be populated with the real walk (master then parent)
+    expect(result.chain).toBeDefined();
+    expect(result.chain).toHaveLength(2);
+
+    // First hop: master card (holder)
+    expect(result.chain![0]!.card_address).toBe(holder.address);
+    expect(result.chain![0]!.public_key).toBeDefined();
+    expect(typeof result.chain![0]!.public_key).toBe("string");
+    expect(result.chain![0]!.public_key.length).toBeGreaterThan(0);
+    expect(result.chain![0]!.card_content).toBeDefined();
+    expect(result.chain![0]!.card_content["policy_id"]).toBe(POLICY_CID);
+
+    // Second hop: parent card
+    expect(result.chain![1]!.card_address).toBe(parent.address);
+    expect(result.chain![1]!.public_key).toBeDefined();
+    expect(typeof result.chain![1]!.public_key).toBe("string");
+    expect(result.chain![1]!.card_content).toBeDefined();
+    expect(result.chain![1]!.card_content["policy_id"]).toBe(POLICY_CID);
+
+    // chain_reaches_trusted_root should be true (chain walks all the way to root)
+    expect(result.chain_reaches_trusted_root).toBe(true);
+  });
+
+  it("wrong pubkey (mismatched address) produces ADDRESS_BINDING_MISMATCH error and empty chain", async () => {
+    const { rpc, ipfs, root, holder, sub, appCertRoot } = buildScenario();
+    // Use a different card's pubkey (the sub-card's pubkey instead of holder's)
+    const wrongPubkeyB64url = Buffer.from(sub.publicKey).toString("base64url");
+
+    const verifier = new CardVerifier({
+      rpc,
+      ipfs,
+      trustedRoots: [root.address],
+      appCertificationRoot: appCertRoot.address,
+      returnChain: true,
+    });
+
+    // Call verifyCard with a mismatched pubkey
+    const result = await verifier.verifyCard(holder.address, { pubkey: wrongPubkeyB64url });
+
+    // Chain should remain empty
+    expect(result.chain).toBeDefined();
+    expect(result.chain).toHaveLength(0);
+
+    // errors should contain an ADDRESS_BINDING_MISMATCH entry with stage 3
+    expect(result.errors).toContainEqual(
+      expect.objectContaining({
+        stage: 3,
+        code: "ADDRESS_BINDING_MISMATCH",
+      })
+    );
+  });
+
+  it("verifyCard() without pubkey maintains no-pubkey behavior (returns empty chain)", async () => {
+    const { rpc, ipfs, root, appCertRoot, holder } = buildScenario();
+    const verifier = new CardVerifier({
+      rpc,
+      ipfs,
+      trustedRoots: [root.address],
+      appCertificationRoot: appCertRoot.address,
+      returnChain: true,
+    });
+
+    // Call verifyCard without pubkey (or with undefined pubkey)
+    const result = await verifier.verifyCard(holder.address);
+
+    // Chain should be empty (no pubkey available)
+    expect(result.chain).toBeDefined();
+    expect(result.chain).toHaveLength(0);
+  });
+});

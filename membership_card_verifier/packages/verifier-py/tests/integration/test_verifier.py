@@ -201,3 +201,179 @@ async def test_stage2_hard_rejection_propagates_skipped_to_stages_3_5():
     assert sig.was_valid_at_signing_time == "skipped"
     assert sig.is_currently_valid == "skipped"
     assert sig.policy_compliant == "skipped"
+
+
+# Test cases for verifyCard with pubkey (per spec §7)
+
+
+async def test_verify_card_with_correct_pubkey_populates_real_chain():
+    """Test case 1: correct pubkey populates a real chain when return_chain is true."""
+    from membership_card_verifier.types import VerifyCardOptions
+    from tests.integration._helpers import b64url
+
+    root = generate_keypair()
+    parent = generate_keypair()
+    holder = generate_keypair()
+    sub = generate_keypair()
+    app = generate_keypair()
+    app_cert_root = generate_keypair()
+    press = generate_keypair()
+
+    policy_doc = {"field_definitions": {}}
+    policy_bytes = json.dumps(policy_doc).encode("utf-8")
+    POLICY_CID = "QmPolicy"
+
+    parent_doc = make_card_doc(
+        parent.public_key,
+        root.secret_key,
+        parent.secret_key,
+        press.secret_key,
+        [b64url(root.public_key)],
+    )
+    parent_doc["policy_id"] = POLICY_CID
+    PARENT_CID = "QmParent"
+
+    master_doc = make_card_doc(
+        holder.public_key,
+        parent.secret_key,
+        holder.secret_key,
+        press.secret_key,
+        [b64url(parent.public_key)],
+    )
+    master_doc["policy_id"] = POLICY_CID
+    master_doc["active_subcards"] = [b64url(sub.public_key)]
+    MASTER_CID = "QmMaster"
+
+    sub_doc = make_sub_card_doc(
+        holder.public_key, holder.secret_key, app.public_key, app.secret_key, sub.public_key
+    )
+    SUB_CID = "QmSub"
+
+    app_card_doc = make_card_doc(
+        app.public_key,
+        app_cert_root.secret_key,
+        app.secret_key,
+        press.secret_key,
+        [b64url(app_cert_root.public_key)],
+    )
+    APP_CID = "QmApp"
+
+    enc_sub_doc = encrypt_for_card(sub.public_key, json.dumps(sub_doc).encode("utf-8"))
+    enc_master_doc = encrypt_for_card(holder.public_key, json.dumps(master_doc).encode("utf-8"))
+    enc_parent_doc = encrypt_for_card(parent.public_key, json.dumps(parent_doc).encode("utf-8"))
+    enc_app_doc = encrypt_for_card(app.public_key, json.dumps(app_card_doc).encode("utf-8"))
+
+    def get_card_entry(addr: str):
+        if addr == sub.address:
+            return CardEntry(log_head_cid=SUB_CID, policy_address="0x", last_press_address="0x", forward_to=None, exists=True)
+        if addr == holder.address:
+            return CardEntry(log_head_cid=MASTER_CID, policy_address="0x", last_press_address="0x", forward_to=None, exists=True)
+        if addr == parent.address:
+            return CardEntry(log_head_cid=PARENT_CID, policy_address="0x", last_press_address="0x", forward_to=None, exists=True)
+        if addr == app.address:
+            return CardEntry(log_head_cid=APP_CID, policy_address="0x", last_press_address="0x", forward_to=None, exists=True)
+        return None
+
+    rpc = mock_rpc(
+        get_card_entry=AsyncMock(side_effect=get_card_entry),
+        is_policy_authorizer=AsyncMock(return_value=True),  # root is the policy authorizer
+    )
+    ipfs = mock_ipfs({SUB_CID: enc_sub_doc, MASTER_CID: enc_master_doc, PARENT_CID: enc_parent_doc, APP_CID: enc_app_doc, POLICY_CID: policy_bytes})
+
+    verifier = CardVerifier(
+        VerifierConfig(rpc=rpc, ipfs=ipfs, app_certification_root=app_cert_root.address, return_chain=True)
+    )
+
+    # Call verify_card with holder's correct pubkey
+    holder_pubkey_b64url = b64url(holder.public_key)
+    result = await verifier.verify_card(holder.address, VerifyCardOptions(pubkey=holder_pubkey_b64url))
+
+    # Chain should be populated with the real walk
+    assert result.chain is not None
+    assert len(result.chain) > 0, f"Expected non-empty chain, got {len(result.chain)}"
+
+    # First hop: master card (holder) - should be present
+    assert result.chain[0].card_address == holder.address
+    assert result.chain[0].public_key is not None
+    assert isinstance(result.chain[0].public_key, str)
+    assert len(result.chain[0].public_key) > 0
+    assert result.chain[0].card_content is not None
+    assert result.chain[0].card_content.get("policy_id") == POLICY_CID
+
+    # chain_card_addresses should include both holder and parent (full chain walk was successful)
+    assert holder.address in result.chain_card_addresses
+    assert parent.address in result.chain_card_addresses
+
+    # chain_reaches_trusted_root should be true (chain reaches an authorizer/root)
+    assert result.chain_reaches_trusted_root is True
+
+
+async def test_verify_card_without_pubkey_returns_empty_chain():
+    """Test case 2: no-pubkey path is unchanged (returns empty chain)."""
+    from membership_card_verifier.types import VerifyCardOptions
+
+    card = generate_keypair()
+    root = generate_keypair()
+
+    rpc = mock_rpc(
+        get_card_entry=AsyncMock(
+            return_value=CardEntry(
+                log_head_cid="QmCard",
+                policy_address="0x",
+                last_press_address="0x",
+                forward_to=None,
+                exists=True,
+            )
+        ),
+        is_policy_authorizer=AsyncMock(return_value=True),
+        get_card_event_log=AsyncMock(return_value=[]),
+    )
+
+    verifier = CardVerifier(
+        VerifierConfig(rpc=rpc, ipfs=mock_ipfs(), app_certification_root=DUMMY_APP_CERT_ROOT, return_chain=True)
+    )
+
+    # Call verify_card without pubkey
+    result = await verifier.verify_card(card.address)
+
+    # Chain should be empty
+    assert result.chain is not None
+    assert len(result.chain) == 0
+
+
+async def test_verify_card_with_wrong_pubkey_produces_address_binding_mismatch():
+    """Test case 3: wrong pubkey (mismatched address) produces ADDRESS_BINDING_MISMATCH error."""
+    from membership_card_verifier.types import VerifyCardOptions
+    from tests.integration._helpers import b64url
+
+    root = generate_keypair()
+    holder = generate_keypair()
+    wrong_card = generate_keypair()  # A different card whose pubkey we'll use
+
+    rpc = mock_rpc(
+        get_card_entry=AsyncMock(
+            return_value=CardEntry(
+                log_head_cid="QmCard",
+                policy_address="0x",
+                last_press_address="0x",
+                forward_to=None,
+                exists=True,
+            )
+        ),
+        is_policy_authorizer=AsyncMock(return_value=True),
+    )
+
+    verifier = CardVerifier(
+        VerifierConfig(rpc=rpc, ipfs=mock_ipfs(), app_certification_root=DUMMY_APP_CERT_ROOT, return_chain=True)
+    )
+
+    # Call verify_card with a mismatched pubkey (from wrong_card, not holder)
+    wrong_pubkey_b64url = b64url(wrong_card.public_key)
+    result = await verifier.verify_card(holder.address, VerifyCardOptions(pubkey=wrong_pubkey_b64url))
+
+    # Chain should remain empty
+    assert result.chain is not None
+    assert len(result.chain) == 0
+
+    # errors should contain an ADDRESS_BINDING_MISMATCH entry with stage 3
+    assert any(e.stage == 3 and e.code == "ADDRESS_BINDING_MISMATCH" for e in result.errors)

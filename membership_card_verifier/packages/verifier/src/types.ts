@@ -194,6 +194,9 @@ export interface SignatureEntry {
 
 export interface VerifyCardOptions {
   asOf?: string;
+  pubkey?: string; // base64url-encoded public key for cardAddress, if the caller has it —
+  // enables real chain population the same way verifyEnvelope's signature-carried
+  // pubkey does. Omit to keep today's chain: [] behavior.
 }
 
 // ─── Result Types ─────────────────────────────────────────────────────────────

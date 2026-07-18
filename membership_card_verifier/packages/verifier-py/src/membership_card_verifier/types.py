@@ -230,6 +230,9 @@ class SignatureEntry:
 @dataclass
 class VerifyCardOptions:
     as_of: Optional[str] = None
+    pubkey: Optional[str] = None  # base64url-encoded public key for card_address, if the
+    # caller has it — enables real chain population the same way verify_envelope's
+    # signature-carried pubkey does. Omit to keep today's chain: [] behavior.
 
 
 # ─── Result Types ─────────────────────────────────────────────────────────────

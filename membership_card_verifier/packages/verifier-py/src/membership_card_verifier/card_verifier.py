@@ -1,12 +1,14 @@
 import asyncio
+import base64
 import hashlib
+import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, Literal, Optional
 
 from .canonicalize import canonicalize
 from .constants import PROTOCOL_VERSION_0_1
-from .crypto import keccak256
+from .crypto import aes256gcm_decrypt, hkdf_sha3_256, keccak256
 from .errors import CardProtocolError
 from .policy_match import evaluate_policy_match
 from .stages.stage1 import verify_stage1
@@ -49,6 +51,11 @@ def _unknown_revocation() -> RevocationStatus:
     return RevocationStatus(
         status="unknown", code=None, effective_date=None, data_freshness_seconds=0
     )
+
+
+def _b64url_decode(s: str) -> bytes:
+    padding = "=" * (-len(s) % 4)
+    return base64.urlsafe_b64decode(s + padding)
 
 
 class CardVerifier:
@@ -214,19 +221,53 @@ class CardVerifier:
             chain_addresses, self.config.rpc, self.config.ipfs, self.config
         )
 
-        all_errors = errors + stage4.errors + stage6.errors
-
         # verify_card cannot decrypt any CardDocument (no pubkey available for the given
-        # address alone), so no chain data is ever resolved here — chain is always empty.
+        # address alone), so no chain data is ever resolved here — chain is always empty
+        # unless the caller provides a pubkey, which enables real chain population.
         chain: list[ChainLink] = []
+        real_chain_reaches_trusted_root: bool | Literal["skipped"] = is_trusted_root
+        real_chain_addresses: list[str] = chain_addresses
+
+        if options is not None and options.pubkey:
+            pubkey_bytes = _b64url_decode(options.pubkey)
+            derived_address = keccak256(pubkey_bytes)
+
+            if derived_address != card_address:
+                errors.append(
+                    VerificationError(
+                        stage=3,
+                        code="ADDRESS_BINDING_MISMATCH",
+                        message=f"Supplied pubkey does not correspond to card_address: {card_address}",
+                    )
+                )
+                # chain stays [], real_chain_reaches_trusted_root stays is_trusted_root
+            else:
+                content_key = hkdf_sha3_256(pubkey_bytes, "card-content-v1")
+                try:
+                    encrypted = await self.config.ipfs.fetch(card_entry.log_head_cid)
+                    decrypted = aes256gcm_decrypt(content_key, encrypted)
+                    card_doc = json.loads(decrypted.decode("utf-8"))
+
+                    stage3 = await verify_stage3(
+                        card_doc, card_address, self.config.rpc, self.config.ipfs, self.config, pubkey_bytes
+                    )
+                    errors.extend(stage3.errors)
+                    chain = stage3.chain
+                    real_chain_reaches_trusted_root = stage3.chain_reaches_trusted_root
+                    real_chain_addresses = stage3.chain_card_addresses
+                except CardProtocolError as e:
+                    errors.append(VerificationError(stage=3, code=e.code, message=str(e)))
+                    # chain stays [] — decryption/parse failure falls back to today's behavior
+
+        all_errors = errors + stage4.errors + stage6.errors
 
         return CardVerificationResult(
             signer_card=card_address,
             signature_valid=None,
             protocol_version=PROTOCOL_VERSION_0_1,
             scope_clean="skipped",
-            chain_reaches_trusted_root=is_trusted_root,
-            chain_card_addresses=chain_addresses,
+            chain_reaches_trusted_root=real_chain_reaches_trusted_root,
+            chain_card_addresses=real_chain_addresses,
             app_card_chain_valid="skipped",
             revocation=stage4.revocation,
             was_valid_at_signing_time=stage4.was_valid_at_signing_time,

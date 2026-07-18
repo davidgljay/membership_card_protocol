@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { canonicalize } from "./canonicalize.js";
 import { PROTOCOL_VERSION_0_1 } from "./constants.js";
-import { keccak256 } from "./crypto.js";
+import { keccak256, hkdfSha3256, aes256gcmDecrypt } from "./crypto.js";
 import { CardProtocolError } from "./errors.js";
 import { evaluatePolicyMatch } from "./policy-match.js";
 import { verifyStage1 } from "./stages/stage1.js";
@@ -21,6 +21,7 @@ import type {
   VerifyCardOptions,
   VerificationError,
   PolicyMatchResult,
+  CardDocument,
 } from "./types.js";
 
 const DEFAULTS = {
@@ -183,15 +184,49 @@ export class CardVerifier {
 
     // verifyCard cannot decrypt any CardDocument (no pubkey available for the given
     // address alone), so no chain data is ever resolved here — chain is always empty.
-    const chain: ChainLink[] = [];
+    let chain: ChainLink[] = [];
+    let realChainReachesTrustedRoot: boolean | "skipped" = isTrustedRoot;
+    let realChainAddresses: string[] = chainAddresses;
+
+    if (options?.pubkey) {
+      const pubkeyBytes = new Uint8Array(Buffer.from(options.pubkey, "base64url"));
+      const derivedAddress = keccak256(pubkeyBytes);
+
+      if (derivedAddress !== cardAddress) {
+        allErrors.push({
+          stage: 3,
+          code: "ADDRESS_BINDING_MISMATCH",
+          message: `Supplied pubkey does not correspond to cardAddress: ${cardAddress}`,
+        });
+        // chain stays [], realChainReachesTrustedRoot stays isTrustedRoot (today's behavior)
+      } else {
+        const contentKey = hkdfSha3256(pubkeyBytes, "card-content-v1");
+        try {
+          const encrypted = await this.config.ipfs.fetch(cardEntry.log_head_cid);
+          const decrypted = aes256gcmDecrypt(contentKey, encrypted);
+          const cardDoc = JSON.parse(new TextDecoder().decode(decrypted)) as CardDocument;
+
+          const stage3 = await verifyStage3(cardDoc, cardAddress, this.config.rpc, this.config.ipfs, this.config, pubkeyBytes);
+          allErrors.push(...stage3.errors);
+          chain = stage3.chain;
+          realChainReachesTrustedRoot = stage3.chain_reaches_trusted_root;
+          realChainAddresses = stage3.chain_card_addresses;
+        } catch (e) {
+          const code = e instanceof CardProtocolError ? e.code : "DECRYPTION_FAILED";
+          allErrors.push({ stage: 3, code, message: String(e) });
+          // chain stays [] — decryption/parse failure falls back to today's behavior,
+          // not a hard rejection of the whole verifyCard call.
+        }
+      }
+    }
 
     return {
       signer_card: cardAddress,
       signature_valid: null,
       protocol_version: PROTOCOL_VERSION_0_1,
       scope_clean: "skipped",
-      chain_reaches_trusted_root: isTrustedRoot,
-      chain_card_addresses: chainAddresses,
+      chain_reaches_trusted_root: realChainReachesTrustedRoot,
+      chain_card_addresses: realChainAddresses,
       app_card_chain_valid: "skipped",
       revocation: stage4.revocation,
       was_valid_at_signing_time: stage4.was_valid_at_signing_time,
