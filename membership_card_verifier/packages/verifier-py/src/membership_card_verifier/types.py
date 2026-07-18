@@ -178,6 +178,12 @@ class PolicyMatchConditions:
 
 
 @dataclass
+class PolicyMatchResult:
+    matched: bool
+    reason: Optional[Literal["no_policy_match", "field_mismatch"]] = None
+
+
+@dataclass
 class VerifierConfig:
     rpc: RpcProvider
     ipfs: IpfsProvider
@@ -234,7 +240,7 @@ class EnvelopeVerificationResult:
     verified_at: str
     protocol_version: str
     signatures: list[SignatureVerificationResult]
-    policy_match: Optional[bool] = None
+    policy_match: Optional[PolicyMatchResult] = None
 
 
 @dataclass
@@ -290,7 +296,7 @@ class SignatureVerificationResult:
     annotations: list[EasAnnotation]
     signature_valid: Optional[bool] = None
     policy_compliant: bool | Literal["skipped"] | None = None
-    policy_match: Optional[bool] = None
+    policy_match: Optional[PolicyMatchResult] = None
     chain: Optional[list[ChainLink]] = None
 
 
@@ -313,7 +319,7 @@ class CardVerificationResult:
     annotations: list[EasAnnotation]
     signature_valid: None = None
     policy_compliant: bool | Literal["skipped"] | None = None
-    policy_match: Optional[bool] = None
+    policy_match: Optional[PolicyMatchResult] = None
     chain: Optional[list[ChainLink]] = None
 
 

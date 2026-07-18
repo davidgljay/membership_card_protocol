@@ -262,8 +262,8 @@ describe("policy_match", () => {
       conditions: { policy_id: POLICY_CID },
     });
     const result = await verifier.verifyEnvelope(envelope);
-    expect(result.signatures[0]!.policy_match).toBe(true);
-    expect(result.policy_match).toBe(true);
+    expect(result.signatures[0]!.policy_match).toEqual({ matched: true });
+    expect(result.policy_match).toEqual({ matched: true });
   });
 
   it("is false when no card in the chain matches policy_id", async () => {
@@ -276,8 +276,8 @@ describe("policy_match", () => {
       conditions: { policy_id: "QmSomeOtherPolicy" },
     });
     const result = await verifier.verifyEnvelope(envelope);
-    expect(result.signatures[0]!.policy_match).toBe(false);
-    expect(result.policy_match).toBe(false);
+    expect(result.signatures[0]!.policy_match).toEqual({ matched: false, reason: "no_policy_match" });
+    expect(result.policy_match).toEqual({ matched: false, reason: "no_policy_match" });
   });
 
   it("plain-string field_match is exact-match shorthand", async () => {
@@ -290,7 +290,7 @@ describe("policy_match", () => {
       conditions: { policy_id: POLICY_CID, field_match: { user_type: "admin" } },
     });
     const result = await verifier.verifyEnvelope(envelope);
-    expect(result.signatures[0]!.policy_match).toBe(true);
+    expect(result.signatures[0]!.policy_match).toEqual({ matched: true });
   });
 
   it("plain-string field_match with a non-matching value is false", async () => {
@@ -303,7 +303,7 @@ describe("policy_match", () => {
       conditions: { policy_id: POLICY_CID, field_match: { user_type: "admin" } },
     });
     const result = await verifier.verifyEnvelope(envelope);
-    expect(result.signatures[0]!.policy_match).toBe(false);
+    expect(result.signatures[0]!.policy_match).toEqual({ matched: false, reason: "field_mismatch" });
   });
 
   it("regex field_match is supported as the escape hatch", async () => {
@@ -316,7 +316,7 @@ describe("policy_match", () => {
       conditions: { policy_id: POLICY_CID, field_match: { user_type: { regex: "^(admin|super-admin)$" } } },
     });
     const result = await verifier.verifyEnvelope(envelope);
-    expect(result.signatures[0]!.policy_match).toBe(true);
+    expect(result.signatures[0]!.policy_match).toEqual({ matched: true });
   });
 
   it("multiple field_match conditions: all match -> true", async () => {
@@ -335,7 +335,7 @@ describe("policy_match", () => {
       },
     });
     const result = await verifier.verifyEnvelope(envelope);
-    expect(result.signatures[0]!.policy_match).toBe(true);
+    expect(result.signatures[0]!.policy_match).toEqual({ matched: true });
   });
 
   it("multiple field_match conditions: one non-matching -> false", async () => {
@@ -354,7 +354,7 @@ describe("policy_match", () => {
       },
     });
     const result = await verifier.verifyEnvelope(envelope);
-    expect(result.signatures[0]!.policy_match).toBe(false);
+    expect(result.signatures[0]!.policy_match).toEqual({ matched: false, reason: "field_mismatch" });
   });
 
   it("verifyCard() with conditions and returnChain returns empty chain and false policy_match", async () => {
@@ -378,7 +378,7 @@ describe("policy_match", () => {
     expect(result.chain).toBeDefined();
     expect(result.chain).toHaveLength(0);
     // When conditions are supplied but no chain can be resolved, policy_match is false
-    expect(result.policy_match).toBe(false);
+    expect(result.policy_match).toEqual({ matched: false, reason: "no_policy_match" });
   });
 
   it("verifyCard() without conditions and returnChain returns empty chain and null policy_match", async () => {
@@ -396,6 +396,144 @@ describe("policy_match", () => {
     expect("chain" in result).toBe(true);
     expect(result.chain).toHaveLength(0);
     expect(result.policy_match).toBeNull();
+  });
+
+  it("chain with one link matching different policy_id and second matching target but failing field_match -> field_mismatch", async () => {
+    // This test ensures that sawPolicyIdMatch is correctly set only when the target
+    // policy_id matches, not when other links match different policy_ids.
+    // Chain structure: master (QmAltPolicy) -> parent (QmPolicy, user_type=member)
+    // Conditions: { policy_id: QmPolicy, field_match: { user_type: "admin" } }
+    // Expected: field_mismatch (parent matches policy_id but field fails)
+
+    const root = generateKeypair();
+    const parent = generateKeypair();
+    const holder = generateKeypair();
+    const sub = generateKeypair();
+    const app = generateKeypair();
+    const appCertRoot = generateKeypair();
+    const press = generateKeypair();
+
+    const policyDoc = { field_definitions: {} };
+    const policyBytes = new TextEncoder().encode(JSON.stringify(policyDoc));
+    const POLICY_CID = "QmPolicyAlt";
+
+    // Parent card matches target policy_id but fails field_match
+    const parentDoc = makeCardDoc(
+      parent.publicKey,
+      root.secretKey,
+      parent.secretKey,
+      press.secretKey,
+      [Buffer.from(root.publicKey).toString("base64url")]
+    );
+    parentDoc.policy_id = POLICY_CID;
+    parentDoc.user_type = "member"; // fails field_match condition
+    const PARENT_CID = "QmParentAlt";
+
+    // Master card has different policy_id (won't match target)
+    const masterDoc = makeCardDoc(
+      holder.publicKey,
+      parent.secretKey,
+      holder.secretKey,
+      press.secretKey,
+      [Buffer.from(parent.publicKey).toString("base64url")]
+    );
+    masterDoc.policy_id = "QmAltPolicy"; // different from POLICY_CID
+    masterDoc.active_subcards = [Buffer.from(sub.publicKey).toString("base64url")];
+    const MASTER_CID = "QmMasterAlt";
+
+    const subDoc = makeSubCardDoc(holder.publicKey, holder.secretKey, app.publicKey, app.secretKey, sub.publicKey);
+    const SUB_CID = "QmSubAlt";
+
+    const appCardDoc = makeCardDoc(
+      app.publicKey,
+      appCertRoot.secretKey,
+      app.secretKey,
+      press.secretKey,
+      [Buffer.from(appCertRoot.publicKey).toString("base64url")]
+    );
+    const APP_CID = "QmAppAlt";
+
+    const encSubDoc = encryptForCard(sub.publicKey, new TextEncoder().encode(JSON.stringify(subDoc)));
+    const encMasterDoc = encryptForCard(holder.publicKey, new TextEncoder().encode(JSON.stringify(masterDoc)));
+    const encParentDoc = encryptForCard(parent.publicKey, new TextEncoder().encode(JSON.stringify(parentDoc)));
+    const encAppDoc = encryptForCard(app.publicKey, new TextEncoder().encode(JSON.stringify(appCardDoc)));
+
+    const payload = { message: "hello world", protocol_version: "0.1", timestamp: "2026-06-20T00:00:00Z" };
+    const sig = ml_dsa44.sign(canonicalize(payload), sub.secretKey);
+    const envelope: SignedMessageEnvelope = {
+      payload,
+      signatures: [
+        {
+          public_key: Buffer.from(sub.publicKey).toString("base64url"),
+          signature: Buffer.from(sig).toString("base64url"),
+        },
+      ],
+    };
+
+    const subCardEntry: SubCardEntry = {
+      master_card_address: holder.address,
+      registration_log_head: "0x",
+      sub_card_doc_cid: SUB_CID,
+      active: true,
+      registered_at: "2026-01-01T00:00:00Z",
+      deregistered_at: null,
+    };
+
+    const pressEntry: PressAuthEntry = {
+      press_public_key: Buffer.from(press.publicKey).toString("hex"),
+      mldsa44_key_hash: "0x",
+      active: true,
+      authorized_at: "2026-01-01T00:00:00Z",
+      revoked_at: null,
+    };
+
+    function makeCardEntry(cid: string): CardEntry {
+      return { log_head_cid: cid, policy_address: "0x" + "f".repeat(64), last_press_address: press.address, forward_to: null, exists: true };
+    }
+
+    const rpc: RpcProvider = {
+      getCardEntry: vi.fn().mockImplementation((addr: string) => {
+        if (addr === sub.address) return Promise.resolve(makeCardEntry(SUB_CID));
+        if (addr === holder.address) return Promise.resolve(makeCardEntry(MASTER_CID));
+        if (addr === parent.address) return Promise.resolve(makeCardEntry(PARENT_CID));
+        if (addr === app.address) return Promise.resolve(makeCardEntry(APP_CID));
+        return Promise.resolve(null);
+      }),
+      isPolicyAuthorizer: vi.fn().mockImplementation((addr: string) => Promise.resolve(addr === root.address)),
+      getPressAuthorization: vi.fn().mockResolvedValue(pressEntry),
+      getSubCardEntry: vi.fn().mockImplementation((addr: string) =>
+        addr === sub.address ? Promise.resolve(subCardEntry) : Promise.resolve(null)
+      ),
+      getCardEventLog: vi.fn().mockResolvedValue([]),
+      getEasAnnotations: vi.fn().mockResolvedValue([]),
+    };
+
+    const ipfs: IpfsProvider = {
+      fetch: vi.fn().mockImplementation((cid: string) => {
+        if (cid === SUB_CID) return Promise.resolve(encSubDoc);
+        if (cid === MASTER_CID) return Promise.resolve(encMasterDoc);
+        if (cid === PARENT_CID) return Promise.resolve(encParentDoc);
+        if (cid === APP_CID) return Promise.resolve(encAppDoc);
+        if (cid === POLICY_CID) return Promise.resolve(policyBytes);
+        return Promise.reject(new Error(`CID not found: ${cid}`));
+      }),
+    };
+
+    const verifier = new CardVerifier({
+      rpc,
+      ipfs,
+      trustedRoots: [root.address],
+      appCertificationRoot: appCertRoot.address,
+      returnChain: true,
+      conditions: { policy_id: POLICY_CID, field_match: { user_type: "admin" } },
+    });
+
+    const result = await verifier.verifyEnvelope(envelope);
+    expect(result.signatures[0]!.policy_match).toEqual({
+      matched: false,
+      reason: "field_mismatch",
+    });
+    expect(result.policy_match).toEqual({ matched: false, reason: "field_mismatch" });
   });
 
   it("envelope-level policy_match is the OR across all signatures", async () => {
@@ -457,7 +595,7 @@ describe("policy_match", () => {
     expect(result.signatures).toHaveLength(2);
     // At least one signer (scenarioB's, matching "admin") should produce policy_match true,
     // which must OR up to the envelope level regardless of the other signer's outcome.
-    expect(result.signatures.some((s) => s.policy_match === true)).toBe(true);
-    expect(result.policy_match).toBe(true);
+    expect(result.signatures.some((s) => s.policy_match?.matched === true)).toBe(true);
+    expect(result.policy_match).toEqual({ matched: true });
   });
 });

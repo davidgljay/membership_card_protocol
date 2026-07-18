@@ -18,7 +18,7 @@ def test_single_entry_matching_policy_and_field() -> None:
         ]
     }
     chain = _chain(POLICY_A, status="active")
-    assert evaluate_room_predicate(doc, chain) is True
+    assert evaluate_room_predicate(doc, chain) == (True, None)
 
 
 def test_single_entry_matching_policy_wrong_field() -> None:
@@ -28,13 +28,13 @@ def test_single_entry_matching_policy_wrong_field() -> None:
         ]
     }
     chain = _chain(POLICY_A, status="suspended")
-    assert evaluate_room_predicate(doc, chain) is False
+    assert evaluate_room_predicate(doc, chain) == (False, "field_mismatch")
 
 
 def test_single_entry_non_matching_policy() -> None:
     doc = {"policies": [{"ref_type": "cid", "ref": POLICY_A}]}
     chain = _chain(POLICY_C)
-    assert evaluate_room_predicate(doc, chain) is False
+    assert evaluate_room_predicate(doc, chain) == (False, "no_policy_match")
 
 
 def test_multi_entry_any_of_only_one_matches() -> None:
@@ -46,7 +46,7 @@ def test_multi_entry_any_of_only_one_matches() -> None:
     }
     # Doesn't satisfy entry 1 (wrong policy_id), does satisfy entry 2 (no field_match).
     chain = _chain(POLICY_B)
-    assert evaluate_room_predicate(doc, chain) is True
+    assert evaluate_room_predicate(doc, chain) == (True, None)
 
 
 def test_multi_entry_any_of_none_match() -> None:
@@ -57,7 +57,7 @@ def test_multi_entry_any_of_none_match() -> None:
         ]
     }
     chain = _chain(POLICY_C)
-    assert evaluate_room_predicate(doc, chain) is False
+    assert evaluate_room_predicate(doc, chain) == (False, "no_policy_match")
 
 
 def test_pointer_entry_uses_resolved_ref_not_ref() -> None:
@@ -68,8 +68,8 @@ def test_pointer_entry_uses_resolved_ref_not_ref() -> None:
         ]
     }
     chain = _chain(POLICY_B)
-    assert evaluate_room_predicate(doc, chain) is True
+    assert evaluate_room_predicate(doc, chain) == (True, None)
 
 
 def test_empty_policies_list_denies() -> None:
-    assert evaluate_room_predicate({"policies": []}, _chain(POLICY_A)) is False
+    assert evaluate_room_predicate({"policies": []}, _chain(POLICY_A)) == (False, "no_policy_match")

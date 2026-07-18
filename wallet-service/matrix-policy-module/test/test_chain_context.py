@@ -197,10 +197,10 @@ async def test_extracted_chain_satisfies_room_predicate() -> None:
             {"ref_type": "cid", "ref": POLICY_CID, "field_match": {"field": "status", "regex": "^active$"}}
         ]
     }
-    assert evaluate_room_predicate(matching_doc, chain) is True
+    assert evaluate_room_predicate(matching_doc, chain) == (True, None)
 
     non_matching_doc = {"policies": [{"ref_type": "cid", "ref": "QmSomeOtherPolicy"}]}
-    assert evaluate_room_predicate(non_matching_doc, chain) is False
+    assert evaluate_room_predicate(non_matching_doc, chain) == (False, "no_policy_match")
 
 
 @pytest.mark.asyncio

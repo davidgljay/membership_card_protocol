@@ -20,6 +20,7 @@ import type {
   CardVerificationResult,
   VerifyCardOptions,
   VerificationError,
+  PolicyMatchResult,
 } from "./types.js";
 
 const DEFAULTS = {
@@ -390,9 +391,11 @@ export class CardVerifier {
     };
   }
 
-  #aggregateEnvelopePolicyMatch(signatures: SignatureVerificationResult[]): boolean | null {
+  #aggregateEnvelopePolicyMatch(signatures: SignatureVerificationResult[]): PolicyMatchResult | null {
     if (!this.config.conditions) return null;
-    return signatures.some((s) => s.policy_match === true);
+    if (signatures.some((s) => s.policy_match?.matched === true)) return { matched: true };
+    const anyFieldMismatch = signatures.some((s) => s.policy_match?.reason === "field_mismatch");
+    return { matched: false, reason: anyFieldMismatch ? "field_mismatch" : "no_policy_match" };
   }
 
   #skippedResult(

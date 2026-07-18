@@ -277,9 +277,9 @@ class PolicyModule:
         if predicate_document is None:
             return False, "predicate document unreachable"
 
-        satisfies_policy = self._safe_evaluate_predicate(predicate_document, attestation.chain, room_id, matrix_user_id)
+        satisfies_policy, policy_reason = self._safe_evaluate_predicate(predicate_document, attestation.chain, room_id, matrix_user_id)
         if satisfies_policy is not True:
-            return False, "evaluation_error" if satisfies_policy is None else "policy_violation"
+            return False, policy_reason
 
         watched_addresses = [link.card_address for link in attestation.chain] or [attestation.card_hash]
         self._registry.register(room_id, matrix_user_id, attestation.card_hash, watched_addresses, joined_at=_now_iso())
@@ -380,10 +380,9 @@ class PolicyModule:
             logger.warning("post denied for %s in %s: predicate document unreachable", matrix_user_id, room_id)
             return Codes.FORBIDDEN
 
-        satisfies_policy = self._safe_evaluate_predicate(predicate_document, cached.chain, room_id, matrix_user_id)
+        satisfies_policy, policy_reason = self._safe_evaluate_predicate(predicate_document, cached.chain, room_id, matrix_user_id)
         if satisfies_policy is not True:
-            reason = "evaluation_error" if satisfies_policy is None else "policy_violation"
-            logger.info("post denied for %s in %s: %s", matrix_user_id, room_id, reason)
+            logger.info("post denied for %s in %s: %s", matrix_user_id, room_id, policy_reason)
             return Codes.FORBIDDEN
 
         return NOT_SPAM
@@ -392,18 +391,15 @@ class PolicyModule:
 
     def _safe_evaluate_predicate(
         self, predicate_document: dict[str, Any], chain: list, room_id: str, matrix_user_id: str
-    ) -> Optional[bool]:
-        """Wraps predicates.evaluate_room_predicate so a bug or unexpected
-        shape in the evaluator denies (per matrix_room_membership.md §4's
-        "Predicate evaluation itself throws" row) rather than propagating an
-        uncaught exception out of a Synapse callback with undefined
-        allow/deny consequences. Returns None (denied, logged as
-        evaluation_error) on any exception, True/False otherwise."""
+    ) -> tuple[Optional[bool], Optional[str]]:
+        """Returns (matched, reason). matched is None (with reason
+        "evaluation_error") on any exception from the evaluator, per
+        matrix_room_membership.md §4's "Predicate evaluation itself throws" row."""
         try:
             return evaluate_room_predicate(predicate_document, chain)
         except Exception:
             logger.exception("predicate evaluation raised for %s in %s", matrix_user_id, room_id)
-            return None
+            return None, "evaluation_error"
 
     async def _resolve_policy_id(self, room_id: str) -> Optional[str]:
         # NOTE (still genuinely open, unlike the resolver-wiring gap this

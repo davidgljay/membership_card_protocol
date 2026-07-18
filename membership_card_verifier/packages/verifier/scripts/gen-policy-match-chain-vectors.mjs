@@ -166,7 +166,7 @@ function buildProviders(dataset) {
       return dataset.press_authorizations[`${policyAddr}|${pressAddr}`] ?? null;
     },
     async getSubCardEntry(addr) { return dataset.sub_card_entries[addr] ?? null; },
-    async getLogEntries() { return []; },
+    async getCardEventLog() { return []; },
     async getEasAnnotations() { return []; },
   };
   const ipfs = {
@@ -303,6 +303,66 @@ await buildCase("PMC-04", "no conditions supplied -> null, chain still returned"
       envelope_policy_match: result.policy_match,
       per_signature_policy_match: result.signatures.map((s) => s.policy_match),
       chains: result.signatures.map((s) => s.chain),
+    },
+  });
+}
+
+// --- PMC-06: chain with one link matching different policy_id, second matching target but failing field_match ---
+{
+  const altParentDoc = makeCardDoc(parent.publicKey, root.secretKey, parent.secretKey, press.secretKey, [b64url(root.publicKey)]);
+  // Parent has target POLICY_CID but fails field_match
+  altParentDoc.policy_id = POLICY_CID;
+  altParentDoc.user_type = "member"; // doesn't match the field_match condition
+
+  const altMasterDoc = {
+    ...makeCardDoc(holder.publicKey, parent.secretKey, holder.secretKey, press.secretKey, [b64url(parent.publicKey)]),
+    active_subcards: [b64url(sub.publicKey)],
+    policy_id: "QmAltPolicyCID", // different from POLICY_CID
+    user_type: "admin",
+  };
+
+  const alt_providerDataset = JSON.parse(JSON.stringify(providerDataset)); // deep clone
+  const ALTMASTER_CID = "QmAltMasterCID";
+  const ALTPARENT_CID = "QmAltParentCID";
+
+  const encAltMasterDoc = encryptForCard(holder.publicKey, Buffer.from(JSON.stringify(altMasterDoc), "utf-8"));
+  const encAltParentDoc = encryptForCard(parent.publicKey, Buffer.from(JSON.stringify(altParentDoc), "utf-8"));
+
+  Object.assign(alt_providerDataset.card_entries, {
+    [holder.address]: { log_head_cid: ALTMASTER_CID, policy_address: "0x" + "f".repeat(64), last_press_address: press.address, forward_to: null, exists: true },
+    [parent.address]: { log_head_cid: ALTPARENT_CID, policy_address: "0x" + "f".repeat(64), last_press_address: press.address, forward_to: null, exists: true },
+  });
+  Object.assign(alt_providerDataset.ipfs, {
+    [ALTMASTER_CID]: b64url(encAltMasterDoc),
+    [ALTPARENT_CID]: b64url(encAltParentDoc),
+  });
+
+  const conditions = { policy_id: POLICY_CID, field_match: { user_type: "admin" } };
+  const { rpc, ipfs } = buildProviders(alt_providerDataset);
+  const verifier = new CardVerifier({
+    rpc,
+    ipfs,
+    trustedRoots: [root.address],
+    appCertificationRoot: appCertRoot.address,
+    returnChain: true,
+    conditions,
+  });
+  const result = await verifier.verifyEnvelope(envelope);
+  cases.push({
+    id: "PMC-06",
+    description: "chain: one link matches different policy_id, second matches target but fails field_match -> field_mismatch",
+    provider_dataset: alt_providerDataset,
+    envelope,
+    config: {
+      trusted_roots: [root.address],
+      app_certification_root: appCertRoot.address,
+      return_chain: true,
+      conditions,
+    },
+    expected: {
+      envelope_policy_match: result.policy_match,
+      signature_policy_match: result.signatures[0].policy_match,
+      chain: result.signatures[0].chain,
     },
   });
 }

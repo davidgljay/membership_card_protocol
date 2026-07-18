@@ -18,7 +18,7 @@ prevent.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 from membership_card_verifier import ChainLink, PolicyMatchConditions, evaluate_policy_match
 
@@ -34,15 +34,22 @@ def _entry_conditions(entry: dict[str, Any]) -> PolicyMatchConditions:
 
 def evaluate_room_predicate(
     predicate_document: dict[str, Any], chain: list[ChainLink]
-) -> bool:
-    """True if `chain` was issued under *any* policy entry in the room's
-    predicate document (and satisfies that entry's field_match, if present).
-    False otherwise, including for an entry whose evaluate_policy_match
-    returns None (indeterminate — treated as non-match, not an exception;
-    deny-by-default per matrix_room_membership.md §4 is enforced by the
-    caller treating "no entry matched" as a deny)."""
+) -> tuple[bool, Optional[str]]:
+    """Returns (matched, reason). matched is True if `chain` was issued
+    under *any* policy entry in the room's predicate document (and satisfies
+    that entry's field_match, if present). reason is None when matched is
+    True; otherwise "field_mismatch" if any entry's policy_id matched but its
+    field_match didn't, else "no_policy_match" — mirrors
+    evaluate_policy_match's own reason priority, aggregated the same way
+    #aggregateEnvelopePolicyMatch aggregates across signatures."""
+    saw_field_mismatch = False
     for entry in predicate_document.get("policies", []):
         conditions = _entry_conditions(entry)
-        if evaluate_policy_match(chain, conditions):
-            return True
-    return False
+        result = evaluate_policy_match(chain, conditions)
+        if result is None:
+            continue
+        if result.matched:
+            return True, None
+        if result.reason == "field_mismatch":
+            saw_field_mismatch = True
+    return False, ("field_mismatch" if saw_field_mismatch else "no_policy_match")

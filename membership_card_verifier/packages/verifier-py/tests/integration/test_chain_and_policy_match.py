@@ -20,6 +20,7 @@ from membership_card_verifier import (
     CardVerifier,
     ChainLink,
     PolicyMatchConditions,
+    PolicyMatchResult,
     VerifierConfig,
 )
 from membership_card_verifier.types import (
@@ -161,7 +162,7 @@ class TestPolicyMatch:
 
         conditions = PolicyMatchConditions(policy_id="QmPolicy")
         result = evaluate_policy_match(chain, conditions)
-        assert result is True
+        assert result == PolicyMatchResult(matched=True)
 
     def test_policy_match_false_for_non_matching_policy(self):
         """policy_match should be False when chain doesn't include matching policy_id."""
@@ -177,7 +178,7 @@ class TestPolicyMatch:
 
         conditions = PolicyMatchConditions(policy_id="QmPolicy")
         result = evaluate_policy_match(chain, conditions)
-        assert result is False
+        assert result == PolicyMatchResult(matched=False, reason="no_policy_match")
 
     def test_policy_match_with_plain_string_field_match(self):
         """policy_match should support plain-string field_match as exact-match shorthand."""
@@ -199,7 +200,7 @@ class TestPolicyMatch:
             field_match={"user_type": "admin"},
         )
         result = evaluate_policy_match(chain, conditions)
-        assert result is True
+        assert result == PolicyMatchResult(matched=True)
 
     def test_policy_match_false_for_non_matching_field(self):
         """policy_match should be False when field doesn't match."""
@@ -221,7 +222,7 @@ class TestPolicyMatch:
             field_match={"user_type": "admin"},
         )
         result = evaluate_policy_match(chain, conditions)
-        assert result is False
+        assert result == PolicyMatchResult(matched=False, reason="field_mismatch")
 
     def test_policy_match_with_regex_field_match(self):
         """policy_match should support regex field_match."""
@@ -243,7 +244,7 @@ class TestPolicyMatch:
             field_match={"user_type": {"regex": "^(admin|super-admin)$"}},
         )
         result = evaluate_policy_match(chain, conditions)
-        assert result is True
+        assert result == PolicyMatchResult(matched=True)
 
     def test_policy_match_searches_full_chain(self):
         """policy_match should search the entire chain for a matching policy."""
@@ -270,7 +271,36 @@ class TestPolicyMatch:
             field_match={"user_type": "admin"},
         )
         result = evaluate_policy_match(chain, conditions)
-        assert result is True
+        assert result == PolicyMatchResult(matched=True)
+
+    def test_policy_match_field_mismatch_with_different_policy_in_chain(self):
+        """policy_match should distinguish between no_policy_match and field_mismatch even when
+        earlier links have different policy_ids. Ensures sawPolicyIdMatch tracks only the
+        target policy_id, not coincidental matches on other policies."""
+        from membership_card_verifier.policy_match import evaluate_policy_match
+
+        chain = [
+            ChainLink(
+                card_address="0xaddress1",
+                public_key="base64_pubkey1",
+                card_content={"policy_id": "QmDifferentPolicy"},
+            ),
+            ChainLink(
+                card_address="0xaddress2",
+                public_key="base64_pubkey2",
+                card_content={
+                    "policy_id": "QmPolicy",
+                    "user_type": "member",  # Matches target policy_id but fails field_match
+                },
+            ),
+        ]
+
+        conditions = PolicyMatchConditions(
+            policy_id="QmPolicy",
+            field_match={"user_type": "admin"},
+        )
+        result = evaluate_policy_match(chain, conditions)
+        assert result == PolicyMatchResult(matched=False, reason="field_mismatch")
 
 
 class TestMasterVsSignerAddress:

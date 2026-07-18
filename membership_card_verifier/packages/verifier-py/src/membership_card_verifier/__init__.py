@@ -19,6 +19,7 @@ from .types import (
     NonComplianceReport,
     PastKey,
     PolicyMatchConditions,
+    PolicyMatchResult,
     PressAuthEntry,
     RevocationStatus,
     RpcProvider,
@@ -68,4 +69,5 @@ __all__ = [
     "PastKey",
     "ChainLink",
     "PolicyMatchConditions",
+    "PolicyMatchResult",
 ]

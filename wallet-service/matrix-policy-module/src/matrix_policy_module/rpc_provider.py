@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from typing import Any, AsyncIterator, Optional
 
 import httpx
-from membership_card_verifier import CardEntry, EasAttestation, LogEntry, PressAuthEntry, SubCardEntry
+from membership_card_verifier import CardEntry, EasAttestation, LogUpdate, PressAuthEntry, SubCardEntry
 from web3 import AsyncWeb3
 from web3.providers.persistent import WebSocketProvider
 
@@ -190,14 +190,14 @@ class Web3RpcProvider:
             deregistered_at=None if deregistered_at == 0 else str(deregistered_at),
         )
 
-    async def get_log_entries(self, card_address: str) -> list[LogEntry]:
+    async def get_log_entries(self, card_address: str) -> list[LogUpdate]:
         """Walks the CID-linked log chain from the on-chain head, newest first —
         mirrors press/src/context.ts's getLogEntries exactly (same MAX_WALK,
         same prev_log_root field, same silent-truncate-on-fetch-failure
         behavior, since a partial log is still usable for revocation checks
         and stage4.py already treats missing entries as "not found" rather
         than raising)."""
-        entries: list[LogEntry] = []
+        entries: list[LogUpdate] = []
         card_entry = await self.get_card_entry(card_address)
         if card_entry is None:
             return entries
@@ -215,7 +215,8 @@ class Web3RpcProvider:
                 code = doc.get("code")
                 if code is not None:
                     entries.append(
-                        LogEntry(
+                        LogUpdate(
+                            card_address=card_address,
                             update_code=code,
                             effective_date=doc.get("effective_date", ""),
                             cid=cid,

@@ -21,6 +21,7 @@ from membership_card_verifier import (
     CardEntry,
     CardVerifier,
     PolicyMatchConditions,
+    PolicyMatchResult,
     PressAuthEntry,
     SubCardEntry,
     VerifierConfig,
@@ -118,6 +119,27 @@ def _chain_to_comparable(chain: Optional[list]) -> Optional[list[dict[str, Any]]
     ]
 
 
+def _policy_match_to_comparable(expected: Optional[Any]) -> Optional[PolicyMatchResult]:
+    """Convert expected policy_match value from JSON to PolicyMatchResult for comparison.
+
+    Handles both old boolean format (from stale vectors) and new dict format.
+    """
+    if expected is None:
+        return None
+    if isinstance(expected, dict):
+        return PolicyMatchResult(**expected)
+    if isinstance(expected, bool):
+        # Handle stale vectors file with boolean values
+        if expected is True:
+            return PolicyMatchResult(matched=True)
+        else:
+            # Old format doesn't have the reason, so we can't know if it was
+            # field_mismatch or no_policy_match. Return no_policy_match as default.
+            return PolicyMatchResult(matched=False, reason="no_policy_match")
+    # If it's already a PolicyMatchResult, return as-is
+    return expected
+
+
 @pytest.mark.parametrize("case", [c for c in CASES if c["id"] != "PMC-05"], ids=lambda c: c["id"])
 async def test_policy_match_and_chain_match_ts_output(case: dict) -> None:
     dataset = case["provider_dataset"]
@@ -140,8 +162,8 @@ async def test_policy_match_and_chain_match_ts_output(case: dict) -> None:
     result = await verifier.verify_envelope(envelope)
 
     expected = case["expected"]
-    assert result.policy_match == expected["envelope_policy_match"]
-    assert result.signatures[0].policy_match == expected["signature_policy_match"]
+    assert result.policy_match == _policy_match_to_comparable(expected["envelope_policy_match"])
+    assert result.signatures[0].policy_match == _policy_match_to_comparable(expected["signature_policy_match"])
     assert _chain_to_comparable(result.signatures[0].chain) == expected["chain"]
 
 
@@ -166,6 +188,6 @@ async def test_policy_match_envelope_level_or_matches_ts_output() -> None:
     result = await verifier.verify_envelope(case["envelope"])
     expected = case["expected"]
 
-    assert result.policy_match == expected["envelope_policy_match"]
-    assert [s.policy_match for s in result.signatures] == expected["per_signature_policy_match"]
+    assert result.policy_match == _policy_match_to_comparable(expected["envelope_policy_match"])
+    assert [s.policy_match for s in result.signatures] == [_policy_match_to_comparable(pm) for pm in expected["per_signature_policy_match"]]
     assert [_chain_to_comparable(s.chain) for s in result.signatures] == expected["chains"]

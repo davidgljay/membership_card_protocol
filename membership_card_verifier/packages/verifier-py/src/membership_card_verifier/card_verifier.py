@@ -19,6 +19,7 @@ from .types import (
     CardVerificationResult,
     ChainLink,
     EnvelopeVerificationResult,
+    PolicyMatchResult,
     RevocationStatus,
     SignatureEntry,
     SignatureVerificationResult,
@@ -456,8 +457,20 @@ class CardVerifier:
 
     def _aggregate_envelope_policy_match(
         self, signatures: list[SignatureVerificationResult]
-    ) -> Optional[bool]:
-        """Aggregates policy_match across signatures as an OR."""
+    ) -> Optional[PolicyMatchResult]:
+        """Aggregates policy_match across signatures as an OR on `matched`; when
+        none matched, prefers surfacing `field_mismatch` over `no_policy_match`
+        if any signature saw one, since it's the more specific/informative
+        reason."""
         if not self.config.conditions:
             return None
-        return any(s.policy_match is True for s in signatures)
+        if any(s.policy_match is not None and s.policy_match.matched for s in signatures):
+            return PolicyMatchResult(matched=True)
+        any_field_mismatch = any(
+            s.policy_match is not None and s.policy_match.reason == "field_mismatch"
+            for s in signatures
+        )
+        return PolicyMatchResult(
+            matched=False,
+            reason="field_mismatch" if any_field_mismatch else "no_policy_match",
+        )

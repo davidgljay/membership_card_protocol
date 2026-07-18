@@ -169,6 +169,11 @@ export interface PolicyMatchConditions {
   field_match?: Record<string, string | { regex: string }>; // plain string = exact-match shorthand; { regex } = full regex
 }
 
+export interface PolicyMatchResult {
+  matched: boolean;
+  reason?: "no_policy_match" | "field_mismatch"; // present only when matched === false
+}
+
 // ─── API Input Types ──────────────────────────────────────────────────────────
 
 export interface SignedMessageEnvelope {
@@ -198,7 +203,7 @@ export interface EnvelopeVerificationResult {
   verified_at: string;
   protocol_version: string;
   signatures: SignatureVerificationResult[];
-  policy_match: boolean | null;
+  policy_match: PolicyMatchResult | null;
 }
 
 export interface SignatureVerificationResult {
@@ -215,7 +220,7 @@ export interface SignatureVerificationResult {
   is_currently_valid: boolean | "skipped";
   log_updates: LogUpdate[];
   policy_compliant: boolean | null | "skipped";
-  policy_match: boolean | null;
+  policy_match: PolicyMatchResult | null;
   press_subsequently_revoked: boolean;
   non_compliance_reported: boolean;
   addressed_to_verifier: boolean;
