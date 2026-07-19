@@ -8,7 +8,21 @@
  *   4. Verify press is active under at least one configured policy (warning only)
  *   5. Mark ready — HTTP listener begins accepting traffic
  *
- * GET /health returns 503 until step 5 completes.
+ * GET /health (and every other endpoint) returns 503 until step 5 completes.
+ *
+ * Under the cloudflare-module preset, this sequence's async I/O (IPFS/RPC
+ * checks) can't run directly in defineNitroPlugin's own callback — Workers
+ * runs plugin registration at module-evaluation time, outside any request's
+ * handler context, and workerd hard-rejects fetch()/connect() there
+ * ("Disallowed operation called within global scope"). Confirmed against
+ * the actual `wrangler dev` error, not just docs. So the plugin only
+ * registers a `request` hook (which *does* fire inside request handling);
+ * the hook kicks off runStartup() on the first real request it sees,
+ * memoized via startupPromise so later requests don't restart it. Every
+ * handler already checks isPressReady() before touching context (see
+ * server/api/*), so requests during the startup window still get a clean
+ * 503 exactly as before — this only changes when the I/O begins, not the
+ * observable ready/not-ready contract.
  */
 
 import { loadConfig, type PressConfig } from '../../src/config.js';
@@ -42,7 +56,27 @@ export function getCtx(): PressContext {
   return pressContext;
 }
 
-export default defineNitroPlugin(async () => {
+let startupPromise: Promise<void> | null = null;
+
+export default defineNitroPlugin((nitroApp) => {
+  nitroApp.hooks.hook('request', async () => {
+    // Awaited (not fire-and-forget): workerd only permits async I/O for the
+    // duration of the request that's actually executing. A detached
+    // background promise starting mid-request but outliving its own
+    // handler's return gets its I/O silently stuck (confirmed empirically —
+    // fetch() inside it never resolves or rejects). Awaiting here keeps
+    // runStartup()'s I/O within a request's live execution the whole time.
+    // Memoized via startupPromise, so only the request that triggers it
+    // pays the cost — every request after that (including concurrent ones)
+    // awaits the same settled/settling promise.
+    if (!startupPromise) {
+      startupPromise = runStartup();
+    }
+    await startupPromise;
+  });
+});
+
+async function runStartup(): Promise<void> {
   // ── Step 1: config ──────────────────────────────────────────────────────────
   let config: PressConfig;
   try {
@@ -61,16 +95,16 @@ export default defineNitroPlugin(async () => {
     return;
   }
 
-  // ── Step 3: Arbitrum One RPC ────────────────────────────────────────────────
+  // ── Step 3: Arbitrum RPC (chain ID checked against config.EXPECTED_CHAIN_ID) ─
   const rpcClient = createPublicClient({
     chain: arbitrum,
     transport: http(config.ARBITRUM_RPC_URL),
   });
   try {
     const chainId = await rpcClient.getChainId();
-    if (chainId !== arbitrum.id) {
+    if (chainId !== config.EXPECTED_CHAIN_ID) {
       pressStartupError =
-        `ARBITRUM_RPC_URL: connected to chain ${chainId}, expected ${arbitrum.id} (Arbitrum One)`;
+        `ARBITRUM_RPC_URL: connected to chain ${chainId}, expected ${config.EXPECTED_CHAIN_ID}`;
       return;
     }
   } catch (err) {
@@ -120,4 +154,4 @@ export default defineNitroPlugin(async () => {
       `Policies: ${config.PRESS_POLICY_CIDS.length} | ` +
       `Authorized: ${authorizedCount}`
   );
-});
+}

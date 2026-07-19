@@ -1,5 +1,26 @@
 # Phase 1 Environment Notes
 
+## Press under workerd: three real Workers-compatibility bugs, all fixed (2026-07-18)
+
+**Status: resolved.** Full details and the fix for each are in
+`specs/object_specs/press.md`'s 2026-07-18 amendment (§3.1–§3.3, config
+table) and `plans/integration-testing-implementation-plan.md`'s Step 1.6
+amendment — not duplicated here. Summary for anyone scanning this file:
+
+1. `ioredis` (behind the KV `redis` driver) can't run under Workers'
+   `nodejs_compat` — crashes on boot (`node:string_decoder` mock throws).
+   Fixed: native `cloudflare-kv-binding` on the default preset.
+2. `defineNitroPlugin`'s callback runs outside any request's execution
+   context under Workers; workerd rejects async I/O there. A background
+   promise not `await`ed from inside a request handler also silently stalls
+   once that request ends (confirmed empirically, not just from docs).
+   Fixed: startup checks deferred to an `await`ed `request` hook.
+3. Startup RPC check hardcoded Arbitrum One (42161), so it always failed
+   against the stack's Sepolia chain component. Fixed: new
+   `EXPECTED_CHAIN_ID` config (readiness check only — `src/chain/
+   {registry,gas}.ts`/`reconcile-cids.ts` still hardcode mainnet for
+   transaction construction).
+
 ## Synapse policy module: watcher background loops throw at startup (2026-07-18)
 
 **Status: noted, not fixed — not on the critical path.** Bringing up Synapse

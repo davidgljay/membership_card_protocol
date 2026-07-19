@@ -27,7 +27,7 @@ function setEnv(env: Record<string, string>) {
 
 // Vars a test may set beyond validEnv's keys (e.g. to exercise the kubo
 // provider path) — cleared alongside validEnv so tests stay isolated.
-const EXTRA_CLEARABLE_KEYS = ['IPFS_PROVIDER', 'KUBO_API_URL', 'KUBO_GATEWAY_URL'];
+const EXTRA_CLEARABLE_KEYS = ['IPFS_PROVIDER', 'KUBO_API_URL', 'KUBO_GATEWAY_URL', 'EXPECTED_CHAIN_ID'];
 
 function clearEnv() {
   for (const k of [...Object.keys(validEnv), ...EXTRA_CLEARABLE_KEYS]) {
@@ -117,6 +117,18 @@ describe('loadConfig', () => {
     expect(config.IPFS_PROVIDER).toBe('filebase');
     expect(config.FILEBASE_BUCKET).toBe('membership_card_protocol');
     expect(config.FILEBASE_ENDPOINT).toBe('https://s3.filebase.com');
+  });
+
+  it('defaults EXPECTED_CHAIN_ID to Arbitrum One (42161)', () => {
+    setEnv(validEnv);
+    const config = loadConfig();
+    expect(config.EXPECTED_CHAIN_ID).toBe(42161);
+  });
+
+  it('honors an EXPECTED_CHAIN_ID override (e.g. Arbitrum Sepolia for testing)', () => {
+    setEnv({ ...validEnv, EXPECTED_CHAIN_ID: '421614' });
+    const config = loadConfig();
+    expect(config.EXPECTED_CHAIN_ID).toBe(421614);
   });
 
   it('exits non-zero for an unrecognized IPFS_PROVIDER', () => {

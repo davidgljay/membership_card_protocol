@@ -6,6 +6,12 @@
 
 **Amended 2026-07-16:** §5.3 `appendLogEntry` updated for the `LogEntry` full-repost design change (`protocol-objects.md §3`, `object_specs/ipfs_card.md §5`) — the press now fetches/decrypts the current head before assembling a new entry, and each entry carries `card_state` (full current field state) and `history` (flat CID provenance list) rather than only a diff.
 
+**Amended 2026-07-18 (workerd fidelity fixes, integration testing):** Three issues surfaced getting press running under real `wrangler dev`/workerd rather than a plain-Node preset (`integration_tests` Phase 1.6), all now fixed:
+
+1. **KV storage.** The `redis` Nitro storage driver (`EXTERNAL_KV_URL`) pulls in `ioredis`, whose wire-protocol parser instantiates `node:string_decoder`'s `StringDecoder` unconditionally at module-load time — Cloudflare Workers' `nodejs_compat` layer only ships a non-functional mock of it, so the Worker crashed on boot before serving any request (confirmed against the actual bundled output, not just docs — not fixable via `compatibility_date`/flags). §3.1, §3.2, §3.3 updated: the default `cloudflare-module` preset now uses a native `cloudflare-kv-binding` (`PRESS_KV`, `press/wrangler.toml`) — the same fix `wallet-service`'s `nitro.config.ts` already applies for the identical reason. `EXTERNAL_KV_URL`/the `redis` driver survive only for the `node-server`/`aws-lambda` presets, where `ioredis` works fine; `EXTERNAL_KV_URL` is accordingly no longer a universally-required variable.
+2. **Startup timing.** `server/plugins/startup.ts`'s IPFS/chain readiness checks used to run directly inside `defineNitroPlugin`'s own callback — under Workers, plugin registration happens at module-evaluation time, outside any request's execution context, and workerd hard-rejects async I/O there ("Disallowed operation called within global scope"). Further: kicking the checks off from inside a request but not `await`ing them there let their `fetch()` calls get silently orphaned once that request's own handler returned (confirmed empirically — the promise never resolved or rejected). Fixed by registering a `request` hook that `await`s a memoized startup promise, so the I/O stays within a live request's execution the whole time; only the triggering request pays the cost, everything after awaits the same settled promise. Every handler already checked `isPressReady()` before touching context, so the observable ready/not-ready contract for callers is unchanged.
+3. **Hardcoded mainnet chain ID.** The startup RPC check compared against `viem/chains`' `arbitrum` (Arbitrum One, 42161) unconditionally, so it always failed against any other network — including Arbitrum Sepolia, which `integration_tests`' stack deliberately uses (see `integration_tests/reports/phase-1-environment-notes.md`). New optional `EXPECTED_CHAIN_ID` config (§3.2), defaulting to `42161`. Note this only fixes the *readiness check* — `src/chain/{registry,gas}.ts` and `server/tasks/reconcile-cids.ts` still hardcode `arbitrum` for transaction construction, so pointing `ARBITRUM_RPC_URL` at a different network gets the health check passing but does not make write paths chain-agnostic; that would need those three files updated too.
+
 **Amended 2026-07-18:** §3.2, §3.4 updated — IPFS pinning is now behind a provider abstraction (`IpfsPinningProvider`, `press/src/ipfs/provider.ts`) selected at startup via the new `IPFS_PROVIDER` config variable (default `filebase`, preserving all existing-deployment behavior unchanged). Filebase remains the production implementation and everything below describing its mechanics is still accurate for `IPFS_PROVIDER=filebase`; the change only removes the previous hardcoding of the Filebase endpoint/bucket and makes the interface pluggable. Two additional implementations exist for non-production use: `kubo` (talks directly to a local Kubo node's HTTP API — for local/integration testing) and `mock` (in-memory — for unit tests). §3.5's CID reconciliation task is Filebase-Pinning-API-specific and is a no-op when `IPFS_PROVIDER` is not `filebase`.
 
 **Amended 2026-07-16 (spec-consistency Phase 3, Tier 1 item 1):** §3.2, §3.4 (renamed from "IPFS Pinning — Piñata" to "IPFS Pinning — Filebase"), §3.5, §5.1, §5.0, §7, and §10 corrected to describe **Filebase** (S3-compatible upload + `HeadObject` CID capture + gateway fetch + byte-compare validation + Filebase Pinning API reconciliation), the actual and confirmed-deliberate production IPFS pinning vendor — the prior text describing Piñata was stale/incorrect; the deployed code (`press/src/ipfs/client.ts`, `press/server/tasks/reconcile-cids.ts`) has never used Piñata. See `plans/spec-consistency/inconsistencies/phase-3-consolidated-fixes.md` Tier 1 item 1.
@@ -108,7 +114,7 @@ The press card is issued externally (by the governance body that authorizes the 
 
 The press is a **Nitro** application (https://nitro.unjs.io). Nitro produces a universal server build that deploys as serverless functions to any supported target (AWS Lambda, Cloudflare Workers, Vercel, self-hosted Node.js, etc.). HTTP routes are defined as Nitro API routes; the CID reconciliation job runs as a Nitro scheduled task.
 
-Each function invocation is stateless. The press loads key material from the environment on each invocation and reads/writes all durable state (rate limit counters, offer records, log heads, app gas balances) to an external key-value store configured via `EXTERNAL_KV_URL`.
+Each function invocation is stateless. The press loads key material from the environment on each invocation and reads/writes all durable state (rate limit counters, offer records, log heads, app gas balances) to a KV store. On the default `cloudflare-module` preset this is a native Cloudflare KV binding (`PRESS_KV`); on `node-server`/`aws-lambda` it's a Redis-backed store configured via `EXTERNAL_KV_URL` (`ioredis`, the driver behind that option, can't run under Workers' `nodejs_compat` — see the 2026-07-18 amendment above).
 
 **Press operator deployment:**
 
@@ -138,6 +144,7 @@ All configuration is via environment variables.
 | `PRESS_GAS_WALLET_PRIVATE_KEY` | Yes | Hex-encoded Ethereum wallet private key that holds ETH and pays gas (`msg.sender`) for on-chain transactions. Distinct from `PRESS_SECP256R1_PRIVATE_KEY` — see §2. Added 2026-07-16, Phase 3 Tier 1 item 17. |
 | `PRESS_OHTTP_PRIVATE_KEY` | Yes | Base64url-encoded X25519 HPKE private key backing the OHTTP gateway endpoints (§4). Added 2026-07-16, Phase 3 Tier 1 item 16. |
 | `ARBITRUM_RPC_URL` | Yes | Arbitrum One RPC endpoint (e.g. `https://arb1.arbitrum.io/rpc`) |
+| `EXPECTED_CHAIN_ID` | No | Chain ID the startup readiness check expects `ARBITRUM_RPC_URL` to report. Default: `42161` (Arbitrum One). Added 2026-07-18 — only the readiness check honors this; see the amendment above. |
 | `REGISTRY_CONTRACT_ADDRESS` | Yes | Address of the registry storage contract on Arbitrum One |
 | `IPFS_PROVIDER` | No | Which `IpfsPinningProvider` to construct: `filebase`, `kubo`, or `mock`. Default: `filebase`. Added 2026-07-18. |
 | `FILEBASE_KEY` | If `IPFS_PROVIDER=filebase` | Filebase S3-compatible access key ID (IPFS pinning and content upload) |
@@ -148,7 +155,7 @@ All configuration is via environment variables.
 | `FILEBASE_BUCKET` | No | Filebase bucket name. Default: `membership_card_protocol`. Added 2026-07-18 (previously hardcoded). |
 | `KUBO_API_URL` | If `IPFS_PROVIDER=kubo` | Base URL of a Kubo node's HTTP API (e.g. `http://ipfs:5001`). Added 2026-07-18. |
 | `KUBO_GATEWAY_URL` | If `IPFS_PROVIDER=kubo` | Base URL of that Kubo node's IPFS gateway (e.g. `http://ipfs:8080`). Added 2026-07-18. |
-| `EXTERNAL_KV_URL` | Yes | Connection URL for the external key-value store (Redis, Upstash, DynamoDB, etc.) |
+| `EXTERNAL_KV_URL` | If not `cloudflare-module` preset | Connection URL for the Redis-backed KV store used on `node-server`/`aws-lambda`. Not read by application code — only by `nitro.config.ts`'s build-time driver selection. Unused (and not required) on the default `cloudflare-module` preset, which uses `PRESS_KV` instead — see the 2026-07-18 amendment above. |
 | `PORT` | No | HTTP port (self-hosted Node.js only). Default: `3000` |
 | `LOG_LEVEL` | No | `debug`, `info`, `warn`, `error`. Default: `info` |
 | `MAX_BATCH_SIZE` | No | Maximum cards per `BatchUpdateCardHeads` call. Default: `100` (contract maximum) |
@@ -156,9 +163,9 @@ All configuration is via environment variables.
 
 ---
 
-### 3.3 Persistent State — External KV Store
+### 3.3 Persistent State — KV Store
 
-All durable state is stored in an external key-value store accessed via Nitro's `useStorage()` API. The underlying driver (Redis, Upstash, Cloudflare KV, DynamoDB, etc.) is operator-configured via `EXTERNAL_KV_URL` and the Nitro storage driver for that backend.
+All durable state is stored in a key-value store accessed via Nitro's `useStorage()` API. The underlying driver is chosen in `nitro.config.ts` based on the build preset: `cloudflare-kv-binding` (`PRESS_KV`) on the default `cloudflare-module` preset, or Redis (`EXTERNAL_KV_URL`) on `node-server`/`aws-lambda`. The Redis (`ioredis`) driver cannot run under Workers' `nodejs_compat` — see the 2026-07-18 amendment above.
 
 No local SQLite database is used. On restart or cold start, the press reads any required state from the KV store and falls back to on-chain reads where the KV store is absent (e.g., for log head CIDs).
 

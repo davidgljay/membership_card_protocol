@@ -176,6 +176,39 @@ services:
       synapse-init:
         condition: service_completed_successfully
 
+  # ── Phase 1.6: press under workerd ──────────────────────────────────────────
+  # Runs the real Cloudflare Workers build (NITRO_PRESET=cloudflare-module)
+  # under `wrangler dev`/workerd, not a plain-Node preset — per strategic
+  # plan §Rationale Goal 1, this is the whole point of testing press here
+  # rather than just running `npm run dev`. IPFS_PROVIDER=kubo talks to this
+  # stack's ipfs service directly (see the IPFS-provider-abstraction commit)
+  # — no MinIO/S3 shim needed. KV storage is a native `cloudflare-kv-binding`
+  # (PRESS_KV, press/wrangler.toml), emulated locally by wrangler dev/
+  # miniflare — no separate Redis service, unlike relay/synapse (see
+  # press/nitro.config.ts's comment: ioredis, the `redis` driver's
+  # dependency, can't run under Workers' nodejs_compat). Chain access is
+  # Sepolia (see docker-compose.yml's top-of-file note); all values
+  # (including dummy-but-correctly-shaped test key material) are in
+  # env/press/.dev.vars, which `wrangler dev` loads automatically from its
+  # working directory.
+  press:
+    build:
+      context: ..
+      dockerfile: integration_tests/env/press/Dockerfile
+    volumes:
+      - ./env/press/.dev.vars:/repo/press/.dev.vars:ro
+    ports:
+      - "3001:3000"
+    depends_on:
+      ipfs:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health | grep -q '\"status\":\"ok\"'"]
+      interval: 3s
+      timeout: 3s
+      retries: 60
+      start_period: 30s
+
   # ── Phase 1.2 (deferred — see reports/phase-1-environment-notes.md) ────────
   nitro-devnode:
     profiles: ["local-chain"]
