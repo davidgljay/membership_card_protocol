@@ -44,13 +44,13 @@ integration_tests/
 
 ## Status
 
-Environment (Phase 1) is under construction — see
-`plans/milestones/integration-phase-1.md` once it exists for a status
-summary. The default stack itself (`docker compose up --wait` — ipfs,
+Phase 1 (the environment itself) is complete — see
+[`plans/milestones/integration-phase-1.md`](../plans/milestones/integration-phase-1.md)
+for the full review. The default stack (`docker compose up --wait` — ipfs,
 redis, relay, synapse, press, wallet-service and their Postgres/migration
-containers) comes up healthy and repeatably from a clean state in ~30s; what's
-still missing before this directory is runnable end-to-end is `run.sh` and
-the `suites/`/`harnesses/` themselves (Phase 2).
+containers) comes up healthy and repeatably from a clean state in ~30s.
+What's still missing before this directory is runnable end-to-end is
+`run.sh` and the `suites/`/`harnesses/` themselves (Phase 2).
 
 ## Running (once complete)
 

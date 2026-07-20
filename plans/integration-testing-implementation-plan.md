@@ -77,6 +77,7 @@ integration_tests/
 **Phase 1 Milestone Review** — [Sonnet]
 - Context needed: `integration_tests/docker-compose.yml`, all `env/` files, `deployments/local.json` output, `stack-ready` output, strategic plan §Key Objectives Goal 1.
 - Done when: every Goal-1 objective verified; service naming/env-var conventions consistent across containers; any workerd limitations discovered (missing Node APIs etc.) written to `integration_tests/reports/phase-1-environment-notes.md`; one-paragraph summary in `plans/milestones/integration-phase-1.md`.
+- **Confirmed 2026-07-19**: full review written to `plans/milestones/integration-phase-1.md`. Every Goal-1 objective checked against the strategic plan's actual wording: environment, IPFS, press, wallet-service, relay+redis, and Synapse are all done and healthy; the Nitro-devnode-with-fresh-contracts bullet is deliberately descoped to Sepolia (documented deviation, not a gap); the web/RN SDK harness bullet is Phase 2 scope per the implementation plan's own phase split, not Phase 1's. Env-var/naming conventions checked across all `env/` files and `docker-compose.yml` — consistent, with `IPFS_GATEWAY_URL` vs. press's `KUBO_*` naming noted as an intentional (not accidental) divergence. No new workerd limitations found beyond what 1.6/1.7 already documented.
 
 ---
 
