@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { canonicalize } from "./canonicalize.js";
 import { PROTOCOL_VERSION_0_1 } from "./constants.js";
 import { keccak256, hkdfSha3256, aes256gcmDecrypt } from "./crypto.js";
@@ -116,7 +115,8 @@ export class CardVerifier {
     }
 
     const canonicalEnvelope = canonicalize(envelope);
-    const envelope_id = createHash("sha256").update(canonicalEnvelope).digest("hex");
+    const envelopeIdDigest = await crypto.subtle.digest("SHA-256", Uint8Array.from(canonicalEnvelope));
+    const envelope_id = Buffer.from(envelopeIdDigest).toString("hex");
 
     const signatures = await Promise.all(
       envelope.signatures.map((entry) =>
@@ -203,7 +203,7 @@ export class CardVerifier {
         const contentKey = hkdfSha3256(pubkeyBytes, "card-content-v1");
         try {
           const encrypted = await this.config.ipfs.fetch(cardEntry.log_head_cid);
-          const decrypted = aes256gcmDecrypt(contentKey, encrypted);
+          const decrypted = await aes256gcmDecrypt(contentKey, encrypted);
           const cardDoc = JSON.parse(new TextDecoder().decode(decrypted)) as CardDocument;
 
           const stage3 = await verifyStage3(cardDoc, cardAddress, this.config.rpc, this.config.ipfs, this.config, pubkeyBytes);

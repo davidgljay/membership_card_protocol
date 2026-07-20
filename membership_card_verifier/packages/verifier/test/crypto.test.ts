@@ -34,16 +34,16 @@ describe("aes256gcmDecrypt", () => {
     return new Uint8Array(Buffer.concat([nonce, ciphertext, tag]));
   }
 
-  it("decrypts a valid ciphertext", () => {
+  it("decrypts a valid ciphertext", async () => {
     const key = new Uint8Array(randomBytes(32));
     const nonce = new Uint8Array(randomBytes(12));
     const plaintext = new TextEncoder().encode("hello, card protocol");
     const encrypted = encrypt(key, nonce, plaintext);
-    const decrypted = aes256gcmDecrypt(key, encrypted);
+    const decrypted = await aes256gcmDecrypt(key, encrypted);
     expect(decrypted).toEqual(plaintext);
   });
 
-  it("throws CardProtocolError on tampered ciphertext", () => {
+  it("throws CardProtocolError on tampered ciphertext", async () => {
     const key = new Uint8Array(randomBytes(32));
     const nonce = new Uint8Array(randomBytes(12));
     const plaintext = new TextEncoder().encode("secret");
@@ -52,7 +52,7 @@ describe("aes256gcmDecrypt", () => {
     encrypted[13] ^= 0xff;
     let caught: unknown;
     try {
-      aes256gcmDecrypt(key, encrypted);
+      await aes256gcmDecrypt(key, encrypted);
     } catch (e) {
       caught = e;
     }

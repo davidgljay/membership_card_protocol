@@ -42,7 +42,7 @@ export async function verifyStage2(
   let subCardDoc: SubCardDocument;
   try {
     const encrypted = await ipfs.fetch(cardEntry.log_head_cid);
-    const decrypted = aes256gcmDecrypt(leafContentKey, encrypted);
+    const decrypted = await aes256gcmDecrypt(leafContentKey, encrypted);
     subCardDoc = JSON.parse(new TextDecoder().decode(decrypted)) as SubCardDocument;
   } catch (e) {
     const code = e instanceof CardProtocolError ? e.code : "DECRYPTION_FAILED";
@@ -86,7 +86,7 @@ export async function verifyStage2(
   let masterCardDoc: CardDocument;
   try {
     const encrypted = await ipfs.fetch(masterCardEntry.log_head_cid);
-    const decrypted = aes256gcmDecrypt(masterContentKey, encrypted);
+    const decrypted = await aes256gcmDecrypt(masterContentKey, encrypted);
     masterCardDoc = JSON.parse(new TextDecoder().decode(decrypted)) as CardDocument;
   } catch (e) {
     const code = e instanceof CardProtocolError ? e.code : "DECRYPTION_FAILED";
@@ -206,7 +206,7 @@ export async function verifyStage2(
   let appCardDoc: CardDocument;
   try {
     const encrypted = await ipfs.fetch(appCardEntry.log_head_cid);
-    const decrypted = aes256gcmDecrypt(appCardContentKey, encrypted);
+    const decrypted = await aes256gcmDecrypt(appCardContentKey, encrypted);
     appCardDoc = JSON.parse(new TextDecoder().decode(decrypted)) as CardDocument;
   } catch (e) {
     const code = e instanceof CardProtocolError ? e.code : "DECRYPTION_FAILED";
@@ -246,7 +246,7 @@ export async function verifyStage2(
     const nextContentKey = hkdfSha3256(nextPubkeyBytes, "card-content-v1");
     try {
       const encrypted = await ipfs.fetch(nextEntry.log_head_cid);
-      const decrypted = aes256gcmDecrypt(nextContentKey, encrypted);
+      const decrypted = await aes256gcmDecrypt(nextContentKey, encrypted);
       currentDoc = JSON.parse(new TextDecoder().decode(decrypted)) as CardDocument;
       currentAddress = nextAddress;
     } catch (e) {

@@ -91,7 +91,7 @@ export async function verifyStage3(
     let ancestorDoc: CardDocument;
     try {
       const encrypted = await ipfs.fetch(cardEntry.log_head_cid);
-      const decrypted = aes256gcmDecrypt(contentKey, encrypted);
+      const decrypted = await aes256gcmDecrypt(contentKey, encrypted);
       ancestorDoc = JSON.parse(new TextDecoder().decode(decrypted)) as CardDocument;
     } catch (e) {
       const code = e instanceof CardProtocolError ? e.code : "DECRYPTION_FAILED";
