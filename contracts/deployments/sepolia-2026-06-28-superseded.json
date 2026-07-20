@@ -1,0 +1,29 @@
+{
+  "network": "sepolia",
+  "deployed_at": "2026-06-28T06:35:35Z",
+  "rpc_url": "https://sepolia-rollup.arbitrum.io/rpc",
+  "contracts": {
+    "verifier_module": "0x720ea9ec3b09de2077c63096f7b412749a58bd85",
+    "storage_contract": "0x3284f0019df69a4aaa4142b3c63dd9c7ffaba0be",
+    "logic_contract": "0xc9d2439c1cc3575dc4f57b9caa1c8130c4b60fc9"
+  },
+  "deployment_txs": {
+    "verifier_module": "0xdc498593cf1ba185b248c67c04c87b2bdc933558054747abc63195b893d32895",
+    "storage_contract": "0xdd2b79d240e4b158b3914aa906a4aa6017ba6eb1e11a35166056672a9c18a5e6",
+    "logic_contract": "0x2f6522598cbbd4b2f2dbe64883a09bb4d3c8ad86139456ff18681a037ef40d60"
+  },
+  "wiring_txs": {
+    "init_storage": "0x55a6c17c9683eb458493535228e3a59ff3ce5728347134904f840f37e1bf8332",
+    "init_logic": "0x1039d4cc2f0477d1fb69a955ba1abf2093af7d9d31dcd9bbb0ac4dc346d6b31b"
+  },
+  "dns_bootstrap_txs": {
+    "register_dns_policy": "0x08c2be00de586d6662edb1d1076f12cb1144878191b1a5deb6da41bbaabfdc98",
+    "authorize_dns_press": "0x1352254f688c13a34f20051baa35ffd8c7cfc7d5de24dedc2842120d19667633",
+    "set_dns_governance_policy_address": "0x97017ea5bcef4f2184b6906b0f5381590b9980e0ffb2215d2369e4f3f2cb660f"
+  },
+  "dns_addresses": {
+    "dns_governance_policy": "0x11d0ab23735a00656136b38bd37988374c41c57c3b7e5744e462f4b33270c6c5",
+    "dns_governance_press": "0x222fb1247a7b3fb31a1912819a41e00665ea5cf6b90b6c25d1d0adfa87171342"
+  },
+  "notes": "Phase 4 DNS deployment. Storage redeployed with DomainRegistrations, PolicyAddresses, DnsAdminCardKeys, DnsGovernancePolicyAddress tables. Supersedes pre-DNS deployments. DNS bootstrap complete; end-to-end test passed 2026-06-28."
+}
