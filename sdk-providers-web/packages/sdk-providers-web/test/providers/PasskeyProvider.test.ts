@@ -34,6 +34,7 @@ describe('WebAuthnPasskeyProvider', () => {
     const create = vi.fn().mockResolvedValue({
       rawId,
       response: { attestationObject, clientDataJSON },
+      getClientExtensionResults: () => ({}),
     });
     stubCredentialsContainer({ create } as unknown as Partial<CredentialsContainer>);
 
@@ -44,10 +45,26 @@ describe('WebAuthnPasskeyProvider', () => {
     const options = create.mock.calls[0][0].publicKey;
     expect(new Uint8Array(options.challenge)).toEqual(challenge);
     expect(options.rp).toEqual({ id: 'example.com', name: 'Example' });
+    expect(options.extensions.prf.eval.first.length).toBe(32);
 
     expect(result.credentialId).toEqual(new Uint8Array(rawId));
     expect(result.attestationObject).toEqual(new Uint8Array(attestationObject));
     expect(result.clientDataJSON).toEqual(new Uint8Array(clientDataJSON));
+  });
+
+  it('register() maps the PRF extension output when the authenticator supports it', async () => {
+    const prfFirst = new Uint8Array([42, 42, 42]).buffer;
+    const create = vi.fn().mockResolvedValue({
+      rawId: new Uint8Array([9]).buffer,
+      response: { attestationObject: new Uint8Array([1]).buffer, clientDataJSON: new Uint8Array([2]).buffer },
+      getClientExtensionResults: () => ({ prf: { results: { first: prfFirst } } }),
+    });
+    stubCredentialsContainer({ create } as unknown as Partial<CredentialsContainer>);
+
+    const provider = new WebAuthnPasskeyProvider({ rpId: 'example.com' });
+    const result = await provider.register(new Uint8Array([1, 2, 3]));
+
+    expect(result.prfOutput).toEqual(new Uint8Array(prfFirst));
   });
 
   it('assert() omits allowCredentials when no credentialId is supplied', async () => {
@@ -59,6 +76,7 @@ describe('WebAuthnPasskeyProvider', () => {
         clientDataJSON: new Uint8Array([2]).buffer,
         signature: new Uint8Array([3]).buffer,
       },
+      getClientExtensionResults: () => ({}),
     });
     stubCredentialsContainer({ get } as unknown as Partial<CredentialsContainer>);
 
@@ -67,6 +85,7 @@ describe('WebAuthnPasskeyProvider', () => {
 
     const options = get.mock.calls[0][0].publicKey;
     expect('allowCredentials' in options).toBe(false);
+    expect(options.extensions.prf.eval.first.length).toBe(32);
   });
 
   it('assert() includes allowCredentials when a credentialId is supplied', async () => {
@@ -79,6 +98,7 @@ describe('WebAuthnPasskeyProvider', () => {
         clientDataJSON: new Uint8Array([2]).buffer,
         signature: new Uint8Array([3]).buffer,
       },
+      getClientExtensionResults: () => ({}),
     });
     stubCredentialsContainer({ get } as unknown as Partial<CredentialsContainer>);
 
@@ -87,5 +107,24 @@ describe('WebAuthnPasskeyProvider', () => {
 
     const options = get.mock.calls[0][0].publicKey;
     expect(new Uint8Array(options.allowCredentials[0].id)).toEqual(credentialId);
+  });
+
+  it('assert() maps the PRF extension output when present', async () => {
+    const prfFirst = new Uint8Array([7, 7, 7]).buffer;
+    const get = vi.fn().mockResolvedValue({
+      rawId: new Uint8Array([1]).buffer,
+      response: {
+        authenticatorData: new Uint8Array([1]).buffer,
+        clientDataJSON: new Uint8Array([2]).buffer,
+        signature: new Uint8Array([3]).buffer,
+      },
+      getClientExtensionResults: () => ({ prf: { results: { first: prfFirst } } }),
+    });
+    stubCredentialsContainer({ get } as unknown as Partial<CredentialsContainer>);
+
+    const provider = new WebAuthnPasskeyProvider({ rpId: 'example.com' });
+    const result = await provider.assert(new Uint8Array([1, 2, 3]));
+
+    expect(result.prfOutput).toEqual(new Uint8Array(prfFirst));
   });
 });
