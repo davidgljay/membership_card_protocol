@@ -2,6 +2,8 @@
 
 **Status:** Production deployment approval is pending CP-3's independent security review (see `docs/security-review-cp3.md`). This runbook documents how to deploy, configure, and operate an instance once that review clears.
 
+**Amended 2026-07-19 (integration_tests Phase 1.7):** the §Deployment claim that "a bare Worker cannot open a raw TCP socket to a database without [Hyperdrive]" was wrong — corrected below. Confirmed running this service under real `wrangler dev`/workerd (not a plain-Node preset): a bare `pg` connection to Postgres works fine. The real constraint is connection *lifetime*, not socket capability — see `server/db/client.ts`'s doc comment for the full story and `integration_tests/reports/phase-1-environment-notes.md` for how it was found.
+
 ---
 
 ## Deployment
@@ -14,7 +16,7 @@ The wallet service is a Nitro (`nitropack`) application with three supported pre
 | `node-server` | `pnpm run build:node` | Any Node 22+ host |
 | `aws-lambda` | `pnpm run build:lambda` | AWS Lambda |
 
-**Cloudflare specifics:** `wrangler.toml` sets `compatibility_flags = ["nodejs_compat"]` (required for `pg` and `node:crypto`) and declares the `WALLET_KV` binding used when `KV_BACKEND=cloudflare-kv`. `pg` needs a TCP-capable path to Postgres from a Worker — use Cloudflare Hyperdrive or an equivalent; a bare Worker cannot open a raw TCP socket to a database without it.
+**Cloudflare specifics:** `wrangler.toml` sets `compatibility_flags = ["nodejs_compat"]` (required for `pg` and `node:crypto`) and declares the `WALLET_KV` binding used when `KV_BACKEND=cloudflare-kv`. A bare Worker *can* open a raw TCP socket to Postgres under `nodejs_compat` — confirmed running this service for real under `wrangler dev`. The actual constraint is that a `pg.Pool` kept alive across separate requests (the normal Node pattern) doesn't survive reliably under workerd: a connection established while handling one request intermittently hangs when reused during a later, different request, and gets force-killed by the runtime's watchdog (~50% failure rate on a plain health-check query, measured directly — not a theoretical concern). `server/db/client.ts` works around this on the `cloudflare-module` preset by returning a fresh, small (`max: 1`) `Pool` per call instead of a cached singleton, so its one connection is always established and used within the same request — no Hyperdrive or other TCP-proxying layer required for this to work, though Hyperdrive's actual pooling would still reduce per-request connection-setup overhead at higher request volume than this fix alone gives you.
 
 **Database:** PostgreSQL, schema managed via `node-pg-migrate` (`server/db/migrations/`). Run `pnpm run migrate` (reads `.env`) or `node-pg-migrate up --migrations-dir server/db/migrations --database-url-var DATABASE_URL` with `DATABASE_URL` set directly, before starting the application for the first time and after every deploy that adds a migration.
 

@@ -1,5 +1,24 @@
 # Phase 1 Environment Notes
 
+## Wallet-service under workerd: pooled pg connections don't survive across requests (2026-07-19)
+
+**Status: resolved.** Full details in `plans/integration-testing-implementation-plan.md`'s
+Step 1.7 amendment and `wallet-service/server/db/client.ts`'s doc comment —
+not duplicated here. Summary: a module-scope `pg.Pool` reused across
+requests (standard Node pattern, used by all ~37 `getPool()` call sites)
+intermittently hung and got force-killed by the Workers runtime's watchdog
+when a connection from one request got reused in a later, different
+request (~50% failure rate on a plain health check, measured directly).
+Confirmed local Hyperdrive emulation does not fix this — `wrangler dev`'s
+`localConnectionString` is a passthrough with no pooling. Fixed by
+returning a fresh, small (`max: 1`) `Pool` per call on the Workers runtime
+instead of a cached singleton; `node-server`/`aws-lambda` keep the real
+persistent pool. Confirmed 15/15 consecutive `/health` requests passing
+after the fix (previously ~50% failure). `wallet-service/docs/
+operations.md` had a stale claim that raw TCP sockets don't work under
+Workers without Hyperdrive at all — corrected; the real constraint is
+connection lifetime, not socket capability.
+
 ## Press under workerd: three real Workers-compatibility bugs, all fixed (2026-07-18)
 
 **Status: resolved.** Full details and the fix for each are in

@@ -209,6 +209,69 @@ services:
       retries: 60
       start_period: 30s
 
+  # ── Phase 1.7: wallet-service under workerd ─────────────────────────────────
+  # Same rationale/pattern as press (env/wallet-service/Dockerfile mirrors
+  # env/press/Dockerfile). Unlike press, wallet-service already had a
+  # workerd-compatible KV story built in (KV_BACKEND=cloudflare-kv, toggled
+  # via its existing wrangler.toml's WALLET_KV binding — no code changes
+  # needed here) and does its health-check I/O lazily inside the /health
+  # request handler rather than eagerly in a plugin, so it doesn't hit
+  # press's startup-timing bug either. Its own Postgres (raw `pg` TCP,
+  # requires compatibility_flags=nodejs_compat, already set in wrangler.toml)
+  # is a separate open question from press's — confirmed working under
+  # wrangler dev's local workerd, see reports/phase-1-environment-notes.md
+  # if that ever needs revisiting.
+  wallet-service-postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: wallet_service
+      POSTGRES_PASSWORD: wallet_service
+      POSTGRES_DB: wallet_service
+    volumes:
+      - wallet-service-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wallet_service"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  wallet-service-migrate:
+    image: integration_tests-wallet-service
+    build:
+      context: ..
+      dockerfile: integration_tests/env/wallet-service/Dockerfile
+    entrypoint: ["npx", "node-pg-migrate", "--migrations-dir", "server/db/migrations", "up"]
+    environment:
+      DATABASE_URL: postgres://wallet_service:wallet_service@wallet-service-postgres:5432/wallet_service
+    depends_on:
+      wallet-service-postgres:
+        condition: service_healthy
+
+  wallet-service:
+    image: integration_tests-wallet-service
+    build:
+      context: ..
+      dockerfile: integration_tests/env/wallet-service/Dockerfile
+    volumes:
+      - ./env/wallet-service/.dev.vars:/repo/wallet-service/.dev.vars:ro
+    ports:
+      - "3002:3000"
+    depends_on:
+      wallet-service-postgres:
+        condition: service_healthy
+      wallet-service-migrate:
+        condition: service_completed_successfully
+      synapse:
+        condition: service_healthy
+      relay:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health | grep -q '\"status\":\"ok\"'"]
+      interval: 3s
+      timeout: 3s
+      retries: 60
+      start_period: 30s
+
   # ── Phase 1.2 (deferred — see reports/phase-1-environment-notes.md) ────────
   nitro-devnode:
     profiles: ["local-chain"]
@@ -270,3 +333,4 @@ volumes:
   relay-db:
   synapse-pg-data:
   synapse-data:
+  wallet-service-pg-data:
