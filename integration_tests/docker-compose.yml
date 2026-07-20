@@ -265,6 +265,8 @@ services:
         condition: service_healthy
       relay:
         condition: service_healthy
+      ipfs:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health | grep -q '\"status\":\"ok\"'"]
       interval: 3s

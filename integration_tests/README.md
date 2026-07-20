@@ -27,6 +27,7 @@ rollout:
 ```
 integration_tests/
   docker-compose.yml   # the full stack
+  stack-ready.sh        # polls an already-running stack's healthchecks until ready
   run.sh                # single entry point: unit tests + stack + integration suites
   env/                   # per-service Dockerfiles, wrangler configs, bootstrap scripts
   fixtures/               # shared keys, cards, test vectors (reused from existing suites)
@@ -45,8 +46,11 @@ integration_tests/
 
 Environment (Phase 1) is under construction — see
 `plans/milestones/integration-phase-1.md` once it exists for a status
-summary. Until `docker-compose.yml` and `run.sh` are complete, this
-directory is not yet runnable end-to-end.
+summary. The default stack itself (`docker compose up --wait` — ipfs,
+redis, relay, synapse, press, wallet-service and their Postgres/migration
+containers) comes up healthy and repeatably from a clean state in ~30s; what's
+still missing before this directory is runnable end-to-end is `run.sh` and
+the `suites/`/`harnesses/` themselves (Phase 2).
 
 ## Running (once complete)
 

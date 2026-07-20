@@ -71,7 +71,8 @@ integration_tests/
 **1.8 Stack-wide healthcheck + startup ordering** — [Sonnet]
 - What: add `depends_on` conditions across all services, a `stack-ready` script that polls every healthcheck, and fix any startup races. Measure cold-start time (target ≤ ~5 min).
 - Context: full compose file; outputs of 1.2–1.7.
-- Done when: `docker compose up --wait` succeeds repeatedly from clean state on a dev machine.
+- Done when: `docker compose up --wait` succeeds repeatedly from clean state on a dev machine. **Confirmed 2026-07-19**: two consecutive clean-state (`docker compose down -v`) runs of `docker compose up --wait` both succeeded in ~27s, well under the 5-min target.
+- **Amended 2026-07-19:** the `depends_on` graph built up incrementally across 1.3–1.7 was already sufficient — a single unstaged `docker compose up -d` from a clean volume converged all 8 default-stack services to healthy in ~20s with no manual sleeps, the same result the earlier per-service verification passes got by staging services up by hand. One gap found by reviewing every service's env vars against its `depends_on`: `wallet-service` reads `IPFS_GATEWAY_URL` (same as `press`) but, unlike `press`, had no `depends_on: ipfs`. Added, for consistency — not currently exercised by `/health`, but avoids a confusing failure if a future endpoint calls IPFS before the container's had a chance to see it come up. Added `integration_tests/stack-ready.sh`, a small polling script for the case `docker compose up --wait` doesn't cover: confirming an already-running stack (started in a separate step, e.g. by CI) is ready before a suite runs against it — Phase 2's harnesses/suites should call this rather than re-invoking `docker compose up`.
 
 **Phase 1 Milestone Review** — [Sonnet]
 - Context needed: `integration_tests/docker-compose.yml`, all `env/` files, `deployments/local.json` output, `stack-ready` output, strategic plan §Key Objectives Goal 1.
