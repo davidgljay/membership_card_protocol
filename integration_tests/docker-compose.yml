@@ -135,7 +135,7 @@ services:
       # web3.py's contract() rejects non-EIP-55-checksummed addresses —
       # deployments/sepolia.json's lowercase logic_contract address needed
       # `cast to-checksum` applied.
-      REGISTRY_CONTRACT_ADDRESS: "0xc9D2439C1cc3575DC4f57b9CAA1C8130c4B60fc9"
+      REGISTRY_CONTRACT_ADDRESS: "0x22206625803BCb584268B57dd6BD78cF61181399"
       IPFS_GATEWAY_URL: http://ipfs:8080
       JOIN_ATTESTATION_FRESHNESS_SECONDS: "300"
       WATCHER_BACKSTOP_INTERVAL_SECONDS: "60"

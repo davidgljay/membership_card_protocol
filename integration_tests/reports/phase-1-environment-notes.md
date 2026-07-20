@@ -1,5 +1,137 @@
 # Phase 1 Environment Notes
 
+## Press's chain integration: real on-chain writes never worked (2026-07-20)
+
+**Status: resolved — and this is the headline finding of Phase 2's fixtures
+work.** Building `integration_tests/fixtures`' `mintCard` helper (2.1 —
+"a fixture helper can produce a signed card accepted by the live press")
+required exercising press's real `POST /issue` → `POST /issue/finalize` →
+on-chain `RegisterCard` path for the first time against a genuinely live
+stack. It had never actually worked. Six distinct, independent bugs had to
+be found and fixed, in order, before a single card could be minted
+end-to-end:
+
+1. **`issuer_signature`/`holder_signature`/`press_signature` wire format
+   didn't match `protocol-objects.md`'s `CardDocument` spec.** Press
+   expected `{ public_key, signature }` objects; the spec (and
+   `membership_card_verifier`'s own types, and `app-sdk`'s real
+   `assembleAndSignTargetedOffer`) define these as bare base64url strings,
+   with the issuer's public key coming from `ancestry_pubkeys[0]` instead.
+   This meant **press's `/issue` endpoint could not accept an offer built
+   by the actual client SDK** — the exact class of bug this whole
+   environment exists to catch. Also found and fixed the same pattern in
+   `OpenCardOffer`/`OpenOfferClaimSubmission` (`open-offer.ts`), which
+   shares the assembly code path. Fixed in `press/src/types.ts`,
+   `src/functions/issuance.ts`, `src/handlers/open-offer.ts`; press's own
+   `issuance.test.ts`/`errors.test.ts` updated to match (they'd encoded
+   the same wrong convention).
+2. **`registry.ts`'s ABI used the wrong function-name casing everywhere.**
+   Every function was declared `PascalCase` or `snake_case`
+   (`RegisterCard`, `get_protocol_version`); Stylus SDK converts Rust's
+   snake_case to **camelCase** for real ABI dispatch — confirmed via a raw
+   `eth_call` against the live contract (the camelCase selector for
+   `getCardEntry` returns valid data; every name as originally written
+   reverts). This is the same class of bug as an already-documented
+   logic→storage contract mismatch fixed 2026-06-22, this time in press's
+   own client code rather than a cross-contract `sol_interface!`. Every
+   on-chain call press made — every read and every write — was reverting.
+3. **Several write functions were missing a `press_address` parameter
+   entirely** (`registerCard`, `updateCardHead`, `claimOpenOffer`,
+   `registerSubCard`, `deregisterSubCard`, `batchUpdateCardHeads`), and
+   `Vec<u8>` fields were declared as Solidity `bytes` instead of the
+   `uint8[]` Stylus actually uses (each byte padded to a 32-byte word).
+   `registry_contract.md`'s own ASCII diagrams turned out to be
+   simplified/inaccurate in several places (missing params, and
+   `BatchUpdateCardHeads`'s `UpdateItem[]` is actually three parallel
+   arrays on the wire) — not reliable as the wire-level source of truth.
+   Fixed by rebuilding `REGISTRY_ABI` (split into `LOGIC_ABI`/`STORAGE_ABI`
+   — see point 4) directly from `cargo stylus export-abi`'s real output
+   for both contracts, the actual ground truth.
+4. **Two read functions the client called (`getOpenOfferUseCount`,
+   `getSubCardEntry`) don't exist on the logic contract's ABI at all** —
+   only on the storage contract. Per `registry_contract.md §1`, the
+   storage contract's address is "the stable protocol identifier" that
+   never changes across logic upgrades, so — rather than patch just those
+   two — **all reads now go through storage, not logic**, added as a new
+   `STORAGE_CONTRACT_ADDRESS` config field. This is also more correct
+   going forward: reads through logic would otherwise silently break on
+   every future logic upgrade even for the calls logic does mirror.
+5. **`press_address` is `bytes32` on-chain, but press passed a raw 20-byte
+   Ethereum address.** `write_gate.rs` confirmed it's purely an opaque
+   `PressAuthorizations[policy][press]` lookup key (the actual signature
+   check is against a separately-stored `press_public_key`, unrelated to
+   this value) — fixed by left-padding to 32 bytes, matching Solidity's
+   standard `address → bytes32` conversion
+   (`bytes32(uint256(uint160(address)))`).
+6. **A `PositionOutOfBoundsError` decoding `getCardEntry`/
+   `getPressAuthorization`/`getSubCardEntry`.** Any multi-value return that
+   includes a `uint8[]` gets ABI-encoded with an extra 32-byte outer tuple
+   offset that a plain comma-separated `returns (...)` declaration doesn't
+   account for — the exact issue already documented in project memory for
+   a contracts-side Foundry test, now hit again in press's own ABI. Fixed
+   by declaring the return as a single named tuple
+   (`returns ((uint8[] x, ...) r)`) — note viem's human-readable-ABI
+   parser rejects the `tuple(...)` keyword `cast` accepts; plain
+   parentheses are required.
+
+None of this was reachable by press's own unit test suite (all mocked)
+or by anything in Phase 1, which never drove a real on-chain write. Every
+one of these was found only by actually running `POST /issue/finalize`
+against the live Sepolia deployment and reading real revert data/RPC
+errors — this is precisely Goal 3's "the first run against real
+components mostly finds pre-existing issues, not test bugs" playing out.
+
+**Separately, also found and fixed while getting this far:**
+
+- **`crypto.createCipheriv` is not implemented under Workers'
+  `nodejs_compat`** (`aes256gcmEncrypt`/`aes256gcmDecrypt` in
+  `press/src/functions/crypto.ts`) — the same class of gap as Phase 1's
+  `ioredis` finding, just a different Node API `unenv` doesn't polyfill.
+  Fixed by switching to `crypto.subtle` (WebCrypto, native to Workers and
+  available in Node 22+), mirroring the pattern `wallet-service`'s
+  `WebCryptoBackend` already uses. WebCrypto's AES-GCM `encrypt` already
+  returns ciphertext with the tag appended, so the on-disk/IPFS wire
+  format (`nonce(12) || ciphertext || tag(16)`) is unchanged — no other
+  component needs to change to keep decrypting these.
+- **`registry.ts`/`gas.ts` hardcoded viem's `arbitrum` (mainnet, chain ID
+  42161) chain object for transaction construction even when
+  `ARBITRUM_RPC_URL` points at Sepolia** — a gap already flagged (not
+  fixed) during Step 1.6's press work. It turned out to matter for real:
+  `eth_sendRawTransaction` rejects a transaction whose signed chain ID
+  doesn't match the RPC endpoint's ("Missing or invalid parameters"),
+  which only surfaces once a real write is attempted — reads (`eth_call`)
+  carry no chain ID and were unaffected, which is why nothing caught this
+  until now. Fixed by deriving the `chain` object from `EXPECTED_CHAIN_ID`
+  in both files. `server/tasks/reconcile-cids.ts` still hardcodes
+  `arbitrum` — not fixed, out of scope for the write path this covers.
+
+**The Sepolia deployment itself was also stale and had to be redeployed.**
+`getProtocolVersion()` reverted even after the ABI-casing fix — confirmed
+independently via a raw `eth_call` bypassing press entirely. Root cause:
+the function's own doc comment says "contracts deployed before §4.17 was
+added are treated as v0.1," implying it was added to source *after* the
+2026-06-28 deployment; if the deployed WASM simply doesn't contain that
+function's dispatch entry, any call to it hits Stylus's unrecognized-
+selector fallback and reverts regardless of the defensive Rust-level
+logic, since that logic never executes. The correct fix — a logic-only
+upgrade via `proposeLogicUpgrade`/`confirmLogicUpgrade`, which preserves
+`storage_contract`'s state — has a mandatory **7-day timelock**, too slow
+to unblock testing. Did a full fresh three-contract deployment instead
+(explicit tradeoff, authorized: the 2026-06-28 deployment had no real
+users/value, so abandoning its state was acceptable). New addresses in
+`contracts/deployments/sepolia.json`; the superseded record (including its
+DNS bootstrap) is preserved at `sepolia-2026-06-28-superseded.json`. The
+fresh deployment has **not** re-run DNS bootstrap — only a minimal
+`registerPolicy`/`authorizePress` for the fixtures' own test policy and
+press's on-chain identity. Every service's `REGISTRY_CONTRACT_ADDRESS`
+(and press's new `STORAGE_CONTRACT_ADDRESS`) updated to match.
+
+**Confirmed working end-to-end**, twice consecutively: `integration_tests/
+fixtures`' `mintCard` helper signs a real offer with `app-sdk`, POSTs
+through `/issue` and `/issue/finalize`, and press successfully registers
+the new card on real Sepolia — full spec-conformant signing, ABI encoding,
+and chain submission all correct.
+
 ## Wallet-service under workerd: pooled pg connections don't survive across requests (2026-07-19)
 
 **Status: resolved.** Full details in `plans/integration-testing-implementation-plan.md`'s
