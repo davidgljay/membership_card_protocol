@@ -50,7 +50,19 @@ export interface IssuerOffer {
   issuer_card: string;
   press_card: string;
   issued_at: string;
-  issuer_signature: SignatureField;
+  /**
+   * `protocol-objects.md §1`: immediate parent (the issuer's own public
+   * key) toward the trusted root, `[]` only if the issuer card is itself a
+   * trusted root or its immediate parent is. `issuer_signature` is verified
+   * against `ancestry_pubkeys[0]`, binding-checked against `issuer_card`
+   * (`keccak256(ancestry_pubkeys[0]) == issuer_card`) — there is currently
+   * no path to verify an offer from a root-level issuer with no ancestry
+   * hint at all (same limitation `wallet-sdk`'s client-side
+   * `reviewTargetedOffer` already has).
+   */
+  ancestry_pubkeys?: string[];
+  /** base64url ML-DSA-44 signature — `protocol-objects.md §1` documents CardDocument's three signatures as bare strings, not `{ public_key, signature }` objects; the signer's public key is never embedded in its own signature field. */
+  issuer_signature: string;
   [key: string]: unknown; // policy field values
 }
 
@@ -78,7 +90,8 @@ export interface IssuanceResponse {
 export interface FinalizeRequest {
   offer_cid: string;
   recipient_pubkey: string; // base64url ML-DSA-44 public key
-  holder_signature: SignatureField;
+  /** base64url — see `IssuerOffer.issuer_signature`'s comment; verified against `recipient_pubkey`, not an embedded key. */
+  holder_signature: string;
   past_keys?: PastKey[];
 }
 
@@ -105,7 +118,10 @@ export interface OpenCardOffer {
   expires_at?: string;
   max_acceptances?: number;
   offer_id?: string;
-  issuer_signature: SignatureField;
+  /** `protocol-objects.md §7`: an explicit, separate field — not embedded in `issuer_signature`. `issuer_signature` covers all other fields, including this one; a verifier must confirm `keccak256(issuer_pubkey) == issuer_card` before trusting it. */
+  issuer_pubkey: string;
+  /** base64url — see `IssuerOffer.issuer_signature`'s comment. */
+  issuer_signature: string;
   [key: string]: unknown;
 }
 
@@ -114,7 +130,8 @@ export interface OpenOfferClaimSubmission {
     offer: OpenCardOffer;
     recipient_pubkey: string;
   };
-  recipient_signature: SignatureField;
+  /** base64url — sig over canonical JSON of the entire `claim_payload`, verified against `claim_payload.recipient_pubkey` (`protocol-objects.md §7`). */
+  recipient_signature: string;
 }
 
 export interface OpenOfferClaimResponse {

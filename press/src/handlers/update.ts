@@ -135,7 +135,7 @@ export async function handleUpdate(
     try {
       const contentKey = deriveContentKey(updaterPubkey);
       const encrypted = await ctx.ipfs.fetchFromIPFS(new TextDecoder().decode(cardEntry.log_head_cid));
-      const decrypted = aes256gcmDecrypt(contentKey, encrypted);
+      const decrypted = await aes256gcmDecrypt(contentKey, encrypted);
       const doc = JSON.parse(new TextDecoder().decode(decrypted)) as CardDocument;
       preUpdateActiveSubcards = doc.active_subcards ?? [];
     } catch (err) {

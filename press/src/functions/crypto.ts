@@ -15,7 +15,6 @@ import { keccak_256 } from '@noble/hashes/sha3';
 import { hkdf } from '@noble/hashes/hkdf';
 import { sha3_256 } from '@noble/hashes/sha3';
 import { sha256 } from '@noble/hashes/sha256';
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 
 // ---------------------------------------------------------------------------
 // ML-DSA-44 signing
@@ -77,16 +76,23 @@ export function deriveContentKey(recipientPubkey: Uint8Array): Uint8Array {
 /**
  * Encrypt `plaintext` with AES-256-GCM using a random 96-bit nonce.
  * Output layout: 12-byte nonce || ciphertext || 16-byte GCM tag.
+ *
+ * Uses Web Crypto (`crypto.subtle`) rather than `node:crypto`'s
+ * createCipheriv — the latter is one of the Node APIs `unenv` doesn't
+ * polyfill under Workers' `nodejs_compat` ("crypto.createCipheriv is not
+ * implemented yet!", confirmed running this under real `wrangler dev`).
+ * `crypto.subtle` is a native Workers API (and available in Node 22+ too),
+ * and its AES-GCM `encrypt` already returns ciphertext with the auth tag
+ * appended — the same layout this function already produced, so the wire
+ * format and every caller/decryptor are unaffected.
  */
-export function aes256gcmEncrypt(key: Uint8Array, plaintext: Uint8Array): Uint8Array {
-  const nonce = randomBytes(12);
-  const cipher = createCipheriv('aes-256-gcm', key, nonce);
-  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-  const tag = cipher.getAuthTag();
-  const out = new Uint8Array(12 + ciphertext.length + 16);
+export async function aes256gcmEncrypt(key: Uint8Array, plaintext: Uint8Array): Promise<Uint8Array> {
+  const nonce = crypto.getRandomValues(new Uint8Array(12));
+  const cryptoKey = await crypto.subtle.importKey('raw', toArrayBuffer(key), { name: 'AES-GCM' }, false, ['encrypt']);
+  const ciphertextAndTag = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce }, cryptoKey, toArrayBuffer(plaintext));
+  const out = new Uint8Array(12 + ciphertextAndTag.byteLength);
   out.set(nonce, 0);
-  out.set(ciphertext, 12);
-  out.set(tag, 12 + ciphertext.length);
+  out.set(new Uint8Array(ciphertextAndTag), 12);
   return out;
 }
 
@@ -99,17 +105,23 @@ export function aes256gcmEncrypt(key: Uint8Array, plaintext: Uint8Array): Uint8A
  * public key — can decrypt registered card content without holding any
  * private key material.
  */
-export function aes256gcmDecrypt(key: Uint8Array, noncePlusCiphertext: Uint8Array): Uint8Array {
+export async function aes256gcmDecrypt(key: Uint8Array, noncePlusCiphertext: Uint8Array): Promise<Uint8Array> {
   if (noncePlusCiphertext.length < 12 + 16) {
     throw new Error('aes256gcmDecrypt: payload too short to contain nonce and GCM tag');
   }
-  const nonce = noncePlusCiphertext.subarray(0, 12);
-  const tag = noncePlusCiphertext.subarray(noncePlusCiphertext.length - 16);
-  const ciphertext = noncePlusCiphertext.subarray(12, noncePlusCiphertext.length - 16);
-  const decipher = createDecipheriv('aes-256-gcm', key, nonce);
-  decipher.setAuthTag(tag);
-  const plain = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
-  return new Uint8Array(plain);
+  const nonce = toArrayBuffer(noncePlusCiphertext.subarray(0, 12));
+  const ciphertextAndTag = toArrayBuffer(noncePlusCiphertext.subarray(12));
+  const cryptoKey = await crypto.subtle.importKey('raw', toArrayBuffer(key), { name: 'AES-GCM' }, false, ['decrypt']);
+  const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: nonce }, cryptoKey, ciphertextAndTag);
+  return new Uint8Array(plaintext);
+}
+
+// Web Crypto's BufferSource rejects a Uint8Array view over a larger/shared
+// backing buffer under strict lib.dom typings — copy into a fresh,
+// plain-ArrayBuffer-backed Uint8Array first (same fix wallet-service's
+// WebCryptoBackend already uses for this exact API).
+function toArrayBuffer(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
+  return Uint8Array.from(bytes) as Uint8Array<ArrayBuffer>;
 }
 
 // ---------------------------------------------------------------------------

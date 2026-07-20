@@ -20,7 +20,7 @@
 
 import { createPublicClient, http, type PublicClient, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { arbitrum } from 'viem/chains';
+import { arbitrum, arbitrumSepolia } from 'viem/chains';
 import type { PressConfig } from '../config.js';
 import type { RegistryClient } from './registry.js';
 import { kvKeys, type KvStore, type AppGasRecord } from '../kv.js';
@@ -92,8 +92,15 @@ export function createGasManager(
   registry: RegistryClient,
   kv: KvStore
 ): GasManager {
+  // See registry.ts's identical fix for why this is derived from
+  // EXPECTED_CHAIN_ID rather than hardcoded to mainnet — this client is
+  // read-only (getBalance/getLogs), so the mismatch didn't break anything
+  // here the way it did for registry.ts's write path, but it's the same
+  // latent bug and the same fix.
+  const chain = config.EXPECTED_CHAIN_ID === arbitrumSepolia.id ? arbitrumSepolia : arbitrum;
+
   const publicClient: PublicClient = createPublicClient({
-    chain: arbitrum,
+    chain,
     transport: http(config.ARBITRUM_RPC_URL),
   });
 

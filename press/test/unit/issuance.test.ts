@@ -17,7 +17,7 @@ import { canonicalize, canonicalizeExcluding } from '../../src/serialization.js'
 import { createDecipheriv } from 'node:crypto';
 import { hkdf } from '@noble/hashes/hkdf';
 import { sha3_256 } from '@noble/hashes/sha3';
-import { toBase64url, fromBase64url } from '../../src/functions/crypto.js';
+import { toBase64url, fromBase64url, keccak256 } from '../../src/functions/crypto.js';
 import type { PressConfig } from '../../src/config.js';
 import type { IssuerOffer } from '../../src/types.js';
 
@@ -31,6 +31,11 @@ const { secretKey: ISSUER_SK, publicKey: ISSUER_PK } = ml_dsa44.keygen(issuerSee
 const holderSeed = new Uint8Array(32).fill(0x33);
 const { secretKey: HOLDER_SK, publicKey: HOLDER_PK } = ml_dsa44.keygen(holderSeed);
 
+// `issuer_card` must equal keccak256(ancestry_pubkeys[0]) — verifyIssuerSignature's
+// binding check (`protocol-objects.md §1`: ancestry_pubkeys[0] is the new card's
+// immediate parent, i.e. the issuer's own public key).
+const ISSUER_CARD_ADDRESS = '0x' + Buffer.from(keccak256(ISSUER_PK)).toString('hex');
+
 const CONFIG = {
   PRESS_CARD_CID: 'bafybeipress',
   PRESS_MLDSA44_PRIVATE_KEY: PRESS_SK,
@@ -41,40 +46,38 @@ const CONFIG = {
 function makeOffer(): IssuerOffer {
   const base = {
     policy_id: 'bafybeipolicy',
-    issuer_card: '0x' + Buffer.from(new Uint8Array(32).fill(0x22)).toString('hex'),
+    issuer_card: ISSUER_CARD_ADDRESS,
     press_card: 'bafybeipress',
     issued_at: new Date().toISOString(),
+    ancestry_pubkeys: [toBase64url(ISSUER_PK)],
     role: 'member',
   };
   const toSign = canonicalize(base);
   const sig = ml_dsa44.sign(toSign, ISSUER_SK);
   return {
     ...base,
-    issuer_signature: {
-      public_key: toBase64url(ISSUER_PK),
-      signature: toBase64url(sig),
-    },
+    issuer_signature: toBase64url(sig),
   };
 }
 
 describe('assembleCardDocument', () => {
   it('includes protocol_version in the assembled document', () => {
     const offer = makeOffer();
-    const holderSig = { public_key: toBase64url(HOLDER_PK), signature: toBase64url(new Uint8Array(2420)) };
+    const holderSig = toBase64url(new Uint8Array(2420));
     const doc = assembleCardDocument(CONFIG, offer, toBase64url(HOLDER_PK), holderSig, [], '0.1');
     expect(doc['protocol_version']).toBe('0.1');
   });
 
   it('reflects the protocol_version provided by the caller', () => {
     const offer = makeOffer();
-    const holderSig = { public_key: toBase64url(HOLDER_PK), signature: toBase64url(new Uint8Array(2420)) };
+    const holderSig = toBase64url(new Uint8Array(2420));
     const doc = assembleCardDocument(CONFIG, offer, toBase64url(HOLDER_PK), holderSig, [], '0.2');
     expect(doc['protocol_version']).toBe('0.2');
   });
 
   it('includes all expected press fields alongside protocol_version', () => {
     const offer = makeOffer();
-    const holderSig = { public_key: toBase64url(HOLDER_PK), signature: toBase64url(new Uint8Array(2420)) };
+    const holderSig = toBase64url(new Uint8Array(2420));
     const doc = assembleCardDocument(CONFIG, offer, toBase64url(HOLDER_PK), holderSig, [], '0.1');
     expect(doc['press_card']).toBe(CONFIG.PRESS_CARD_CID);
     expect(doc['recipient_pubkey']).toBe(toBase64url(HOLDER_PK));
@@ -89,9 +92,9 @@ describe('signCardDocument', () => {
     const doc = { policy_id: 'p', issued_at: 'now', recipient_pubkey: toBase64url(HOLDER_PK) };
     const signed = signCardDocument(CONFIG, doc);
     expect(signed['press_signature']).toBeTruthy();
-    const { press_signature: ps } = signed as { press_signature: { public_key: string; signature: string } };
+    const { press_signature: ps } = signed as { press_signature: string };
     const toVerify = canonicalizeExcluding(signed, ['press_signature']);
-    expect(ml_dsa44.verify(fromBase64url(ps.signature), toVerify, fromBase64url(ps.public_key))).toBe(true);
+    expect(ml_dsa44.verify(fromBase64url(ps), toVerify, PRESS_PK)).toBe(true);
   });
 });
 
@@ -110,7 +113,7 @@ describe('publishCard', () => {
       recipient_pubkey: toBase64url(HOLDER_PK),
       policy_id: 'bafybeipolicy',
       issued_at: new Date().toISOString(),
-      press_signature: { public_key: toBase64url(PRESS_PK), signature: toBase64url(new Uint8Array(2420)) },
+      press_signature: toBase64url(new Uint8Array(2420)),
     };
 
     const cid = await publishCard(doc, mockIpfs as import('../../src/ipfs/provider.js').IpfsPinningProvider);
@@ -138,9 +141,21 @@ describe('verifyIssuerSignature', () => {
 
   it('returns false when signature is tampered', () => {
     const offer = makeOffer();
-    const tampered = { ...offer };
-    const badSig = new Uint8Array(2420).fill(0xff);
-    tampered.issuer_signature = { ...offer.issuer_signature, signature: toBase64url(badSig) };
+    const badSig = toBase64url(new Uint8Array(2420).fill(0xff));
+    const tampered = { ...offer, issuer_signature: badSig };
+    expect(verifyIssuerSignature(tampered)).toBe(false);
+  });
+
+  it('returns false when ancestry_pubkeys is missing (no issuer public key to verify against)', () => {
+    const offer = makeOffer();
+    const { ancestry_pubkeys: _ap, ...withoutAncestry } = offer;
+    expect(verifyIssuerSignature(withoutAncestry as IssuerOffer)).toBe(false);
+  });
+
+  it('returns false when ancestry_pubkeys[0] does not bind to issuer_card', () => {
+    const offer = makeOffer();
+    const wrongKey = ml_dsa44.keygen(new Uint8Array(32).fill(0x99)).publicKey;
+    const tampered = { ...offer, ancestry_pubkeys: [toBase64url(wrongKey)] };
     expect(verifyIssuerSignature(tampered)).toBe(false);
   });
 });
@@ -155,16 +170,17 @@ describe('verifyHolderSignature', () => {
     };
     const toSign = canonicalizeExcluding(partialDoc, ['holder_signature', 'press_signature']);
     const sig = ml_dsa44.sign(toSign, HOLDER_SK);
-    const holderSig = { public_key: toBase64url(HOLDER_PK), signature: toBase64url(sig) };
 
-    expect(verifyHolderSignature(partialDoc, holderSig)).toBe(true);
+    expect(verifyHolderSignature(partialDoc, toBase64url(sig))).toBe(true);
   });
 
   it('returns false when holder signature covers different bytes', () => {
-    const holderSig = {
-      public_key: toBase64url(HOLDER_PK),
-      signature: toBase64url(new Uint8Array(2420).fill(0xaa)),
-    };
+    const holderSig = toBase64url(new Uint8Array(2420).fill(0xaa));
+    expect(verifyHolderSignature({ recipient_pubkey: toBase64url(HOLDER_PK) }, holderSig)).toBe(false);
+  });
+
+  it('returns false when recipient_pubkey is missing from the document', () => {
+    const holderSig = toBase64url(new Uint8Array(2420).fill(0xaa));
     expect(verifyHolderSignature({ some: 'doc' }, holderSig)).toBe(false);
   });
 });

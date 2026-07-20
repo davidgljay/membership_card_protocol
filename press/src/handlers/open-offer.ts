@@ -46,34 +46,34 @@ export async function handleOpenOfferClaim(
   }
 
   // 3. Verify issuer binding: keccak256(issuer_pubkey) == issuer_card address.
-  const issuerPubkeyBytes = fromBase64url(offer.issuer_signature.public_key);
+  // `protocol-objects.md §7`: issuer_pubkey is a separate, explicit field
+  // (not embedded in issuer_signature) — an untrusted hint until this check
+  // passes.
+  const issuerPubkeyBytes = fromBase64url(offer.issuer_pubkey);
   const derivedAddress = '0x' + Buffer.from(keccak256(issuerPubkeyBytes)).toString('hex');
   if (derivedAddress.toLowerCase() !== offer.issuer_card.toLowerCase()) {
     throw Object.assign(
-      new Error('P-05: issuer_signature.public_key binding check failed'),
+      new Error('P-05: issuer_pubkey binding check failed'),
       { pressCode: 'P-05' }
     );
   }
 
-  // 4. Verify issuer signature over canonical offer excluding issuer_signature.
-  const { issuer_signature: _sig, ...offerWithoutSig } = offer;
+  // 4. Verify issuer signature (bare base64url) over canonical offer excluding issuer_signature.
+  const { issuer_signature: sig, ...offerWithoutSig } = offer;
   const toVerifyIssuer = canonicalizeExcluding(offerWithoutSig as Record<string, unknown>, ['issuer_signature']);
-  const issuerSigValid = mlDsa44Verify(
-    issuerPubkeyBytes,
-    toVerifyIssuer,
-    fromBase64url(offer.issuer_signature.signature)
-  );
+  const issuerSigValid = mlDsa44Verify(issuerPubkeyBytes, toVerifyIssuer, fromBase64url(sig));
   if (!issuerSigValid) {
     throw Object.assign(new Error('P-05: Invalid issuer_signature'), { pressCode: 'P-05' });
   }
 
-  // 5. Verify recipient signature over canonical claim_payload.
+  // 5. Verify recipient signature (bare base64url) over canonical claim_payload,
+  // against the recipient_pubkey already present in claim_payload.
   const claimBytes = canonicalize(claim_payload as Record<string, unknown>);
-  const recipientPubkeyBytes = fromBase64url(recipient_signature.public_key);
+  const recipientPubkeyBytes = fromBase64url(recipient_pubkey);
   const recipientSigValid = mlDsa44Verify(
     recipientPubkeyBytes,
     claimBytes,
-    fromBase64url(recipient_signature.signature)
+    fromBase64url(recipient_signature)
   );
   if (!recipientSigValid) {
     throw Object.assign(new Error('P-06: Invalid recipient_signature'), { pressCode: 'P-06' });

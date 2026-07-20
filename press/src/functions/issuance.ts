@@ -31,7 +31,6 @@ import type {
   FinalizeRequest,
   ScipObject,
   PastKey,
-  SignatureField,
 } from '../types.js';
 import type { Hex } from 'viem';
 
@@ -117,7 +116,7 @@ export function assembleCardDocument(
   config: PressConfig,
   offer: IssuerOffer,
   recipientPubkey: string,
-  holderSignature: SignatureField,
+  holderSignature: string,
   ancestryPubkeys: string[],
   protocolVersion: string,
   pastKeys?: PastKey[]
@@ -152,15 +151,15 @@ export function signCardDocument(
   const toSign = canonicalizeExcluding(cardDocument, ['press_signature']);
   // 2. Sign with press ML-DSA-44 private key.
   const signature = mlDsa44Sign(config.PRESS_MLDSA44_PRIVATE_KEY, toSign);
-  const pubKey = mlDsa44PublicKeyFromPrivate(config.PRESS_MLDSA44_PRIVATE_KEY);
 
-  // 3. Add press_signature.
+  // 3. Add press_signature. `protocol-objects.md §1`: a bare base64url
+  // string, like issuer_signature/holder_signature — press's public key is
+  // not embedded here; verifiers resolve it out-of-band (e.g. VerifierConfig
+  // trusted press keys), the same way membership_card_verifier already
+  // expects (`press_signature: string` in its own types.ts).
   return {
     ...cardDocument,
-    press_signature: {
-      public_key: toBase64url(pubKey),
-      signature: toBase64url(signature),
-    },
+    press_signature: toBase64url(signature),
   };
 }
 
@@ -180,7 +179,7 @@ export async function publishCard(
 
   // 2. Encrypt canonical JSON with AES-256-GCM.
   const plaintext = canonicalize(signedCardDocument);
-  const ciphertext = aes256gcmEncrypt(contentKey, plaintext);
+  const ciphertext = await aes256gcmEncrypt(contentKey, plaintext);
 
   // 3. Upload to IPFS and validate CID.
   return ipfs.pinToIPFS(ciphertext);
@@ -253,25 +252,47 @@ async function deliverScip(scip: ScipObject, url: string): Promise<void> {
  * Verify the issuer's ML-DSA-44 signature on the offer blob.
  * The signed bytes are the canonical RFC 8785 JSON of all offer fields
  * excluding issuer_signature.
+ *
+ * `issuer_signature` is a bare base64url string (`protocol-objects.md §1`)
+ * — the issuer's public key is not embedded in it. `ancestry_pubkeys[0]` is
+ * the new card's immediate parent, i.e. the issuer's own public key (the
+ * same convention `membership_card_verifier`'s stage2/stage3 chain-walk
+ * already uses); binding-checked against `issuer_card` before trusting it,
+ * matching `wallet-sdk`'s client-side `reviewTargetedOffer`. An offer from
+ * an issuer with no ancestry hint (a root-level issuer with no parent) has
+ * no way to be verified here — same documented limitation `wallet-sdk`
+ * already has, not solved by this fix.
  */
 export function verifyIssuerSignature(offer: IssuerOffer): boolean {
+  const issuerPubkeyB64 = offer.ancestry_pubkeys?.[0];
+  if (!issuerPubkeyB64) return false;
+  const pubKey = fromBase64url(issuerPubkeyB64);
+  const derivedAddress = '0x' + Buffer.from(keccak256(pubKey)).toString('hex');
+  if (derivedAddress.toLowerCase() !== offer.issuer_card.toLowerCase()) return false;
+
   const { issuer_signature: sig, ...rest } = offer;
   const toVerify = canonicalizeExcluding(rest as Record<string, unknown>, ['issuer_signature']);
-  const pubKey = fromBase64url(sig.public_key);
-  const signature = fromBase64url(sig.signature);
+  const signature = fromBase64url(sig);
   return mlDsa44Verify(pubKey, toVerify, signature);
 }
 
 /**
  * Verify holder countersignature over canonical JSON of the offer + recipient_pubkey,
  * excluding holder_signature and press_signature.
+ *
+ * `holder_signature` is a bare base64url string, verified against
+ * `cardDocument.recipient_pubkey` (already present and trusted at this
+ * point — it's the field this same signature adds) rather than an
+ * embedded key.
  */
 export function verifyHolderSignature(
   cardDocument: Record<string, unknown>,
-  holderSig: SignatureField
+  holderSig: string
 ): boolean {
+  const recipientPubkeyB64 = cardDocument['recipient_pubkey'];
+  if (typeof recipientPubkeyB64 !== 'string') return false;
   const toVerify = canonicalizeExcluding(cardDocument, ['holder_signature', 'press_signature']);
-  const pubKey = fromBase64url(holderSig.public_key);
-  const signature = fromBase64url(holderSig.signature);
+  const pubKey = fromBase64url(recipientPubkeyB64);
+  const signature = fromBase64url(holderSig);
   return mlDsa44Verify(pubKey, toVerify, signature);
 }

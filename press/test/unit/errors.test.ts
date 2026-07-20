@@ -13,7 +13,7 @@ import { handleOpenOfferClaim } from '../../src/handlers/open-offer.js';
 import { handleUpdate } from '../../src/handlers/update.js';
 import { handleSubCardRegister, handleSubCardDeregister } from '../../src/handlers/sub-card.js';
 import { createInMemoryKv } from '../../src/kv.js';
-import { toBase64url } from '../../src/functions/crypto.js';
+import { toBase64url, keccak256, fromBase64url } from '../../src/functions/crypto.js';
 import type { PressContext } from '../../src/context.js';
 import type {
   IssuanceRequest, FinalizeRequest, OpenOfferClaimSubmission,
@@ -117,18 +117,27 @@ function makeCtx(overrides: Partial<PressContext> = {}): PressContext {
 
 import { canonicalize, canonicalizeExcluding } from '../../src/serialization.js';
 
+// `issuer_signature` is a bare base64url string (`protocol-objects.md §1`) —
+// no embedded public key. Targeted offers (`IssuerOffer`) are verified
+// against `ancestry_pubkeys[0]`; open offers (`OpenCardOffer`) against a
+// separate explicit `issuer_pubkey` field — see press/src/types.ts.
 function signOffer(offer: Record<string, unknown>) {
   const toSign = canonicalizeExcluding(offer, ['issuer_signature']);
   const sig = ml_dsa44.sign(toSign, ISSUER_SK);
-  return { ...offer, issuer_signature: { public_key: toBase64url(ISSUER_PK), signature: toBase64url(sig) } };
+  return { ...offer, issuer_signature: toBase64url(sig) };
 }
+
+// `issuer_card` must equal keccak256(ancestry_pubkeys[0]) for the targeted
+// (`IssuerOffer`) binding check in `verifyIssuerSignature`.
+const ISSUER_CARD_FOR_TARGETED = '0x' + Buffer.from(keccak256(ISSUER_PK)).toString('hex');
 
 function makeValidOffer() {
   const base = {
     policy_id: POLICY_CID,
-    issuer_card: ISSUER_ADDR,
+    issuer_card: ISSUER_CARD_FOR_TARGETED,
     press_card: PRESS_CID,
     issued_at: new Date().toISOString(),
+    ancestry_pubkeys: [toBase64url(ISSUER_PK)],
   };
   return signOffer(base) as IssuanceRequest['offer'];
 }
@@ -170,7 +179,7 @@ describe('P-05', () => {
   it('throws P-05 when issuer_signature is invalid on /issue', async () => {
     const ctx = makeCtx();
     const badOffer = { ...makeValidOffer() };
-    badOffer.issuer_signature = { public_key: toBase64url(ISSUER_PK), signature: toBase64url(new Uint8Array(2420).fill(0xff)) };
+    badOffer.issuer_signature = toBase64url(new Uint8Array(2420).fill(0xff));
     const req: IssuanceRequest = {
       policy_cid: POLICY_CID,
       requester_card_address: ISSUER_ADDR,
@@ -181,15 +190,18 @@ describe('P-05', () => {
 
   it('throws P-05 when issuer binding check fails on open offer claim', async () => {
     const ctx = makeCtx();
-    // Use a pubkey that doesn't match the issuer_card address.
-    const offer = makeValidOffer() as Record<string, unknown>;
-    offer['issuer_card'] = '0x' + 'ab'.repeat(32); // wrong — not keccak256(ISSUER_PK)
+    // issuer_pubkey present but doesn't match issuer_card (wrong — not keccak256(ISSUER_PK)).
+    const base = {
+      policy_id: POLICY_CID, issuer_card: '0x' + 'ab'.repeat(32), press_card: PRESS_CID,
+      issued_at: new Date().toISOString(), issuer_pubkey: toBase64url(ISSUER_PK),
+    };
+    const offer = signOffer(base) as Record<string, unknown>;
     const claimPayload = { offer, recipient_pubkey: toBase64url(HOLDER_PK) };
     const toSignClaim = canonicalize(claimPayload as Record<string, unknown>);
     const recipSig = ml_dsa44.sign(toSignClaim, HOLDER_SK);
     const body: OpenOfferClaimSubmission = {
       claim_payload: claimPayload as never,
-      recipient_signature: { public_key: toBase64url(HOLDER_PK), signature: toBase64url(recipSig) },
+      recipient_signature: toBase64url(recipSig),
     };
     await expect(handleOpenOfferClaim(ctx, body)).rejects.toMatchObject({ pressCode: 'P-05' });
   });
@@ -201,16 +213,18 @@ describe('P-05', () => {
 
 describe('P-06', () => {
   it('throws P-06 when recipient_signature is invalid', async () => {
-    const { keccak256, fromBase64url } = await import('../../src/functions/crypto.js');
     // issuer_card must equal keccak256(ISSUER_PK) so the binding check passes.
-    const issuerCardAddr = '0x' + Buffer.from(keccak256(fromBase64url(toBase64url(ISSUER_PK)))).toString('hex');
-    const base = { policy_id: POLICY_CID, issuer_card: issuerCardAddr, press_card: PRESS_CID, issued_at: new Date().toISOString() };
+    const issuerCardAddr = '0x' + Buffer.from(keccak256(ISSUER_PK)).toString('hex');
+    const base = {
+      policy_id: POLICY_CID, issuer_card: issuerCardAddr, press_card: PRESS_CID,
+      issued_at: new Date().toISOString(), issuer_pubkey: toBase64url(ISSUER_PK),
+    };
     const offer = signOffer(base) as Record<string, unknown>;
     // Issuer sig is valid; recipient sig is invalid.
     const claimPayload = { offer, recipient_pubkey: toBase64url(HOLDER_PK) };
     const body: OpenOfferClaimSubmission = {
       claim_payload: claimPayload as never,
-      recipient_signature: { public_key: toBase64url(HOLDER_PK), signature: toBase64url(new Uint8Array(2420)) },
+      recipient_signature: toBase64url(new Uint8Array(2420)),
     };
     const ctx = makeCtx();
     await expect(handleOpenOfferClaim(ctx, body)).rejects.toMatchObject({ pressCode: 'P-06' });
@@ -224,16 +238,19 @@ describe('P-06', () => {
 describe('P-07', () => {
   it('throws P-07 when open offer expires_at is in the past', async () => {
     const ctx = makeCtx();
-    const { keccak256, fromBase64url } = await import('../../src/functions/crypto.js');
-    const issuerCardAddr = '0x' + Buffer.from(keccak256(fromBase64url(toBase64url(ISSUER_PK)))).toString('hex');
-    const base = { policy_id: POLICY_CID, issuer_card: issuerCardAddr, press_card: PRESS_CID, issued_at: new Date().toISOString(), expires_at: new Date(Date.now() - 10_000).toISOString() };
+    const issuerCardAddr = '0x' + Buffer.from(keccak256(ISSUER_PK)).toString('hex');
+    const base = {
+      policy_id: POLICY_CID, issuer_card: issuerCardAddr, press_card: PRESS_CID,
+      issued_at: new Date().toISOString(), expires_at: new Date(Date.now() - 10_000).toISOString(),
+      issuer_pubkey: toBase64url(ISSUER_PK),
+    };
     const offer = signOffer(base) as Record<string, unknown>;
     const claimPayload = { offer, recipient_pubkey: toBase64url(HOLDER_PK) };
     const toSignClaim = canonicalize(claimPayload as Record<string, unknown>);
     const recipSig = ml_dsa44.sign(toSignClaim, HOLDER_SK);
     const body: OpenOfferClaimSubmission = {
       claim_payload: claimPayload as never,
-      recipient_signature: { public_key: toBase64url(HOLDER_PK), signature: toBase64url(recipSig) },
+      recipient_signature: toBase64url(recipSig),
     };
     await expect(handleOpenOfferClaim(ctx, body)).rejects.toMatchObject({ pressCode: 'P-07' });
   });
@@ -245,22 +262,24 @@ describe('P-07', () => {
 
 describe('P-08', () => {
   it('throws P-08 when use_count >= max_acceptances', async () => {
-    const { keccak256, fromBase64url } = await import('../../src/functions/crypto.js');
-    const issuerCardAddr = '0x' + Buffer.from(keccak256(fromBase64url(toBase64url(ISSUER_PK)))).toString('hex');
+    const issuerCardAddr = '0x' + Buffer.from(keccak256(ISSUER_PK)).toString('hex');
     const ctx = makeCtx({
       registry: {
         ...makeCtx().registry,
         getOpenOfferUseCount: vi.fn().mockResolvedValue(5n), // at capacity
       } as never,
     });
-    const base = { policy_id: POLICY_CID, issuer_card: issuerCardAddr, press_card: PRESS_CID, issued_at: new Date().toISOString(), max_acceptances: 5 };
+    const base = {
+      policy_id: POLICY_CID, issuer_card: issuerCardAddr, press_card: PRESS_CID,
+      issued_at: new Date().toISOString(), max_acceptances: 5, issuer_pubkey: toBase64url(ISSUER_PK),
+    };
     const offer = signOffer(base) as Record<string, unknown>;
     const claimPayload = { offer, recipient_pubkey: toBase64url(HOLDER_PK) };
     const toSignClaim = canonicalize(claimPayload as Record<string, unknown>);
     const recipSig = ml_dsa44.sign(toSignClaim, HOLDER_SK);
     const body: OpenOfferClaimSubmission = {
       claim_payload: claimPayload as never,
-      recipient_signature: { public_key: toBase64url(HOLDER_PK), signature: toBase64url(recipSig) },
+      recipient_signature: toBase64url(recipSig),
     };
     await expect(handleOpenOfferClaim(ctx, body)).rejects.toMatchObject({ pressCode: 'P-08' });
   });
@@ -530,8 +549,9 @@ describe('P-22', () => {
   it('throws P-22 when offer.issued_at is older than staleness window', async () => {
     // Sign the offer with the stale timestamp so the issuer sig remains valid.
     const staleBase = {
-      policy_id: POLICY_CID, issuer_card: ISSUER_ADDR, press_card: PRESS_CID,
+      policy_id: POLICY_CID, issuer_card: ISSUER_CARD_FOR_TARGETED, press_card: PRESS_CID,
       issued_at: new Date(Date.now() - 600_000).toISOString(), // 10 min ago > 5 min window
+      ancestry_pubkeys: [toBase64url(ISSUER_PK)],
     };
     const staleOffer = signOffer(staleBase) as IssuanceRequest['offer'];
     const ctx = makeCtx();

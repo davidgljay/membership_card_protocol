@@ -31,17 +31,32 @@ export interface PressConfig {
   ARBITRUM_RPC_URL: string;
   /**
    * Chain ID startup.ts's ARBITRUM_RPC_URL check expects. Defaults to
-   * Arbitrum One (42161) — production's only intended network. Only the
-   * startup readiness check reads this; src/chain/{registry,gas}.ts and
-   * server/tasks/reconcile-cids.ts still hardcode viem's `arbitrum`
-   * (mainnet) chain object for transaction construction, so pointing
-   * ARBITRUM_RPC_URL + this at a different network (e.g. Sepolia, for
-   * integration testing) only gets you past the startup check — it does
-   * not make write paths chain-agnostic. Full multi-chain support would
-   * need those three files updated too; out of scope here.
+   * Arbitrum One (42161) — production's only intended network.
+   * `src/chain/{registry,gas}.ts` now derive their viem `chain` object from
+   * this value (Sepolia when it's 421614, mainnet otherwise) — previously
+   * both hardcoded viem's `arbitrum` (mainnet) chain object regardless,
+   * which silently broke on-chain **writes** against Sepolia
+   * ("Missing or invalid parameters" from `eth_sendRawTransaction`, since
+   * the signed tx's chain ID didn't match the RPC endpoint's — confirmed
+   * running integration_tests' write path for real). Reads were unaffected
+   * (no chain ID on `eth_call`), which is why this stayed hidden until a
+   * write was actually exercised. `server/tasks/reconcile-cids.ts` still
+   * hardcodes `arbitrum` — not fixed here, out of scope for the write path
+   * this amendment covers.
    */
   EXPECTED_CHAIN_ID: number;
+  /** Logic contract — upgradeable, all write operations. */
   REGISTRY_CONTRACT_ADDRESS: string;
+  /**
+   * Storage contract — the stable protocol identifier (`registry_contract.md
+   * §1`: "its address is the stable protocol identifier", never changes
+   * across logic upgrades). All reads go here rather than through the
+   * logic contract: some reads (getSubCardEntry, getOpenOfferCount) exist
+   * only on storage, not re-exposed by logic at all, and reading through
+   * logic would silently break after every logic upgrade even for the
+   * reads logic does mirror.
+   */
+  STORAGE_CONTRACT_ADDRESS: string;
   /**
    * Which IpfsPinningProvider implementation to construct (src/ipfs/index.ts).
    * Defaults to 'filebase' — the production pinning vendor — so existing
@@ -168,6 +183,7 @@ export function loadConfig(): PressConfig {
   const ARBITRUM_RPC_URL = requireEnv('ARBITRUM_RPC_URL');
   const EXPECTED_CHAIN_ID = parseInt(optionalEnv('EXPECTED_CHAIN_ID', '42161'), 10);
   const REGISTRY_CONTRACT_ADDRESS = requireEnv('REGISTRY_CONTRACT_ADDRESS');
+  const STORAGE_CONTRACT_ADDRESS = requireEnv('STORAGE_CONTRACT_ADDRESS');
 
   const IPFS_PROVIDER = validateIpfsProvider(optionalEnv('IPFS_PROVIDER', 'filebase'));
 
@@ -206,6 +222,7 @@ export function loadConfig(): PressConfig {
     ARBITRUM_RPC_URL,
     EXPECTED_CHAIN_ID,
     REGISTRY_CONTRACT_ADDRESS,
+    STORAGE_CONTRACT_ADDRESS,
     IPFS_PROVIDER,
     FILEBASE_KEY,
     FILEBASE_SECRET,

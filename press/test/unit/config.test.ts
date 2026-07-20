@@ -13,6 +13,7 @@ const validEnv: Record<string, string> = {
   PRESS_OHTTP_PRIVATE_KEY: Buffer.alloc(32, 7).toString('base64url'),
   ARBITRUM_RPC_URL: 'https://arb1.arbitrum.io/rpc',
   REGISTRY_CONTRACT_ADDRESS: '0x' + '00'.repeat(20),
+  STORAGE_CONTRACT_ADDRESS: '0x' + '11'.repeat(20),
   FILEBASE_KEY: 'test-key',
   FILEBASE_SECRET: 'test-secret',
   FILEBASE_BUCKET: 'test-bucket',

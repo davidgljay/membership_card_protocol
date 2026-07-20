@@ -75,26 +75,26 @@ describe('secp256r1Sign', () => {
 describe('AES-256-GCM encrypt / decrypt round-trip', () => {
   const key = new Uint8Array(32).fill(0x01);
 
-  it('decrypts to the original plaintext', () => {
+  it('decrypts to the original plaintext', async () => {
     const plaintext = new TextEncoder().encode('{"card":"data"}');
-    const ciphertext = aes256gcmEncrypt(key, plaintext);
+    const ciphertext = await aes256gcmEncrypt(key, plaintext);
     // Output is nonce(12) + ciphertext + tag(16)
     expect(ciphertext.length).toBe(12 + plaintext.length + 16);
-    const decrypted = aes256gcmDecrypt(key, ciphertext);
+    const decrypted = await aes256gcmDecrypt(key, ciphertext);
     expect(decrypted).toEqual(plaintext);
   });
 
-  it('each call produces a different ciphertext (random nonce)', () => {
+  it('each call produces a different ciphertext (random nonce)', async () => {
     const pt = new TextEncoder().encode('same plaintext');
-    const c1 = aes256gcmEncrypt(key, pt);
-    const c2 = aes256gcmEncrypt(key, pt);
+    const c1 = await aes256gcmEncrypt(key, pt);
+    const c2 = await aes256gcmEncrypt(key, pt);
     expect(c1).not.toEqual(c2);
   });
 
-  it('decryption fails with a tampered ciphertext', () => {
-    const ct = aes256gcmEncrypt(key, new TextEncoder().encode('data'));
+  it('decryption fails with a tampered ciphertext', async () => {
+    const ct = await aes256gcmEncrypt(key, new TextEncoder().encode('data'));
     ct[20] ^= 0xff; // flip a byte in the ciphertext body
-    expect(() => aes256gcmDecrypt(key, ct)).toThrow();
+    await expect(aes256gcmDecrypt(key, ct)).rejects.toThrow();
   });
 });
 

@@ -166,7 +166,7 @@ describe('handleUpdate — sibling sub-card notification dispatch', () => {
   /** Encrypt a minimal CardDocument the way the press's ADR-006 scheme does, so
    * handleUpdate's pre-update decrypt (deriveContentKey(HOLDER_PK) + AES-GCM)
    * succeeds exactly as it would against a real master card on IPFS. */
-  function encryptMasterDoc(activeSubcards: string[]): Uint8Array {
+  function encryptMasterDoc(activeSubcards: string[]): Promise<Uint8Array> {
     const doc = { active_subcards: activeSubcards };
     const key = deriveContentKey(HOLDER_PK);
     return aes256gcmEncrypt(key, new TextEncoder().encode(JSON.stringify(doc)));
@@ -179,7 +179,7 @@ describe('handleUpdate — sibling sub-card notification dispatch', () => {
 
     const ctx = makeCtx({
       ipfs: {
-        fetchFromIPFS: vi.fn().mockResolvedValue(encryptMasterDoc([existingA, existingB])),
+        fetchFromIPFS: vi.fn().mockResolvedValue(await encryptMasterDoc([existingA, existingB])),
         pinToIPFS: vi.fn().mockResolvedValue('bafybeinewentry'),
       } as unknown as PressContext['ipfs'],
     });
@@ -207,7 +207,7 @@ describe('handleUpdate — sibling sub-card notification dispatch', () => {
 
     const ctx = makeCtx({
       ipfs: {
-        fetchFromIPFS: vi.fn().mockResolvedValue(encryptMasterDoc([remaining, removed])),
+        fetchFromIPFS: vi.fn().mockResolvedValue(await encryptMasterDoc([remaining, removed])),
         pinToIPFS: vi.fn().mockResolvedValue('bafybeinewentry'),
       } as unknown as PressContext['ipfs'],
     });
@@ -238,7 +238,7 @@ describe('handleUpdate — sibling sub-card notification dispatch', () => {
 
     const ctx = makeCtx({
       ipfs: {
-        fetchFromIPFS: vi.fn().mockResolvedValue(encryptMasterDoc([remaining, oldSub])),
+        fetchFromIPFS: vi.fn().mockResolvedValue(await encryptMasterDoc([remaining, oldSub])),
         pinToIPFS: vi.fn().mockResolvedValue('bafybeinewentry'),
       } as unknown as PressContext['ipfs'],
     });
@@ -264,7 +264,7 @@ describe('handleUpdate — sibling sub-card notification dispatch', () => {
   it('still returns a successful result even when notification dispatch throws', async () => {
     const ctx = makeCtx({
       ipfs: {
-        fetchFromIPFS: vi.fn().mockResolvedValue(encryptMasterDoc([])),
+        fetchFromIPFS: vi.fn().mockResolvedValue(await encryptMasterDoc([])),
         pinToIPFS: vi.fn().mockResolvedValue('bafybeinewentry'),
       } as unknown as PressContext['ipfs'],
     });
