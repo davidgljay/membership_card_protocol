@@ -13,5 +13,14 @@
   "engines": {
     "node": ">=22",
     "pnpm": ">=9"
+  },
+  "pnpm": {
+    "overrides": {
+      "@noble/curves": "1.9.1",
+      "@noble/hashes": "1.8.0"
+    },
+    "patchedDependencies": {
+      "@noble/curves@1.9.1": "patches/@noble__curves@1.9.1.patch"
+    }
   }
 }

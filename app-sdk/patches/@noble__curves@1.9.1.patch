@@ -1,0 +1,26 @@
+diff --git a/package.json b/package.json
+index c483b1e4fbfab002daabd81cfeabe78c71b78e1f..da5aeb6e57d2d77b757615b41b0989318a247d0e 100644
+--- a/package.json
++++ b/package.json
+@@ -85,6 +85,10 @@
+       "import": "./esm/abstract/utils.js",
+       "require": "./abstract/utils.js"
+     },
++    "./utils": {
++      "import": "./esm/abstract/utils.js",
++      "require": "./abstract/utils.js"
++    },
+     "./abstract/weierstrass": {
+       "import": "./esm/abstract/weierstrass.js",
+       "require": "./abstract/weierstrass.js"
+@@ -185,6 +189,10 @@
+       "import": "./esm/abstract/utils.js",
+       "require": "./abstract/utils.js"
+     },
++    "./utils.js": {
++      "import": "./esm/abstract/utils.js",
++      "require": "./abstract/utils.js"
++    },
+     "./abstract/weierstrass.js": {
+       "import": "./esm/abstract/weierstrass.js",
+       "require": "./abstract/weierstrass.js"
