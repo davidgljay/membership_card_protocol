@@ -115,7 +115,7 @@ async function runStartup(): Promise<void> {
   // ── Step 4: initialize clients ──────────────────────────────────────────────
   const registry = createRegistryClient(config);
   const kv = createNitroKvStore();
-  const verifier = buildCardVerifier(config, registry, ipfs);
+  const verifier = buildCardVerifier(config, registry, ipfs, kv);
   const gas = createGasManager(config, registry, kv);
 
   const pressPublicKey = mlDsa44PublicKeyFromPrivate(config.PRESS_MLDSA44_PRIVATE_KEY);

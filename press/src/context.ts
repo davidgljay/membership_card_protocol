@@ -6,7 +6,7 @@
  */
 
 import { CardVerifier } from '@membership-card-protocol/verifier';
-import type { RpcProvider, IpfsProvider, CardEntry, PressAuthEntry, SubCardEntry, LogEntry } from '@membership-card-protocol/verifier';
+import type { RpcProvider, IpfsProvider, CardEntry, PressAuthEntry, SubCardEntry, CardChainEvent } from '@membership-card-protocol/verifier';
 import type { PressConfig } from './config.js';
 import type { KvStore } from './kv.js';
 import type { IpfsPinningProvider } from './ipfs/provider.js';
@@ -14,6 +14,7 @@ import type { RegistryClient } from './chain/registry.js';
 import type { GasManager } from './chain/gas.js';
 import { mlDsa44PublicKeyFromPrivate } from './functions/crypto.js';
 import { toBase64url, fromBase64url } from './functions/crypto.js';
+import { kvKeys } from './kv.js';
 import type { Hex } from 'viem';
 
 export interface PressContext {
@@ -50,12 +51,11 @@ export function getPressContext(): PressContext {
  * Key conversions:
  * - RegistryClient uses viem Hex types; the verifier uses plain strings.
  * - log_head_cid from the registry is Uint8Array CID bytes; verifier wants a string CID.
- * - getLogEntries walks the CID-linked log chain from IPFS (OQ-B3).
+ * - getCardEventLog replays on-chain CardRegistered/CardHeadUpdated events
+ *   (registry.getCardEventLog) rather than walking IPFS content — see that
+ *   method's doc in chain/registry.ts for why.
  */
-export function createRpcProvider(
-  registry: RegistryClient,
-  ipfs: IpfsPinningProvider
-): RpcProvider {
+export function createRpcProvider(registry: RegistryClient, kv: KvStore): RpcProvider {
   return {
     async getCardEntry(address: string): Promise<CardEntry | null> {
       try {
@@ -74,17 +74,19 @@ export function createRpcProvider(
     },
 
     async isPolicyAuthorizer(address: string): Promise<boolean> {
-      // A card is a policy authorizer if it has an entry in PolicyAuthorizerKeys.
-      // We approximate this by checking if it has any press authorizations under it.
-      // The verifier uses this only to determine trusted-root status in verifyCard().
+      // Real on-chain source of truth: RegisterPolicy populates
+      // PolicyAuthorizerKeys, so an address that's a registered policy
+      // (registry_contract.md §3.2) is a legitimate trusted root.
       try {
-        const entry = await registry.getCardEntry(address as Hex);
-        // Addresses with active cards that were issued under themselves are policy roots.
-        // For now: a trusted root must be explicitly listed in config.trustedRoots.
-        return false;
+        const isRegisteredPolicy = await registry.isPolicyAuthorizer(address as Hex);
+        if (isRegisteredPolicy) return true;
       } catch {
-        return false;
+        // fall through to the KV-registered check below
       }
+      // Operator-registered fallback (POST /api/admin/trusted-roots) for
+      // addresses that are legitimately trusted anchors but were never
+      // themselves an on-chain policy — see kv.ts's trustedRoot key doc.
+      return (await kv.getItem<boolean>(kvKeys.trustedRoot(address.toLowerCase()))) === true;
     },
 
     async getPressAuthorization(
@@ -125,43 +127,12 @@ export function createRpcProvider(
       }
     },
 
-    async getLogEntries(cardAddress: string): Promise<LogEntry[]> {
-      // Walk the CID-linked log chain from the on-chain head (OQ-B3).
-      // Returns entries in reverse chronological order (newest first).
-      const MAX_WALK = 64;
-      try {
-        const cardEntry = await registry.getCardEntry(cardAddress as Hex);
-        if (!cardEntry.exists) return [];
-
-        const entries: LogEntry[] = [];
-        let cid = cidBytesToString(cardEntry.log_head_cid);
-        let depth = 0;
-
-        while (cid && depth < MAX_WALK) {
-          try {
-            const bytes = await ipfs.fetchFromIPFS(cid);
-            const doc = JSON.parse(new TextDecoder().decode(bytes)) as {
-              code?: number;
-              effective_date?: string;
-              prev_log_root?: string;
-            };
-            if (doc.code !== undefined) {
-              entries.push({
-                update_code: doc.code,
-                effective_date: doc.effective_date ?? new Date().toISOString(),
-                cid,
-              });
-            }
-            cid = doc.prev_log_root ?? '';
-            depth++;
-          } catch {
-            break;
-          }
-        }
-        return entries;
-      } catch {
-        return [];
-      }
+    async getCardEventLog(cardAddress: string): Promise<CardChainEvent[]> {
+      const events = await registry.getCardEventLog(cardAddress as Hex);
+      return events.map((e) => ({
+        cid: cidBytesToString(e.cid),
+        timestamp: new Date(Number(e.timestamp) * 1000).toISOString(),
+      }));
     },
 
     async getEasAnnotations(): Promise<[]> {
@@ -185,14 +156,18 @@ export function createIpfsProviderAdapter(ipfsClient: IpfsPinningProvider): Ipfs
 export function buildCardVerifier(
   config: PressConfig,
   registry: RegistryClient,
-  ipfsClient: IpfsPinningProvider
+  ipfsClient: IpfsPinningProvider,
+  kv: KvStore
 ): CardVerifier {
-  const rpc = createRpcProvider(registry, ipfsClient);
+  const rpc = createRpcProvider(registry, kv);
   const ipfsProvider = createIpfsProviderAdapter(ipfsClient);
   return new CardVerifier({
     rpc,
     ipfs: ipfsProvider,
-    trustedRoots: config.PRESS_POLICY_CIDS, // policy CIDs are treated as trusted roots
+    // A static config-level override, in addition to rpc.isPolicyAuthorizer's
+    // dynamic on-chain + KV-registered checks (see that method's doc) — kept
+    // for genuinely fixed roots that don't need either.
+    trustedRoots: config.PRESS_POLICY_CIDS,
     revocationFreshnessWindowSeconds: config.STALENESS_WINDOW_SECONDS,
     rejectStaleRevocation: true,
     fetchAnnotations: false,

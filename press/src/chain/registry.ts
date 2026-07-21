@@ -70,11 +70,28 @@ const LOGIC_ABI = parseAbi([
 // single named tuple makes viem expect that outer offset. Same fix already
 // documented for `getCardEntry` in an earlier contracts-side investigation
 // (see project memory) — this is that fix applied to press's own ABI.
+// Log events (§7) — plain Solidity event ABI-encoding, unlike the function
+// ABIs above: the `uint8[]`-not-`bytes` quirk documented there is specific
+// to Stylus's function-dispatch selector generation for `Vec<u8>`
+// parameters, and doesn't apply to event logs, which follow standard
+// Solidity event encoding regardless of the contract's implementation
+// language. `bytes` here matches `logic-contract/src/lib.rs`'s `sol!`
+// event declarations directly. Declared separately (not as one combined
+// array) since viem can't infer a shared `args` filter type across events
+// with different non-indexed parameter shapes.
+const CARD_REGISTERED_EVENT = parseAbi([
+  'event CardRegistered(bytes32 indexed card_address, bytes32 indexed policy_address, bytes32 press_address, bytes initial_log_cid, uint64 timestamp)',
+]);
+const CARD_HEAD_UPDATED_EVENT = parseAbi([
+  'event CardHeadUpdated(bytes32 indexed card_address, bytes prev_log_cid, bytes new_log_cid, bytes32 press_address, uint64 timestamp)',
+]);
+
 const STORAGE_ABI = parseAbi([
   'function getCardEntry(bytes32 card_address) external view returns ((uint8[] log_head_cid, bytes32 policy_address, bytes32 last_press_address, bytes32 forward_to, bool exists) r)',
   'function getPressAuthorization(bytes32 policy_address, bytes32 press_address) external view returns ((uint8[] press_public_key, bytes32 mldsa44_key_hash, uint8 key_scheme, bool active, uint64 next_sequence, uint64 authorized_at, uint64 revoked_at) r)',
   'function getOpenOfferCount(bytes32 offer_id) external view returns (uint64)',
   'function getSubCardEntry(bytes32 sub_card_address) external view returns ((bytes32 master_card_address, uint8[] registration_log_head, uint8[] sub_card_doc_cid, bool active, uint64 registered_at, uint64 deregistered_at) r)',
+  'function policyExists(bytes32 policy_address) external view returns (bool)',
 ]);
 
 // On-chain revert selectors the press needs to act on.
@@ -126,6 +143,12 @@ export interface BatchUpdate {
   new_log_cid: Uint8Array;
 }
 
+export interface CardChainEvent {
+  cid: Uint8Array;
+  /** On-chain block timestamp (§7's `timestamp uint64`, seconds since epoch). */
+  timestamp: bigint;
+}
+
 export interface RegistryClient {
   /**
    * This press's own on-chain `PressAuthorizations` lookup key (secp256r1
@@ -145,6 +168,18 @@ export interface RegistryClient {
   getSubCardEntry(subCardAddress: Hex): Promise<SubCardEntry>;
   /** Read the current protocol version string from the logic contract. */
   getProtocolVersion(): Promise<string>;
+  /**
+   * Ground-truth on-chain event replay for a card's log — every
+   * `CardRegistered`/`CardHeadUpdated` event naming this card address, in
+   * chronological order. There is no on-chain-enumerable per-entry log
+   * (`registry_contract.md §3.1`'s `CardEntries` mapping stores only the
+   * current head); this reconstructs it from event history, the same
+   * ground truth `CardVerifier`'s Stage 4 revocation check cross-references
+   * against a card's self-reported `history` (`registry_contract.md §7`).
+   */
+  getCardEventLog(cardAddress: Hex): Promise<CardChainEvent[]>;
+  /** True if `address` is a registered policy (PolicyAuthorizerKeys, registry_contract.md §3.2) — RegisterPolicy is the only way an entry is created. */
+  isPolicyAuthorizer(address: Hex): Promise<boolean>;
 
   registerCard(params: RegisterCardParams): Promise<Hex>;
   updateCardHead(params: UpdateCardHeadParams): Promise<Hex>;
@@ -410,6 +445,17 @@ export function createRegistryClient(config: PressConfig): RegistryClient {
     return result as unknown as bigint;
   }
 
+  async function isPolicyAuthorizer(address: Hex): Promise<boolean> {
+    address = normalizeHex(address);
+    const result = await publicClient.readContract({
+      address: storageAddress,
+      abi: STORAGE_ABI,
+      functionName: 'policyExists',
+      args: [address],
+    });
+    return result as unknown as boolean;
+  }
+
   async function getProtocolVersion(): Promise<string> {
     return publicClient.readContract({
       address: logicAddress,
@@ -443,6 +489,50 @@ export function createRegistryClient(config: PressConfig): RegistryClient {
       registered_at: tuple.registered_at,
       deregistered_at: tuple.deregistered_at,
     };
+  }
+
+  async function getCardEventLog(cardAddress: Hex): Promise<CardChainEvent[]> {
+    cardAddress = normalizeHex(cardAddress);
+    // Events are emitted by the logic contract, not storage (file doc, §7).
+    const [registeredLogs, headUpdatedLogs] = await Promise.all([
+      publicClient.getLogs({
+        address: logicAddress,
+        event: CARD_REGISTERED_EVENT[0],
+        args: { card_address: cardAddress },
+        fromBlock: 0n,
+        toBlock: 'latest',
+      }),
+      publicClient.getLogs({
+        address: logicAddress,
+        event: CARD_HEAD_UPDATED_EVENT[0],
+        args: { card_address: cardAddress },
+        fromBlock: 0n,
+        toBlock: 'latest',
+      }),
+    ]);
+
+    const events = [
+      ...registeredLogs.map((log) => ({
+        cid: hexToBytes(log.args.initial_log_cid!),
+        timestamp: log.args.timestamp!,
+        blockNumber: log.blockNumber ?? 0n,
+        logIndex: log.logIndex ?? 0,
+      })),
+      ...headUpdatedLogs.map((log) => ({
+        cid: hexToBytes(log.args.new_log_cid!),
+        timestamp: log.args.timestamp!,
+        blockNumber: log.blockNumber ?? 0n,
+        logIndex: log.logIndex ?? 0,
+      })),
+    ];
+
+    return events
+      .sort((a, b) =>
+        a.blockNumber === b.blockNumber
+          ? a.logIndex - b.logIndex
+          : Number(a.blockNumber - b.blockNumber)
+      )
+      .map(({ cid, timestamp }) => ({ cid, timestamp }));
   }
 
   // ---- writes (logic contract) ----
@@ -698,6 +788,8 @@ export function createRegistryClient(config: PressConfig): RegistryClient {
     getOpenOfferUseCount,
     getSubCardEntry,
     getProtocolVersion,
+    getCardEventLog,
+    isPolicyAuthorizer,
     registerCard,
     updateCardHead,
     claimOpenOffer,
