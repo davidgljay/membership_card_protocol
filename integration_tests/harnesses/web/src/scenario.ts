@@ -28,7 +28,12 @@ import {
   createPressSubCardRegistrar,
   type SignedTargetedOffer,
 } from '@membership-card-protocol/app-sdk';
-import { setupWallet, reviewTargetedOffer, acceptTargetedOfferAndCountersign } from '@membership-card-protocol/wallet-sdk';
+import {
+  setupWallet,
+  reviewTargetedOffer,
+  acceptTargetedOfferAndCountersign,
+  registerDeviceSubCard,
+} from '@membership-card-protocol/wallet-sdk';
 import { createViemRegistryContract } from './registryContract.js';
 import type { HarnessConfig } from './prepare.js';
 
@@ -129,6 +134,31 @@ export async function runScenario(config: HarnessConfig): Promise<ScenarioResult
       return { success: false, step, error: 'postSetupHook did not run' };
     }
 
+    // setupWallet's own internal device sub-card registration (Steps 7-9)
+    // used cardHash — setupWallet's freshly-generated, never-on-chain
+    // wallet account identity — as holder_primary_card, so it's expected
+    // to fail RegisterSubCard's on-chain "master must exist" check
+    // (P-16/CardNotFound territory) every time; that's not what this
+    // step is testing. Sub-card registration should be tied to a real,
+    // registered *membership card* (protocol-objects.md's holder_primary_
+    // card is meant to be the holder's actual primary card, not an
+    // internal account key) — prepare.ts mints exactly that
+    // (holderMembershipCardAddress) specifically so this call has one.
+    step = 'register-device-subcard-for-holder-membership-card';
+    const holderMembershipPublicKey = base64UrlToBytes(config.holderMembershipCardPublicKeyB64);
+    const holderMembershipSecretKey = base64UrlToBytes(config.holderMembershipCardSecretKeyB64);
+    const deviceSubCardResult = await registerDeviceSubCard({
+      secureKeyProvider,
+      cardHash: config.holderMembershipCardAddress,
+      masterPublicKey: holderMembershipPublicKey,
+      masterSecretKey: holderMembershipSecretKey,
+      walletAppCard,
+      registerSubCard,
+      capabilities: ['card_offer_accept'],
+      subCardKeyId: 'device-sub-card-holder-membership',
+      cardVerifier,
+    });
+
     step = 'validate-card';
     // Unprefixed, matching CardVerifier's own convention (compares
     // directly against `keccak256(pubkey)` — see prepare.ts's doc comment
@@ -139,7 +169,7 @@ export async function runScenario(config: HarnessConfig): Promise<ScenarioResult
     return {
       success: verifyResult.chain_reaches_trusted_root === true && verifyResult.is_currently_valid === true,
       cardHash: setupResult.cardHash,
-      subCardRegistered: setupResult.subCardRegistered,
+      subCardRegistered: deviceSubCardResult.registered,
       mintedCardCid: finalizeResult.cardCid,
       chainReachesTrustedRoot: verifyResult.chain_reaches_trusted_root,
       isCurrentlyValid: verifyResult.is_currently_valid,

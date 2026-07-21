@@ -64,6 +64,20 @@ export interface HarnessConfig {
   rootCardAddress: string;
   rootCardPublicKeyB64: string;
   rootCardSecretKeyB64: string;
+  /**
+   * A real, on-chain registered membership card distinct from
+   * `rootCardAddress` (which plays the *offer issuer* role in this
+   * scenario) — this one exists specifically so device sub-card
+   * registration has a genuine "holder's primary card" to tie into,
+   * rather than the wallet's own never-registered internal account
+   * identity (`setupWallet`'s `cardHash`). See scenario.ts's manual
+   * `registerDeviceSubCard` call, which uses this identity instead of
+   * relying on `setupWallet`'s own internal (and, for a first-time
+   * device, expected-to-fail) sub-card registration attempt.
+   */
+  holderMembershipCardAddress: string;
+  holderMembershipCardPublicKeyB64: string;
+  holderMembershipCardSecretKeyB64: string;
   offer: Record<string, unknown>;
   offerCid: string;
 }
@@ -215,6 +229,22 @@ export async function prepare(options: PrepareOptions): Promise<HarnessConfig> {
   }
   const { offer_cid: offerCid } = (await issueRes.json()) as { offer_cid: string };
 
+  // A second, independently-registered membership card for the holder's
+  // own primary-card identity (see HarnessConfig's doc on
+  // holderMembershipCardAddress) — deliberately not rootAddress itself,
+  // which already plays the offer-issuer role above; keeping them
+  // distinct matches the protocol's normal shape (the entity issuing an
+  // offer is not generally the same entity as the accepting holder).
+  const holderMembershipLabel = `web-harness-holder-membership-${Date.now()}`;
+  await mintCard({
+    pressBaseUrl,
+    policyId,
+    label: holderMembershipLabel,
+    fieldValues: { display_name: 'Web Harness Holder Membership' },
+  });
+  const holderMembershipKeypair = deriveKeypair(`holder:${holderMembershipLabel}`);
+  const holderMembershipCardAddress = keccak256(holderMembershipKeypair.publicKey);
+
   return {
     pressBaseUrl,
     walletServiceBaseUrl: options.walletServiceBaseUrl.replace(/\/$/, ''),
@@ -227,6 +257,9 @@ export async function prepare(options: PrepareOptions): Promise<HarnessConfig> {
     rootCardAddress: rootAddress,
     rootCardPublicKeyB64: bytesToBase64Url(rootKeypair.publicKey),
     rootCardSecretKeyB64: bytesToBase64Url(rootKeypair.secretKey),
+    holderMembershipCardAddress,
+    holderMembershipCardPublicKeyB64: bytesToBase64Url(holderMembershipKeypair.publicKey),
+    holderMembershipCardSecretKeyB64: bytesToBase64Url(holderMembershipKeypair.secretKey),
     offer: offer as unknown as Record<string, unknown>,
     offerCid,
   };
