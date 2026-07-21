@@ -1,4 +1,5 @@
 import { PRESS_REGISTRY_BODY_ENDPOINT } from "../constants.js";
+import { bytesToBase64Url } from "../crypto.js";
 import type {
   RpcProvider,
   IpfsProvider,
@@ -90,7 +91,7 @@ export async function verifyStage5(
     const report: NonComplianceReport = {
       card_address: cardAddress,
       press_address: cardEntry.last_press_address,
-      ipfs_card_document: Buffer.from(rawCardBytes).toString("base64url"),
+      ipfs_card_document: bytesToBase64Url(rawCardBytes),
       ipfs_cid: cardCid,
       failed_checks: failedChecks,
       verified_at: new Date().toISOString(),

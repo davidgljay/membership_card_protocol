@@ -1,4 +1,4 @@
-import { keccak256, hkdfSha3256, aes256gcmDecrypt } from "../crypto.js";
+import { keccak256, hkdfSha3256, aes256gcmDecrypt, bytesToBase64Url, base64UrlToBytes } from "../crypto.js";
 import { CardProtocolError } from "../errors.js";
 import type {
   RpcProvider,
@@ -33,7 +33,7 @@ export async function verifyStage3(
   const chain: ChainLink[] = [
     {
       card_address: startCardAddress,
-      public_key: startCardPubkey ? Buffer.from(startCardPubkey).toString("base64url") : "",
+      public_key: startCardPubkey ? bytesToBase64Url(startCardPubkey) : "",
       card_content: startCardDoc,
     },
   ];
@@ -60,7 +60,7 @@ export async function verifyStage3(
     // Check if the next address is already a trusted root before walking
     const nextPubkeyB64 = ancestryPubkeys[0];
     if (!nextPubkeyB64) break;
-    const nextPubkeyBytes = new Uint8Array(Buffer.from(nextPubkeyB64, "base64url"));
+    const nextPubkeyBytes = new Uint8Array(base64UrlToBytes(nextPubkeyB64));
     const nextAddress = keccak256(nextPubkeyBytes);
 
     const isNextRoot =

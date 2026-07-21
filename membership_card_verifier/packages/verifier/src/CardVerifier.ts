@@ -1,6 +1,6 @@
 import { canonicalize } from "./canonicalize.js";
 import { PROTOCOL_VERSION_0_1 } from "./constants.js";
-import { keccak256, hkdfSha3256, aes256gcmDecrypt } from "./crypto.js";
+import { keccak256, hkdfSha3256, aes256gcmDecrypt, base64UrlToBytes } from "./crypto.js";
 import { CardProtocolError } from "./errors.js";
 import { evaluatePolicyMatch } from "./policy-match.js";
 import { verifyStage1 } from "./stages/stage1.js";
@@ -189,7 +189,7 @@ export class CardVerifier {
     let realChainAddresses: string[] = chainAddresses;
 
     if (options?.pubkey) {
-      const pubkeyBytes = new Uint8Array(Buffer.from(options.pubkey, "base64url"));
+      const pubkeyBytes = base64UrlToBytes(options.pubkey);
       const derivedAddress = keccak256(pubkeyBytes);
 
       if (derivedAddress !== cardAddress) {

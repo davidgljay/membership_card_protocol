@@ -11,6 +11,59 @@ export function keccak256(input: Uint8Array): string {
   return Buffer.from(hash).toString("hex");
 }
 
+const STANDARD_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const BASE64URL_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+/**
+ * Encodes bytes as a base64url string, no padding — the encode-direction
+ * counterpart to {@link base64UrlToBytes}, avoiding the same
+ * `Buffer.prototype.toString("base64url")` polyfill gap.
+ */
+export function bytesToBase64Url(bytes: Uint8Array): string {
+  let output = "";
+  for (let i = 0; i < bytes.length; i += 3) {
+    const b0 = bytes[i]!;
+    const b1 = bytes[i + 1];
+    const b2 = bytes[i + 2];
+    output += BASE64URL_CHARS[b0 >> 2];
+    output += BASE64URL_CHARS[((b0 & 0x03) << 4) | (b1 === undefined ? 0 : b1 >> 4)];
+    if (b1 !== undefined) {
+      output += BASE64URL_CHARS[((b1 & 0x0f) << 2) | (b2 === undefined ? 0 : b2 >> 6)];
+    }
+    if (b2 !== undefined) {
+      output += BASE64URL_CHARS[b2 & 0x3f];
+    }
+  }
+  return output;
+}
+
+/**
+ * Decodes a base64url string to bytes without relying on `Buffer.from(str,
+ * "base64url")` — the browser `buffer` polyfill used when this package is
+ * bundled for a browser target (e.g. the web SDK harness) doesn't support
+ * the `"base64url"` encoding argument, throwing `Unknown encoding:
+ * base64url` (confirmed empirically). `Buffer.from(bytes).toString("hex")`
+ * elsewhere in this file is unaffected — only the from-base64url decode
+ * direction hits the polyfill gap.
+ */
+export function base64UrlToBytes(input: string): Uint8Array {
+  const cleaned = input.replace(/-/g, "+").replace(/_/g, "/");
+  const bytes: number[] = [];
+  let buffer = 0;
+  let bitsCollected = 0;
+  for (const char of cleaned) {
+    const value = STANDARD_ALPHABET.indexOf(char);
+    if (value === -1) continue;
+    buffer = (buffer << 6) | value;
+    bitsCollected += 6;
+    if (bitsCollected >= 8) {
+      bitsCollected -= 8;
+      bytes.push((buffer >> bitsCollected) & 0xff);
+    }
+  }
+  return new Uint8Array(bytes);
+}
+
 export function hkdfSha3256(ikm: Uint8Array, info: string): Uint8Array {
   return hkdf(sha3_256, ikm, undefined, new TextEncoder().encode(info), 32);
 }

@@ -1,5 +1,5 @@
 import { canonicalize } from "../canonicalize.js";
-import { mlDsa44Verify, secp256r1Phase1Verify } from "../crypto.js";
+import { mlDsa44Verify, secp256r1Phase1Verify, base64UrlToBytes } from "../crypto.js";
 import { CardProtocolError } from "../errors.js";
 import type { SignatureEntry } from "../types.js";
 
@@ -23,7 +23,7 @@ export function verifyStage1(
 }
 
 function verifyStage1MlDsa44(entry: SignatureEntry, payload: unknown): Stage1Result {
-  const publicKeyBytes = Buffer.from(entry.public_key, "base64url");
+  const publicKeyBytes = base64UrlToBytes(entry.public_key);
   if (publicKeyBytes.length !== 1312) {
     throw new CardProtocolError(
       "INVALID_PUBLIC_KEY_LENGTH",
@@ -31,7 +31,7 @@ function verifyStage1MlDsa44(entry: SignatureEntry, payload: unknown): Stage1Res
     );
   }
 
-  const signatureBytes = Buffer.from(entry.signature, "base64url");
+  const signatureBytes = base64UrlToBytes(entry.signature);
   if (signatureBytes.length !== 2420) {
     throw new CardProtocolError(
       "INVALID_SIGNATURE_LENGTH",
@@ -50,7 +50,7 @@ function verifyStage1MlDsa44(entry: SignatureEntry, payload: unknown): Stage1Res
 }
 
 function verifyStage1Secp256r1Phase1(entry: SignatureEntry, payload: unknown): Stage1Result {
-  const publicKeyBytes = Buffer.from(entry.public_key, "base64url");
+  const publicKeyBytes = base64UrlToBytes(entry.public_key);
   if (publicKeyBytes.length !== 64) {
     throw new CardProtocolError(
       "INVALID_PUBLIC_KEY_LENGTH",
@@ -58,7 +58,7 @@ function verifyStage1Secp256r1Phase1(entry: SignatureEntry, payload: unknown): S
     );
   }
 
-  const signatureBytes = Buffer.from(entry.signature, "base64url");
+  const signatureBytes = base64UrlToBytes(entry.signature);
   if (signatureBytes.length !== 64) {
     throw new CardProtocolError(
       "INVALID_SIGNATURE_LENGTH",

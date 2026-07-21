@@ -1,4 +1,4 @@
-import { keccak256, hkdfSha3256, aes256gcmDecrypt, mlDsa44Verify } from "../crypto.js";
+import { keccak256, hkdfSha3256, aes256gcmDecrypt, mlDsa44Verify, base64UrlToBytes } from "../crypto.js";
 import { CardProtocolError } from "../errors.js";
 import { canonicalize } from "../canonicalize.js";
 import type {
@@ -51,7 +51,7 @@ export async function verifyStage2(
   }
 
   // Step 5 & 6: binding checks on holder_primary_card and app_card
-  const holderPubkeyBytes = Buffer.from(subCardDoc.holder_primary_card_pubkey, "base64url");
+  const holderPubkeyBytes = base64UrlToBytes(subCardDoc.holder_primary_card_pubkey);
   const holderCardAddress = keccak256(new Uint8Array(holderPubkeyBytes));
   if (holderCardAddress !== subCardDoc.holder_primary_card) {
     errors.push({
@@ -62,7 +62,7 @@ export async function verifyStage2(
     return { scope_clean: false, signer_card: signerCard, app_card_chain_valid: false, errors };
   }
 
-  const appPubkeyBytes = Buffer.from(subCardDoc.app_card_pubkey, "base64url");
+  const appPubkeyBytes = base64UrlToBytes(subCardDoc.app_card_pubkey);
   const appCardAddress = keccak256(new Uint8Array(appPubkeyBytes));
   if (appCardAddress !== subCardDoc.app_card) {
     errors.push({
@@ -100,7 +100,7 @@ export async function verifyStage2(
   let foundInActiveSubcards = false;
   for (const subcardPubkeyB64 of activeSubcardsArray) {
     try {
-      const subcardPubkeyBytes = new Uint8Array(Buffer.from(subcardPubkeyB64, "base64url"));
+      const subcardPubkeyBytes = new Uint8Array(base64UrlToBytes(subcardPubkeyB64));
       const subcardAddress = keccak256(subcardPubkeyBytes);
       if (subcardAddress === signerCard) {
         foundInActiveSubcards = true;
@@ -133,7 +133,7 @@ export async function verifyStage2(
 
   // Step 11: verify master card holder's ML-DSA-44 signature on sub-card registration
   const { holder_signature, ...subCardDocWithoutHolderSig } = subCardDoc;
-  const holderSigBytes = Buffer.from(holder_signature, "base64url");
+  const holderSigBytes = base64UrlToBytes(holder_signature);
   const subCardCanonical = canonicalize(subCardDocWithoutHolderSig);
   const holderSigValid = mlDsa44Verify(
     new Uint8Array(holderPubkeyBytes),
@@ -153,7 +153,7 @@ export async function verifyStage2(
 
   // Step 13: verify app_signature using app_card_pubkey
   const { app_signature, holder_signature: _hs, ...subCardDocWithoutSigs } = subCardDoc;
-  const appSigBytes = Buffer.from(app_signature, "base64url");
+  const appSigBytes = base64UrlToBytes(app_signature);
   const appSigCanonical = canonicalize(subCardDocWithoutSigs);
   const appSigValid = mlDsa44Verify(
     new Uint8Array(appPubkeyBytes),
@@ -225,7 +225,7 @@ export async function verifyStage2(
     }
     const nextPubkeyB64 = currentDoc.ancestry_pubkeys[0];
     if (!nextPubkeyB64) break;
-    const nextPubkeyBytes = new Uint8Array(Buffer.from(nextPubkeyB64, "base64url"));
+    const nextPubkeyBytes = new Uint8Array(base64UrlToBytes(nextPubkeyB64));
     const nextAddress = keccak256(nextPubkeyBytes);
 
     if (nextAddress === appCertRoot) {
