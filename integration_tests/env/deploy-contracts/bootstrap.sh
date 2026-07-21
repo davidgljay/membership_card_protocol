@@ -50,8 +50,23 @@ mv "${DEPLOYMENT_FILE}.tmp" "$DEPLOYMENT_FILE"
 echo "local.json written with dev governance keypair."
 
 # Sanity check per Phase 1 Step 1.2's done-when criterion: a cast call
-# against the logic contract succeeds.
+# against the logic contract succeeds. Two encoding pitfalls here, both
+# already documented elsewhere in this codebase for other clients hitting
+# the same contracts, and both previously misread as "calling deployed
+# contracts doesn't work" (reports/phase-1-environment-notes.md) when the
+# actual deployment above was always fine:
+# - The Stylus SDK dispatches on the camelCase-converted selector
+#   (getGovernanceKeyset), not the Rust source's get_governance_keyset —
+#   the wrong-cased form sends an unrecognized selector and reverts.
+# - Vec<u8> is uint8[] on the wire, not bytes (confirmed via
+#   `cargo stylus export-abi`), and — because it's mixed with static
+#   fields in a multi-value return — cast's decoder needs the return
+#   wrapped in an explicit outer tuple `((...))`, not a flat
+#   comma-separated list, or it fails with "buffer overrun while
+#   deserializing" despite the call itself succeeding on-chain (the same
+#   PositionOutOfBoundsError-class issue already documented for viem
+#   elsewhere in this codebase).
 LOGIC_ADDRESS=$(jq -r .contracts.logic_contract "$DEPLOYMENT_FILE")
-cast call "$LOGIC_ADDRESS" "get_governance_keyset(uint8)(bytes,uint8,uint8,uint32,uint8)" 0 \
+cast call "$LOGIC_ADDRESS" "getGovernanceKeyset(uint8)((uint8[],uint8,uint8,uint32,uint8))" 0 \
   --rpc-url "$RPC_URL"
 echo "cast call against logic contract succeeded. Bootstrap complete."
