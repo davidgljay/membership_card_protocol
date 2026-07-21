@@ -127,6 +127,17 @@ export interface BatchUpdate {
 }
 
 export interface RegistryClient {
+  /**
+   * This press's own on-chain `PressAuthorizations` lookup key (secp256r1
+   * gas-account address, bytes32-padded) — a separate identity from
+   * `context.ts`'s `pressAddress` (keccak256 of the ML-DSA-44
+   * content-signing key, exposed as `/api/press`'s `address` field). A
+   * caller needing to check `getPressAuthorization` for this press (e.g.
+   * wallet-sdk's `reviewTargetedOffer`, which requires a caller-supplied
+   * on-chain press address it cannot derive from a content CID) needs this
+   * value; see `/api/press`'s `gas_address` field.
+   */
+  readonly pressGasAddress: Hex;
   getCardEntry(cardAddress: Hex): Promise<CardEntry>;
   getPressAuthorization(policyAddress: Hex, pressAddress: Hex): Promise<PressAuthEntry>;
   getNextSequence(policyAddress: Hex): Promise<bigint>;
@@ -271,6 +282,8 @@ export function createRegistryClient(config: PressConfig): RegistryClient {
     policyAddress: Hex,
     forPressAddress: Hex
   ): Promise<PressAuthEntry> {
+    policyAddress = normalizeHex(policyAddress);
+    forPressAddress = normalizeHex(forPressAddress);
     const result = await publicClient.readContract({
       address: storageAddress,
       abi: STORAGE_ABI,
@@ -321,10 +334,13 @@ export function createRegistryClient(config: PressConfig): RegistryClient {
     policyAddress: Hex,
     retries = 1
   ): Promise<Hex> {
+    console.error(`[registry] submitWithRetry(${functionName}) fetching next sequence...`);
     let seq = await getNextSequence(policyAddress);
+    console.error(`[registry] submitWithRetry(${functionName}) got sequence ${seq}`);
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
         const args = buildArgs(seq);
+        console.error(`[registry] submitWithRetry(${functionName}) attempt ${attempt}: writeContract...`);
         const hash = await walletClient.writeContract({
           address: logicAddress,
           abi: LOGIC_ABI,
@@ -333,9 +349,19 @@ export function createRegistryClient(config: PressConfig): RegistryClient {
           account: gasAccount,
           chain,
         });
-        await publicClient.waitForTransactionReceipt({ hash });
+        console.error(`[registry] submitWithRetry(${functionName}) got hash ${hash}, waiting for receipt...`);
+        // The public Arbitrum Sepolia RPC has been observed to lag behind
+        // its own mined blocks when polled for a receipt — transactions
+        // that land successfully (confirmed separately via
+        // eth_getTransactionReceipt against the same RPC minutes later)
+        // still miss viem's default 180s waitForTransactionReceipt window.
+        // Give it more headroom rather than surfacing a false failure for
+        // a transaction that in fact succeeded.
+        await publicClient.waitForTransactionReceipt({ hash, timeout: 300_000 });
+        console.error(`[registry] submitWithRetry(${functionName}) confirmed`);
         return hash;
       } catch (err) {
+        console.error(`[registry] submitWithRetry(${functionName}) attempt ${attempt} error:`, String(err));
         const msg = String(err);
         if (attempt < retries && msg.includes(E07_SEQUENCE_MISMATCH)) {
           seq = await getNextSequence(policyAddress);
@@ -350,6 +376,7 @@ export function createRegistryClient(config: PressConfig): RegistryClient {
   // ---- reads (storage contract — see file doc for why) ----
 
   async function getCardEntry(cardAddress: Hex): Promise<CardEntry> {
+    cardAddress = normalizeHex(cardAddress);
     const result = await publicClient.readContract({
       address: storageAddress,
       abi: STORAGE_ABI,
@@ -373,6 +400,7 @@ export function createRegistryClient(config: PressConfig): RegistryClient {
   }
 
   async function getOpenOfferUseCount(offerId: Hex): Promise<bigint> {
+    offerId = normalizeHex(offerId);
     const result = await publicClient.readContract({
       address: storageAddress,
       abi: STORAGE_ABI,
@@ -392,6 +420,7 @@ export function createRegistryClient(config: PressConfig): RegistryClient {
   }
 
   async function getSubCardEntry(subCardAddress: Hex): Promise<SubCardEntry> {
+    subCardAddress = normalizeHex(subCardAddress);
     const result = await publicClient.readContract({
       address: storageAddress,
       abi: STORAGE_ABI,
@@ -419,6 +448,7 @@ export function createRegistryClient(config: PressConfig): RegistryClient {
   // ---- writes (logic contract) ----
 
   async function registerCard(params: RegisterCardParams): Promise<Hex> {
+    params = { ...params, cardAddress: normalizeHex(params.cardAddress), policyAddress: normalizeHex(params.policyAddress) };
     return submitWithRetry(
       'registerCard',
       (seq) => {
@@ -445,6 +475,7 @@ export function createRegistryClient(config: PressConfig): RegistryClient {
   }
 
   async function updateCardHead(params: UpdateCardHeadParams): Promise<Hex> {
+    params = { ...params, cardAddress: normalizeHex(params.cardAddress) };
     // Resolve the policy address from the card entry (needed for sequence fetch).
     const entry = await getCardEntry(params.cardAddress);
     const policyAddress = entry.policy_address;
@@ -498,6 +529,12 @@ export function createRegistryClient(config: PressConfig): RegistryClient {
   }
 
   async function claimOpenOffer(params: ClaimOpenOfferParams): Promise<Hex> {
+    params = {
+      ...params,
+      offerId: normalizeHex(params.offerId),
+      cardAddress: normalizeHex(params.cardAddress),
+      policyAddress: normalizeHex(params.policyAddress),
+    };
     return submitWithRetry(
       'claimOpenOffer',
       (seq) => {
@@ -528,6 +565,11 @@ export function createRegistryClient(config: PressConfig): RegistryClient {
   }
 
   async function registerSubCard(params: RegisterSubCardParams): Promise<Hex> {
+    params = {
+      ...params,
+      subCardAddress: normalizeHex(params.subCardAddress),
+      masterCardAddress: normalizeHex(params.masterCardAddress),
+    };
     // Sub-card registration uses the master card's policy. Look it up.
     const masterEntry = await getCardEntry(params.masterCardAddress);
     const policyAddress = masterEntry.policy_address;
@@ -566,6 +608,7 @@ export function createRegistryClient(config: PressConfig): RegistryClient {
   }
 
   async function deregisterSubCard(params: DeregisterSubCardParams): Promise<Hex> {
+    params = { ...params, subCardAddress: normalizeHex(params.subCardAddress) };
     const subEntry = await getSubCardEntry(params.subCardAddress);
     const masterEntry = await getCardEntry(subEntry.master_card_address);
     const policyAddress = masterEntry.policy_address;
@@ -599,6 +642,10 @@ export function createRegistryClient(config: PressConfig): RegistryClient {
         `BatchUpdateCardHeads: update count ${params.updates.length} out of range [1, ${config.MAX_BATCH_SIZE}]`
       );
     }
+    params = {
+      policyAddress: normalizeHex(params.policyAddress),
+      updates: params.updates.map((u) => ({ ...u, card_address: normalizeHex(u.card_address) })),
+    };
     return submitWithRetry(
       'batchUpdateCardHeads',
       (seq) => {
@@ -643,6 +690,7 @@ export function createRegistryClient(config: PressConfig): RegistryClient {
   }
 
   return {
+    pressGasAddress: pressAddress,
     getCardEntry,
     getPressAuthorization: (policyAddress, forPressAddress) =>
       getPressAuthorization(policyAddress, forPressAddress),
@@ -664,6 +712,23 @@ export function createRegistryClient(config: PressConfig): RegistryClient {
 // ---------------------------------------------------------------------------
 // Utility
 // ---------------------------------------------------------------------------
+
+/**
+ * Card/policy/press addresses arriving at this client's public interface
+ * may be unprefixed lowercase hex — the convention used throughout the
+ * offer/verifier layer (app-sdk's `keccak256()`, `CardVerifier`,
+ * wallet-sdk's `offerVerification.ts`, all of which compare addresses
+ * directly against `keccak256()`'s own bare-hex output with no `0x`).
+ * viem's ABI encoder requires a leading `0x` on every `Hex` arg, so every
+ * exported `RegistryClient` method normalizes its own Hex-typed params
+ * here before any internal call — this is the *only* place in press that
+ * should add or assume a prefix; comparison/verification logic elsewhere
+ * (`functions/issuance.ts`, `handlers/sub-card.ts`, etc.) works in the
+ * unprefixed convention to match the rest of the system.
+ */
+function normalizeHex(hex: string): Hex {
+  return (hex.startsWith('0x') ? hex : '0x' + hex) as Hex;
+}
 
 function hexToBytes(hex: Hex): Uint8Array {
   const clean = hex.startsWith('0x') ? hex.slice(2) : hex;

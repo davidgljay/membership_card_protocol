@@ -47,8 +47,11 @@ export async function handleSubCardRegister(
   }
 
   // 2. Binding check: keccak256(holder_primary_card_pubkey) == holder_primary_card address.
+  // Unprefixed, matching the convention `keccak256()` documents and that
+  // wallet-sdk's `cardPointer`/offer-binding checks use for the same
+  // comparison elsewhere in the protocol.
   const holderPubBytes = fromBase64url(doc.holder_primary_card_pubkey);
-  const derivedHolderAddr = '0x' + Buffer.from(keccak256(holderPubBytes)).toString('hex');
+  const derivedHolderAddr = Buffer.from(keccak256(holderPubBytes)).toString('hex');
   if (derivedHolderAddr.toLowerCase() !== doc.holder_primary_card.toLowerCase()) {
     throw Object.assign(
       new Error('P-13: holder_primary_card_pubkey binding check failed'),
@@ -57,7 +60,7 @@ export async function handleSubCardRegister(
   }
 
   // 3. Binding check: keccak256(app_card_pubkey) == app_card address.
-  const derivedAppAddr = '0x' + Buffer.from(keccak256(appPubkey)).toString('hex');
+  const derivedAppAddr = Buffer.from(keccak256(appPubkey)).toString('hex');
   if (derivedAppAddr.toLowerCase() !== doc.app_card.toLowerCase()) {
     throw Object.assign(
       new Error('P-13: app_card_pubkey binding check failed'),

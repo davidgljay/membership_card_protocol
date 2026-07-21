@@ -7,7 +7,7 @@ export default defineEventHandler(async (event) => {
     setResponseStatus(event, 503);
     return { error: 'PRESS_NOT_READY', message: 'Press is initializing' };
   }
-  const { config, kv, pressAddress } = getCtx();
+  const { config, kv, pressAddress, registry } = getCtx();
 
   // Collect current log heads for each policy.
   const log_heads: Record<string, string | null> = {};
@@ -20,6 +20,12 @@ export default defineEventHandler(async (event) => {
     press_card_cid: config.PRESS_CARD_CID,
     policy_cids: config.PRESS_POLICY_CIDS,
     address: pressAddress,
+    // On-chain `PressAuthorizations` lookup key (secp256r1 gas-account
+    // address, bytes32-padded) — a distinct identity from `address` above
+    // (keccak256 of the ML-DSA-44 content-signing key). Callers that need
+    // to authoritatively check this press's authorization for a policy
+    // (e.g. wallet-sdk's `reviewTargetedOffer`) need this value, not `address`.
+    gas_address: registry.pressGasAddress,
     log_heads,
   };
 });

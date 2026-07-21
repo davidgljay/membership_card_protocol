@@ -14,13 +14,15 @@ import type { PressContext } from '../../src/context.js';
 import type { PressConfig } from '../../src/config.js';
 import type { UpdateIntentPayload, UpdateRequest } from '../../src/types.js';
 
+// Unprefixed — matches handlers/update.ts's binding-check convention
+// (wallet-sdk's `offerVerification.ts` compares the same way).
 const holderSeed = new Uint8Array(32).fill(0x44);
 const { secretKey: HOLDER_SK, publicKey: HOLDER_PK } = ml_dsa44.keygen(holderSeed);
-const HOLDER_ADDRESS = ('0x' + Buffer.from(keccak_256(HOLDER_PK)).toString('hex')) as `0x${string}`;
+const HOLDER_ADDRESS = Buffer.from(keccak_256(HOLDER_PK)).toString('hex');
 
 const otherSeed = new Uint8Array(32).fill(0x55);
 const { secretKey: OTHER_SK, publicKey: OTHER_PK } = ml_dsa44.keygen(otherSeed);
-const OTHER_ADDRESS = ('0x' + Buffer.from(keccak_256(OTHER_PK)).toString('hex')) as `0x${string}`;
+const OTHER_ADDRESS = Buffer.from(keccak_256(OTHER_PK)).toString('hex');
 
 const CONFIG = {
   STALENESS_WINDOW_SECONDS: 300,

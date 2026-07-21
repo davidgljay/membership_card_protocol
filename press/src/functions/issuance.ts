@@ -267,7 +267,11 @@ export function verifyIssuerSignature(offer: IssuerOffer): boolean {
   const issuerPubkeyB64 = offer.ancestry_pubkeys?.[0];
   if (!issuerPubkeyB64) return false;
   const pubKey = fromBase64url(issuerPubkeyB64);
-  const derivedAddress = '0x' + Buffer.from(keccak256(pubKey)).toString('hex');
+  // Unprefixed, matching the convention `keccak256()` itself documents and
+  // that wallet-sdk's `offerVerification.ts` uses for this exact same
+  // comparison — `issuer_card` must be an unprefixed lowercase hex address
+  // for a real wallet-sdk client's offer to ever pass both sides.
+  const derivedAddress = Buffer.from(keccak256(pubKey)).toString('hex');
   if (derivedAddress.toLowerCase() !== offer.issuer_card.toLowerCase()) return false;
 
   const { issuer_signature: sig, ...rest } = offer;

@@ -33,8 +33,10 @@ const { secretKey: HOLDER_SK, publicKey: HOLDER_PK } = ml_dsa44.keygen(holderSee
 
 // `issuer_card` must equal keccak256(ancestry_pubkeys[0]) — verifyIssuerSignature's
 // binding check (`protocol-objects.md §1`: ancestry_pubkeys[0] is the new card's
-// immediate parent, i.e. the issuer's own public key).
-const ISSUER_CARD_ADDRESS = '0x' + Buffer.from(keccak256(ISSUER_PK)).toString('hex');
+// immediate parent, i.e. the issuer's own public key). Unprefixed, matching
+// the convention `keccak256()` itself documents and that wallet-sdk's
+// `offerVerification.ts` uses for this same comparison.
+const ISSUER_CARD_ADDRESS = Buffer.from(keccak256(ISSUER_PK)).toString('hex');
 
 const CONFIG = {
   PRESS_CARD_CID: 'bafybeipress',

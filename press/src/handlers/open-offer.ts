@@ -50,7 +50,9 @@ export async function handleOpenOfferClaim(
   // (not embedded in issuer_signature) — an untrusted hint until this check
   // passes.
   const issuerPubkeyBytes = fromBase64url(offer.issuer_pubkey);
-  const derivedAddress = '0x' + Buffer.from(keccak256(issuerPubkeyBytes)).toString('hex');
+  // Unprefixed — see functions/issuance.ts's verifyIssuerSignature for the
+  // full explanation of why this must match wallet-sdk's convention.
+  const derivedAddress = Buffer.from(keccak256(issuerPubkeyBytes)).toString('hex');
   if (derivedAddress.toLowerCase() !== offer.issuer_card.toLowerCase()) {
     throw Object.assign(
       new Error('P-05: issuer_pubkey binding check failed'),

@@ -99,7 +99,9 @@ export async function handleUpdate(
       );
     }
 
-    const signerAddress = '0x' + Buffer.from(keccak256(updaterPubkey)).toString('hex');
+    // Unprefixed — see functions/issuance.ts's verifyIssuerSignature for
+    // the full explanation of why this must match wallet-sdk's convention.
+    const signerAddress = Buffer.from(keccak256(updaterPubkey)).toString('hex');
     if (signerAddress.toLowerCase() !== targetAddress.toLowerCase()) {
       throw Object.assign(
         new Error('P-13: intent_signature public_key does not bind to target_card_address'),

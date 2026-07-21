@@ -128,8 +128,9 @@ function signOffer(offer: Record<string, unknown>) {
 }
 
 // `issuer_card` must equal keccak256(ancestry_pubkeys[0]) for the targeted
-// (`IssuerOffer`) binding check in `verifyIssuerSignature`.
-const ISSUER_CARD_FOR_TARGETED = '0x' + Buffer.from(keccak256(ISSUER_PK)).toString('hex');
+// (`IssuerOffer`) binding check in `verifyIssuerSignature`. Unprefixed,
+// matching wallet-sdk's convention for this same comparison.
+const ISSUER_CARD_FOR_TARGETED = Buffer.from(keccak256(ISSUER_PK)).toString('hex');
 
 function makeValidOffer() {
   const base = {
@@ -214,7 +215,7 @@ describe('P-05', () => {
 describe('P-06', () => {
   it('throws P-06 when recipient_signature is invalid', async () => {
     // issuer_card must equal keccak256(ISSUER_PK) so the binding check passes.
-    const issuerCardAddr = '0x' + Buffer.from(keccak256(ISSUER_PK)).toString('hex');
+    const issuerCardAddr = Buffer.from(keccak256(ISSUER_PK)).toString('hex');
     const base = {
       policy_id: POLICY_CID, issuer_card: issuerCardAddr, press_card: PRESS_CID,
       issued_at: new Date().toISOString(), issuer_pubkey: toBase64url(ISSUER_PK),
@@ -238,7 +239,7 @@ describe('P-06', () => {
 describe('P-07', () => {
   it('throws P-07 when open offer expires_at is in the past', async () => {
     const ctx = makeCtx();
-    const issuerCardAddr = '0x' + Buffer.from(keccak256(ISSUER_PK)).toString('hex');
+    const issuerCardAddr = Buffer.from(keccak256(ISSUER_PK)).toString('hex');
     const base = {
       policy_id: POLICY_CID, issuer_card: issuerCardAddr, press_card: PRESS_CID,
       issued_at: new Date().toISOString(), expires_at: new Date(Date.now() - 10_000).toISOString(),
@@ -262,7 +263,7 @@ describe('P-07', () => {
 
 describe('P-08', () => {
   it('throws P-08 when use_count >= max_acceptances', async () => {
-    const issuerCardAddr = '0x' + Buffer.from(keccak256(ISSUER_PK)).toString('hex');
+    const issuerCardAddr = Buffer.from(keccak256(ISSUER_PK)).toString('hex');
     const ctx = makeCtx({
       registry: {
         ...makeCtx().registry,
@@ -408,8 +409,8 @@ describe('P-13', () => {
 describe('P-14', () => {
   it('throws P-14 when holder_signature is invalid on sub-card registration', async () => {
     const { keccak256, fromBase64url } = await import('../../src/functions/crypto.js');
-    const holderCardAddr = '0x' + Buffer.from(keccak256(fromBase64url(toBase64url(HOLDER_PK)))).toString('hex');
-    const appCardAddr = '0x' + Buffer.from(keccak256(fromBase64url(toBase64url(APP_PK)))).toString('hex');
+    const holderCardAddr = Buffer.from(keccak256(fromBase64url(toBase64url(HOLDER_PK)))).toString('hex');
+    const appCardAddr = Buffer.from(keccak256(fromBase64url(toBase64url(APP_PK)))).toString('hex');
 
     // Valid app_signature.
     const docForAppSig = {
@@ -446,8 +447,8 @@ describe('P-14', () => {
 describe('P-15', () => {
   it('throws P-15 when app cert chain is untrusted', async () => {
     const { keccak256, fromBase64url } = await import('../../src/functions/crypto.js');
-    const holderCardAddr = '0x' + Buffer.from(keccak256(fromBase64url(toBase64url(HOLDER_PK)))).toString('hex');
-    const appCardAddr = '0x' + Buffer.from(keccak256(fromBase64url(toBase64url(APP_PK)))).toString('hex');
+    const holderCardAddr = Buffer.from(keccak256(fromBase64url(toBase64url(HOLDER_PK)))).toString('hex');
+    const appCardAddr = Buffer.from(keccak256(fromBase64url(toBase64url(APP_PK)))).toString('hex');
 
     const docForAppSig = {
       holder_primary_card: holderCardAddr, holder_primary_card_pubkey: toBase64url(HOLDER_PK),
@@ -486,8 +487,8 @@ describe('P-15', () => {
 describe('P-16', () => {
   it('throws P-16 when app gas account is insufficient', async () => {
     const { keccak256, fromBase64url } = await import('../../src/functions/crypto.js');
-    const holderCardAddr = '0x' + Buffer.from(keccak256(fromBase64url(toBase64url(HOLDER_PK)))).toString('hex');
-    const appCardAddr = '0x' + Buffer.from(keccak256(fromBase64url(toBase64url(APP_PK)))).toString('hex');
+    const holderCardAddr = Buffer.from(keccak256(fromBase64url(toBase64url(HOLDER_PK)))).toString('hex');
+    const appCardAddr = Buffer.from(keccak256(fromBase64url(toBase64url(APP_PK)))).toString('hex');
 
     const docForAppSig = {
       holder_primary_card: holderCardAddr, holder_primary_card_pubkey: toBase64url(HOLDER_PK),
