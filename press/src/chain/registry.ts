@@ -56,7 +56,7 @@ const LOGIC_ABI = parseAbi([
   'function registerCard(bytes32 card_address, uint8[] initial_log_cid, bytes32 policy_address, bytes32 press_address, uint8[] press_sig_payload, uint8[] press_signature) external',
   'function updateCardHead(bytes32 card_address, uint8[] new_log_cid, uint8[] prev_log_cid, bytes32 press_address, uint8[] press_sig_payload, uint8[] press_signature) external',
   'function claimOpenOffer(bytes32 offer_id, uint64 max_acceptances, uint64 expires_at, bytes32 card_address, uint8[] initial_log_cid, bytes32 policy_address, bytes32 press_address, uint8[] press_sig_payload, uint8[] press_signature) external',
-  'function registerSubCard(bytes32 sub_card_address, bytes32 master_card_address, uint8[] registration_log_head, uint8[] sub_card_doc_cid, bytes32 press_address, uint8[] press_sig_payload, uint8[] press_signature, uint8[] master_sig_payload, uint8[] master_signature, uint8[] admin_secp_payload, uint8[] admin_secp_signature) external',
+  'function registerSubCard(bytes32 sub_card_address, bytes32 master_card_address, uint8[] registration_log_head, uint8[] sub_card_doc_cid, bytes32 press_address, uint8[] press_sig_payload, uint8[] press_signature, uint8[] admin_secp_payload, uint8[] admin_secp_signature) external',
   'function deregisterSubCard(bytes32 sub_card_address, bytes32 press_address, uint8[] press_sig_payload, uint8[] press_signature, uint8[] sig_payload, uint8[] signature) external',
   'function batchUpdateCardHeads(bytes32 policy_address, bytes32 press_address, bytes32[] card_addresses, uint8[][] prev_log_cids, uint8[][] new_log_cids, uint8[] press_sig_payload, uint8[] press_signature) external',
   'function getProtocolVersion() external view returns (string)',
@@ -218,8 +218,6 @@ export interface RegisterSubCardParams {
   masterCardAddress: Hex;
   registrationLogHead: Uint8Array;
   subCardDocCid: Uint8Array;
-  masterSigPayload: Uint8Array;
-  masterSignature: Uint8Array;
   /** Empty when the master card is not a DNS admin card (the common case). */
   adminSecpPayload?: Uint8Array;
   /** Must be exactly 64 bytes when present; omit for a non-DNS-admin master. */
@@ -687,8 +685,6 @@ export function createRegistryClient(config: PressConfig): RegistryClient {
           pressAddress,
           Array.from(payloadBytes),
           Array.from(pressSignature),
-          Array.from(params.masterSigPayload),
-          Array.from(params.masterSignature),
           Array.from(adminSecpPayload),
           Array.from(adminSecpSignature),
         ];

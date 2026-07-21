@@ -6,7 +6,7 @@
 
 import type { PressContext } from '../context.js';
 import { canonicalize, canonicalizeExcluding } from '../serialization.js';
-import { keccak256, toBase64url, fromBase64url } from '../functions/crypto.js';
+import { keccak256, fromBase64url } from '../functions/crypto.js';
 import { mlDsa44Verify } from '@membership-card-protocol/verifier';
 import { checkRateLimits, recordWrite } from '../functions/predicates.js';
 import { fetchPolicyCard } from '../functions/issuance.js';
@@ -126,21 +126,11 @@ export async function handleSubCardRegister(
   const subCardPubBytes = fromBase64url(doc.recipient_pubkey);
   const subCardAddress = ('0x' + Buffer.from(keccak256(subCardPubBytes)).toString('hex')) as Hex;
 
-  const masterSigPayload = canonicalize({
-    op: 'register_sub_card',
-    sub_card_address: subCardAddress,
-    master_card_address: masterCardAddress,
-    sub_card_doc_cid: toBase64url(new TextEncoder().encode(subCardDocCid)),
-    timestamp: new Date().toISOString(),
-  } as Record<string, unknown>);
-
   const txHash = await ctx.registry.registerSubCard({
     subCardAddress,
     masterCardAddress,
     registrationLogHead: masterEntry.log_head_cid,
     subCardDocCid: new TextEncoder().encode(subCardDocCid),
-    masterSigPayload,
-    masterSignature: fromBase64url(holder_signature),
     adminSecpPayload: body.admin_secp_payload
       ? new TextEncoder().encode(body.admin_secp_payload)
       : new Uint8Array(0),
