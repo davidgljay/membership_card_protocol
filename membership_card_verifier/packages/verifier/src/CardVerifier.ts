@@ -167,33 +167,19 @@ export class CardVerifier {
     // Stage 3 result: simplified chain for verifyCard (can't walk without pubkey)
     const chainAddresses = [cardAddress];
 
-    // Stage 4: revocation check. verifyCard has no pubkey, so no card_content can
-    // ever be decrypted here — Stage 4 falls back to `revocation.status: "unknown"`
-    // for this path (see card_verifier.md §7.4 "verifyCard limitation").
-    const stage4 = await verifyStage4(
-      [{ card_address: cardAddress, public_key: "", card_content: {} }],
-      signingTimestamp,
-      this.config.rpc,
-      this.config
-    );
-
-    // Stage 6: annotations
-    const stage6 = await verifyStage6(chainAddresses, this.config.rpc, this.config.ipfs, this.config);
-
-    const allErrors = [...errors, ...stage4.errors, ...stage6.errors];
-
-    // verifyCard cannot decrypt any CardDocument (no pubkey available for the given
-    // address alone), so no chain data is ever resolved here — chain is always empty.
+    // verifyCard cannot decrypt any CardDocument without a pubkey for the given
+    // address, so chain data only gets resolved when options.pubkey is supplied.
     let chain: ChainLink[] = [];
     let realChainReachesTrustedRoot: boolean | "skipped" = isTrustedRoot;
     let realChainAddresses: string[] = chainAddresses;
+    const stage3Errors: VerificationError[] = [];
 
     if (options?.pubkey) {
       const pubkeyBytes = base64UrlToBytes(options.pubkey);
       const derivedAddress = keccak256(pubkeyBytes);
 
       if (derivedAddress !== cardAddress) {
-        allErrors.push({
+        stage3Errors.push({
           stage: 3,
           code: "ADDRESS_BINDING_MISMATCH",
           message: `Supplied pubkey does not correspond to cardAddress: ${cardAddress}`,
@@ -207,18 +193,32 @@ export class CardVerifier {
           const cardDoc = JSON.parse(new TextDecoder().decode(decrypted)) as CardDocument;
 
           const stage3 = await verifyStage3(cardDoc, cardAddress, this.config.rpc, this.config.ipfs, this.config, pubkeyBytes);
-          allErrors.push(...stage3.errors);
+          stage3Errors.push(...stage3.errors);
           chain = stage3.chain;
           realChainReachesTrustedRoot = stage3.chain_reaches_trusted_root;
           realChainAddresses = stage3.chain_card_addresses;
         } catch (e) {
           const code = e instanceof CardProtocolError ? e.code : "DECRYPTION_FAILED";
-          allErrors.push({ stage: 3, code, message: String(e) });
+          stage3Errors.push({ stage: 3, code, message: String(e) });
           // chain stays [] — decryption/parse failure falls back to today's behavior,
           // not a hard rejection of the whole verifyCard call.
         }
       }
     }
+
+    // Stage 4: revocation check. Uses the real decrypted chain when options.pubkey
+    // resolved one above; falls back to the content-less stub (revocation.status:
+    // "unknown", per card_verifier.md §7.4 "verifyCard limitation") otherwise —
+    // this must run *after* the pubkey branch above, not before it, or it would
+    // always see empty content even when real content was just decrypted.
+    const stage4Input: ChainLink[] =
+      chain.length > 0 ? chain : [{ card_address: cardAddress, public_key: "", card_content: {} }];
+    const stage4 = await verifyStage4(stage4Input, signingTimestamp, this.config.rpc, this.config);
+
+    // Stage 6: annotations
+    const stage6 = await verifyStage6(chainAddresses, this.config.rpc, this.config.ipfs, this.config);
+
+    const allErrors = [...errors, ...stage3Errors, ...stage4.errors, ...stage6.errors];
 
     return {
       signer_card: cardAddress,
