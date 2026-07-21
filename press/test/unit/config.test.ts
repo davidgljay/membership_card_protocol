@@ -18,6 +18,7 @@ const validEnv: Record<string, string> = {
   FILEBASE_SECRET: 'test-secret',
   FILEBASE_BUCKET: 'test-bucket',
   EXTERNAL_KV_URL: 'redis://localhost:6379',
+  PRESS_ADMIN_API_KEY: 'test-admin-key',
 };
 
 function setEnv(env: Record<string, string>) {

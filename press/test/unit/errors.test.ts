@@ -392,9 +392,9 @@ describe('P-13', () => {
         recipient_pubkey: toBase64url(APP_PK),
         issued_at: new Date().toISOString(),
         attestation_level: 'T2',
-        app_signature: { public_key: toBase64url(APP_PK), signature: toBase64url(new Uint8Array(2420)) },
+        app_signature: toBase64url(new Uint8Array(2420)),
       },
-      holder_signature: { public_key: toBase64url(HOLDER_PK), signature: toBase64url(new Uint8Array(2420)) },
+      holder_signature: toBase64url(new Uint8Array(2420)),
     };
     // P-13: app_card binding check. App sig is checked first but will fail;
     // depending on order, may get P-13 on the binding check first.
@@ -429,12 +429,9 @@ describe('P-14', () => {
       sub_card_document: {
         ...docForAppSig,
         attestation_level: 'T2',
-        app_signature: { public_key: toBase64url(APP_PK), signature: toBase64url(appSig) },
+        app_signature: toBase64url(appSig),
       },
-      holder_signature: {
-        public_key: toBase64url(HOLDER_PK),
-        signature: toBase64url(new Uint8Array(2420).fill(0xcc)), // invalid
-      },
+      holder_signature: toBase64url(new Uint8Array(2420).fill(0xcc)), // invalid
     };
     await expect(handleSubCardRegister(ctx, body)).rejects.toMatchObject({ pressCode: 'P-14' });
   });
@@ -458,7 +455,7 @@ describe('P-15', () => {
     };
     const appSigBytes = canonicalize(docForAppSig as Record<string, unknown>);
     const appSig = ml_dsa44.sign(appSigBytes, APP_SK);
-    const docWithAppSig = { ...docForAppSig, app_signature: { public_key: toBase64url(APP_PK), signature: toBase64url(appSig) } };
+    const docWithAppSig = { ...docForAppSig, app_signature: toBase64url(appSig) };
     const holderSigBytes = canonicalize(docWithAppSig as Record<string, unknown>);
     const holderSig = ml_dsa44.sign(holderSigBytes, HOLDER_SK);
 
@@ -473,8 +470,8 @@ describe('P-15', () => {
     });
 
     const body: SubCardRegistrationRequest = {
-      sub_card_document: { ...docForAppSig, attestation_level: 'T2', app_signature: { public_key: toBase64url(APP_PK), signature: toBase64url(appSig) } },
-      holder_signature: { public_key: toBase64url(HOLDER_PK), signature: toBase64url(holderSig) },
+      sub_card_document: { ...docForAppSig, attestation_level: 'T2', app_signature: toBase64url(appSig) },
+      holder_signature: toBase64url(holderSig),
     };
     await expect(handleSubCardRegister(ctx, body)).rejects.toMatchObject({ pressCode: 'P-15' });
   });
@@ -498,7 +495,7 @@ describe('P-16', () => {
     };
     const appSigBytes = canonicalize(docForAppSig as Record<string, unknown>);
     const appSig = ml_dsa44.sign(appSigBytes, APP_SK);
-    const docWithAppSig = { ...docForAppSig, app_signature: { public_key: toBase64url(APP_PK), signature: toBase64url(appSig) } };
+    const docWithAppSig = { ...docForAppSig, app_signature: toBase64url(appSig) };
     const holderSigBytes = canonicalize(docWithAppSig as Record<string, unknown>);
     const holderSig = ml_dsa44.sign(holderSigBytes, HOLDER_SK);
 
@@ -510,8 +507,8 @@ describe('P-16', () => {
     });
 
     const body: SubCardRegistrationRequest = {
-      sub_card_document: { ...docForAppSig, attestation_level: 'T2', app_signature: { public_key: toBase64url(APP_PK), signature: toBase64url(appSig) } },
-      holder_signature: { public_key: toBase64url(HOLDER_PK), signature: toBase64url(holderSig) },
+      sub_card_document: { ...docForAppSig, attestation_level: 'T2', app_signature: toBase64url(appSig) },
+      holder_signature: toBase64url(holderSig),
     };
     await expect(handleSubCardRegister(ctx, body)).rejects.toMatchObject({ pressCode: 'P-16' });
   });
