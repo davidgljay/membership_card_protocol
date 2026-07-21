@@ -88,6 +88,8 @@ export interface PressConfig {
   LOG_LEVEL: 'debug' | 'info' | 'warn' | 'error';
   MAX_BATCH_SIZE: number;
   STALENESS_WINDOW_SECONDS: number;
+  /** Bearer token gating the operator-facing /admin/* endpoints — mirrors wallet-service's convention. Not for end users or peers. */
+  PRESS_ADMIN_API_KEY: string;
 }
 
 function requireEnv(name: string): string {
@@ -211,6 +213,7 @@ export function loadConfig(): PressConfig {
     optionalEnv('STALENESS_WINDOW_SECONDS', '300'),
     10
   );
+  const PRESS_ADMIN_API_KEY = requireEnv('PRESS_ADMIN_API_KEY');
 
   return {
     PRESS_CARD_CID,
@@ -237,5 +240,6 @@ export function loadConfig(): PressConfig {
     LOG_LEVEL,
     MAX_BATCH_SIZE,
     STALENESS_WINDOW_SECONDS,
+    PRESS_ADMIN_API_KEY,
   };
 }

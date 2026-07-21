@@ -89,4 +89,16 @@ export const kvKeys = {
     `press:policy_writes:${policyAddress}:${windowStart}`,
   appGas: (appCardAddress: string) => `press:app_gas:${appCardAddress}`,
   reconcileLastBlock: () => 'press:reconcile:last_block',
+  /**
+   * Operator-registered addresses `isPolicyAuthorizer` (context.ts's
+   * `createRpcProvider`) recognizes as trusted chain-walk roots, alongside
+   * the real on-chain `PolicyAuthorizerKeys` check `RegisterPolicy`
+   * populates. For addresses that are legitimately trusted anchors but
+   * were never themselves registered as an on-chain policy (e.g. a test
+   * fixture's synthetic per-run issuer card standing in as its own root —
+   * `integration_tests/fixtures/src/mintCard.ts`), since a static
+   * `trustedRoots` env value can't track an address that's freshly
+   * generated on every run. Set via `POST /admin/trusted-roots`.
+   */
+  trustedRoot: (address: string) => `press:trusted_root:${address}`,
 } as const;
