@@ -59,9 +59,12 @@ export async function mintCard(options: MintCardOptions): Promise<MintedCard> {
   const issuerKeyId = `issuer:${options.label}`;
   const secureKeyProvider = new InMemorySecureKeyProvider();
   const issuerPubkey = await secureKeyProvider.generateKey(issuerKeyId);
-  // app-sdk's keccak256 already returns lowercase hex (see its own doc
-  // comment) — not raw bytes, unlike press's own keccak256.
-  const issuerAddress = '0x' + keccak256(issuerPubkey);
+  // app-sdk's keccak256 already returns lowercase hex, unprefixed (see its
+  // own doc comment) — not raw bytes, unlike press's own keccak256. Card
+  // addresses stay unprefixed throughout the offer/verifier layer;
+  // press's verifyIssuerSignature (functions/issuance.ts) compares
+  // issuer_card against this exact same unprefixed convention.
+  const issuerAddress = keccak256(issuerPubkey);
 
   const pressBaseUrl = options.pressBaseUrl.replace(/\/$/, '');
 
@@ -111,6 +114,16 @@ export async function mintCard(options: MintCardOptions): Promise<MintedCard> {
   return { cardCid, scip, issuerAddress, holderPublicKey: holder.publicKey };
 }
 
+/**
+ * The offer's `press_card` field must equal `PRESS_CARD_CID` exactly:
+ * `handleIssueFinalize` (`press/src/handlers/issue.ts:112-116`)
+ * unconditionally overwrites `press_card` with `ctx.config.PRESS_CARD_CID`
+ * before re-verifying `holder_signature`, so whatever the offer was signed
+ * with must match that same CID or the signature check fails. (A
+ * plausible-looking alternative — the press's on-chain registry `address`,
+ * since `getPressAuthorization`'s on-chain arg is address-shaped — is
+ * *not* it; that was tried and breaks signature verification here.)
+ */
 async function fetchPressCardCid(pressBaseUrl: string): Promise<string> {
   const res = await fetch(`${pressBaseUrl}/api/press`);
   if (!res.ok) {

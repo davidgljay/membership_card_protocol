@@ -1,0 +1,4 @@
+wallet-service-tls:3443 {
+	tls internal
+	reverse_proxy wallet-service:3000
+}

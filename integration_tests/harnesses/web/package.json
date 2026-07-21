@@ -1,0 +1,33 @@
+{
+  "name": "@membership-card-protocol/harness-web",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Playwright harness exercising sdk-providers-web + app-sdk/wallet-sdk against the live integration_tests stack: create wallet, accept an offer, validate the resulting card.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && playwright test"
+  },
+  "dependencies": {
+    "@membership-card-protocol/app-sdk": "file:../../../app-sdk/packages/app-sdk",
+    "@membership-card-protocol/integration-fixtures": "file:../../fixtures",
+    "@membership-card-protocol/sdk-providers-web": "file:../../../sdk-providers-web/packages/sdk-providers-web",
+    "@membership-card-protocol/verifier": "file:../../../membership_card_verifier/packages/verifier",
+    "@membership-card-protocol/verifier-ipfs-provider": "file:../../../membership_card_verifier/packages/verifier-ipfs-provider",
+    "@membership-card-protocol/verifier-rpc-provider": "file:../../../membership_card_verifier/packages/verifier-rpc-provider",
+    "@membership-card-protocol/wallet-sdk": "file:../../../wallet-sdk/packages/wallet-sdk",
+    "buffer": "^6.0.3",
+    "viem": "^2.53.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.28.1",
+    "http-server": "^14.1.1",
+    "typescript": "^5.8.3"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "targets": [
+    {
+      "target_id": "0xc62599d7958b85bfd769c934e37afe024fb7a6af3b3f80c04f31ff985dae83ad",
+      "ohttp_gateway_url": "https://wallet-service-tls:3443/ohttp/gateway"
+    }
+  ]
+}

@@ -61,19 +61,55 @@ services:
       - "3000:3000"
     volumes:
       - ./env/relay/apps.json:/app/config/apps.json:ro
+      - ./env/relay/oblivious_targets.json:/app/config/oblivious_targets.json:ro
       - relay-db:/data
+      # Relay's outbound OHTTP forwarding fetch is plain Node `fetch`, which
+      # validates certs against Node's trust store — it needs
+      # wallet-service-tls's self-signed (Caddy-internal-CA) cert trusted,
+      # via NODE_EXTRA_CA_CERTS below, rather than disabling verification.
+      - caddy-data:/caddy-data:ro
     environment:
       REDIS_URL: redis://redis:6379
       APP_REGISTRY_PATH: /app/config/apps.json
+      OBLIVIOUS_TARGETS_PATH: /app/config/oblivious_targets.json
       DB_PATH: /data/registry.db
+      NODE_EXTRA_CA_CERTS: /caddy-data/caddy/pki/authorities/local/root.crt
     depends_on:
       redis:
+        condition: service_healthy
+      wallet-service-tls:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
       interval: 10s
       timeout: 5s
       retries: 3
+
+  # TLS termination for wallet-service so relay's OHTTP oblivious-forwarding
+  # (which hard-requires an https:// gateway URL, by design — see
+  # relay/src/utils/oblivious_targets.ts) can reach it from within this
+  # stack without weakening that check. Caddy's self-signed cert (via `tls
+  # internal`) is trusted by relay through NODE_EXTRA_CA_CERTS above,
+  # sourced from the shared caddy-data volume. The healthcheck waits for
+  # Caddy's root CA to actually exist on disk before relay starts — Node
+  # only reads NODE_EXTRA_CA_CERTS once at process startup, so a race here
+  # would crash relay with ENOENT rather than just failing to trust the cert.
+  wallet-service-tls:
+    image: caddy:2-alpine
+    volumes:
+      - ./env/wallet-service-tls/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    # No depends_on wallet-service: that would create relay -> wallet-
+    # service-tls -> wallet-service -> relay (wallet-service already depends
+    # on relay). Caddy's reverse_proxy tolerates a not-yet-ready upstream
+    # (returns 502 until wallet-service is healthy) rather than needing it
+    # up first, and TLS/CA generation doesn't depend on the upstream at all.
+    healthcheck:
+      test: ["CMD", "test", "-f", "/data/caddy/pki/authorities/local/root.crt"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 5s
 
   redis:
     image: redis:7-alpine
@@ -336,3 +372,4 @@ volumes:
   synapse-pg-data:
   synapse-data:
   wallet-service-pg-data:
+  caddy-data:
