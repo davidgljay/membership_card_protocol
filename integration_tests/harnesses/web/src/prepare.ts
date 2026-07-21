@@ -135,6 +135,49 @@ export async function prepare(options: PrepareOptions): Promise<HarnessConfig> {
   // prefix when it actually talks to viem.
   const rootAddress = keccak256(rootKeypair.publicKey);
 
+  // Press's own internal CardVerifier (used e.g. by sub-card registration's
+  // app-certification check, handlers/sub-card.ts's verifyAppCertificationChain)
+  // is a separate instance from the browser-side one scenario.ts configures
+  // below, with no way to pass per-run trustedRoots into a running server —
+  // register this run's fresh root as a trusted chain-walk anchor via the
+  // operator-only admin endpoint (context.ts's isPolicyAuthorizer checks
+  // this KV-backed set alongside the real on-chain PolicyAuthorizerKeys).
+  const trustedRootRes = await fetch(`${pressBaseUrl}/api/admin/trusted-roots`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${pressDevVars.PRESS_ADMIN_API_KEY}`,
+    },
+    body: JSON.stringify({ address: rootAddress }),
+  });
+  if (!trustedRootRes.ok) {
+    throw new Error(
+      `prepare: POST /api/admin/trusted-roots failed: HTTP ${trustedRootRes.status}: ${await trustedRootRes.text()}`
+    );
+  }
+
+  // Sub-card registration (handlers/sub-card.ts step 8, checkAppGasBalance)
+  // requires the app card — this same root card, acting as the wallet's own
+  // app identity (scenario.ts's walletAppCard.cardPointer) — to have a
+  // pre-funded gas account. The real flow is an app sending ETH to the
+  // press's address with its app_card_address in the calldata, detected by
+  // chain/gas.ts's block-polling task; this harness credits the same KV
+  // record directly via the admin endpoint rather than driving that whole
+  // flow just to unblock a gas check.
+  const gasCreditRes = await fetch(`${pressBaseUrl}/api/admin/app-gas-credit`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${pressDevVars.PRESS_ADMIN_API_KEY}`,
+    },
+    body: JSON.stringify({ app_card_address: rootAddress, wei_amount: String(10n ** 18n) }),
+  });
+  if (!gasCreditRes.ok) {
+    throw new Error(
+      `prepare: POST /api/admin/app-gas-credit failed: HTTP ${gasCreditRes.status}: ${await gasCreditRes.text()}`
+    );
+  }
+
   // Build and submit a targeted offer issued by that same root card:
   // ancestry_pubkeys=[rootPubkey] (root acts as its own immediate parent
   // for the *new* card being offered) is also what makes the offer's
