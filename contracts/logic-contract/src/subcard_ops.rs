@@ -144,8 +144,15 @@ pub fn register_sub_card(
             return Err(errors::make_error(errors::INVALID_ADMIN_CARD_SIGNATURE));
         }
     } else {
-        // For non-DNS-admin masters, no admin secp signature may be supplied.
-        if !admin_secp_signature.is_empty() || !admin_secp_payload.is_empty() {
+        // For non-DNS-admin masters, admin_secp_signature must be exactly
+        // bytes[64](0) (registry_contract.md §4.3) — not merely empty.
+        // `Vec::is_empty()` only checks length == 0, which a genuine
+        // caller-supplied bytes[64](0) sentinel (length 64, all zero) never
+        // satisfies; every non-admin RegisterSubCard call reverted here
+        // until this was fixed to check the actual sentinel value.
+        let is_zero_signature =
+            admin_secp_signature.len() == 64 && admin_secp_signature.iter().all(|&b| b == 0);
+        if !is_zero_signature || !admin_secp_payload.is_empty() {
             return Err(errors::make_error(errors::INVALID_ADMIN_CARD_SIGNATURE));
         }
     }
