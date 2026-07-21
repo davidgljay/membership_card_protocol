@@ -663,8 +663,7 @@ Implemented in `press/src/functions/notifications.ts` (`diffActiveSubcards` iden
 **Steps:**
 
 1. Confirm the requesting app's gas balance is sufficient. Reject with `P-16` if insufficient (do not sponsor; the press does not self-fund sub-card registration).
-2. Build the `RegisterSubCardPayload` and sign with secp256r1.
-3. Call `RegisterSubCard(sub_card_address, master_card_address, registration_log_head, sub_card_doc_cid, master_sig_payload, master_signature, admin_secp_payload, admin_secp_signature)` on the registry — the 8-argument form per `registry_contract.md §4.3` (Fix #2). `admin_secp_payload`/`admin_secp_signature` are the values resolved by `processSubCardRegistration` step 5a: the DNS admin holder's `AdminAuthorizeSubCardPayload` + secp256r1 signature when the master card is a DNS admin card, or explicit zero-value/empty (`bytes[64](0)` / empty bytes) otherwise. On revert with `E-47` (`INVALID_ADMIN_CARD_SIGNATURE`), surface that error to the caller — do not retry.
+2. Call `RegisterSubCard(sub_card_address, master_card_address, registration_log_head, sub_card_doc_cid, press_address, press_sig_payload, press_signature, admin_secp_payload, admin_secp_signature)` on the registry, per `registry_contract.md §4.3` — as of v0.7, no holder ML-DSA-44 signature is carried in calldata; `sub_card_doc_cid` (a content-addressed CID of the `SubCardDocument`, which contains `holder_signature`) already serves as a tamper-evident on-chain commitment to it. `admin_secp_payload`/`admin_secp_signature` are the values resolved by `processSubCardRegistration` step 5a: the DNS admin holder's `AdminAuthorizeSubCardPayload` + secp256r1 signature when the master card is a DNS admin card, or explicit zero-value/empty (`bytes[64](0)` / empty bytes) otherwise. On revert with `E-47` (`INVALID_ADMIN_CARD_SIGNATURE`), surface that error to the caller — do not retry.
 
 **Returns:** Transaction hash on success.
 

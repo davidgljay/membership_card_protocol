@@ -672,6 +672,17 @@ impl LogicContract {
     /// When `master_card_address` is a DNS admin card (`DnsAdminCardKeys[master]` is non-zero),
     /// `admin_secp_payload` and `admin_secp_signature` are required and verified on-chain (E-47).
     /// For non-DNS-admin master cards, both must be empty/zero.
+    ///
+    /// No holder ML-DSA-44 signature is carried in calldata — matching `RegisterCard`/
+    /// `UpdateCardHead`/`ClaimOpenOffer`, none of which carry a holder/issuer ML-DSA-44
+    /// signature either. The holder's authorization already lives in the `SubCardDocument`
+    /// pinned at `sub_card_doc_cid`; that CID is itself a content-addressed, tamper-evident
+    /// commitment to it, so a second on-chain copy added nothing an off-chain reader
+    /// couldn't already verify — while costing ~88KB of `uint8[]`-encoded calldata per call
+    /// (ML-DSA-44 signatures are large, and Stylus's function-dispatch ABI encodes `Vec<u8>`
+    /// as `uint8[]`, 32 bytes per element). A prior version of this function accepted
+    /// `master_sig_payload`/`master_signature` for this purpose; removed 2026-07-21 (see
+    /// registry_contract.md §4.3's changelog).
     pub fn register_sub_card(
         &mut self,
         sub_card_address: B256,
@@ -681,8 +692,6 @@ impl LogicContract {
         press_address: B256,
         press_sig_payload: Vec<u8>,
         press_signature: Vec<u8>,
-        master_sig_payload: Vec<u8>,    // ML-DSA-44 payload (auditable; not verified on-chain)
-        master_signature: Vec<u8>,      // ML-DSA-44 signature (auditable; not verified on-chain)
         admin_secp_payload: Vec<u8>,    // AdminAuthorizeSubCardPayload; required for DNS admin masters
         admin_secp_signature: Vec<u8>,  // secp256r1 sig; required for DNS admin masters (E-47)
     ) -> Result<(), Vec<u8>> {
@@ -694,8 +703,7 @@ impl LogicContract {
     /// `sig_payload` and `signature` are the holder's ML-DSA-44 deregistration
     /// authorization. The press verifies the holder's signature off-chain before
     /// submitting. They are included in calldata for auditability but are not
-    /// verified on-chain — consistent with the `master_sig_payload` / `master_signature`
-    /// pattern in `register_sub_card` (§4.3).
+    /// verified on-chain.
     pub fn deregister_sub_card(
         &mut self,
         sub_card_address: B256,

@@ -1,10 +1,24 @@
 # Card Protocol — Registry Contract Spec
 
-**Version:** 0.6 (draft)  
+**Version:** 0.7 (draft)  
 **Date:** 2026-06-25  
 **Status:** Draft  
 **Contract target:** Arbitrum One (Stylus / WASM-compiled Rust)  
-**Amends:** v0.5 — DNS admin card secp256r1 on-chain signing added. New storage table `DnsAdminCardKeys` (§3.11) maps DNS admin card addresses to secp256r1 public keys. `RegisterDomain` (§4.17) accepts and stores the admin's secp256r1 public key. `DeregisterDomain` (§4.18) clears it. `RegisterSubCard` (§4.3) gains two new parameters and an on-chain RIP-7212 verification step triggered when the master card is a DNS admin card; a compromised press can no longer register fraudulent sub-cards of domain admin cards without the admin's secp256r1 private key. Error code E-47 added. See also v0.4→v0.5: DNS authorization model hardened. `SetPolicyAddress` (§4.19) gains explicit domain-card binding check: `admin_card_address` must match `DomainRegistrations[domain].admin_card_address`; optional `sub_card_address` must be a registered direct sub-card of that admin card (`SubCardRegistrations` one-hop check). Governance-quorum write path split into dedicated `GovernanceSetPolicyAddress` (§4.23) for rollback and fraud remediation. `SetDnsGovernancePolicyAddress` (§4.24) added, making `DnsGovernancePolicyAddress` mutable via `DnsGovernanceBody` quorum rather than write-once. `PolicyAddressSet` event gains `sub_card_address` field. Two new events: `PolicyAddressGovernanceSet` and `DnsGovernancePolicyAddressUpdated`. Error codes E-45–E-46 added. See also v0.3→v0.4: DNS resolution support added. `DnsGovernanceBody` added to `GovernanceBodyId` enum (§3.6). New storage tables `DomainRegistrations` (§3.8), `PolicyAddresses` (§3.9), and global variable `DnsGovernancePolicyAddress` (§3.10). Six new write operations §4.17–4.22. Two new read operations in §5. Six new events in §7. Error codes E-37–E-44 in §8. See also `specs/dns_resolution.md` for the full DNS resolution protocol spec. See also v0.2→v0.3: three-contract architecture adopted (storage / logic / verifier). Logic contract is upgradeable via 7-day timelock `UpgradeLogic` (RootPolicyBody). Storage contract is immutable and enforces unconditional audit-trail invariants. §3.7, §4.14, §6.3 added/rewritten; events, error codes, and read operations updated. See also v0.1→v0.2: on-chain verification changed from ML-DSA-44 to secp256r1/RIP-7212 per ADR-012.
+**Amends:** v0.6 — `RegisterSubCard` (§4.3) drops `master_sig_payload`/`master_signature`.
+These carried the holder's ML-DSA-44 `SubCardDocument` signature in calldata for
+"auditability" only — never verified on-chain, never referenced in storage or
+events. That audit purpose is already served by `sub_card_doc_cid`: a
+content-addressed CID of the full `SubCardDocument` (which already contains
+`holder_signature`) is itself a tamper-evident commitment, so the on-chain copy
+added nothing an off-chain reader couldn't already verify — while costing
+~88KB of `uint8[]`-encoded calldata per call (ML-DSA-44 signatures are ~2420
+bytes raw; Stylus's function-dispatch ABI encodes `Vec<u8>` as `uint8[]`, 32
+bytes per element — see `press/src/chain/registry.ts`'s file doc), enough to
+push real calls past devnet tx-size limits. This brings `RegisterSubCard` in
+line with `RegisterCard`/`UpdateCardHead`/`ClaimOpenOffer`, none of which
+carry a holder/issuer ML-DSA-44 signature on-chain either — the press's own
+secp256r1 `press_sig_payload`/`press_signature` is the only signature pair
+ever verified on-chain, in any of these operations. See also v0.5→v0.6: DNS admin card secp256r1 on-chain signing added. New storage table `DnsAdminCardKeys` (§3.11) maps DNS admin card addresses to secp256r1 public keys. `RegisterDomain` (§4.17) accepts and stores the admin's secp256r1 public key. `DeregisterDomain` (§4.18) clears it. `RegisterSubCard` (§4.3) gains two new parameters and an on-chain RIP-7212 verification step triggered when the master card is a DNS admin card; a compromised press can no longer register fraudulent sub-cards of domain admin cards without the admin's secp256r1 private key. Error code E-47 added. See also v0.4→v0.5: DNS authorization model hardened. `SetPolicyAddress` (§4.19) gains explicit domain-card binding check: `admin_card_address` must match `DomainRegistrations[domain].admin_card_address`; optional `sub_card_address` must be a registered direct sub-card of that admin card (`SubCardRegistrations` one-hop check). Governance-quorum write path split into dedicated `GovernanceSetPolicyAddress` (§4.23) for rollback and fraud remediation. `SetDnsGovernancePolicyAddress` (§4.24) added, making `DnsGovernancePolicyAddress` mutable via `DnsGovernanceBody` quorum rather than write-once. `PolicyAddressSet` event gains `sub_card_address` field. Two new events: `PolicyAddressGovernanceSet` and `DnsGovernancePolicyAddressUpdated`. Error codes E-45–E-46 added. See also v0.3→v0.4: DNS resolution support added. `DnsGovernanceBody` added to `GovernanceBodyId` enum (§3.6). New storage tables `DomainRegistrations` (§3.8), `PolicyAddresses` (§3.9), and global variable `DnsGovernancePolicyAddress` (§3.10). Six new write operations §4.17–4.22. Two new read operations in §5. Six new events in §7. Error codes E-37–E-44 in §8. See also `specs/dns_resolution.md` for the full DNS resolution protocol spec. See also v0.2→v0.3: three-contract architecture adopted (storage / logic / verifier). Logic contract is upgradeable via 7-day timelock `UpgradeLogic` (RootPolicyBody). Storage contract is immutable and enforces unconditional audit-trail invariants. §3.7, §4.14, §6.3 added/rewritten; events, error codes, and read operations updated. See also v0.1→v0.2: on-chain verification changed from ML-DSA-44 to secp256r1/RIP-7212 per ADR-012.
 
 **Changelog (spec-consistency Phase 1):** §2's `CardEntry` field count corrected from "4-field" to "5-field" (Fix #1); §3.1 gains a clarifying note on currently-supported vs. reserved CID hash algorithms (Fix #6). See `plans/spec-consistency/inconsistencies/phase-1-consolidated-fixes.md`.
 
@@ -596,7 +610,7 @@ UpdateCardHead(
 
 ### 4.3 RegisterSubCard
 
-**Called by:** Press (authorized for the card's policy), on behalf of the sub-card holder. Gas is paid from the requesting app's pre-funded gas account with the press (see §4.12). The press verifies the holder's authorization off-chain before submitting; the holder's signature in `master_sig_payload` is included for auditability.  
+**Called by:** Press (authorized for the card's policy), on behalf of the sub-card holder. Gas is paid from the requesting app's pre-funded gas account with the press (see §4.12). The press verifies the holder's authorization off-chain before submitting. No holder signature is carried in calldata — `sub_card_doc_cid` (a content-addressed CID of the full `SubCardDocument`, which contains `holder_signature`) is itself a tamper-evident on-chain commitment to it; see this section's v0.7 changelog entry above for why an additional on-chain copy was removed.  
 **Purpose:** Register a new sub-card (device key delegation) under a master card.
 
 ```
@@ -609,12 +623,6 @@ RegisterSubCard(
     sub_card_doc_cid       bytes,      — CID of the SubCardDocument on IPFS, which contains the
                                          app card address (app_card), app card pubkey, app signature,
                                          and holder countersignature. Maximum 64 bytes.
-    master_sig_payload     bytes,      — Canonical RFC 8785 JSON of the RegisterSubCardPayload
-    master_signature       bytes[2420] — ML-DSA-44 signature over master_sig_payload,
-                                         using the master card's holder key.
-                                         Note: master card holder keys are ML-DSA-44 (IPFS identity
-                                         keys); this is not a secp256r1 signature. The press verifies
-                                         this off-chain against the holder's CardDocument pubkey.
     admin_secp_payload     bytes,      — Canonical RFC 8785 JSON of AdminAuthorizeSubCardPayload (see below).
                                          Required (non-empty) when DnsAdminCardKeys[master_card_address]
                                          is non-zero (master is a DNS admin card). Empty bytes otherwise.
@@ -624,20 +632,6 @@ RegisterSubCard(
                                          Required (non-zero) when master is a DNS admin card.
                                          Must be bytes[64](0) when master is not a DNS admin card.
 ) → void
-```
-
-**`RegisterSubCardPayload` (press-signed):**
-
-```json
-{
-  "op":                       "register_sub_card",
-  "sub_card_address":         "<base64url — bytes32>",
-  "master_card_address":      "<base64url — bytes32>",
-  "registration_log_head":    "<base64url — CID bytes>",
-  "sub_card_doc_cid":         "<base64url — CID bytes of the SubCardDocument on IPFS>",
-  "sequence":                 <uint64 — must equal PressAuthorizations[policy][press].next_sequence>,
-  "timestamp":                "<ISO 8601>"
-}
 ```
 
 **`AdminAuthorizeSubCardPayload` (admin card secp256r1-signed; required only when master is a DNS admin card):**
@@ -669,7 +663,7 @@ The `sub_card_address` and `sub_card_doc_cid` fields in `AdminAuthorizeSubCardPa
    - If `DnsAdminCardKeys[master_card_address] == bytes[64](0)` (master is not a DNS admin card):
      - `admin_secp_signature` must be `bytes[64](0)` and `admin_secp_payload` must be empty. Error: E-47 if either is non-zero/non-empty (prevents spurious signatures).
 
-> **Master ML-DSA-44 signature is press-side only.** The press verifies `master_signature` (ML-DSA-44) off-chain against the holder public key from the card's `CardDocument` (fetched from IPFS) before submitting. The contract does not re-verify the ML-DSA-44 signature. The holder signature in calldata is retained as an auditable proof of holder intent. A press submitting without a valid ML-DSA-44 holder signature is a press policy violation (press-side error E-22).
+> **Master ML-DSA-44 signature is press-side only.** The press verifies `holder_signature` (ML-DSA-44, part of the `SubCardDocument` at `sub_card_doc_cid`) off-chain against the holder public key from the card's `CardDocument` (fetched from IPFS) before submitting. The contract does not verify this signature, and — as of v0.7 — does not carry a copy of it in calldata either; `sub_card_doc_cid`'s content-addressing already makes it independently verifiable off-chain. A press submitting without a valid ML-DSA-44 holder signature is a press policy violation (press-side error E-22).
 
 > **Admin secp256r1 signature is on-chain verified.** For DNS admin master cards, the admin card holder's secp256r1 signature is verified by the contract via RIP-7212. A compromised press cannot register a fraudulent sub-card of a domain admin card without possession of the admin holder's secp256r1 private key, regardless of whether it skips the ML-DSA-44 press-side check.
 
