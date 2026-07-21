@@ -23,6 +23,10 @@ const PROXY_TARGETS = {
   press: process.env.HARNESS_PRESS_URL ?? 'http://localhost:3001',
   'wallet-service': process.env.HARNESS_WALLET_SERVICE_URL ?? 'http://localhost:3002',
   relay: process.env.HARNESS_RELAY_URL ?? 'http://localhost:3000',
+  // nitro-devnode's RPC has no CORS headers either (unlike public Sepolia
+  // RPCs, which set permissive CORS for dapp/browser compatibility) — same
+  // gap, same fix.
+  rpc: process.env.HARNESS_ARBITRUM_RPC_URL ?? 'http://localhost:8547',
 };
 
 const MIME_TYPES = {
@@ -47,6 +51,11 @@ async function handleProxy(req, res, service, rest) {
   const responseHeaders = Object.fromEntries(upstream.headers.entries());
   delete responseHeaders['content-encoding'];
   delete responseHeaders['transfer-encoding'];
+  // fetch() transparently decompresses a gzip/deflate/br upstream body, so
+  // the original content-length (measured on the compressed bytes) is
+  // stale once decompressed — forwarding it truncates the response at the
+  // client. Node sets a fresh one from the actual buffer length below.
+  delete responseHeaders['content-length'];
   res.writeHead(upstream.status, responseHeaders);
   res.end(Buffer.from(await upstream.arrayBuffer()));
 }

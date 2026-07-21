@@ -20,14 +20,37 @@
  * verifier config, by design (`card_verifier.md §5`).
  */
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { join, dirname } from 'node:path';
 import {
   deriveKeypair,
   InMemorySecureKeyProvider,
   buildPermissiveTestPolicy,
   pinJsonToKubo,
   mintCard,
+  ensureGovernanceBootstrap,
+  type GovernanceKeypair,
 } from '@membership-card-protocol/integration-fixtures';
-import { assembleAndSignTargetedOffer, keccak256, bytesToBase64Url } from '@membership-card-protocol/app-sdk';
+import { assembleAndSignTargetedOffer, keccak256, bytesToBase64Url, base64UrlToBytes } from '@membership-card-protocol/app-sdk';
+
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../../..');
+
+/**
+ * Parses a wrangler `.dev.vars` file (KEY=value per line, `#`-comments,
+ * blank lines) — no library needed for this simple, well-known format.
+ */
+function parseDevVars(path: string): Record<string, string> {
+  const vars: Record<string, string> = {};
+  for (const line of readFileSync(path, 'utf-8').split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq === -1) continue;
+    vars[trimmed.slice(0, eq)] = trimmed.slice(eq + 1);
+  }
+  return vars;
+}
 
 export interface HarnessConfig {
   pressBaseUrl: string;
@@ -69,6 +92,31 @@ export async function prepare(options: PrepareOptions): Promise<HarnessConfig> {
   const policy = buildPermissiveTestPolicy(pressInfo.press_card_cid);
   const policyId = await pinJsonToKubo(options.kuboApiUrl, policy);
   const policyAddress = '0x' + keccak256(new TextEncoder().encode(policyId));
+
+  // Local nitro-devnode resets all chain state on every restart, so —
+  // unlike Sepolia, where this was already done once by hand — this
+  // policy and this press need registering/authorizing on-chain before
+  // any card can be minted under it. Idempotent: no-ops if already done.
+  // See governanceBootstrap.ts's doc comment for the full rationale.
+  const deploymentFile = join(REPO_ROOT, 'contracts/deployments/local.json');
+  const deployment = JSON.parse(readFileSync(deploymentFile, 'utf-8')) as {
+    contracts: { logic_contract: string; storage_contract: string };
+    dev_governance_keypair: GovernanceKeypair;
+  };
+  const pressDevVars = parseDevVars(join(REPO_ROOT, 'integration_tests/env/press/.dev.vars'));
+
+  await ensureGovernanceBootstrap({
+    rpcUrl: options.arbitrumRpcUrl,
+    logicAddress: deployment.contracts.logic_contract as `0x${string}`,
+    storageAddress: deployment.contracts.storage_contract as `0x${string}`,
+    policyAddress,
+    pressAddress: pressInfo.gas_address as `0x${string}`,
+    pressSecp256r1PrivateKey: pressDevVars.PRESS_SECP256R1_PRIVATE_KEY!,
+    pressMlDsa44PrivateKey: base64UrlToBytes(pressDevVars.PRESS_MLDSA44_PRIVATE_KEY!),
+    governanceKeypair: deployment.dev_governance_keypair,
+    pressGasWalletPrivateKey: pressDevVars.PRESS_GAS_WALLET_PRIVATE_KEY!,
+    contractsScriptsDir: join(REPO_ROOT, 'contracts/scripts'),
+  });
 
   // Mint the root card via the exact same flow 2.1's fixtures already
   // proved end-to-end (real registerCard on Sepolia). A fresh label each

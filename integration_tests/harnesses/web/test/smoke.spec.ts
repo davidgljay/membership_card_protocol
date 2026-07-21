@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { join, dirname } from 'node:path';
 import { test, expect } from '@playwright/test';
 import { prepare } from '../src/prepare.js';
 import type { HarnessConfig } from '../src/prepare.js';
@@ -6,15 +9,34 @@ import type { ScenarioResult } from '../src/scenario.js';
 const PRESS_BASE_URL = process.env.HARNESS_PRESS_URL ?? 'http://localhost:3001';
 const WALLET_SERVICE_BASE_URL = process.env.HARNESS_WALLET_SERVICE_URL ?? 'http://localhost:3002';
 const RELAY_BASE_URL = process.env.HARNESS_RELAY_URL ?? 'http://localhost:3000';
-const ARBITRUM_RPC_URL = process.env.HARNESS_ARBITRUM_RPC_URL ?? 'https://sepolia-rollup.arbitrum.io/rpc';
-const STORAGE_CONTRACT_ADDRESS = process.env.HARNESS_STORAGE_CONTRACT_ADDRESS ?? '0xeb80867de14183B8A95A6547027F344995A014aC';
 const KUBO_API_URL = process.env.HARNESS_KUBO_API_URL ?? 'http://localhost:5001';
 const HARNESS_ORIGIN = 'http://localhost:8901';
 
 /**
- * press/wallet-service/relay have no CORS headers, so browser-side fetches
- * to them (unlike prepare.ts's Node-side ones) must go through serve.mjs's
- * same-origin proxy instead of hitting the real ports directly.
+ * The stack runs against a local nitro-devnode by default (see
+ * docker-compose.yml's top-of-file comment), which resets all chain state
+ * and redeploys fresh contracts on every restart — so, unlike a stable
+ * Sepolia address, the storage contract address can't be a fixed default.
+ * Read it from the same deployments/local.json file press/wallet-service's
+ * own entrypoint.sh reads (bind-mounted from the same host path, not a
+ * named Docker volume — see docker-compose.yml's deploy-contracts service).
+ * HARNESS_ARBITRUM_RPC_URL/HARNESS_STORAGE_CONTRACT_ADDRESS still override
+ * this for pointing the harness at Sepolia or another chain instead.
+ */
+function readLocalStorageAddress(): string {
+  const deploymentPath = join(dirname(fileURLToPath(import.meta.url)), '../../../../contracts/deployments/local.json');
+  const deployment = JSON.parse(readFileSync(deploymentPath, 'utf-8')) as { contracts: { storage_contract: string } };
+  return deployment.contracts.storage_contract;
+}
+
+const ARBITRUM_RPC_URL = process.env.HARNESS_ARBITRUM_RPC_URL ?? 'http://localhost:8547';
+const STORAGE_CONTRACT_ADDRESS = process.env.HARNESS_STORAGE_CONTRACT_ADDRESS ?? readLocalStorageAddress();
+
+/**
+ * press/wallet-service/relay/the chain RPC have no CORS headers, so
+ * browser-side fetches to them (unlike prepare.ts's Node-side ones) must
+ * go through serve.mjs's same-origin proxy instead of hitting the real
+ * ports directly.
  */
 function toBrowserConfig(config: HarnessConfig): HarnessConfig {
   return {
@@ -22,6 +44,7 @@ function toBrowserConfig(config: HarnessConfig): HarnessConfig {
     pressBaseUrl: `${HARNESS_ORIGIN}/proxy/press`,
     walletServiceBaseUrl: `${HARNESS_ORIGIN}/proxy/wallet-service`,
     relayBaseUrl: `${HARNESS_ORIGIN}/proxy/relay`,
+    arbitrumRpcUrl: `${HARNESS_ORIGIN}/proxy/rpc`,
   };
 }
 
@@ -67,7 +90,7 @@ test('create wallet, accept an offer, validate the card', async ({ page, context
   }, toBrowserConfig(config) as never) as ScenarioResult;
 
   if (!result.success) {
-    console.error('Scenario failed at step:', result.step, '\nError:', result.error);
+    console.error('Scenario failed. Full result:', JSON.stringify(result, null, 2));
   }
   expect(result.error).toBeUndefined();
   expect(result.success).toBe(true);
