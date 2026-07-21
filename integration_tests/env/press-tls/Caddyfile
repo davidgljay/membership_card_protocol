@@ -1,0 +1,4 @@
+press-tls:3443 {
+	tls internal
+	reverse_proxy press:3000
+}

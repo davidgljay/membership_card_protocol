@@ -32,6 +32,12 @@ RUN NITRO_PRESET=cloudflare-module npm run build
 # wrangler dev reads .dev.vars from its own working directory at runtime
 # (mounted by docker-compose.yml, not baked into the image — see
 # env/press/.dev.vars), and wrangler.toml (committed in press/, generic —
-# same convention as wallet-service/wrangler.toml).
+# same convention as wallet-service/wrangler.toml). entrypoint.sh overrides
+# the chain-related vars with the local devnode's freshly-deployed contract
+# addresses (see its own doc comment) — everything else still comes from
+# .dev.vars.
+COPY integration_tests/env/press/entrypoint.sh /repo/entrypoint.sh
+RUN chmod +x /repo/entrypoint.sh
+
 EXPOSE 3000
-ENTRYPOINT ["npx", "wrangler", "dev", ".output/server/index.mjs", "--site", ".output/public", "--ip", "0.0.0.0", "--port", "3000"]
+ENTRYPOINT ["/repo/entrypoint.sh"]

@@ -3,9 +3,17 @@
 # Stylus contracts against it, and write deployments/local.json.
 #
 # Run inside the deploy-contracts container (see ../../docker-compose.yml).
-# Idempotent-ish: deploy.sh always redeploys fresh contracts, which is
-# correct here since `nitro-node --dev` resets chain state on every restart
-# anyway (see contracts/scripts/deploy.sh's `local` case).
+# `docker compose up` re-runs this container's dependency graph any time a
+# service that depends_on it (press, wallet-service) is recreated, even
+# when nitro-devnode itself never restarted and chain state is unchanged —
+# so this is NOT actually one-shot in practice. Redeploying fresh contracts
+# in that situation desyncs any already-running press/wallet-service (which
+# read local.json once at their own startup) from the harness (which reads
+# it fresh every run), producing hard-to-diagnose "issuer_chain_not_trusted"
+# failures. Guard against it: skip redeployment if local.json already
+# records a logic contract with live code on the CURRENT chain — this still
+# redeploys correctly on a genuine fresh chain (no code at that address)
+# while skipping the redundant, desyncing redeploy otherwise.
 
 set -euo pipefail
 
@@ -23,6 +31,20 @@ until curl -s -X POST -H "Content-Type: application/json" \
   sleep 1
 done
 echo "Nitro devnode is up."
+
+DEPLOYMENT_FILE="$CONTRACTS_DIR/deployments/local.json"
+if [ -f "$DEPLOYMENT_FILE" ]; then
+  EXISTING_LOGIC_ADDRESS=$(jq -r '.contracts.logic_contract // empty' "$DEPLOYMENT_FILE")
+  if [ -n "$EXISTING_LOGIC_ADDRESS" ]; then
+    EXISTING_CODE=$(curl -s -X POST -H "Content-Type: application/json" \
+      --data "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getCode\",\"params\":[\"$EXISTING_LOGIC_ADDRESS\",\"latest\"],\"id\":1}" \
+      "$RPC_URL" | jq -r '.result // "0x"')
+    if [ "$EXISTING_CODE" != "0x" ] && [ -n "$EXISTING_CODE" ]; then
+      echo "local.json's logic contract ($EXISTING_LOGIC_ADDRESS) already has live code on this chain — skipping redeploy."
+      exit 0
+    fi
+  fi
+fi
 
 # Generate a fresh secp256r1 dev governance keypair non-interactively (the
 # same generator contracts/scripts/gen_keypair.rs used by manual dev setup).

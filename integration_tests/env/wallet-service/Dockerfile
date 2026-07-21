@@ -31,5 +31,12 @@ RUN pnpm install
 COPY wallet-service/ ./
 RUN NITRO_PRESET=cloudflare-module npm run build
 
+# entrypoint.sh overrides the chain-related vars with the local devnode's
+# freshly-deployed contract address — see its own doc comment. The
+# wallet-service-migrate service (docker-compose.yml) overrides this
+# ENTRYPOINT directly, so it's unaffected.
+COPY integration_tests/env/wallet-service/entrypoint.sh /repo/entrypoint.sh
+RUN chmod +x /repo/entrypoint.sh
+
 EXPOSE 3000
-ENTRYPOINT ["npx", "wrangler", "dev", ".output/server/index.mjs", "--assets", ".output/public", "--ip", "0.0.0.0", "--port", "3000"]
+ENTRYPOINT ["/repo/entrypoint.sh"]

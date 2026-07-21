@@ -3,6 +3,10 @@
     {
       "target_id": "0xc62599d7958b85bfd769c934e37afe024fb7a6af3b3f80c04f31ff985dae83ad",
       "ohttp_gateway_url": "https://wallet-service-tls:3443/ohttp/gateway"
+    },
+    {
+      "target_id": "0xed551eda1e9e29c47ce36fa163be041e22bc95381498730125b970d0bdc233cd",
+      "ohttp_gateway_url": "https://press-tls:3443/ohttp/gateway"
     }
   ]
 }
