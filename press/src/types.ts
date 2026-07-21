@@ -189,13 +189,15 @@ export interface SubCardDocument {
   valid_until?: string;
   attestation_level: 'T1' | 'T2';
   attestation_proof?: string;
-  app_signature: SignatureField;
-  holder_signature?: SignatureField;
+  /** Base64url ML-DSA-44 signature — a plain string, matching app-sdk's `AppSignedSubCardDocument`/`SignedSubCardDocument` wire shape (`requestSubCard.ts`, `countersign.ts`), which every requester/holder canonicalizes and signs against. Not a `SignatureField` object — there is no separate public_key on the wire here since it's already present as `app_card_pubkey`/`holder_primary_card_pubkey`. */
+  app_signature: string;
+  holder_signature?: string;
 }
 
 export interface SubCardRegistrationRequest {
   sub_card_document: SubCardDocument;
-  holder_signature: SignatureField;
+  /** Base64url ML-DSA-44 signature — see `SubCardDocument.app_signature`'s doc for why this is a plain string, not `SignatureField`. */
+  holder_signature: string;
   /** Required when the master card is a DNS admin card. */
   admin_secp_payload?: string;
   admin_secp_signature?: string;

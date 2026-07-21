@@ -33,6 +33,26 @@ interface SubCardRegisterResponseBody {
   tx_hash: string;
 }
 
+/**
+ * Press's `/sub-card/register` body shape (`press.md §5.4
+ * processSubCardRegistration(subCardDoc, holderSignature, ...)`): the doc
+ * and the holder's countersignature are separate top-level fields —
+ * `sub_card_document` (which still carries `app_signature`) and a sibling
+ * `holder_signature` — rather than the single flat object
+ * `SignedSubCardDocument` uses internally. Both signatures stay plain
+ * base64url strings on the wire, matching what `requestSubCard.ts`/
+ * `countersign.ts` actually canonicalize and sign over.
+ */
+interface SubCardRegisterRequestBody {
+  sub_card_document: Omit<SignedSubCardDocument, 'holder_signature'>;
+  holder_signature: string;
+}
+
+function toPressRequestBody(document: SignedSubCardDocument): SubCardRegisterRequestBody {
+  const { holder_signature, ...sub_card_document } = document;
+  return { sub_card_document, holder_signature };
+}
+
 /** `POST /sub-card/register`. Throws on a non-2xx response — unlike {@link createPressSubCardRegistrar}, which swallows failure into `{ registered: false }` to match `RegisterSubCardFn`'s shape. */
 export async function submitSubCardRegistration(
   document: SignedSubCardDocument,
@@ -44,7 +64,7 @@ export async function submitSubCardRegistration(
       method: 'POST',
       path: '/sub-card/register',
       headers: { 'content-type': 'application/json' },
-      body: new TextEncoder().encode(JSON.stringify(document)),
+      body: new TextEncoder().encode(JSON.stringify(toPressRequestBody(document))),
     }
   );
 

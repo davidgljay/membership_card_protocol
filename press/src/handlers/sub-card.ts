@@ -37,7 +37,7 @@ export async function handleSubCardRegister(
   const appSigValid = mlDsa44Verify(
     appPubkey,
     appSigBytes,
-    fromBase64url(doc.app_signature.signature)
+    fromBase64url(doc.app_signature)
   );
   if (!appSigValid) {
     throw Object.assign(
@@ -75,7 +75,7 @@ export async function handleSubCardRegister(
   const holderSigValid = mlDsa44Verify(
     holderPubBytes,
     holderSigBytes,
-    fromBase64url(holder_signature.signature)
+    fromBase64url(holder_signature)
   );
   if (!holderSigValid) {
     throw Object.assign(
@@ -140,7 +140,7 @@ export async function handleSubCardRegister(
     registrationLogHead: masterEntry.log_head_cid,
     subCardDocCid: new TextEncoder().encode(subCardDocCid),
     masterSigPayload,
-    masterSignature: fromBase64url(holder_signature.signature),
+    masterSignature: fromBase64url(holder_signature),
     adminSecpPayload: body.admin_secp_payload
       ? new TextEncoder().encode(body.admin_secp_payload)
       : new Uint8Array(0),
