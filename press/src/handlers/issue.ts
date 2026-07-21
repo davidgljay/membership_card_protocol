@@ -123,7 +123,15 @@ export async function handleIssueFinalize(
 
   // Assemble, sign, and publish card.
   const policy = await fetchPolicyCard(ctx.ipfs, offerRecord.policy_cid);
-  const ancestry: string[] = []; // Phase 3: ancestry chain walk deferred to Phase 4.
+  // The offerer sets ancestry_pubkeys when constructing the offer
+  // (card_protocol_spec.md step 5) and issuer_signature covers it —
+  // verifyIssuerSignature above already binding-checks ancestry_pubkeys[0]
+  // against issuer_card. Carried through unchanged into the completed card
+  // (step 8: "The completed card — ... ancestry_pubkeys ... — is posted to
+  // IPFS"); runtime verifiers walk this chain independently at read time
+  // (protocol-objects.md §16), so press does not re-validate it reaches a
+  // trusted root before issuing — only that the offer coherently declared it.
+  const ancestry = (offer as import('../types.js').IssuerOffer).ancestry_pubkeys ?? [];
   const protocolVersion = await ctx.registry.getProtocolVersion();
 
   const assembled = assembleCardDocument(
