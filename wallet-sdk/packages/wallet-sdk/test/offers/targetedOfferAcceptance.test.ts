@@ -79,7 +79,7 @@ function makeHappyPathRpc(issuerAddress: string): RpcProvider {
         ? { press_public_key: 'x', mldsa44_key_hash: 'y', active: true, authorized_at: '2026-01-01T00:00:00.000Z', revoked_at: null }
         : null,
     getSubCardEntry: async () => null,
-    getLogEntries: async () => [],
+    getCardEventLog: async () => [],
     getEasAnnotations: async () => [],
   };
 }
@@ -114,7 +114,7 @@ describe('targeted offer acceptance and press finalization', () => {
 
     const acceptResult = await acceptTargetedOffer({
       offer,
-      chainVerification: { cardVerifier, rpc, policyAddress: POLICY_ADDRESS },
+      chainVerification: { cardVerifier, rpc, policyAddress: POLICY_ADDRESS, pressAddress: PRESS_CARD },
       storageProvider,
       decryptionKey: RECIPIENT_DECRYPTION_KEY,
     });
@@ -254,7 +254,7 @@ describe('targeted offer acceptance and press finalization', () => {
 
     const result = await acceptTargetedOffer({
       offer,
-      chainVerification: { cardVerifier, rpc, policyAddress: POLICY_ADDRESS },
+      chainVerification: { cardVerifier, rpc, policyAddress: POLICY_ADDRESS, pressAddress: PRESS_CARD },
       storageProvider,
       decryptionKey: RECIPIENT_DECRYPTION_KEY,
     });

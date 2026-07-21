@@ -62,7 +62,7 @@ function makeHappyPathRpc(appCardAddress: string, overrides: Partial<RpcProvider
     isPolicyAuthorizer: async (address) => address === appCardAddress,
     getPressAuthorization: async () => null,
     getSubCardEntry: async () => null,
-    getLogEntries: async () => [],
+    getCardEventLog: async () => [],
     getEasAnnotations: async () => {
       throw new Error('getEasAnnotations should never be called — fetchAnnotations is false (OQ-SDK-11)');
     },
@@ -105,7 +105,10 @@ describe('handleSubCardRequest', () => {
     if (!result.valid) throw new Error('unreachable');
     expect(result.request).toBe(document);
     expect(result.appCardVerification.chain_reaches_trusted_root).toBe(true);
-    expect(result.appCardVerification.is_currently_valid).toBe(true);
+    // verifyCard is called with no pubkey here, so CardVerifier always
+    // returns "skipped" for is_currently_valid (card_verifier.md §7.4) —
+    // not a real revocation determination.
+    expect(result.appCardVerification.is_currently_valid).toBe('skipped');
   });
 
   it('rejects on holder_primary_card binding mismatch', async () => {
@@ -179,11 +182,11 @@ describe('handleSubCardRequest', () => {
     expect(result.code).toBe('app_card_chain_not_trusted');
   });
 
-  it('rejects when the app card is currently revoked', async () => {
+  it('does not reject a request over a revoked app card — verifyCard has no pubkey to work from here, so it cannot determine revocation (card_verifier.md §7.4)', async () => {
     const { document, appCard } = await makeRequest();
     const appCardAddress = keccak256(appCard.publicKey);
     const rpc = makeHappyPathRpc(appCardAddress, {
-      getLogEntries: async () => [
+      getCardEventLog: async () => [
         {
           card_address: appCardAddress,
           update_code: 811,
@@ -200,9 +203,9 @@ describe('handleSubCardRequest', () => {
     });
 
     const result = await handleSubCardRequest({ cardVerifier, request: document });
-    expect(result.valid).toBe(false);
-    if (result.valid) throw new Error('unreachable');
-    expect(result.code).toBe('app_card_not_currently_valid');
+    expect(result.valid).toBe(true);
+    if (!result.valid) throw new Error('unreachable');
+    expect(result.appCardVerification.is_currently_valid).toBe('skipped');
   });
 
   it('surfaces a CardVerifier error as a rejection, not an uncaught exception', async () => {

@@ -127,7 +127,15 @@ export async function handleSubCardRequest(options: HandleSubCardRequestOptions)
       'app card chain does not reach the governance app-certification policy root.'
     );
   }
-  if (appCardVerification.is_currently_valid !== true) {
+  // `verifyCard` is always called here with no pubkey, so `CardVerifier`
+  // always returns `is_currently_valid: "skipped"` for this path
+  // (`card_verifier.md §7.4`'s documented "verifyCard limitation" — Stage 4
+  // cannot determine revocation status without decryptable content, same
+  // as `offerVerification.ts`'s identical check). Treating "skipped" as a
+  // rejection would block every sub-card request unconditionally; only an
+  // explicit `false` (a decryptable, confirmed-revoked card) is a real
+  // rejection.
+  if (appCardVerification.is_currently_valid === false) {
     return rejection('app_card_not_currently_valid', 'app card is revoked or not currently valid.');
   }
 

@@ -45,7 +45,7 @@ function makeHappyPathRpc(issuerAddress: string): RpcProvider {
         ? { press_public_key: 'x', mldsa44_key_hash: 'y', active: true, authorized_at: '2026-01-01T00:00:00.000Z', revoked_at: null }
         : null,
     getSubCardEntry: async () => null,
-    getLogEntries: async () => [],
+    getCardEventLog: async () => [],
     getEasAnnotations: async () => [],
   };
 }
@@ -68,7 +68,7 @@ describe('reviewTargetedOffer', () => {
       fieldValues: { tier: 'gold' },
     });
 
-    const result = await reviewTargetedOffer(offer, { cardVerifier, rpc, policyAddress: POLICY_ADDRESS });
+    const result = await reviewTargetedOffer(offer, { cardVerifier, rpc, policyAddress: POLICY_ADDRESS, pressAddress: PRESS_CARD });
 
     expect(result.approved).toBe(true);
     if (!result.approved) throw new Error('unreachable');
@@ -96,7 +96,7 @@ describe('reviewTargetedOffer', () => {
       fieldValues: {},
     });
 
-    const result = await reviewTargetedOffer(offer, { cardVerifier, rpc, policyAddress: POLICY_ADDRESS });
+    const result = await reviewTargetedOffer(offer, { cardVerifier, rpc, policyAddress: POLICY_ADDRESS, pressAddress: PRESS_CARD });
     expect(result.approved).toBe(false);
     if (result.approved) throw new Error('unreachable');
     expect(result.code).toBe('issuer_binding_mismatch');
@@ -119,7 +119,7 @@ describe('reviewTargetedOffer', () => {
       fieldValues: {},
     });
 
-    const result = await reviewTargetedOffer(offer, { cardVerifier, rpc, policyAddress: POLICY_ADDRESS });
+    const result = await reviewTargetedOffer(offer, { cardVerifier, rpc, policyAddress: POLICY_ADDRESS, pressAddress: PRESS_CARD });
     expect(result.approved).toBe(false);
     if (result.approved) throw new Error('unreachable');
     expect(result.code).toBe('issuer_binding_mismatch');
@@ -143,7 +143,7 @@ describe('reviewTargetedOffer', () => {
     });
     const tampered = { ...offer, issuer_signature: bytesToBase64Url(new Uint8Array(2420)) };
 
-    const result = await reviewTargetedOffer(tampered, { cardVerifier, rpc, policyAddress: POLICY_ADDRESS });
+    const result = await reviewTargetedOffer(tampered, { cardVerifier, rpc, policyAddress: POLICY_ADDRESS, pressAddress: PRESS_CARD });
     expect(result.approved).toBe(false);
     if (result.approved) throw new Error('unreachable');
     expect(result.code).toBe('issuer_signature_invalid');
@@ -162,7 +162,7 @@ describe('reviewTargetedOffer', () => {
       isPolicyAuthorizer: async () => false,
       getPressAuthorization: async () => ({ press_public_key: 'x', mldsa44_key_hash: 'y', active: true, authorized_at: '2026-01-01T00:00:00.000Z', revoked_at: null }),
       getSubCardEntry: async () => null,
-      getLogEntries: async () => [],
+      getCardEventLog: async () => [],
       getEasAnnotations: async () => [],
     };
     const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, trustedRoots: [] });
@@ -177,7 +177,7 @@ describe('reviewTargetedOffer', () => {
       fieldValues: {},
     });
 
-    const result = await reviewTargetedOffer(offer, { cardVerifier, rpc, policyAddress: POLICY_ADDRESS });
+    const result = await reviewTargetedOffer(offer, { cardVerifier, rpc, policyAddress: POLICY_ADDRESS, pressAddress: PRESS_CARD });
     expect(result.approved).toBe(false);
     if (result.approved) throw new Error('unreachable');
     expect(result.code).toBe('issuer_chain_not_trusted');
@@ -195,7 +195,7 @@ describe('reviewTargetedOffer', () => {
       isPolicyAuthorizer: async (address) => address === issuerAddress,
       getPressAuthorization: async () => null, // not authorized
       getSubCardEntry: async () => null,
-      getLogEntries: async () => [],
+      getCardEventLog: async () => [],
       getEasAnnotations: async () => [],
     };
     const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
@@ -210,7 +210,7 @@ describe('reviewTargetedOffer', () => {
       fieldValues: {},
     });
 
-    const result = await reviewTargetedOffer(offer, { cardVerifier, rpc, policyAddress: POLICY_ADDRESS });
+    const result = await reviewTargetedOffer(offer, { cardVerifier, rpc, policyAddress: POLICY_ADDRESS, pressAddress: PRESS_CARD });
     expect(result.approved).toBe(false);
     if (result.approved) throw new Error('unreachable');
     expect(result.code).toBe('press_not_authorized');
@@ -234,7 +234,7 @@ describe('reviewTargetedOffer', () => {
       fieldValues: {},
     });
 
-    const result = await reviewTargetedOffer(offer, { cardVerifier, rpc, policyAddress: POLICY_ADDRESS });
+    const result = await reviewTargetedOffer(offer, { cardVerifier, rpc, policyAddress: POLICY_ADDRESS, pressAddress: PRESS_CARD });
     expect(result.approved).toBe(false);
     if (result.approved) throw new Error('unreachable');
     expect(result.code).toBe('verification_error');
@@ -262,6 +262,7 @@ describe('reviewTargetedOffer', () => {
       cardVerifier,
       rpc,
       policyAddress: POLICY_ADDRESS,
+      pressAddress: PRESS_CARD,
       policyApprovedPresses: ['some-other-press'],
     });
     expect(result.approved).toBe(true);
@@ -289,7 +290,7 @@ describe('reviewOpenOffer', () => {
       proposedFields: {},
     });
 
-    const result = await reviewOpenOffer(offer, { cardVerifier, rpc, policyAddress: POLICY_ADDRESS });
+    const result = await reviewOpenOffer(offer, { cardVerifier, rpc, policyAddress: POLICY_ADDRESS, pressAddress: PRESS_CARD });
     expect(result.approved).toBe(true);
   });
 
@@ -311,7 +312,7 @@ describe('reviewOpenOffer', () => {
       proposedFields: {},
     });
 
-    const result = await reviewOpenOffer(offer, { cardVerifier, rpc, policyAddress: POLICY_ADDRESS });
+    const result = await reviewOpenOffer(offer, { cardVerifier, rpc, policyAddress: POLICY_ADDRESS, pressAddress: PRESS_CARD });
     expect(result.approved).toBe(false);
     if (result.approved) throw new Error('unreachable');
     expect(result.code).toBe('issuer_binding_mismatch');
@@ -336,7 +337,7 @@ describe('reviewOpenOffer', () => {
     });
     const tampered = { ...offer, issuer_signature: bytesToBase64Url(new Uint8Array(2420)) };
 
-    const result = await reviewOpenOffer(tampered, { cardVerifier, rpc, policyAddress: POLICY_ADDRESS });
+    const result = await reviewOpenOffer(tampered, { cardVerifier, rpc, policyAddress: POLICY_ADDRESS, pressAddress: PRESS_CARD });
     expect(result.approved).toBe(false);
     if (result.approved) throw new Error('unreachable');
     expect(result.code).toBe('issuer_signature_invalid');
@@ -354,7 +355,7 @@ describe('reviewOpenOffer', () => {
       isPolicyAuthorizer: async (address) => address === issuerAddress,
       getPressAuthorization: async () => ({ press_public_key: 'x', mldsa44_key_hash: 'y', active: false, authorized_at: '2026-01-01T00:00:00.000Z', revoked_at: '2026-02-01T00:00:00.000Z' }),
       getSubCardEntry: async () => null,
-      getLogEntries: async () => [],
+      getCardEventLog: async () => [],
       getEasAnnotations: async () => [],
     };
     const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
@@ -370,7 +371,7 @@ describe('reviewOpenOffer', () => {
       proposedFields: {},
     });
 
-    const result = await reviewOpenOffer(offer, { cardVerifier, rpc, policyAddress: POLICY_ADDRESS });
+    const result = await reviewOpenOffer(offer, { cardVerifier, rpc, policyAddress: POLICY_ADDRESS, pressAddress: PRESS_CARD });
     expect(result.approved).toBe(false);
     if (result.approved) throw new Error('unreachable');
     expect(result.code).toBe('press_not_authorized');

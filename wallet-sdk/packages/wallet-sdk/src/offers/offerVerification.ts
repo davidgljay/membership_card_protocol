@@ -28,11 +28,13 @@ import type {
  * expose a "resolve this address's current public key" primitive beyond
  * what {@link CardVerifier.verifyCard} already returns):
  *
- * - The on-chain **address** used to check press authorization
- *   (`policyAddress`) is supplied by the caller rather than re-derived
- *   from the offer's `policy_id` (a CID, not an address) — resolving a CID
- *   to its governing policy's on-chain address is a policy-resolution
- *   concern this step doesn't own.
+ * - The on-chain **addresses** used to check press authorization
+ *   (`policyAddress`, `pressAddress`) are supplied by the caller rather than
+ *   re-derived from the offer's `policy_id`/`press_card` (CIDs, not
+ *   addresses — a press's on-chain `PressAuthorizations` key is its
+ *   gas-account address, entirely unrelated to its content CID) — resolving
+ *   a CID to its on-chain address is a policy/press-resolution concern this
+ *   step doesn't own.
  * - The policy's `approved_presses` (advisory-only, per this step's own
  *   "Done when" framing) is likewise caller-supplied — fetching and
  *   decrypting the policy card is out of scope here; omitting it simply
@@ -67,6 +69,15 @@ export interface OfferChainVerificationOptions {
   rpc: RpcProvider;
   /** On-chain address of the policy governing this offer (see this module's doc for why this isn't re-derived from `policy_id`). */
   policyAddress: string;
+  /**
+   * On-chain `PressAuthorizations` lookup key for the offer's named press
+   * (`offer.press_card`) — the press's gas-account address, bytes32-padded
+   * (see press's own `chain/registry.ts` for the exact derivation). Caller-
+   * supplied for the same reason `policyAddress` is: `offer.press_card` is a
+   * content CID with no derivation path to this on-chain address, so
+   * resolving it is a concern this step doesn't own.
+   */
+  pressAddress: string;
   /** Advisory-only cross-check against the policy's `approved_presses`; omit to skip. */
   policyApprovedPresses?: string[];
 }
@@ -110,13 +121,21 @@ async function verifyIssuerChainAndPress(
   if (issuerVerification.chain_reaches_trusted_root !== true) {
     return rejection('issuer_chain_not_trusted', 'issuer card chain does not reach a trusted root.');
   }
-  if (issuerVerification.is_currently_valid !== true) {
+  // `verifyCard` is always called here with no pubkey (this step never has
+  // the issuer's decrypted card content to work from — see the file doc's
+  // "Judgment calls"), so `CardVerifier` always returns `is_currently_valid:
+  // "skipped"` for this path (`card_verifier.md §7.4`'s documented
+  // "verifyCard limitation" — Stage 4 cannot determine revocation status
+  // without decryptable content). Treating "skipped" as a rejection would
+  // make this check reject every offer unconditionally; only an explicit
+  // `false` (a decryptable, confirmed-revoked card) is a real rejection.
+  if (issuerVerification.is_currently_valid === false) {
     return rejection('issuer_card_not_currently_valid', 'issuer card is revoked or not currently valid.');
   }
 
   let pressAuth;
   try {
-    pressAuth = await options.rpc.getPressAuthorization(options.policyAddress, pressCard);
+    pressAuth = await options.rpc.getPressAuthorization(options.policyAddress, options.pressAddress);
   } catch (err) {
     return rejection(
       'verification_error',

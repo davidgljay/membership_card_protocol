@@ -186,7 +186,7 @@ function makeAlwaysTrustingCardVerifier(): CardVerifier {
     isPolicyAuthorizer: async () => true,
     getPressAuthorization: async () => null,
     getSubCardEntry: async () => null,
-    getLogEntries: async () => [],
+    getCardEventLog: async () => [],
     getEasAnnotations: async () => {
       throw new Error('getEasAnnotations should never be called — fetchAnnotations is false');
     },

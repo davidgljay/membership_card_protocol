@@ -59,7 +59,7 @@ function makeHappyPathRpc(appCardAddress: string): RpcProvider {
     isPolicyAuthorizer: async (address) => address === appCardAddress,
     getPressAuthorization: async () => null,
     getSubCardEntry: async () => null,
-    getLogEntries: async () => [],
+    getCardEventLog: async () => [],
     getEasAnnotations: async () => [],
   };
 }

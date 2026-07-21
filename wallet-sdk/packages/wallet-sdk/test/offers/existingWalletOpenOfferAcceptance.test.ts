@@ -129,7 +129,7 @@ function makeHappyPathRpc(issuerAddress: string): RpcProvider {
         ? { press_public_key: 'x', mldsa44_key_hash: 'y', active: true, authorized_at: '2026-01-01T00:00:00.000Z', revoked_at: null }
         : null,
     getSubCardEntry: async () => null,
-    getLogEntries: async () => [],
+    getCardEventLog: async () => [],
     getEasAnnotations: async () => [],
   };
 }
@@ -140,7 +140,7 @@ function makeAlwaysTrustingCardVerifier(): CardVerifier {
     isPolicyAuthorizer: async () => true,
     getPressAuthorization: async () => null,
     getSubCardEntry: async () => null,
-    getLogEntries: async () => [],
+    getCardEventLog: async () => [],
     getEasAnnotations: async () => {
       throw new Error('getEasAnnotations should never be called');
     },
@@ -298,7 +298,7 @@ describe('acceptOpenOfferForExistingWallet', () => {
 
     const result = await acceptOpenOfferForExistingWallet({
       offer,
-      chainVerification: { cardVerifier: cardVerifierForReview, rpc, policyAddress: POLICY_ADDRESS },
+      chainVerification: { cardVerifier: cardVerifierForReview, rpc, policyAddress: POLICY_ADDRESS, pressAddress: PRESS_CARD },
       pressBaseUrl: PRESS_BASE_URL,
       transport,
       storageProvider,
@@ -356,7 +356,7 @@ describe('acceptOpenOfferForExistingWallet', () => {
 
     const result = await acceptOpenOfferForExistingWallet({
       offer,
-      chainVerification: { cardVerifier, rpc, policyAddress: POLICY_ADDRESS },
+      chainVerification: { cardVerifier, rpc, policyAddress: POLICY_ADDRESS, pressAddress: PRESS_CARD },
       pressBaseUrl: PRESS_BASE_URL,
       transport,
       storageProvider,
