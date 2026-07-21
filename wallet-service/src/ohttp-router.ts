@@ -7,12 +7,12 @@
  *
  * Only these endpoints are reachable through the gateway; anything else is
  * rejected (404-equivalent) rather than silently forwarded. The keyring
- * rotation endpoints (challenge + PUT) are included alongside account
- * creation because `setupWallet`/`recoverWallet` call them immediately
- * after account creation over the same transport — leaving them
- * gateway-unreachable would make that one follow-up call reveal the
- * caller's IP correlated with `card_hash`, defeating the point of routing
- * the rest of account setup obliviously.
+ * rotation endpoints (challenge + PUT) and backup registration are
+ * included alongside account creation because `setupWallet`/`recoverWallet`
+ * call them immediately after account creation over the same transport —
+ * leaving them gateway-unreachable would make that one follow-up call
+ * reveal the caller's IP correlated with `card_hash`, defeating the point
+ * of routing the rest of account setup obliviously.
  *
  * Every handler returns a `{ ok: true, ... } | { ok: false, statusCode,
  * statusMessage }` outcome (see accounts-challenge.ts's doc for why —
@@ -30,6 +30,7 @@ import { handleAccountsCreate, type RawCreateAccountBody } from './routes/accoun
 import { handleKeyringsGet } from './routes/keyrings-get.js';
 import { handleKeyringChallenge } from './routes/keyring-challenge.js';
 import { handleKeyringUpdate, type KeyringUpdateBody } from './routes/keyring-put.js';
+import { handleCreateBackup, type CreateBackupBody } from './routes/create-backup.js';
 import { handleMessagesCreate, type RawRoutingEnvelopeBody } from './routes/messages-create.js';
 import {
   handleUuidRegistration,
@@ -92,6 +93,13 @@ function matchAccountKeyringPath(path: string): { cardHash: string } | null {
   return { cardHash: match[1]! };
 }
 
+/** Matches `/accounts/{card_hash}/backups`. */
+function matchBackupsPath(path: string): { cardHash: string } | null {
+  const match = /^\/accounts\/([^/]+)\/backups$/.exec(path);
+  if (!match) return null;
+  return { cardHash: match[1]! };
+}
+
 export async function dispatch(
   envelope: OhttpEnvelope,
   ctx: DispatchContext
@@ -133,6 +141,19 @@ export async function dispatch(
     const outcome = await handleKeyringUpdate({ pool, cardHash: accountKeyringMatch.cardHash, body: rawBody });
     if (!outcome.ok) return fail(outcome.statusCode, outcome.statusMessage);
     return ok(200, { service_secret: outcome.service_secret, keyring_id: outcome.keyring_id });
+  }
+
+  const backupsMatch = envelope.method === 'POST' ? matchBackupsPath(envelope.path) : null;
+  if (backupsMatch) {
+    const rawBody = decodeBody<CreateBackupBody>(envelope.body);
+    const outcome = await handleCreateBackup({
+      pool,
+      cardHash: backupsMatch.cardHash,
+      authorizationHeader: envelope.headers?.authorization,
+      body: rawBody,
+    });
+    if (!outcome.ok) return fail(outcome.statusCode, outcome.statusMessage);
+    return ok(200, { backup_id: outcome.backup_id });
   }
 
   if (envelope.method === 'POST' && envelope.path === '/messages') {
