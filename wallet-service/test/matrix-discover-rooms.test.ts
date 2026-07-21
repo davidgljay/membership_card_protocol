@@ -333,7 +333,7 @@ describe('discoverEligibleRooms against a real CardVerifier (no mocked verifier 
           deregistered_at: null,
         };
       },
-      async getLogEntries() {
+      async getCardEventLog() {
         return [];
       },
       async getEasAnnotations() {

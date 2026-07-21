@@ -3,10 +3,19 @@
 import { keccak_256 } from '@noble/hashes/sha3';
 import { sha256 } from '@noble/hashes/sha256';
 
-/** keccak256 of a base64url string's decoded bytes, returned as 0x-prefixed hex. */
+/**
+ * keccak256 of a base64url string's decoded bytes, returned as unprefixed
+ * lowercase hex — matching the convention used throughout the rest of the
+ * system (app-sdk's `keccak256`, wallet-sdk's `computeKeyringId`/`cardHash`,
+ * `CardVerifier`), all of which compare their outputs directly against each
+ * other with no `0x` prefix. This function's every caller compares its
+ * result against one of those values (card_hash, keyring_id), so a
+ * prefixed result here was a real, previously-unexercised mismatch — see
+ * `card_verifier.md`/`registry.ts`'s own doc comments on this convention.
+ */
 export function keccak256OfBase64Url(base64url: string): string {
   const bytes = Buffer.from(base64url, 'base64url');
-  return '0x' + Buffer.from(keccak_256(bytes)).toString('hex');
+  return Buffer.from(keccak_256(bytes)).toString('hex');
 }
 
 /**
