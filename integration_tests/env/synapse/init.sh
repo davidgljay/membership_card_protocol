@@ -30,8 +30,18 @@ fi
 # wallet-service/scripts/generate-matrix-secrets.ts's header comment), so
 # it's supplied as a literal value in its own config file, passed as a
 # second --config-path alongside homeserver.yaml.
+#
+# Fixed, not random: integration_tests/suites/matrix-relay/ suites register
+# test users directly via Synapse's admin/v1/register shared-secret HMAC
+# flow (bypassing wallet-service's Application Service bridge entirely —
+# see that suite's own doc comment for why) and need to know this value
+# from the test-runner process, which has no access to the synapse-data
+# Docker volume this file lives in. A dummy, deterministic, dev-only
+# secret — same convention as deploy-contracts' dev_governance_keypair and
+# press's dummy PRESS_MLDSA44_PRIVATE_KEY — is simplest here, not a random
+# one a test process would have no way to read.
 if [[ ! -f "$SECRETS_DIR/registration-shared-secret.yaml" ]]; then
-  SECRET=$(openssl rand -hex 32)
+  SECRET="${MATRIX_REGISTRATION_SHARED_SECRET:-integration-tests-dev-registration-shared-secret}"
   echo "registration_shared_secret: \"$SECRET\"" > "$SECRETS_DIR/registration-shared-secret.yaml"
   echo "Generated $SECRETS_DIR/registration-shared-secret.yaml"
 fi

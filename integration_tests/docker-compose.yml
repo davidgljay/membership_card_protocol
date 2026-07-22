@@ -215,6 +215,12 @@ services:
       # Watcher yet (same gap wallet-service/docker-compose.yml notes), so
       # nothing resolves this as a real account until that lands.
       MATRIX_ENFORCEMENT_USER_ID: "@enforcement:matrix.integration-tests.local"
+      # Fixed, not random — see init.sh's own comment: integration_tests
+      # suites register test Matrix users directly via this shared-secret
+      # HMAC flow (bypassing wallet-service's AS bridge), from a
+      # test-runner process with no access to this volume to read a
+      # randomly-generated value back out.
+      MATRIX_REGISTRATION_SHARED_SECRET: "integration-tests-dev-registration-shared-secret"
     volumes:
       - synapse-data:/data
       - ./env/synapse/homeserver.yaml.template:/template/homeserver.yaml.template:ro
