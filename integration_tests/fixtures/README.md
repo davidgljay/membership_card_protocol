@@ -26,6 +26,14 @@ onward). See `plans/integration-testing-implementation-plan.md`'s Step 2.1.
   ML-DSA-44 signing for the holder side (see the function's doc comment
   for why it doesn't route through `wallet-sdk`'s full keyring/review
   flow — that's Phase 2's harness scope, 2.2/2.3, not this fixture's).
+- **`src/governanceBootstrap.ts`** — `ensureGovernanceBootstrap`: added
+  when the stack moved from Sepolia to a local nitro-devnode (see
+  "Prerequisites" below) — idempotent `RegisterPolicy`/`AuthorizePress`
+  plus press-gas-wallet funding for a fresh local chain, using the single
+  genesis governance keypair `deploy-contracts`'s `bootstrap.sh` already
+  generates. Both harnesses (2.2, 2.3) call this once per `prepare()`
+  before minting; `mintCard` itself doesn't call it, since a Sepolia-style
+  pre-governed deployment never needed it.
 
 This package does *not* reuse `contracts/test_params`, `press/test`,
 `relay/tests`, or `wallet-service/test` as originally scoped — each turned
@@ -38,20 +46,29 @@ suite, not card/key fixtures, so it isn't re-exported here either.
 
 ## Prerequisites
 
-The fixture policy CID (and therefore the on-chain policy address it's
+The default stack now runs against a local `nitro-devnode` (moved off
+Sepolia during Phase 2 — see `plans/milestones/integration-phase-2.md`),
+which starts ungoverned: no policy registered, no press authorized. The
+fixture policy CID (and therefore the on-chain policy address it's
 registered under) is a pure function of `pressCardCid` — pin the same
 content, get the same CID, every time, as long as press's
-`PRESS_CARD_CID` config value doesn't change. That means minting a card
-requires two one-time on-chain governance calls (`registerPolicy`,
-`authorizePress`) for this fixture's specific policy address and press's
-own on-chain identity — already done for the current
-`contracts/deployments/sepolia.json` deployment. If the deployment is ever
-redeployed, or `PRESS_CARD_CID`/`PRESS_SECP256R1_PRIVATE_KEY` change, these
-need to be redone — see `integration_tests/reports/phase-1-environment-
-notes.md`'s "Press's chain integration" entry for the exact `cast send`
-commands used and why each parameter is shaped the way it is (especially
-`press_address` needing to be a left-padded bytes32, and `press_pubkey`
-needing to be *press's own* secp256r1 public key, not the deployer's).
+`PRESS_CARD_CID` config value doesn't change — so `ensureGovernanceBootstrap`
+(above) only needs to run once per chain lifetime; it's idempotent and
+safe to call on every `prepare()` regardless. `deploy-contracts`'s own
+`bootstrap.sh` is idempotent too (skips redeploying if the chain already
+has live code at the recorded address), so the local chain's state —
+and therefore this governance — persists across `docker compose up`
+invocations rather than resetting each time.
+
+`mintCard` itself still assumes the policy/press are already governed
+(it never calls `ensureGovernanceBootstrap`) — callers running against a
+fresh chain must call it first, as both harnesses' `prepare.ts` do.
+Pointing this fixture at Sepolia or another pre-governed deployment
+instead (`HARNESS_ARBITRUM_RPC_URL`/`HARNESS_STORAGE_CONTRACT_ADDRESS`)
+still works without any bootstrap call, same as before this migration —
+see `integration_tests/reports/phase-1-environment-notes.md`'s "Press's
+chain integration" entry for the original one-time `cast send` commands
+that governed the Sepolia deployment by hand.
 
 ## Running
 
