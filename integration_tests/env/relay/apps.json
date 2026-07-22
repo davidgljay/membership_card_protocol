@@ -1,3 +1,12 @@
 {
-  "apps": []
+  "apps": [
+    {
+      "app_id": "integration-tests",
+      "platform": "fcm",
+      "wallet_base_url": "https://wallet-service-tls:3000",
+      "fcm": {
+        "service_account_file": "/app/config/fcm-dummy.json"
+      }
+    }
+  ]
 }

@@ -75,6 +75,7 @@ services:
       - "3000:3000"
     volumes:
       - ./env/relay/apps.json:/app/config/apps.json:ro
+      - ./env/relay/fcm-dummy.json:/app/config/fcm-dummy.json:ro
       - ./env/relay/oblivious_targets.json:/app/config/oblivious_targets.json:ro
       - relay-db:/data
       # Relay's outbound OHTTP forwarding fetch is plain Node `fetch`, which
