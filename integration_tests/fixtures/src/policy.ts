@@ -38,6 +38,6 @@ export function buildPermissiveTestPolicy(pressCardCid: string): PolicyDocument 
       display_name: { type: 'string', required: false },
     },
     approved_presses: [pressCardCid],
-    allow_open_offers: false,
+    allow_open_offers: true,
   };
 }

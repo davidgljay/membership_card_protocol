@@ -13,7 +13,10 @@
   "dependencies": {
     "@membership-card-protocol/app-sdk": "file:../../app-sdk/packages/app-sdk",
     "@membership-card-protocol/integration-fixtures": "file:../fixtures",
-    "@membership-card-protocol/verifier": "file:../../membership_card_verifier/packages/verifier"
+    "@membership-card-protocol/verifier": "file:../../membership_card_verifier/packages/verifier",
+    "@membership-card-protocol/verifier-rpc-provider": "file:../../membership_card_verifier/packages/verifier-rpc-provider",
+    "@membership-card-protocol/verifier-ipfs-provider": "file:../../membership_card_verifier/packages/verifier-ipfs-provider",
+    "viem": "^2.53.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
