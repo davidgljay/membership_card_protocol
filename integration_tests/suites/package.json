@@ -1,0 +1,26 @@
+{
+  "name": "@membership-card-protocol/integration-suites",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Integration test suites for the Card Protocol's process specs — one file per spec, run against the live local stack.",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "//": "file: references match the convention already used by fixtures/harnesses for these same packages, both of which build dist/ ahead of time.",
+  "dependencies": {
+    "@membership-card-protocol/app-sdk": "file:../../app-sdk/packages/app-sdk",
+    "@membership-card-protocol/integration-fixtures": "file:../fixtures",
+    "@membership-card-protocol/verifier": "file:../../membership_card_verifier/packages/verifier"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
