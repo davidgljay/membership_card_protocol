@@ -1,0 +1,37 @@
+{
+  "name": "@membership-card-protocol/harness-rn",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Jest + react-native-preset harness exercising sdk-providers-rn + app-sdk/wallet-sdk against the live integration_tests stack: create wallet, accept an offer, validate the resulting card. No emulator — PasskeyProvider is a jest-only fake (see src/mockPasskeyProvider.ts); every other provider (SecureEnclaveKeyProvider, AsyncStorageProvider) is the real sdk-providers-rn implementation with its native module mocked at the jest level, same as sdk-providers-rn's own unit tests.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "jest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@membership-card-protocol/app-sdk": "file:../../../app-sdk/packages/app-sdk",
+    "@membership-card-protocol/integration-fixtures": "file:../../fixtures",
+    "@membership-card-protocol/sdk-providers-rn": "file:../../../sdk-providers-rn/packages/sdk-providers-rn",
+    "@membership-card-protocol/verifier": "file:../../../membership_card_verifier/packages/verifier",
+    "@membership-card-protocol/verifier-ipfs-provider": "file:../../../membership_card_verifier/packages/verifier-ipfs-provider",
+    "@membership-card-protocol/verifier-rpc-provider": "file:../../../membership_card_verifier/packages/verifier-rpc-provider",
+    "@membership-card-protocol/wallet-sdk": "file:../../../wallet-sdk/packages/wallet-sdk",
+    "viem": "^2.53.1"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.25.0",
+    "@babel/plugin-transform-modules-commonjs": "^7.25.0",
+    "@react-native-async-storage/async-storage": "^2.0.0",
+    "@react-native/babel-preset": "^0.86.0",
+    "@types/jest": "^29.5.0",
+    "@types/node": "^22.0.0",
+    "babel-jest": "^29.7.0",
+    "jest": "^29.7.0",
+    "react-native": "^0.75.0",
+    "react-native-keychain": "^10.0.0",
+    "typescript": "^5.8.3"
+  }
+}
