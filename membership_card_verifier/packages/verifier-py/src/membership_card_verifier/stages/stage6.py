@@ -1,4 +1,3 @@
-import asyncio
 import json
 from dataclasses import dataclass
 
@@ -63,10 +62,13 @@ async def verify_stage6(
     if len(active_annotator_set) == 0:
         return Stage6Result(annotations=[], errors=errors)
 
-    # Step 3: fetch EAS attestations for all cards in chain
-    all_attestations = await asyncio.gather(
-        *(rpc.get_eas_annotations(addr, active_annotator_set) for addr in chain_card_addresses)
-    )
+    # Step 3: fetch EAS attestations for all cards in chain. Sequential, not
+    # asyncio.gather — see card_verifier.py's verify_envelope for the full
+    # explanation (Twisted-reactor/asyncio.gather incompatibility inside
+    # Synapse's matrix_policy_module, confirmed live 2026-07-21).
+    all_attestations = [
+        await rpc.get_eas_annotations(addr, active_annotator_set) for addr in chain_card_addresses
+    ]
     attestations = [a for sublist in all_attestations for a in sublist]
 
     # Step 4: process each attestation

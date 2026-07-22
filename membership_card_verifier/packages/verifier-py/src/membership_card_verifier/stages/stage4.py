@@ -1,4 +1,3 @@
-import asyncio
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -67,15 +66,21 @@ async def verify_stage4(
 
     fetched_at = time.time()
 
-    # Resolve on-chain CardEntry + event-log replay for every chain member in parallel.
+    # Resolve on-chain CardEntry + event-log replay for every chain member.
+    # Sequential, not asyncio.gather — see card_verifier.py's verify_envelope
+    # for the full explanation (Twisted-reactor/asyncio.gather incompatibility,
+    # confirmed live 2026-07-21): this package runs embedded inside Synapse's
+    # matrix_policy_module, where bare asyncio.gather() raises
+    # `RuntimeError: await wasn't used with future`. Order doesn't matter
+    # for this loop's result (per_card is only iterated, never indexed
+    # positionally against `chain`), so sequential awaiting changes nothing
+    # about correctness, only concurrency.
     async def _fetch_one(link: ChainLink):
-        card_entry, event_log = await asyncio.gather(
-            rpc.get_card_entry(link.card_address),
-            rpc.get_card_event_log(link.card_address),
-        )
+        card_entry = await rpc.get_card_entry(link.card_address)
+        event_log = await rpc.get_card_event_log(link.card_address)
         return link, card_entry, event_log
 
-    per_card = await asyncio.gather(*(_fetch_one(link) for link in chain))
+    per_card = [await _fetch_one(link) for link in chain]
 
     earliest_revocation: Optional[tuple[int, str]] = None
     any_content_available = False

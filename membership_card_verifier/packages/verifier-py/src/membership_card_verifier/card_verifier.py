@@ -1,4 +1,3 @@
-import asyncio
 import base64
 import hashlib
 import json
@@ -152,12 +151,23 @@ class CardVerifier:
         canonical_envelope = canonicalize(envelope)
         envelope_id = hashlib.sha256(canonical_envelope).hexdigest()
 
-        signatures = await asyncio.gather(
-            *(
-                self._verify_signature_entry(entry, payload, payload["timestamp"])
-                for entry in envelope["signatures"]
-            )
-        )
+        # Sequential, not asyncio.gather: this package is embedded inside
+        # Synapse's matrix_policy_module, driven by Twisted's reactor via
+        # Deferred.fromCoroutine — asyncio.gather() wraps each awaitable in
+        # a real asyncio.Task/Future via ensure_future(), and Twisted's
+        # coroutine-driving machinery does not reliably recognize the
+        # resulting gather() awaitable, raising
+        # `RuntimeError: await wasn't used with future` (confirmed live,
+        # 2026-07-21 — see integration_tests/reports/2026-07-21-wave-2.md
+        # item 3). A plain, sequential `await` per iteration is exactly the
+        # supported case Twisted's generator-driving code handles — no
+        # asyncio.Task wrapping involved. Order (which the caller relies on
+        # via `list(signatures)`) is preserved either way; only concurrency
+        # across independent signature checks is lost, which is not a
+        # correctness concern for a security-verification path.
+        signatures = []
+        for entry in envelope["signatures"]:
+            signatures.append(await self._verify_signature_entry(entry, payload, payload["timestamp"]))
 
         return EnvelopeVerificationResult(
             envelope_id=envelope_id,

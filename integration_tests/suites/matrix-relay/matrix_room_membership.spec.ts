@@ -190,36 +190,29 @@ describe('matrix_room_membership.md + matrix_join_attestation_and_revocation.md 
       expect(body.errcode).toBe('M_FORBIDDEN');
     }, 15_000);
 
-    // BUG, confirmed live 2026-07-21, not fixed here (Wave-2 report
-    // fix-now/defer candidate): a validly-signed, correctly-bound
-    // attestation for a card that was never minted anywhere reaches the
-    // module's real chain-walk path (attestation.py's
+    // BUG, confirmed live 2026-07-21, FIXED the same day: a validly-signed,
+    // correctly-bound attestation for a card that was never minted anywhere
+    // used to reach the module's real chain-walk path (attestation.py's
     // verify_join_attestation -> chain_context.py's
     // walk_join_attestation_chain -> membership_card_verifier's
-    // CardVerifier.verify_envelope), which crashes with
+    // CardVerifier.verify_envelope) and crash with
     // `RuntimeError: await wasn't used with future` inside
     // `card_verifier.py`'s `asyncio.gather(...)` call — a Twisted-reactor/
-    // asyncio-Future mismatch somewhere in the RPC/IPFS provider bridging
-    // `chain_context.py` hands to the verifier. The exception is NOT
-    // caught and converted to a deny; it propagates all the way to
-    // Synapse's HTTP layer as a raw `500`, not the `403 M_FORBIDDEN` every
-    // other deny path in this file produces. This violates
-    // `matrix_room_membership.md §4`'s own "Predicate evaluation itself
-    // throws... Deny... This is the module's last line of defense — a bug
-    // in the evaluator must not become an accidental allow" guarantee: a
-    // 500 is not an allow, but it's also not the guaranteed clean deny the
-    // spec promises, and — more importantly — it's the first attestation
-    // in this file's tests to actually reach real chain-walk code, so
-    // nothing before this suite had a chance to exercise (and catch) this
-    // path. See the Wave-2 report for full triage.
-    it.todo(
-      'denies (403) a join with a validly-signed, correctly-bound attestation for a card that does not exist on-chain — currently 500s instead, see comment above'
-    );
-
-    it('[regression trip-wire, not the desired behavior] currently 500s rather than allowing — at least confirms this never silently becomes an allow', async () => {
+    // asyncio.gather incompatibility (asyncio.gather() wraps each awaitable
+    // in a real asyncio.Task via ensure_future(), which Twisted's
+    // Deferred.fromCoroutine-driven generator machinery doesn't reliably
+    // recognize). Fixed by replacing every asyncio.gather() call in the
+    // Python verify path (card_verifier.py, stages/stage4.py,
+    // stages/stage6.py, matrix_policy_module/rpc_provider.py) with
+    // sequential awaits — see those files' own comments. Confirmed fixed
+    // against the rebuilt synapse image: this now correctly returns 403,
+    // not 500.
+    it('denies (403) a join with a validly-signed, correctly-bound attestation for a card that does not exist on-chain', async () => {
       const joinerKeypair = mlDsa44GenerateKeypair();
       const { localpart, matrixUserId } = localpartFor(joinerKeypair);
       const joiner = await registerMatrixUserViaSharedSecret(localpart);
+      expect(joiner.userId).toBe(matrixUserId);
+
       const attestation = buildJoinAttestation(joinerKeypair.secretKey, roomId, MATRIX_SERVER_NAME);
       expect(attestation.payload.matrix_user_id).toBe(matrixUserId);
 
@@ -228,12 +221,15 @@ describe('matrix_room_membership.md + matrix_join_attestation_and_revocation.md 
         headers: { Authorization: `Bearer ${joiner.accessToken}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ [JOIN_ATTESTATION_EVENT_CONTENT_KEY]: attestation }),
       });
-      // NOT 200/allow, at least — but also not the 403 the spec promises.
-      // If this ever starts returning 200, that's a much worse regression
-      // (deny-by-default silently broken) and this assertion will catch
-      // it. If it starts returning 403, the it.todo above should be
-      // un-skipped and this test deleted.
-      expect(res.status).toBe(500);
+      // The attestation itself is well-formed and correctly bound (unlike
+      // the two cases above), but this card was never minted anywhere —
+      // no chain to walk, no predicate document this suite pinned for
+      // real. Deny-by-default (matrix_join_attestation_and_revocation.md
+      // §3.3) means an unresolvable chain/predicate denies rather than
+      // falling back to an allow.
+      expect(res.status).toBe(403);
+      const body = (await res.json()) as { errcode?: string };
+      expect(body.errcode).toBe('M_FORBIDDEN');
     }, 15_000);
 
     it('none of the denied joiners appear in the room member list', async () => {

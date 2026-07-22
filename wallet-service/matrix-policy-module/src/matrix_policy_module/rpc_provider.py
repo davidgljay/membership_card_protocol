@@ -25,7 +25,6 @@ design (matrix_synapse_module.md's package layout section says as much).
 
 from __future__ import annotations
 
-import asyncio
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -286,13 +285,22 @@ class Web3RpcProvider:
         while from_block <= latest_block:
             to_block = min(from_block + window_size - 1, latest_block)
             try:
-                registered, updated = await asyncio.gather(
-                    registered_contract.events.CardRegistered().get_logs(
-                        from_block=from_block, to_block=to_block, argument_filters={"card_address": card_address}
-                    ),
-                    updated_contract.events.CardHeadUpdated().get_logs(
-                        from_block=from_block, to_block=to_block, argument_filters={"card_address": card_address}
-                    ),
+                # Sequential, not asyncio.gather — this module runs
+                # embedded inside Synapse's Twisted reactor, where bare
+                # asyncio.gather() raises
+                # `RuntimeError: await wasn't used with future` (confirmed
+                # live 2026-07-21 at the membership_card_verifier call site
+                # this rpc_provider feeds — see
+                # integration_tests/reports/2026-07-21-wave-2.md item 3;
+                # applying the same fix here preemptively since this is the
+                # exact same pattern, not yet hit by a live test only
+                # because get_card_event_log's caller — card_verifier.py's
+                # stage4 chain walk — was never reached before that crash).
+                registered = await registered_contract.events.CardRegistered().get_logs(
+                    from_block=from_block, to_block=to_block, argument_filters={"card_address": card_address}
+                )
+                updated = await updated_contract.events.CardHeadUpdated().get_logs(
+                    from_block=from_block, to_block=to_block, argument_filters={"card_address": card_address}
                 )
                 registered_logs.extend(registered)
                 updated_logs.extend(updated)

@@ -120,15 +120,24 @@ below).
   environment — worth remembering as a real coverage gap distinct from
   "the policy module works," not just an implementation detail.
 
+## Checkpoint outcome
+
+Reviewed same day. Decision: investigate and fix #3 (the chain-walk
+Twisted/asyncio crash) immediately rather than deferring — it was the
+more consequential of the two `fix-now` candidates, since it's a bug in
+code every future chain-walk-dependent suite (including Wave 1's own
+deferred tests) will eventually need to exercise. Root-caused to
+`asyncio.gather()` being incompatible with Twisted's `Deferred.fromCoroutine`-driven
+coroutine execution (Synapse's module-hosting model) — fixed by replacing
+all four `asyncio.gather()` call sites in the Python verification path
+(`membership_card_verifier`'s `card_verifier.py`/`stage4.py`/`stage6.py`,
+`matrix_policy_module`'s `rpc_provider.py`) with sequential awaits, not
+just the one this suite happened to hit. Verified via both Python
+packages' own pytest suites (140 + 98 tests) and a full live-stack
+re-run: the previously-500ing scenario in `matrix_room_membership.spec.ts`
+now correctly returns `403`. #4 (creator auto-join registry gap) was not
+picked up at this checkpoint — remains open for a future pass.
+
 ## What's next
 
-**⛔ Checkpoint (per the implementation plan):** before Phase 5 (Wave 3 —
-full spec coverage) begins, review
-`integration_tests/reports/2026-07-21-wave-2.md` and decide which
-`fix-now`/`defer` items to act on and who owns them. In particular: #3
-(the chain-walk crash) is the more consequential of the two `fix-now`
-candidates — it's the first live evidence of a bug in code every future
-chain-walk-dependent suite (including Wave 1's own deferred tests) will
-eventually need to exercise, so its priority is worth judging against how
-much of the Wave 3/4 roadmap depends on that path working, not just
-against this report's own immediate scope.
+Phase 5 (Wave 3 — full spec coverage) is unblocked.
