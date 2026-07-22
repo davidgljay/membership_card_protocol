@@ -13,7 +13,7 @@ import { handleOpenOfferClaim } from '../../src/handlers/open-offer.js';
 import { handleUpdate } from '../../src/handlers/update.js';
 import { handleSubCardRegister, handleSubCardDeregister } from '../../src/handlers/sub-card.js';
 import { createInMemoryKv } from '../../src/kv.js';
-import { toBase64url, keccak256, fromBase64url } from '../../src/functions/crypto.js';
+import { toBase64url, keccak256, fromBase64url, deriveContentKey, aes256gcmDecrypt } from '../../src/functions/crypto.js';
 import type { PressContext } from '../../src/context.js';
 import type {
   IssuanceRequest, FinalizeRequest, OpenOfferClaimSubmission,
@@ -74,6 +74,7 @@ function makeCtx(overrides: Partial<PressContext> = {}): PressContext {
     getPressAuthorization: vi.fn().mockResolvedValue({ active: true, next_sequence: 0n, press_public_key: new Uint8Array(64), mldsa44_key_hash: '0x', key_scheme: 0, authorized_at: 0n, revoked_at: 0n }),
     getNextSequence: vi.fn().mockResolvedValue(0n),
     getOpenOfferUseCount: vi.fn().mockResolvedValue(0n),
+    getProtocolVersion: vi.fn().mockResolvedValue('0.1'),
     registerCard: vi.fn().mockResolvedValue('0xdeadbeef'),
     updateCardHead: vi.fn().mockResolvedValue('0xdeadbeef'),
     claimOpenOffer: vi.fn().mockResolvedValue('0xdeadbeef'),
@@ -229,6 +230,59 @@ describe('P-06', () => {
     };
     const ctx = makeCtx();
     await expect(handleOpenOfferClaim(ctx, body)).rejects.toMatchObject({ pressCode: 'P-06' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Happy path: open offer claim propagates ancestry_pubkeys
+// ---------------------------------------------------------------------------
+
+describe('handleOpenOfferClaim — success', () => {
+  it('sets ancestry_pubkeys to [issuer_pubkey] on the assembled card, not []', async () => {
+    const issuerCardAddr = Buffer.from(keccak256(ISSUER_PK)).toString('hex');
+    const base = {
+      policy_id: POLICY_CID, issuer_card: issuerCardAddr, press_card: PRESS_CID,
+      issued_at: new Date().toISOString(), issuer_pubkey: toBase64url(ISSUER_PK),
+    };
+    const offer = signOffer(base) as Record<string, unknown>;
+    const claimPayload = { offer, recipient_pubkey: toBase64url(HOLDER_PK) };
+    const toSignClaim = canonicalize(claimPayload as Record<string, unknown>);
+    const recipSig = ml_dsa44.sign(toSignClaim, HOLDER_SK);
+    const body: OpenOfferClaimSubmission = {
+      claim_payload: claimPayload as never,
+      recipient_signature: toBase64url(recipSig),
+    };
+
+    // publishCard (functions/issuance.ts) encrypts the card document
+    // (ADR-006: AES-256-GCM under HKDF-SHA3-256(recipient_pubkey)) before
+    // pinning — capture and decrypt the ciphertext the same way, rather
+    // than assuming pinToIPFS receives plain JSON.
+    let pinnedCiphertext: Uint8Array | undefined;
+    const ctx = makeCtx({
+      ipfs: {
+        fetchFromIPFS: vi.fn().mockImplementation(async (cid: string) => {
+          if (cid === POLICY_CID) {
+            return new TextEncoder().encode(JSON.stringify({
+              policy_id: POLICY_CID, field_definitions: {}, approved_presses: [PRESS_CID],
+              valid_until: new Date(Date.now() + 86400_000).toISOString(), allow_open_offers: true,
+            }));
+          }
+          return new Uint8Array(0);
+        }),
+        pinToIPFS: vi.fn().mockImplementation(async (bytes: Uint8Array) => {
+          pinnedCiphertext = bytes;
+          return 'bafybeimockcid';
+        }),
+      } as never,
+    });
+
+    await handleOpenOfferClaim(ctx, body);
+
+    expect(pinnedCiphertext).toBeDefined();
+    const contentKey = deriveContentKey(HOLDER_PK);
+    const plaintext = await aes256gcmDecrypt(contentKey, pinnedCiphertext!);
+    const pinnedDocument = JSON.parse(new TextDecoder().decode(plaintext)) as Record<string, unknown>;
+    expect(pinnedDocument.ancestry_pubkeys).toEqual([toBase64url(ISSUER_PK)]);
   });
 });
 

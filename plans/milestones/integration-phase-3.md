@@ -110,14 +110,17 @@ coverage). No finding required rewriting a wrong test assertion — the
   `false`) — required for the open-offer suites, harmless for suites that
   don't touch open offers.
 
+## Checkpoint outcome
+
+Reviewed same day. Decision: fix the `fix-now` item immediately rather than
+deferring to Wave 2. `press/src/handlers/open-offer.ts` now propagates
+`[offer.issuer_pubkey]` as `ancestry_pubkeys` (mirroring the targeted-offer
+path's fix), with a new regression test in `press/test/unit/errors.test.ts`.
+Full press suite (172 tests) and all 7 Wave-1 integration suites (44 tests,
+10 `it.todo`) reconfirmed green against the rebuilt press container. The
+three `defer` items stand as deferred — no other action requested at this
+checkpoint.
+
 ## What's next
 
-**⛔ Checkpoint (per the implementation plan):** before Phase 4 (Wave 2 —
-matrix and relay flows) begins, review
-`integration_tests/reports/2026-07-21-wave-1.md` and decide which
-`fix-now`/`defer` items to act on and who owns them. Product-code fixes
-are out of scope for this plan unless assigned at this checkpoint — in
-particular, the open-offer ancestry-propagation bug (#2 in the report) is
-cheap and has a proven fix pattern already, so it may be worth doing before
-Wave 2 regardless of what else is prioritized, since Wave 2's matrix/relay
-flows are more likely than Wave 1 was to depend on correctly-chained cards.
+Phase 4 (Wave 2 — matrix and relay flows) is unblocked.

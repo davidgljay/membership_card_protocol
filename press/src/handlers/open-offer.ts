@@ -104,13 +104,23 @@ export async function handleOpenOfferClaim(
   }
 
   // 8. Assemble, sign, publish card.
+  // protocol-objects.md §1: `ancestry_pubkeys` is a required field on every
+  // CardDocument, ordered from immediate parent toward the root; the
+  // immediate parent's entry is the issuer card's own public key.
+  // `OpenCardOffer` (unlike the targeted-offer `IssuerOffer`) has no
+  // multi-level `ancestry_pubkeys` field of its own to carry through — it
+  // only ever declares a single-level `issuer_pubkey`, already binding-
+  // checked against `issuer_card` above — so that single entry is the
+  // most this handler can populate. Was hardcoded to `[]` ("Phase 3
+  // placeholder"), the same gap `issue.ts`'s targeted-offer path had
+  // before being fixed to propagate `offer.ancestry_pubkeys`.
   const protocolVersion = await ctx.registry.getProtocolVersion();
   const assembled = assembleCardDocument(
     ctx.config,
     offer as import('../types.js').IssuerOffer,
     recipient_pubkey,
     recipient_signature,
-    [], // ancestry: Phase 3 placeholder
+    [offer.issuer_pubkey],
     protocolVersion
   );
   const signed = signCardDocument(ctx.config, assembled);
