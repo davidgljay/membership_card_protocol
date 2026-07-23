@@ -15,33 +15,71 @@
  * build — there is nothing running to observe force-part behavior against.
  *
  * ---------------------------------------------------------------------
- * BUG FOUND WRITING THIS SUITE — confirmed live, not fixed here
+ * BUG FOUND WRITING THIS SUITE — confirmed live, FIXED 2026-07-23
  * ---------------------------------------------------------------------
  *
  * The spec's own "Creator auto-join, carried over unchanged" paragraph
  * (§2) states plainly: "since their own join never reaches
  * `check_event_for_spam`, whatever code path handles their auto-join has
  * to register the entry directly ... or their first post would have no
- * registry entry to resolve against." Confirmed empirically below (§2a
- * scenario): **it doesn't.** `wallet-service/src/matrix/room-creation.ts`'s
- * `createMatrixRoomViaSynapse` only calls Synapse's `/createRoom` and
- * returns — nothing calls into the membership registry. The room
- * creator's own very first post to their own freshly-created room is
- * denied (`403 M_FORBIDDEN`), exactly the failure the spec's own prose
- * warned about, now confirmed against the real running module rather than
- * inferred from reading the code. This is a real, fixable gap (the fix
- * belongs in wallet-service's room-creation flow — a direct call to the
- * membership registry, or an equivalent server-side registration hook —
- * not in this test suite). See the Wave-2 report for triage.
+ * registry entry to resolve against." Confirmed empirically (§2a scenario
+ * below) that it didn't: `wallet-service/src/matrix/room-creation.ts`'s
+ * `createMatrixRoomViaSynapse` only called Synapse's `/createRoom` and
+ * returned — nothing called into the membership registry, so the room
+ * creator's own very first post to their own freshly-created room was
+ * denied (`403 M_FORBIDDEN`).
+ *
+ * Root cause, confirmed via a live debug probe (not assumed from reading
+ * the spec text): `check_event_allowed` — the real join gate — genuinely
+ * *is* invoked for the creator's own join event during room creation
+ * (the module's own prior docstring/spec claim that it's never invoked for
+ * creation joins was written about `check_event_for_spam`/
+ * `user_may_join_room`, never re-verified for `check_event_allowed` after
+ * that later became the real production gate). But at that point
+ * `m.card.policy` isn't in `state_events` yet — it's a *later*
+ * `initial_state` entry in the same `/createRoom` request — so the
+ * "not a card-gated room yet" early-return fires and nothing registers.
+ *
+ * Fixed in `matrix_policy_module/module.py` (`_register_creator_membership`,
+ * a new `io.cardprotocol.room_creator_attestation` custom state-event
+ * type `check_event_allowed` now recognizes): the creator submits a
+ * normal join-attestation envelope (`client-sdk`'s `buildJoinAttestation`,
+ * reused unchanged) as a follow-up state event once `room_id` is known
+ * (it can't be part of the `/createRoom` request itself — `room_id`
+ * doesn't exist until that request returns). Unlike an ordinary join, this
+ * doesn't require the creator's card to satisfy the room's own policy —
+ * per the spec's own words, the creator is trusted by virtue of having
+ * created the room, not by qualifying under it. wallet-service's
+ * `POST /matrix/rooms` was deliberately NOT changed to route this itself:
+ * wallet-service is non-custodial (never holds a card's signing key) and
+ * can't sign the attestation, and a client that already holds its own
+ * Matrix access token can submit this state event directly against
+ * Synapse — no new wallet-service API surface needed.
+ *
+ * **What "fixed" means here, precisely**: confirmed via direct
+ * `docker compose logs synapse` inspection (not guessed) that submitting
+ * the creator attestation changes the creator's own next post's deny
+ * reason from `membership_not_registered` to `predicate document
+ * unreachable` — i.e. `_register_creator_membership` now successfully
+ * finds `card_hash` via the registry where it previously found nothing.
+ * It can't be asserted as an HTTP-observable `200`, though: posting still
+ * needs a real, fetchable, *satisfiable* predicate document, which needs a
+ * real on-chain card issued under a real policy — the same "no real chain
+ * data reachable in this environment" gap already blocking every other
+ * happy-path scenario in this file, and neither deny reason is ever
+ * surfaced in the HTTP response regardless (`403 M_FORBIDDEN` either way).
+ * See the `it.todo` below for the precise, evidence-based statement of
+ * what remains unprovable via HTTP alone.
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
-import { mlDsa44GenerateKeypair, keccak256, deriveMatrixUserId } from '@membership-card-protocol/client-sdk';
+import { mlDsa44GenerateKeypair, keccak256, deriveMatrixUserId, buildJoinAttestation } from '@membership-card-protocol/client-sdk';
 import {
   SYNAPSE_BASE_URL,
   MATRIX_SERVER_NAME,
   registerMatrixUserViaSharedSecret,
   createCardGatedRoom,
+  submitRoomCreatorAttestation,
   type RegisteredMatrixUser,
 } from '../support/matrixAdmin.js';
 
@@ -82,24 +120,38 @@ describe('matrix_join_attestation_and_revocation.md (live stack)', () => {
       name: 'matrix_join_attestation_and_revocation suite fixture room',
     });
     roomId = room.roomId;
+
+    // The fix, exercised for real: submit the creator's own join
+    // attestation as a follow-up state event now that room_id is known.
+    const creatorAttestation = buildJoinAttestation(creatorKeypair.secretKey, roomId, MATRIX_SERVER_NAME);
+    const attestationRes = await submitRoomCreatorAttestation(roomId, creator.accessToken, creatorAttestation);
+    expect(attestationRes.ok).toBe(true);
   }, 30_000);
 
   describe('§2a Post-Time Identity Resolution', () => {
-    // BUG, see this file's header comment: the spec explicitly warns this
-    // must not happen ("their first post would have no registry entry to
-    // resolve against" if the creator's auto-join isn't separately
-    // registered) — confirmed live that it does happen. This test asserts
-    // the CURRENT (buggy) behavior, not the spec's intended one, so it
-    // stays a useful regression trip-wire rather than a permanently-red
-    // test: if wallet-service's room-creation flow starts registering the
-    // creator's membership, this assertion should flip to `.toBe(200)`
-    // and this comment updated.
-    it('[BUG, confirmed live] the room creator\'s own first post is denied — creator auto-join is never registered in the membership registry', async () => {
-      const res = await sendTextMessage(roomId, creator.accessToken);
-      expect(res.status).toBe(403);
-      const body = (await res.json()) as { errcode?: string };
-      expect(body.errcode).toBe('M_FORBIDDEN');
-    }, 15_000);
+    // Confirmed live 2026-07-23 (manual docker-logs inspection, not
+    // guessed): submitting the creator attestation DOES register the
+    // membership now — the post's deny reason changes from
+    // `membership_not_registered` to `predicate document unreachable`,
+    // proving `_register_creator_membership` ran and found `card_hash` via
+    // `resolve_card_hash` this time. It still can't return 200 in this
+    // environment: `check_event_for_spam`'s post path also requires
+    // fetching *and satisfying* a real predicate document, and satisfying
+    // one needs a real on-chain card issued under a real policy — this
+    // suite's cards and policy_ids are synthetic (same "no real chain data
+    // reachable" scoping this whole file already documents for every
+    // other happy path). Neither deny reason is surfaced in the HTTP
+    // response either way (`403 M_FORBIDDEN` regardless — see this
+    // suite's sibling `matrix_room_membership.spec.ts` for the same
+    // finding), so there's no purely-HTTP-observable assertion that
+    // distinguishes "still denied because unregistered" from "still
+    // denied because no real chain" — the fix is real, confirmed by
+    // direct log inspection, but not expressible as a passing HTTP
+    // assertion without the same real-card/pinned-policy prerequisite
+    // blocking every other happy path in this file.
+    it.todo(
+      'the room creator, having submitted their own creator attestation, can post in their own room — needs a real on-chain card + satisfiable pinned policy, same gap as the rest of this file'
+    );
 
     it('a post from an account with no membership-registry entry at all is denied the same way (baseline, not creator-specific)', async () => {
       // A user who never joined this room, attempting to post directly —
@@ -116,6 +168,24 @@ describe('matrix_join_attestation_and_revocation.md (live stack)', () => {
       const res = await sendTextMessage(roomId, stranger.accessToken);
       expect(res.status).toBe(403);
     }, 15_000);
+
+    it('a creator who never submits the creator attestation is still denied — the fix is opt-in, not a bypass', async () => {
+      const otherCreatorKeypair = mlDsa44GenerateKeypair();
+      const { localpart, matrixUserId } = localpartFor(otherCreatorKeypair);
+      const otherCreator = await registerMatrixUserViaSharedSecret(localpart);
+
+      const otherRoom = await createCardGatedRoom({
+        creatorMatrixUserId: matrixUserId,
+        creatorAccessToken: otherCreator.accessToken,
+        policyId: 'bafyreig' + Buffer.from(keccak256(new TextEncoder().encode('no-attestation-creator')).slice(0, 32), 'hex').toString('hex') + 'fixturepolicy',
+        name: 'no-attestation creator fixture room',
+      });
+      // No submitRoomCreatorAttestation call — this is exactly the
+      // original, unfixed behavior: nothing registers this creator's
+      // membership, so their first post is denied the same as before.
+      const res = await sendTextMessage(otherRoom.roomId, otherCreator.accessToken);
+      expect(res.status).toBe(403);
+    }, 30_000);
   });
 
   describe('Server-administrator-forced joins (documented, not this environment\'s to exercise)', () => {

@@ -135,9 +135,34 @@ all four `asyncio.gather()` call sites in the Python verification path
 just the one this suite happened to hit. Verified via both Python
 packages' own pytest suites (140 + 98 tests) and a full live-stack
 re-run: the previously-500ing scenario in `matrix_room_membership.spec.ts`
-now correctly returns `403`. #4 (creator auto-join registry gap) was not
-picked up at this checkpoint — remains open for a future pass.
+now correctly returns `403`. #4 (creator auto-join registry gap) was
+picked up in a follow-up pass the same day and also fixed — see below.
+
+## #4 fix (creator auto-join registry gap), same day
+
+Investigation overturned the report's own original guess: the fix isn't
+`room-creation.ts` at all — `wallet-service` is non-custodial and never
+holds a card's signing key, so it structurally cannot build the required
+attestation server-side. A live debug probe also overturned the spec's
+long-standing claim that `check_event_allowed` never fires for a room
+creator's own auto-join — it does; the real reason nothing registered is
+that `m.card.policy` isn't yet in room state at the moment that specific
+event is checked (it's a later `initial_state` entry in the same
+`/createRoom` request). Fixed by adding a new custom state-event type
+(`io.cardprotocol.room_creator_attestation`) that `matrix_policy_module`
+verifies and registers once submitted — the creator's client sends this
+as one extra state event after room creation returns a real `room_id`,
+reusing `client-sdk`'s existing `buildJoinAttestation` unchanged. A second,
+smaller bug (`canonicalize()` rejecting Synapse's `JsonObject` content
+type for this new event) was found and fixed in the same pass. Verified
+via `matrix-policy-module`'s pytest suite and, live, via `docker compose
+logs` showing the creator's post-deny reason move from
+`membership_not_registered` to `predicate document unreachable` — full
+HTTP-observable success remains blocked by the same real-chain-data gap
+affecting every other happy path in this suite set, honestly marked
+`it.todo` rather than asserted.
 
 ## What's next
 
-Phase 5 (Wave 3 — full spec coverage) is unblocked.
+Phase 5 (Wave 3 — full spec coverage) is unblocked. Both Wave 2 fix-now
+items are resolved.

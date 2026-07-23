@@ -101,6 +101,12 @@ logger = logging.getLogger(__name__)
 _REVOKED_STATUSES = {"revoked", "loud_revocation"}
 _CONTENT_BEARING_EVENT_TYPES = {"m.room.message"}
 _JOIN_ATTESTATION_CONTENT_KEY = "io.cardprotocol.join_attestation"
+# A dedicated custom *state event type* (state_key ""), not a key nested
+# inside another event's content the way _JOIN_ATTESTATION_CONTENT_KEY is —
+# unlike m.room.member (whose content has a fixed required shape the
+# attestation has to sit alongside), this event type's whole content IS the
+# attestation envelope. See _register_creator_membership's doc comment.
+_ROOM_CREATOR_ATTESTATION_EVENT_TYPE = "io.cardprotocol.room_creator_attestation"
 
 
 class RoomPolicyResolver(Protocol):
@@ -249,6 +255,83 @@ class PolicyModule:
         # never to be invoked for joins at all.
         return NOT_SPAM
 
+    async def _register_creator_membership(self, room_id: str, event: Any) -> None:
+        """Registers the room creator's own membership in `self._registry`,
+        per `matrix_join_attestation_and_revocation.md §2`'s "Creator
+        auto-join" note: "The creator's membership must still be entered
+        into the membership registry ... since their own join never
+        reaches `check_event_for_spam` [or, as later corrected,
+        `check_event_allowed`], whatever code path handles their auto-join
+        has to register the entry directly."
+
+        BUG, confirmed live 2026-07-23: nothing did this. `create_room`'s
+        auto-join for the creator genuinely does invoke
+        `check_event_allowed` (confirmed by a temporary debug probe against
+        the live stack — the module's own docstring/spec text describing it
+        as unreachable during creation was written before that was
+        verified and turned out to be wrong for this specific callback),
+        but at that point `m.card.policy` is not yet in `state_events` (it
+        is a *later* `initial_state` entry in the same `/createRoom`
+        request), so `check_event_allowed`'s early "not a card-gated room"
+        return fires and no registration happens. The creator was
+        permanently unable to post in their own card-gated room afterward
+        — post-time resolution has no other path (§2a) and a redundant
+        `/join` by an already-joined member is a Matrix no-op that never
+        re-triggers this callback either.
+
+        Fix: `wallet-service`'s `createMatrixRoomViaSynapse` submits a
+        second, custom state event — `io.cardprotocol.room_creator_attestation`
+        — right after room creation, once the room_id it needs to bind is
+        known (the room_id can't be included in an attestation submitted
+        as part of *creating* the room, since Synapse allocates it only
+        once creation completes). This handler verifies that attestation
+        and registers the membership. Unlike an ordinary join
+        (`_decide_join`), this deliberately does **not** require the
+        creator's card to satisfy the room's policy — per the spec's own
+        words, "the creator is still trusted by virtue of having
+        authenticated to wallet-service to create the room in the first
+        place," not by virtue of qualifying under their own room's policy.
+        A missing or invalid attestation is not an error here — the
+        creator's own `m.room.member` join event already succeeded (an
+        empty/legacy client that never submits this event just leaves the
+        creator in the same denied-until-fixed state as before this fix,
+        not worse)."""
+        raw_content = getattr(event, "content", None)
+        if not raw_content or not hasattr(raw_content, "get"):
+            return
+        # A real EventBase's top-level .content is Synapse's own JsonObject/
+        # immutabledict, not a plain dict — canonicalize() (deep inside
+        # verify_join_attestation -> CardVerifier.verify_envelope) only
+        # handles plain dict/list/str/etc. and raises `TypeError: canonicalize:
+        # unsupported type JsonObject` on it directly (confirmed live
+        # 2026-07-23). Nested values (the join envelope's own `payload`/
+        # `signatures`) are already plain dict/list once parsed from JSON —
+        # this is exactly why the existing `_JOIN_ATTESTATION_CONTENT_KEY`
+        # path never hit this: it reads a *nested* value out of `content`,
+        # never canonicalizes `content` itself. This event type's content
+        # IS the envelope, so it needs the same one-level unwrap.
+        envelope = dict(raw_content)
+
+        attestation = await verify_join_attestation(
+            envelope,
+            joining_matrix_user_id=event.sender,
+            server_name=self.config.matrix_server_name,
+            freshness_seconds=self.config.join_attestation_freshness_seconds,
+            verifier=self._verifier,
+        )
+        if not attestation.valid:
+            logger.info(
+                "creator attestation for %s in %s not registered: %s", event.sender, room_id, attestation.deny_reason
+            )
+            return
+
+        watched_addresses = [link.card_address for link in attestation.chain] or [attestation.card_hash]
+        self._registry.register(room_id, event.sender, attestation.card_hash, watched_addresses, joined_at=_now_iso())
+        if attestation.revocation is not None:
+            self._cache.seed_from_join(
+                attestation.card_hash, attestation.chain, attestation.revocation, attestation.is_currently_valid
+            )
+
     async def _decide_join(
         self, room_id: str, matrix_user_id: str, event_content: dict, policy_id: Optional[str]
     ) -> tuple[bool, Optional[str]]:
@@ -307,7 +390,19 @@ class PolicyModule:
         handed to this callback directly by Synapse — no extra ModuleApi
         round-trip needed to read `m.card.policy` here, unlike
         `_resolve_policy_id`'s `check_event_for_spam` path."""
-        if getattr(event, "type", None) != "m.room.member":
+        event_type = getattr(event, "type", None)
+        if event_type == _ROOM_CREATOR_ATTESTATION_EVENT_TYPE:
+            # See _register_creator_membership's doc comment — this event
+            # type exists solely to carry the room creator's own
+            # attestation in, since their m.room.member join (unlike every
+            # other member's) never has m.card.policy in state yet when
+            # check_event_allowed sees it. Always let the event itself
+            # persist as harmless room state — a missing/invalid
+            # attestation just means registration doesn't happen, not that
+            # anything should be rejected.
+            await self._register_creator_membership(event.room_id, event)
+            return True, None
+        if event_type != "m.room.member":
             return True, None
         content = getattr(event, "content", {})
         if content.get("membership") != "join":

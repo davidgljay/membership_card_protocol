@@ -132,6 +132,32 @@ export async function createCardGatedRoom(params: CreateCardGatedRoomParams): Pr
   return { roomId: responseBody.room_id };
 }
 
+/**
+ * Submits the `io.cardprotocol.room_creator_attestation` custom state
+ * event (`matrix_policy_module/module.py`'s `_register_creator_membership`,
+ * fixed 2026-07-23) that gets the room creator's own membership registered
+ * — without this, a room's creator can never post in their own card-gated
+ * room (see `matrix_join_attestation_and_revocation.spec.ts`). Not part of
+ * `createCardGatedRoom` itself: the attestation must bind the real
+ * `room_id`, which only exists after room creation returns, so this is
+ * always a separate, follow-up call — same reasoning `wallet-service`'s
+ * own equivalent client-side flow would need to follow.
+ */
+export async function submitRoomCreatorAttestation(
+  roomId: string,
+  creatorAccessToken: string,
+  attestation: unknown
+): Promise<Response> {
+  return fetch(
+    `${SYNAPSE_BASE_URL}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state/io.cardprotocol.room_creator_attestation`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${creatorAccessToken}` },
+      body: JSON.stringify(attestation),
+    }
+  );
+}
+
 export async function fetchRoomState(roomId: string, eventType: string, accessToken: string): Promise<unknown> {
   const res = await fetch(
     `${SYNAPSE_BASE_URL}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state/${eventType}`,
