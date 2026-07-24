@@ -115,11 +115,34 @@ entirely rather than wire that gap closed:
   which reaches further into the module's real logic than a
   malformed-attestation deny does. That scenario found a real, previously
   unknown bug (see the suite file's own comment and the Wave-2 report):
-  the module's chain-walk path crashes with a Python
-  `RuntimeError: await wasn't used with future` and the exception escapes
-  as a raw `500` rather than the deny-by-default `403` the spec promises —
-  logged as an `it.todo` plus a regression trip-wire test asserting the
-  current (buggy) behavior, not silently worked around.
+  the module's chain-walk path crashed with a Python
+  `RuntimeError: await wasn't used with future`, escaping as a raw `500`
+  rather than the deny-by-default `403` the spec promises — root-caused to
+  `asyncio.gather()` being incompatible with Twisted's coroutine-driving
+  model and fixed the same day (Wave 2 checkpoint); the suite now asserts
+  the correct `403`.
+
+### Object-spec coverage map (Phase 5 Step 5.2)
+
+Every `specs/object_specs/*.md` maps to either a named process suite that
+already exercises it as a real dependency, or a dedicated `conformance/`
+suite for object-level invariants no process suite happens to assert.
+
+| Object spec | Coverage |
+|---|---|
+| `app_sdk.md` | Named process suites — every `core/`/`extended/` suite imports and exercises `@membership-card-protocol/app-sdk`'s real exported functions (offer assembly, messaging, crypto, transport) as its actual implementation, not a mock. No dedicated suite. |
+| `client_sdk.md` | Named process suites — `extended/wallet_backup_and_recovery.spec.ts`, `extended/card_migration.spec.ts`, and the `matrix-relay/` suites exercise `@membership-card-protocol/client-sdk`'s real `setupWallet`/`recoverWallet`/`registerBackup`/`buildJoinAttestation`/etc. No dedicated suite. |
+| `wallet_sdk.md` | Named process suites (web/RN harnesses, Phase 2) plus the same client-sdk-adjacent coverage above. No dedicated suite. |
+| `press.md` | Named process suites — nearly every `core/` and several `extended/` suites (`policy_creation`, `log_auditing`, `subcard_creation_policy`, `oblivious_transport`) exercise press's real HTTP handlers end-to-end. |
+| `wallet.md` | Named process suites — `extended/wallet_backup_and_recovery.spec.ts` (backup/recovery, account creation, rate limits), `extended/card_migration.spec.ts` (`/bindings/announce`), `matrix-relay/*` (`/matrix/token`-equivalent via the bypass documented above). |
+| `relay.md` | Named process suites — `matrix-relay/message_routing.spec.ts`, `matrix-relay/notification_relay.spec.ts`, `extended/oblivious_transport.spec.ts` (the OHTTP forwarding path). |
+| `relay_data_model.md` | `conformance/relay_data_model.spec.ts` — the oblivious-targets/app-registry file schemas aren't asserted as first-class subjects by any process suite (they're only ever read incidentally). |
+| `registry_contract.md` | Named process suites cover the large majority of documented write operations in context (`RegisterCard`, `RegisterPolicy`, `AuthorizePress`, `RegisterDomain`, `DeregisterDomain`, `RegisterSubCard`, `DeregisterSubCard`, `UpdateCardHead`, `ClaimOpenOffer`) — this spec is 2300+ lines and no single suite (dedicated or not) attempts exhaustive coverage of every documented invariant; treated as broadly, not exhaustively, covered. |
+| `matrix_room.md` | Named process suites — `matrix-relay/matrix_room_membership.spec.ts` (room creation, predicate document shape, `m.card.policy` state). |
+| `matrix_synapse_module.md` | Named process suites — `matrix-relay/*` exercise the real running `matrix_policy_module.PolicyModule` throughout. |
+| `matrix_encryption.md` | `conformance/matrix_encryption.spec.ts` — `deriveMatrixUserId`/`verifyMatrixUserIdBinding` are used everywhere as a means to an end, but the spec's own documented invariants (no-inverse guarantee, TS/Python cross-implementation agreement, sender-binding failure modes) were never asserted as the direct subject of a test. |
+| `ipfs_card.md` | `conformance/ipfs_card.spec.ts` — the ADR-006 content-encryption formula and the on-chain `CardEntry` ↔ IPFS-content mapping table (§6) are relied on implicitly by every suite that mints a card, but never asserted directly. |
+| `card_verifier.md` | `conformance/card_verifier.spec.ts` — every suite that verifies a signature uses the verifier package's primitives (`canonicalize`/`mlDsa44Verify`) directly, per this file's own Step 3.1 convention, deliberately bypassing the full `CardVerifier`/`verifyEnvelope` pipeline this object spec documents. Scoped to what's achievable given the already-logged chain-of-trust/ancestry gap (see Wave 1's report) — Stage 1/`verifyCard`'s not-found path, not full multi-stage chain walks. |
 
 ### Running
 
