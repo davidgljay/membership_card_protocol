@@ -2,7 +2,18 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { readBody, sendJson, sendError } from "../utils/http.js";
 import { getCredential, drainMessages, getUuid, enqueuePendingDelete } from "../utils/storage/redis.js";
 
-const MAX_DELETE_DELAY_SECONDS = parseInt(process.env.MAX_DELETE_DELAY_SECONDS ?? "21600", 10);
+// Read lazily, not frozen as a module-level constant at import time: ES
+// module imports are hoisted and evaluated before the importing module's
+// own top-level statements run, so a test file that sets
+// process.env.MAX_DELETE_DELAY_SECONDS *after* its own `import { router }`
+// (textually before, but evaluated after -- the ESM import-hoisting
+// gotcha) would have that assignment silently ignored by a frozen
+// constant here. Confirmed live: this was the actual cause of
+// message-buffer.test.ts's "enqueues delete jobs for acked UUIDs" always
+// scheduling a delete up to 6 hours in the future instead of immediately.
+function maxDeleteDelaySeconds(): number {
+  return parseInt(process.env.MAX_DELETE_DELAY_SECONDS ?? "21600", 10);
+}
 
 function extractBearerToken(req: IncomingMessage): string | null {
   const auth = req.headers["authorization"];
@@ -112,7 +123,7 @@ export async function handleAck(
       continue;
     }
 
-    const delayMs = Math.floor(Math.random() * MAX_DELETE_DELAY_SECONDS * 1000);
+    const delayMs = Math.floor(Math.random() * maxDeleteDelaySeconds() * 1000);
     const executeAtMs = Date.now() + delayMs;
 
     try {

@@ -25,6 +25,7 @@ import {
 } from "../../src/utils/storage/sqlite.js";
 import { runReregistrationCheck } from "../../src/utils/reregistration.js";
 import { runStartupChecks } from "../../src/startup.js";
+import { stopWalletClearance } from "../../src/utils/wallet_clearance.js";
 
 process.env.NODE_ENV = "development";
 process.env.REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
@@ -69,6 +70,14 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // "full runStartupChecks consumes stuck UUIDs..." below calls the real
+  // runStartupChecks(), which starts the real wallet-clearance background
+  // job (a setInterval polling the same `pending_deletes` Redis key
+  // message-buffer.test.ts's "enqueues delete jobs for acked UUIDs" test
+  // reads directly). Left running, it raced that sibling test's own
+  // dequeue for the same queue entries -- a real, confirmed flake, not
+  // just timing noise. Stop it here so it doesn't outlive this file.
+  await stopWalletClearance();
   await new Promise<void>((r) => relayServer.close(() => r()));
   await closeRedis();
   closeDb();

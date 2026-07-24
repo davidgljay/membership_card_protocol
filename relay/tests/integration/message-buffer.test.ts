@@ -18,6 +18,7 @@ import { router } from "../../src/router.js";
 import { loadAppRegistry } from "../../src/utils/apps.js";
 import { getRedisClient, closeRedis } from "../../src/utils/storage/redis.js";
 import { closeDb } from "../../src/utils/storage/sqlite.js";
+import { stopWalletClearance } from "../../src/utils/wallet_clearance.js";
 
 process.env.NODE_ENV = "development";
 process.env.REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
@@ -31,6 +32,15 @@ let tmpDir: string;
 const TEST_APP_ID = "test-app";
 
 beforeAll(async () => {
+  // Defensive, not just failure-cases.test.ts's own cleanup: this file's
+  // "enqueues delete jobs for acked UUIDs" test manually dequeues from the
+  // same real `pending_deletes` Redis key the production wallet-clearance
+  // background job (started by runStartupChecks()) polls on a real
+  // setInterval. That job raced this test's own dequeue when left running
+  // by a sibling test file -- stop it unconditionally on entry here too,
+  // so this file's correctness doesn't depend on file execution order.
+  await stopWalletClearance();
+
   tmpDir = mkdtempSync(join(tmpdir(), "relay-buffer-test-"));
   process.env.DB_PATH = join(tmpDir, "test.db");
 
