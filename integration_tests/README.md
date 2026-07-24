@@ -3,18 +3,21 @@
 Deployment-faithful integration environment for the card protocol. A single
 `docker compose up` brings up every core object — press and wallet-service
 under workerd/wrangler (matching their Cloudflare deployment), relay and
-Matrix (Synapse + policy module) as containers, and web/RN SDK harnesses —
-so cross-component integration failures surface here instead of in
-production.
+Matrix (Synapse + policy module) as containers, IPFS, and a local
+Stylus-capable chain — so cross-component integration failures surface here
+instead of in production.
 
-**Chain component:** the stack points at the existing Arbitrum Sepolia
-deployment (`contracts/deployments/sepolia.json`), not a local devnode.
-Deploying fresh contracts onto a local Nitro devnode works, but calling
-deployed Stylus contracts on it doesn't yet (a genuine WASM-execution issue,
-unrelated to the protocol contracts themselves) — see
-[`reports/phase-1-environment-notes.md`](reports/phase-1-environment-notes.md).
-That path is kept, not deleted, behind the `local-chain` Compose profile:
-`docker compose --profile local-chain up nitro-devnode deploy-contracts`.
+**Chain component:** the default stack runs against a local `nitro-devnode`
+(`--dev` mode), redeployed fresh on every `docker compose up` via the
+`deploy-contracts` one-shot service — not the Sepolia deployment. An earlier
+investigation found every Stylus call reverting against the local devnode
+and concluded it couldn't run deployed Stylus contracts at all; that turned
+out to be a false negative (the sanity check itself used the wrong ABI
+encoding — see `docker-compose.yml`'s own top-of-file note and
+[`reports/phase-1-environment-notes.md`](reports/phase-1-environment-notes.md)
+for the full history). Calling deployed contracts on the local devnode works
+correctly once the ABI is encoded per Stylus SDK 0.8's actual convention
+(camelCase dispatch, `uint8[]` for `Vec<u8>`).
 
 See the strategic and implementation plans for the full rationale and phased
 rollout:
@@ -44,20 +47,52 @@ integration_tests/
 
 ## Status
 
-Phase 1 (the environment itself) is complete — see
-[`plans/milestones/integration-phase-1.md`](../plans/milestones/integration-phase-1.md)
-for the full review. The default stack (`docker compose up --wait` — ipfs,
-redis, relay, synapse, press, wallet-service and their Postgres/migration
-containers) comes up healthy and repeatably from a clean state in ~30s.
-What's still missing before this directory is runnable end-to-end is
-`run.sh` and the `suites/`/`harnesses/` themselves (Phase 2).
+All six implementation phases are complete — see `plans/milestones/
+integration-phase-{1..6}.md` for each phase's own review. Every process spec
+in `specs/process_specs/` and every object spec in `specs/object_specs/` has
+either a dedicated suite or is covered as a real dependency of one (see
+`suites/README.md`'s object-spec coverage map); `run.sh` is CI-gating every
+deploy path (below).
 
-## Running (once complete)
+## Running locally
 
 ```sh
 cd integration_tests
-./run.sh              # unit tests + full stack + integration suites
-./run.sh --unit-only
-./run.sh --integration-only
-./run.sh --suite core/card_signing
+./run.sh              # unit tests + full stack + integration suites + harnesses
+./run.sh --unit-only          # every component's own unit tests only, no stack
+./run.sh --integration-only   # skip unit tests, bring up the stack and run everything else
+./run.sh --suite core/card_signing   # one suite file only (implies --integration-only)
 ```
+
+`run.sh` installs its own dependencies at each step (`npm ci`/`pnpm
+install`/`pip install`/`cargo`), so it works the same from a clean checkout
+as on a dev machine with `node_modules`/`.venv`/`target` already present —
+a clean checkout just costs more wall time. It always tears the stack down
+(`docker compose down -v`) on exit, including on failure or interruption.
+
+If you already have the stack running (e.g. via `docker compose up -d
+--wait` yourself, for iterating on a suite) and don't want `run.sh` to bring
+it down between runs, run suites directly instead:
+
+```sh
+cd integration_tests/suites
+npm test                          # every suite
+npx vitest run core/card_signing.spec.ts   # one file
+```
+
+## CI
+
+[`../.github/workflows/integration-tests.yml`](../.github/workflows/integration-tests.yml)
+runs `run.sh` on every pull request, and is invoked as a reusable workflow
+(`workflow_call`) by the deploy-adjacent workflows so a red suite blocks the
+deploy rather than just failing a check no one is required to look at:
+[`relay-deploy.yml`](../.github/workflows/relay-deploy.yml),
+[`wallet-service-ci.yml`](../.github/workflows/wallet-service-ci.yml),
+[`client-sdk-ci.yml`](../.github/workflows/client-sdk-ci.yml), and
+[`publish-verifier.yml`](../.github/workflows/publish-verifier.yml) each add
+an `integration-tests` job that calls the reusable workflow, with their own
+deploy/publish job listing it in `needs:`. See
+[`plans/milestones/integration-phase-6.md`](../plans/milestones/integration-phase-6.md)
+for how this was verified (a deliberately broken unit test and a
+deliberately broken integration test were each confirmed to make `run.sh`
+exit non-zero, then reverted).
