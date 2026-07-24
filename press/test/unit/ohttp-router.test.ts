@@ -42,12 +42,12 @@ beforeEach(() => {
 describe('press ohttp-router dispatch (client-sdk implementation plan Step 1.4d)', () => {
   it('routes each of the six sensitive endpoints to the exact handler function the plaintext route calls, with the decoded body', async () => {
     const cases: Array<[string, string, ReturnType<typeof vi.fn>]> = [
-      ['/issue', 'POST', mockHandleIssue],
-      ['/issue/finalize', 'POST', mockHandleIssueFinalize],
-      ['/open-offer/claim', 'POST', mockHandleOpenOfferClaim],
-      ['/update', 'POST', mockHandleUpdate],
-      ['/sub-card/register', 'POST', mockHandleSubCardRegister],
-      ['/sub-card/deregister', 'POST', mockHandleSubCardDeregister],
+      ['/api/issue', 'POST', mockHandleIssue],
+      ['/api/issue/finalize', 'POST', mockHandleIssueFinalize],
+      ['/api/open-offer/claim', 'POST', mockHandleOpenOfferClaim],
+      ['/api/update', 'POST', mockHandleUpdate],
+      ['/api/sub-card/register', 'POST', mockHandleSubCardRegister],
+      ['/api/sub-card/deregister', 'POST', mockHandleSubCardDeregister],
     ];
 
     for (const [path, method, mockFn] of cases) {
@@ -67,14 +67,14 @@ describe('press ohttp-router dispatch (client-sdk implementation plan Step 1.4d)
       Object.assign(new Error('P-02: predicate failed'), { pressCode: 'P-02' })
     );
 
-    const response = await dispatch({ path: '/issue', method: 'POST', body: encodeBody({}) }, FAKE_CTX);
+    const response = await dispatch({ path: '/api/issue', method: 'POST', body: encodeBody({}) }, FAKE_CTX);
 
     expect(response.status).toBe(400);
     expect(decodeBody(response.body)).toMatchObject({ error: 'P-02' });
   });
 
   it('rejects a path outside the six reachable endpoints with 404 rather than forwarding it', async () => {
-    const response = await dispatch({ path: '/press', method: 'GET' }, FAKE_CTX);
+    const response = await dispatch({ path: '/api/press', method: 'GET' }, FAKE_CTX);
 
     expect(response.status).toBe(404);
     expect(mockHandleIssue).not.toHaveBeenCalled();
@@ -85,7 +85,7 @@ describe('press ohttp-router dispatch (client-sdk implementation plan Step 1.4d)
     mockHandleUpdate.mockRejectedValueOnce(new Error('unexpected internal failure'));
 
     await expect(
-      dispatch({ path: '/update', method: 'POST', body: encodeBody({}) }, FAKE_CTX)
+      dispatch({ path: '/api/update', method: 'POST', body: encodeBody({}) }, FAKE_CTX)
     ).rejects.toThrow('unexpected internal failure');
   });
 });

@@ -34,31 +34,63 @@ import { generateNonce } from './config.js';
 // ---------------------------------------------------------------------------
 // ABI — DNS functions on logic contract + shared reads
 // ---------------------------------------------------------------------------
-// Logic contract function names follow Stylus SDK's PascalCase export convention.
-
+// Fixed 2026-07-23 — this ABI previously declared PascalCase function names
+// and typed `Vec<u8>`/`Vec<Vec<u8>>` params/returns as Solidity `bytes`/
+// `bytes[]`. Stylus SDK 0.8 actually dispatches on the camelCase-converted
+// selector (Rust snake_case -> camelCase) and maps `Vec<u8>`/`Vec<Vec<u8>>`
+// to `uint8[]`/`uint8[][]`, not `bytes`/`bytes[]` — confirmed against
+// `cargo stylus export-abi`'s real output for this exact logic contract
+// (run 2026-07-23) and against `press/src/chain/registry.ts`'s own
+// long-working camelCase ABI, which hit and fixed the identical casing/
+// type bug independently, earlier in the same integration-testing effort
+// this fix is also part of (see that file's own "ABI note" comment).
+// Every write method below would previously have encoded a call to a
+// non-existent selector (a silent revert on submission); every multi-value
+// read would have mis-decoded.
+//
+// `getCardEntry`/`getGovernanceKeyset`/`getSubCardEntry`/
+// `getPressAuthorization` each mix a `uint8[]` into an otherwise-scalar
+// multi-value return — the same "extra 32-byte outer tuple offset" quirk
+// `press/src/chain/registry.ts` already documents and works around by
+// declaring the return as a single named struct/tuple rather than a plain
+// comma-separated list. Applied the same fix here.
+//
+// **Known residual issue, NOT fixed here** (out of scope for an ABI-casing
+// fix): `getSubCardEntry` does not appear anywhere in the logic contract's
+// real exported ABI at all — per the same investigation that already
+// established (in `press/src/chain/registry.ts`'s own comment, and
+// `integration_tests/suites/extended/dns_governance_verifier.spec.ts`'s
+// research) that `getSubCardEntry` exists only on the **storage** contract,
+// not logic. `policy-address-verifier.ts`'s Script C calls
+// `registry.getSubCardEntry(...)`, which will therefore still fail against
+// `logicAddr` even after this casing fix — fixing that needs a second,
+// storage-contract-address-aware client (`GovScriptConfig` has no
+// `storageContractAddress` field at all today), a real but separate
+// change from what this fix addresses. Left declared here (camelCase-
+// correct, for whenever that follow-up lands) but not wired to the right
+// contract.
 const LOGIC_ABI = parseAbi([
   // ── DNS governance write operations (script-authorized, §4.17–4.21, §4.23) ─
-  'function RegisterDomain(bytes domain, bytes32 admin_card_address, bytes admin_secp256r1_key, bytes governance_payload, bytes[] governance_sigs) external',
-  'function DeregisterDomain(bytes domain, bytes governance_payload, bytes[] governance_sigs) external',
-  'function RemovePolicyAddress(bytes domain, bytes path, bytes32 card_address, bytes32 press_address, bytes press_sig_payload, bytes press_signature, bytes governance_payload, bytes[] governance_sigs) external',
-  'function ClearDomainEntries(bytes domain, bytes[] paths, bytes governance_payload, bytes[] governance_sigs) external',
-  'function GovernanceSetPolicyAddress(bytes domain, bytes path, bytes32 policy_card_address, bytes governance_payload, bytes[] governance_sigs) external',
+  'function registerDomain(uint8[] domain, bytes32 admin_card_address, uint8[] admin_secp256r1_key, uint8[] governance_payload, uint8[][] governance_sigs) external',
+  'function deregisterDomain(uint8[] domain, uint8[] governance_payload, uint8[][] governance_sigs) external',
+  'function removePolicyAddress(uint8[] domain, uint8[] path, bytes32 card_address, bytes32 press_address, uint8[] press_sig_payload, uint8[] press_signature, uint8[] governance_payload, uint8[][] governance_sigs) external',
+  'function clearDomainEntries(uint8[] domain, uint8[][] paths, uint8[] governance_payload, uint8[][] governance_sigs) external',
+  'function governanceSetPolicyAddress(uint8[] domain, uint8[] path, bytes32 policy_card_address, uint8[] governance_payload, uint8[][] governance_sigs) external',
 
   // ── DNS governance write operations (board-only, §4.22, §4.24) ───────────
   // These are NOT called by scripts; payloads are generated for human operators.
-  'function FlagDomainFraudRisk(bytes domain, uint8 fraud_risk, uint64 suspension_expires_at, bytes governance_payload, bytes[] governance_sigs) external',
-  'function SetDnsGovernancePolicyAddress(bytes32 new_policy_address, bytes governance_payload, bytes[] governance_sigs) external',
+  'function flagDomainFraudRisk(uint8[] domain, uint8 fraud_risk, uint64 suspension_expires_at, uint8[] governance_payload, uint8[][] governance_sigs) external',
+  'function setDnsGovernancePolicyAddress(bytes32 new_policy_address, uint8[] governance_payload, uint8[][] governance_sigs) external',
 
   // ── Read operations ───────────────────────────────────────────────────────
-  'function GetCardEntry(bytes32 card_address) external view returns (bytes log_head_cid, bytes32 policy_address, bytes32 last_press_address, bytes32 forward_to, bool exists)',
-  'function CardExists(bytes32 card_address) external view returns (bool)',
-  'function GetSubCardEntry(bytes32 sub_card_address) external view returns (bytes32 master_card_address, bytes registration_log_head, bytes sub_card_doc_cid, bool active, uint64 registered_at, uint64 deregistered_at)',
-  'function GetDomainRegistration(bytes domain) external view returns (bytes32 admin_card_address, uint64 registered_at, uint8 fraud_risk, uint64 suspension_expires_at, bool exists)',
-  'function GetGovernanceKeyset(uint8 body_id) external view returns (bytes keys_flat, uint8 key_count, uint8 quorum, uint32 version, uint8 key_scheme)',
-  'function IsNonceUsed(bytes32 nonce) external view returns (bool)',
-  'function GetPressAuthorization(bytes32 policy_address, bytes32 press_address) external view returns (bytes press_public_key, bytes32 mldsa44_key_hash, uint8 key_scheme, bool active, uint64 next_sequence, uint64 authorized_at, uint64 revoked_at)',
-  'function LookupPolicyAddress(bytes domain, bytes path) external view returns (bytes32)',
-  'function GetDnsAdminCardKey(bytes32 card_address) external view returns (bytes)',
+  'function getCardEntry(bytes32 card_address) external view returns ((uint8[] log_head_cid, bytes32 policy_address, bytes32 last_press_address, bytes32 forward_to, bool exists) r)',
+  'function cardExists(bytes32 card_address) external view returns (bool)',
+  'function getSubCardEntry(bytes32 sub_card_address) external view returns ((bytes32 master_card_address, uint8[] registration_log_head, uint8[] sub_card_doc_cid, bool active, uint64 registered_at, uint64 deregistered_at) r)',
+  'function getDomainRegistration(uint8[] domain) external view returns (bytes32 admin_card_address, uint64 registered_at, uint8 fraud_risk, uint64 suspension_expires_at, bool exists)',
+  'function getGovernanceKeyset(uint8 body_id) external view returns ((uint8[] keys_flat, uint8 key_count, uint8 quorum, uint32 version, uint8 key_scheme) r)',
+  'function getPressAuthorization(bytes32 policy_address, bytes32 press_address) external view returns ((uint8[] press_public_key, bytes32 mldsa44_key_hash, uint8 key_scheme, bool active, uint64 next_sequence, uint64 authorized_at, uint64 revoked_at) r)',
+  'function lookupPolicyAddress(uint8[] domain, uint8[] path) external view returns (bytes32)',
+  'function getDnsAdminCardKey(bytes32 card_address) external view returns (uint8[])',
 ]);
 
 // DnsGovernanceBody body_id = 2
@@ -167,11 +199,11 @@ export function createDnsGovRegistryClient(config: GovScriptConfig): DnsGovRegis
     const result = await publicClient.readContract({
       address: config.registryAddress,
       abi: LOGIC_ABI,
-      functionName: 'GetGovernanceKeyset',
+      functionName: 'getGovernanceKeyset',
       args: [DNS_GOVERNANCE_BODY],
     });
-    const [,,,version] = result as unknown as [Uint8Array, number, number, number, number];
-    return version;
+    const r = result as { keys_flat: readonly number[]; key_count: number; quorum: number; version: number; key_scheme: number };
+    return r.version;
   }
 
   function toBase64url(bytes: Uint8Array): string {
@@ -194,6 +226,16 @@ export function createDnsGovRegistryClient(config: GovScriptConfig): DnsGovRegis
   function hexBytesResult(result: unknown): Uint8Array {
     if (typeof result === 'string') return hexToBytes(result as Hex);
     return new Uint8Array(result as ArrayBuffer);
+  }
+
+  /**
+   * `uint8[]` ABI parameters (Stylus's `Vec<u8>` encoding — see this file's
+   * LOGIC_ABI comment) need a plain `number[]`, not a raw `Uint8Array`, for
+   * viem's ABI encoder — same conversion `governanceBootstrap.ts` and
+   * `dns_governance_verifier.spec.ts` already use for the identical reason.
+   */
+  function bytesToUint8Array(bytes: Uint8Array): number[] {
+    return Array.from(bytes);
   }
 
   function keccak256(input: Uint8Array): Uint8Array {
@@ -262,8 +304,8 @@ export function createDnsGovRegistryClient(config: GovScriptConfig): DnsGovRegis
     const result = await publicClient.readContract({
       address: logicAddr,
       abi: LOGIC_ABI,
-      functionName: 'GetDomainRegistration',
-      args: [bytesToHex(new TextEncoder().encode(domain))],
+      functionName: 'getDomainRegistration',
+      args: [bytesToUint8Array(new TextEncoder().encode(domain))],
     });
     const [admin, regAt, fr, sus, exists] = result as unknown as [Hex, bigint, number, bigint, boolean];
     return { adminCardAddress: admin, registeredAt: regAt, fraudRisk: fr, suspensionExpiresAt: sus, exists };
@@ -273,37 +315,56 @@ export function createDnsGovRegistryClient(config: GovScriptConfig): DnsGovRegis
     const result = await publicClient.readContract({
       address: logicAddr,
       abi: LOGIC_ABI,
-      functionName: 'GetCardEntry',
+      functionName: 'getCardEntry',
       args: [cardAddress],
     });
-    const [cid, policy, press, fwd, exists] = result as unknown as [Uint8Array, Hex, Hex, Hex, boolean];
-    return { logHeadCid: new Uint8Array(cid), policyAddress: policy, lastPressAddress: press, forwardTo: fwd, exists };
+    const r = result as { log_head_cid: readonly number[]; policy_address: Hex; last_press_address: Hex; forward_to: Hex; exists: boolean };
+    return {
+      logHeadCid: new Uint8Array(r.log_head_cid),
+      policyAddress: r.policy_address,
+      lastPressAddress: r.last_press_address,
+      forwardTo: r.forward_to,
+      exists: r.exists,
+    };
   }
 
   async function cardExists(cardAddress: Hex): Promise<boolean> {
     return publicClient.readContract({
       address: logicAddr,
       abi: LOGIC_ABI,
-      functionName: 'CardExists',
+      functionName: 'cardExists',
       args: [cardAddress],
     }) as Promise<boolean>;
   }
 
+  // KNOWN RESIDUAL BUG, not fixed here — see this file's LOGIC_ABI comment:
+  // getSubCardEntry does not exist on the logic contract at all (confirmed
+  // via `cargo stylus export-abi`; it's storage-contract-only). This call
+  // will fail regardless of the casing fix below, since `logicAddr` is the
+  // wrong contract — fixing that needs a storage-contract-aware client,
+  // out of scope for this pass.
   async function getSubCardEntry(subCardAddress: Hex): Promise<SubCardEntry> {
     const result = await publicClient.readContract({
       address: logicAddr,
       abi: LOGIC_ABI,
-      functionName: 'GetSubCardEntry',
+      functionName: 'getSubCardEntry',
       args: [subCardAddress],
     });
-    const [master, regHead, docCid, active, regAt, deregAt] = result as unknown as [Hex, Uint8Array, Uint8Array, boolean, bigint, bigint];
+    const r = result as {
+      master_card_address: Hex;
+      registration_log_head: readonly number[];
+      sub_card_doc_cid: readonly number[];
+      active: boolean;
+      registered_at: bigint;
+      deregistered_at: bigint;
+    };
     return {
-      masterCardAddress: master,
-      registrationLogHead: new Uint8Array(regHead),
-      subCardDocCid: new Uint8Array(docCid),
-      active,
-      registeredAt: regAt,
-      deregisteredAt: deregAt,
+      masterCardAddress: r.master_card_address,
+      registrationLogHead: new Uint8Array(r.registration_log_head),
+      subCardDocCid: new Uint8Array(r.sub_card_doc_cid),
+      active: r.active,
+      registeredAt: r.registered_at,
+      deregisteredAt: r.deregistered_at,
     };
   }
 
@@ -311,10 +372,10 @@ export function createDnsGovRegistryClient(config: GovScriptConfig): DnsGovRegis
     const result = await publicClient.readContract({
       address: logicAddr,
       abi: LOGIC_ABI,
-      functionName: 'GetDnsAdminCardKey',
+      functionName: 'getDnsAdminCardKey',
       args: [cardAddress],
     });
-    return hexBytesResult(result);
+    return new Uint8Array(result as ArrayLike<number>);
   }
 
   async function getLatestBlock(): Promise<bigint> {
@@ -370,53 +431,65 @@ export function createDnsGovRegistryClient(config: GovScriptConfig): DnsGovRegis
     adminCardAddress: Hex,
     adminSecpKey: Uint8Array,
   ): Promise<Hex> {
-    const domainBytes = new TextEncoder().encode(domain);
+    const domainBytes = bytesToUint8Array(new TextEncoder().encode(domain));
     const { payloadBytes, sig } = await buildGovPayload('register_domain', {
       domain,
       admin_card_address: toBase64url(hexToBytes(adminCardAddress)),
       admin_secp256r1_key: toBase64url(adminSecpKey),
     });
-    return submitGovTx('RegisterDomain', [domainBytes, adminCardAddress, adminSecpKey, payloadBytes, [sig]]);
+    return submitGovTx('registerDomain', [
+      domainBytes,
+      adminCardAddress,
+      bytesToUint8Array(adminSecpKey),
+      bytesToUint8Array(payloadBytes),
+      [bytesToUint8Array(sig)],
+    ]);
   }
 
   async function deregisterDomain(domain: string): Promise<Hex> {
-    const domainBytes = new TextEncoder().encode(domain);
+    const domainBytes = bytesToUint8Array(new TextEncoder().encode(domain));
     const { payloadBytes, sig } = await buildGovPayload('deregister_domain', { domain });
-    return submitGovTx('DeregisterDomain', [domainBytes, payloadBytes, [sig]]);
+    return submitGovTx('deregisterDomain', [domainBytes, bytesToUint8Array(payloadBytes), [bytesToUint8Array(sig)]]);
   }
 
   async function removePolicyAddressGov(domain: string, path: string): Promise<Hex> {
-    const domainBytes = new TextEncoder().encode(domain);
-    const pathBytes = new TextEncoder().encode(path);
+    const domainBytes = bytesToUint8Array(new TextEncoder().encode(domain));
+    const pathBytes = bytesToUint8Array(new TextEncoder().encode(path));
     const { payloadBytes, sig } = await buildGovPayload('remove_policy_address', { domain, path });
     // Governance path: card_address = zero, press fields = empty
-    return submitGovTx('RemovePolicyAddress', [
+    return submitGovTx('removePolicyAddress', [
       domainBytes, pathBytes,
       '0x' + '00'.repeat(32),  // card_address = zero (governance path)
       '0x' + '00'.repeat(32),  // press_address = zero
-      new Uint8Array(0),        // press_sig_payload = empty
-      new Uint8Array(0),        // press_signature = zero
-      payloadBytes,
-      [sig],
+      [] as number[],           // press_sig_payload = empty
+      [] as number[],           // press_signature = empty
+      bytesToUint8Array(payloadBytes),
+      [bytesToUint8Array(sig)],
     ]);
   }
 
   async function clearDomainEntries(domain: string, paths: string[]): Promise<Hex> {
-    const domainBytes = new TextEncoder().encode(domain);
-    const pathsBytes = paths.map(p => new TextEncoder().encode(p));
+    const domainBytes = bytesToUint8Array(new TextEncoder().encode(domain));
+    const pathsBytes = paths.map(p => bytesToUint8Array(new TextEncoder().encode(p)));
     const { payloadBytes, sig } = await buildGovPayload('clear_domain_entries', { domain, paths });
-    return submitGovTx('ClearDomainEntries', [domainBytes, pathsBytes, payloadBytes, [sig]]);
+    return submitGovTx('clearDomainEntries', [domainBytes, pathsBytes, bytesToUint8Array(payloadBytes), [bytesToUint8Array(sig)]]);
   }
 
   async function governanceSetPolicyAddressAuto(domain: string, path: string, value: Hex): Promise<Hex> {
-    const domainBytes = new TextEncoder().encode(domain);
-    const pathBytes = new TextEncoder().encode(path);
+    const domainBytes = bytesToUint8Array(new TextEncoder().encode(domain));
+    const pathBytes = bytesToUint8Array(new TextEncoder().encode(path));
     const { payloadBytes, sig } = await buildGovPayload('governance_set_policy_address', {
       domain,
       path,
       policy_card_address: toBase64url(hexToBytes(value)),
     });
-    return submitGovTx('GovernanceSetPolicyAddress', [domainBytes, pathBytes, value, payloadBytes, [sig]]);
+    return submitGovTx('governanceSetPolicyAddress', [
+      domainBytes,
+      pathBytes,
+      value,
+      bytesToUint8Array(payloadBytes),
+      [bytesToUint8Array(sig)],
+    ]);
   }
 
 

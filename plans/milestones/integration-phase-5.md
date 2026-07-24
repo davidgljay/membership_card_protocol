@@ -94,11 +94,30 @@ tests, both full-suite runs), "every open failure" here means every
   of them, but the practice itself is what makes that clean record
   credible rather than assumed.
 
+## Checkpoint outcome
+
+Reviewed same day. Decision: fix both `fix-now` candidates immediately
+rather than deferring.
+
+- **Oblivious transport path convention**: `press/src/ohttp-router.ts`'s
+  dispatch table re-keyed to match press's real `/api/*` routes, matching
+  the Envelope Format spec section's own definition of `path`. Press's
+  own unit tests updated and green (172 tests);
+  `extended/oblivious_transport.spec.ts`'s bypass-mode test no longer
+  needs its `it.todo`.
+- **DNS governance ABI casing**: `governance/scripts/registry.ts`'s
+  `LOGIC_ABI` fixed to camelCase/`uint8[]`, mirroring the exact pattern
+  already proven correct in `press/src/chain/registry.ts`. Verified live
+  (not just typechecked) against the real deployed contract. One new,
+  smaller residual issue found and documented, not fixed:
+  `getSubCardEntry` targets the wrong contract entirely (logic, not
+  storage) — deferred as its own item, since fixing it needs a
+  storage-contract-aware client, a real but separate change.
+
+Full integration suite (23 files) reconfirmed green twice consecutively
+after both fixes: 204 tests passing, 51 `it.todo` (one fewer than before
+the oblivious-transport fix).
+
 ## What's next
 
-**⛔ Checkpoint (per the implementation plan):** before Phase 6 (CI
-gating) begins, review `integration_tests/reports/2026-07-23-full-coverage.md`
-and decide on the 2 `fix-now` candidates and the smaller `defer` items.
-Once resolved, Phase 6 (entry-point script and CI gating) has nothing
-blocking it — a red suite wired into CI would block all deploys, per the
-plan's own note on why this checkpoint exists before that step.
+Phase 6 (entry-point script and CI gating) is unblocked.

@@ -139,17 +139,21 @@ than it claims.
    label), not a quick fix; scope it separately rather than folding into
    this checkpoint.
 2. **`oblivious_transport.md` — `RequestOptions.path` isn't portable
-   between oblivious and bypass modes.** `HpkeObliviousProtocolTransport`'s
-   bypass mode calls `${baseUrl}${path}` directly, but press's real HTTP
-   routes live under `/api/*` while the OHTTP gateway's internal dispatch
-   table uses bare paths (`/issue`, not `/api/issue`) — confirmed live
-   with curl (`/api/issue` → 400, real route; `/issue` → 404, doesn't
-   exist outside the gateway). Contradicts the class's own doc comment
-   ("producing an identical application-level result"). **Triage: fix-now
-   candidate** — small, well-understood (either the gateway's dispatch
-   table should match press's real paths, or `#directRequest` should
-   prefix `/api`), a design call for whoever owns `app-sdk`'s transport
-   layer.
+   between oblivious and bypass modes — FIXED 2026-07-23.**
+   `HpkeObliviousProtocolTransport`'s bypass mode calls `${baseUrl}${path}`
+   directly, but press's real HTTP routes live under `/api/*` while the
+   OHTTP gateway's internal dispatch table used bare paths (`/issue`, not
+   `/api/issue`). Fixed by re-keying `press/src/ohttp-router.ts`'s
+   dispatch table to `/api/*`, matching the Envelope Format section's own
+   definition of `path` ("the destination route path", illustrated with
+   wallet-service's real `/accounts/challenge`) — not by changing
+   `#directRequest`, since wallet-service's own routes have no `/api`
+   prefix and a fix there would have broken wallet-service bypass calls.
+   Updated press's own `ohttp-router.test.ts`/`ohttp-gateway.test.ts`
+   (172 press tests still green) and `oblivious_transport.spec.ts` to
+   match; the suite's bypass-mode test now uses the same `/api/issue`
+   path for both modes and no longer needs an `it.todo`. **Triage:
+   fix-now — done.**
 3. **`wallet_backup_and_recovery.md` — two smaller gaps**: `client-sdk`'s
    `initiateRecovery` can't surface the server's intentional idempotent
    `409` (existing recovery window) — the shared `requestJson` helper
@@ -159,15 +163,36 @@ than it claims.
    wallet-service actually does that. **Triage: defer** — both are
    real but narrow, neither blocking.
 4. **`dns_governance_verifier.md` — `governance/scripts/registry.ts`'s
-   `LOGIC_ABI` is unusable against the real deployed contract.**
-   PascalCase function names and `bytes`/`bytes[]` param types where the
-   real contract (confirmed via `cargo stylus export-abi`) dispatches
-   camelCase with `uint8[]`/`uint8[][]` — the same class of ABI-casing bug
-   already fixed in `press/src/chain/registry.ts` back in Phase 1, never
-   applied to this sibling file. Every write method on
-   `createDnsGovRegistryClient` would fail live. **Triage: fix-now
-   candidate** — small, mechanical, exact fix pattern already proven
-   correct elsewhere in this codebase (Phase 1's press ABI fix).
+   `LOGIC_ABI` is unusable against the real deployed contract — FIXED
+   2026-07-23.** PascalCase function names and `bytes`/`bytes[]` param
+   types where the real contract (confirmed via `cargo stylus
+   export-abi`, re-run for this fix) dispatches camelCase with
+   `uint8[]`/`uint8[][]` — the same class of ABI-casing bug already fixed
+   in `press/src/chain/registry.ts` back in Phase 1, never applied to
+   this sibling file. Every write method on `createDnsGovRegistryClient`
+   would have failed live; the three reads mixing `uint8[]` into an
+   otherwise-scalar tuple (`getCardEntry`, `getGovernanceKeyset`,
+   `getSubCardEntry`) would also have mis-decoded (the same
+   "extra 32-byte outer tuple offset" quirk press's own registry.ts
+   already documents and works around with a struct-wrapped return —
+   applied the same fix here). Also fixed the `uint8[]`-argument encoding
+   (needs a plain `number[]` via `Array.from`, not a raw `Uint8Array`,
+   for viem's ABI encoder — same conversion already used elsewhere this
+   session). Verified live (not just typechecked): a throwaway script
+   calling the fixed `createDnsGovRegistryClient`'s `getDomainRegistration`/
+   `getCardEntry` against the real local chain both correctly decoded
+   `exists: false` for never-registered records — under the old ABI
+   these calls would have hit Stylus's unrecognized-selector fallback
+   (revert or garbage decode), not a clean result.
+   **Known residual issue, NOT fixed** (documented in the file itself,
+   out of scope for an ABI-casing fix): `getSubCardEntry` doesn't exist
+   on the *logic* contract at all — confirmed via the same `cargo stylus
+   export-abi` run — it's storage-contract-only, and `GovScriptConfig`
+   has no storage-contract-address field to route it there. Script C
+   (`policy-address-verifier.ts`) calls this and will still fail; a real,
+   separate fix (a storage-contract-aware client) is needed for that.
+   **Triage: fix-now — done** (the casing/type bug); the wrong-contract
+   issue is a new, smaller `defer` item.
 5. **`relay_data_model.md`**: no new bugs, only the environment
    limitations already listed above.
 6. **`ipfs_card.md`/`matrix_encryption.md`/`card_verifier.md`
@@ -176,15 +201,16 @@ than it claims.
 
 ## Summary for the checkpoint
 
-- **fix-now candidates:** #2 (oblivious transport path convention), #4
-  (DNS governance ABI casing) — both small, mechanical, with an
-  already-proven fix pattern (the ABI one is *literally* the same bug
-  class already fixed once this session in a sibling file).
+- **fix-now:** #2 (oblivious transport path convention) — **done**. #4
+  (DNS governance ABI casing) — **done**, verified live against the real
+  deployed contract, not just typechecked.
 - **defer:** #1 (sub-card deregistration signer paths — sized like real
   feature work, not a quick fix), #3's two sub-items (recovery
-  409-surfacing, backup-key-rotation postcondition).
+  409-surfacing, backup-key-rotation postcondition), and #4's residual
+  wrong-contract issue for `getSubCardEntry` (needs a storage-contract-
+  aware client, a real but separate change from the casing fix).
 - **environment, not code:** the four recurring limitations above — no
   action item, just context for reading every "⚠️ partial" row honestly.
 
-No blocking issues for Phase 6 (CI gating) to begin, once the checkpoint
-below is resolved.
+No blocking issues remain for Phase 6 (CI gating) to begin. Both
+fix-now items are resolved.

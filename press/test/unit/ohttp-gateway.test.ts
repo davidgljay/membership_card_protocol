@@ -47,20 +47,20 @@ describe('press ohttp-gateway (client-sdk implementation plan Step 1.4d)', () =>
 
     // Confirm the derived public key is actually usable for HPKE (not just
     // structurally present) by sealing a message to it.
-    const { body } = await sealAsClient(config.publicKey, { path: '/issue', method: 'POST' });
+    const { body } = await sealAsClient(config.publicKey, { path: '/api/issue', method: 'POST' });
     expect(body.enc.length).toBeGreaterThan(0);
   });
 
   it('round-trips a full request/response exchange end-to-end', async () => {
     const config = getKeyConfig(TEST_CONFIG, 'press-address-1');
     const { body, openResponse } = await sealAsClient(config.publicKey, {
-      path: '/open-offer/claim',
+      path: '/api/open-offer/claim',
       method: 'POST',
       body: Buffer.from(JSON.stringify({ example: true })).toString('base64url'),
     });
 
     const { envelope, encapsulateResponse } = await decapsulate(TEST_CONFIG, body);
-    expect(envelope.path).toBe('/open-offer/claim');
+    expect(envelope.path).toBe('/api/open-offer/claim');
     expect(JSON.parse(Buffer.from(envelope.body!, 'base64url').toString())).toEqual({ example: true });
 
     const sealedResponse = await encapsulateResponse({ status: 200, headers: {} });
