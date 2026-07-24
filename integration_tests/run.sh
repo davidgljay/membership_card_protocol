@@ -18,6 +18,11 @@
 #                         (path relative to suites/, .spec.ts optional).
 #                         Implies --integration-only unless combined with
 #                         no other flag alongside a full run.
+#
+# Known, currently-red steps NOT caused by this script: wallet-service's
+# and client-sdk's own unit-test suites have pre-existing gaps unrelated
+# to run.sh's own orchestration (see reports/2026-07-24-unit-test-gaps.md)
+# -- expect those two steps to fail until that's separately fixed.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -70,14 +75,49 @@ run_unit_tests() {
   echo ""
   echo "########## Unit tests ##########"
 
-  step "contracts: cargo test --workspace" \
-    bash -c "cd '$ROOT/contracts' && cargo test --workspace"
+  # Scoped to protocol-types only, not `cargo test --workspace`: the other
+  # three crates (verifier-module, storage-contract, logic-contract) depend
+  # on stylus-sdk, whose host functions (account_balance, storage_load_bytes32,
+  # etc.) are provided by the Stylus/WASM VM at runtime and have no native
+  # implementation -- linking a native test binary for them fails with
+  # "undefined symbols for architecture arm64" (confirmed live). protocol-types
+  # is the only crate with no Stylus dependency and can compile+link natively
+  # (0 tests exist today, but this is the correct scope for any that get
+  # added). The Stylus crates are verified via the deployed-contract
+  # integration suites instead, not native cargo test -- see
+  # reports/phase-1-environment-notes.md.
+  step "contracts: cargo test -p protocol-types" \
+    bash -c "cd '$ROOT/contracts' && cargo test -p protocol-types"
 
-  step "press: npm test" \
-    bash -c "cd '$ROOT/press' && npm ci && npm run typecheck && npm test"
+  # press/wallet-service use pnpm (pnpm-lock.yaml only, no package-lock.json)
+  # -- `npm ci` here would fail with EUSAGE (confirmed live).
+  step "press: pnpm test" \
+    bash -c "cd '$ROOT/press' && pnpm install --frozen-lockfile && pnpm run typecheck && pnpm test"
 
-  step "wallet-service: npm test" \
-    bash -c "cd '$ROOT/wallet-service' && npm ci && npm run typecheck && npm test"
+  # wallet-service's own test suite needs a real Postgres, migrations run
+  # first, and a batch of env vars (webcrypto secrets backend, WebAuthn
+  # RP/origin, a dummy wallet-service signing identity, etc.) -- confirmed
+  # empirically: 83 of 231 tests fail without them. Mirrors
+  # .github/workflows/wallet-service-ci.yml's own job env/steps exactly
+  # (values there are already committed, non-secret CI fixtures, not real
+  # credentials) rather than inventing a second copy of this setup. Values
+  # live in env/wallet-service/unit-test.env, not inlined here, so this
+  # script doesn't carry a long secret-shaped string directly in a shell
+  # command.
+  step "wallet-service: pnpm test" \
+    bash -c "cd '$ROOT/wallet-service' && \
+      docker rm -f run-sh-wallet-service-pg >/dev/null 2>&1 || true; \
+      docker run -d --rm -p 5433:5432 --name run-sh-wallet-service-pg \
+        -e POSTGRES_USER=wallet_service -e POSTGRES_PASSWORD=wallet_service -e POSTGRES_DB=wallet_service \
+        postgres:16 >/dev/null && \
+      trap 'docker rm -f run-sh-wallet-service-pg >/dev/null 2>&1' EXIT && \
+      until docker exec run-sh-wallet-service-pg pg_isready -U wallet_service >/dev/null 2>&1; do sleep 1; done && \
+      set -a && source '$INTEGRATION_DIR/env/wallet-service/unit-test.env' && set +a && \
+      export DATABASE_URL=postgres://wallet_service:wallet_service@localhost:5433/wallet_service && \
+      pnpm install --frozen-lockfile && \
+      pnpm run typecheck && \
+      pnpm exec node-pg-migrate --migrations-dir server/db/migrations up --database-url-var DATABASE_URL && \
+      pnpm test"
 
   # relay has no "typecheck" script of its own (unlike press/wallet-service)
   # -- npx tsc --noEmit here does the same check `build` (tsc) would as a
