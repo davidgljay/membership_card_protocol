@@ -11,8 +11,14 @@ on:
       - '.github/workflows/wallet-service-ci.yml'
 
 jobs:
+  # Phase 6.3: gates this on the full integration suite in parallel with
+  # wallet-service's own unit tests -- see integration-tests.yml.
+  integration-tests:
+    uses: ./.github/workflows/integration-tests.yml
+
   ci:
     runs-on: ubuntu-latest
+    needs: integration-tests
     defaults:
       run:
         working-directory: wallet-service

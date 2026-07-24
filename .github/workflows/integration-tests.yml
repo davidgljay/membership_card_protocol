@@ -1,0 +1,65 @@
+name: Integration Tests
+
+# Runs integration_tests/run.sh — every component's own unit tests, then the
+# full docker-compose stack + every suite/harness. See
+# plans/integration-testing-implementation-plan.md Phase 6.
+#
+# No direct `push` trigger: this workflow is invoked two ways, and a bare
+# `push` trigger alongside `workflow_call` would double-run it on every push
+# to main (once standalone, once via the calling deploy workflow).
+#   - `pull_request` — gates PRs directly.
+#   - `workflow_call` — gates deploy workflows (6.3: relay-deploy.yml,
+#     wallet-service-ci.yml, client-sdk-ci.yml, publish-verifier.yml each
+#     add a job that `uses: ./.github/workflows/integration-tests.yml` and
+#     make their deploy job `needs:` it).
+#   - `workflow_dispatch` — manual runs, same convention as relay-deploy.yml.
+on:
+  pull_request: {}
+  workflow_call: {}
+  workflow_dispatch: {}
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    # The full pyramid (every component's unit tests + the whole stack +
+    # every suite/harness) comfortably exceeds the 60-minute GitHub Actions
+    # default job timeout on a cold cache.
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # contracts/rust-toolchain.toml pins the exact channel + wasm32 target
+      # `cargo test --workspace` (run by run.sh) needs; ubuntu-latest ships
+      # rustup, which reads that file automatically on the first `cargo`
+      # invocation inside contracts/ — no explicit toolchain install step
+      # needed here, only the cache.
+      - name: Cache cargo registry + build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('contracts/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # run.sh's own steps each do their own `npm ci`/`pnpm install`/`pip
+      # install` (see run.sh's header comment: designed to work the same
+      # from a clean checkout as on a dev machine with dependencies already
+      # present) — nothing else to install here beyond the toolchains above.
+      - name: Run integration_tests/run.sh
+        run: ./integration_tests/run.sh

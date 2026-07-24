@@ -23,6 +23,13 @@ on:
   workflow_dispatch: {}
 
 jobs:
+  # Phase 6.3: gates this deploy on the full integration suite, not just
+  # relay's own unit tests below -- a relay change can pass its own tests
+  # while still breaking press/wallet-service/relay cross-component flows
+  # (oblivious transport, matrix relay routing, etc).
+  integration-tests:
+    uses: ./.github/workflows/integration-tests.yml
+
   test:
     name: Test
     runs-on: ubuntu-latest
@@ -109,6 +116,7 @@ jobs:
     needs:
       - test
       - validate-secrets
+      - integration-tests
     defaults:
       run:
         working-directory: relay
