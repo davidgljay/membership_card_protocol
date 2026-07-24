@@ -144,7 +144,7 @@ export async function handleSubCardRegister(
   try {
     policy = await fetchPolicyCard(ctx.ipfs, policyCid);
   } catch {
-    policy = { field_definitions: {}, approved_presses: [] } as import('../types.js').PolicyDocument;
+    policy = { policy_id: policyCid, field_definitions: {}, approved_presses: [] };
   }
   await recordWrite(ctx.kv, 'register_sub_card', holderAddress, 'holder', policyCid, policy);
   await recordWrite(ctx.kv, 'register_sub_card_app', appCardAddress, 'app_card', policyCid, policy);

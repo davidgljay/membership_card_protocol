@@ -26,7 +26,12 @@ function fakeRpc(overrides: Partial<RpcProvider> = {}): RpcProvider {
     isPolicyAuthorizer: async () => false,
     getPressAuthorization: async () => null,
     getSubCardEntry: async () => null,
-    getLogEntries: async () => [],
+    // A single genesis entry matching getCardEntry's log_head_cid ('') --
+    // stage4.ts treats an empty event log as "no content available" and
+    // reports is_currently_valid: 'skipped' rather than a real true/false,
+    // which isn't what this fixture (a card meant to look fully resolved)
+    // is testing.
+    getCardEventLog: async () => [{ cid: '', timestamp: '2026-01-01T00:00:00.000Z' }],
     getEasAnnotations: async () => [],
     ...overrides,
   };

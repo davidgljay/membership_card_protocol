@@ -61,6 +61,7 @@ function makeCardVerifier(
           signer_card: '0xexpected',
           scope_clean: 'skipped',
           chain_reaches_trusted_root: true,
+          chain_card_addresses: chain.map((link) => link.card_address),
           app_card_chain_valid: 'skipped',
           revocation: { status: 'not_revoked', code: null, effective_date: null, data_freshness_seconds: 0 },
           was_valid_at_signing_time: true,

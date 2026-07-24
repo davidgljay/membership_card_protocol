@@ -26,7 +26,14 @@ function makeFakeWalletAppCard(): WalletAppCardIdentity {
 
 describe('submitSubCardRegistration', () => {
   it('POSTs the document to /sub-card/register via the destination-parameterized transport and parses the response', async () => {
-    const document = { fake: 'document' } as unknown as SignedSubCardDocument;
+    // holder_signature must be a real, present field here: the request
+    // body is built by splitting it off the rest of the document into a
+    // sibling top-level field (see pressSubmission.ts's own
+    // toPressRequestBody doc comment for why press's wire format wants
+    // `{ sub_card_document, holder_signature }` rather than the flat
+    // SignedSubCardDocument shape this package uses internally).
+    const { fake, holder_signature } = { fake: 'document', holder_signature: 'sig-abc' };
+    const document = { fake, holder_signature } as unknown as SignedSubCardDocument;
     const calls: Array<{ destination: ObliviousDestination; options: RequestOptions }> = [];
     const transport: ObliviousProtocolTransport = {
       request: vi.fn(async (destination, options) => {
@@ -43,7 +50,7 @@ describe('submitSubCardRegistration', () => {
     expect(calls[0]!.options.path).toBe('/sub-card/register');
     expect(calls[0]!.options.method).toBe('POST');
     const sentBody = JSON.parse(new TextDecoder().decode(calls[0]!.options.body));
-    expect(sentBody).toEqual(document);
+    expect(sentBody).toEqual({ sub_card_document: { fake }, holder_signature });
   });
 
   it('throws on a non-2xx response', async () => {

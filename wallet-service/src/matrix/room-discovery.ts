@@ -148,14 +148,16 @@ function entryConditions(entry: RoomPredicatePolicyEntry): PolicyMatchConditions
  * `predicates.py`'s `evaluate_room_predicate` / client-sdk's
  * `evaluateRoomPredicate`, ported: true if the chain was issued under *any*
  * policy entry in the room's predicate document (and satisfies that
- * entry's `field_match`, if present). An entry whose `evaluatePolicyMatch`
- * returns `false` (or, in principle, `null` — can't happen here since every
- * entry always supplies a `policy_id`) is treated as non-matching; "no
- * entry matched" denies, per this endpoint's deny-by-default posture.
+ * entry's `field_match`, if present). `evaluatePolicyMatch` returns a
+ * `PolicyMatchResult | null` (reason codes added for observability, not a
+ * plain boolean) — `{ matched: false, ... }` (or, in principle, `null` —
+ * can't happen here since every entry always supplies a `policy_id`) is
+ * treated as non-matching; "no entry matched" denies, per this endpoint's
+ * deny-by-default posture.
  */
 export function evaluateRoomPredicate(predicateDocument: RoomPredicateDocument, chain: ChainLink[]): boolean {
   for (const entry of predicateDocument.policies ?? []) {
-    if (evaluatePolicyMatch(chain, entryConditions(entry)) === true) {
+    if (evaluatePolicyMatch(chain, entryConditions(entry))?.matched === true) {
       return true;
     }
   }
