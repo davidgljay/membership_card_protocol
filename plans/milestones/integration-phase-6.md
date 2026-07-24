@@ -112,16 +112,38 @@ already prove the piece that's actually project-specific (that a broken
 test makes the *entry point* fail loudly); the `needs:` blocking mechanism
 itself is GitHub's, not this repo's, to re-verify.
 
+## Post-review fix: relay's `message-buffer.test.ts` flake
+
+Originally logged here as a known, out-of-scope gap ("failed once (103/104)
+... looks like a staggered-random-delay timing flake"). On investigation
+that diagnosis was wrong: the failure was deterministic (4/4 reproductions,
+including in complete file isolation, 558ms), not timing-sensitive at all.
+
+Root cause: `message-buffer.test.ts` sets `process.env.MAX_DELETE_DELAY_SECONDS
+= "0"` *after* its own `import { router } from "../../src/router.js"` line
+— but ES module imports are hoisted and evaluated before the importing
+module's own top-level statements run, regardless of source order. By the
+time that assignment executed, `src/routes/pending.ts`'s module-level
+`const MAX_DELETE_DELAY_SECONDS = parseInt(process.env.MAX_DELETE_DELAY_SECONDS
+?? "21600", 10)` had already frozen at the 6-hour default, so every `/ack`
+call in the test scheduled its delete job up to 6 hours in the future and
+the test's immediate `dequeuePendingDeletes()` call almost never found it.
+
+Fixed by reading the env var lazily inside the handler instead of freezing
+it as a module-level constant — removes the import-order hazard entirely.
+A second, real (but not the actual cause) test-isolation gap found during
+the investigation was hardened too: `failure-cases.test.ts`'s
+`runStartupChecks()` test starts the real wallet-clearance background job
+(a `setInterval` polling the same `pending_deletes` Redis key) and never
+stopped it; both that file and `message-buffer.test.ts` now call
+`stopWalletClearance()` so correctness doesn't depend on file execution
+order. Verified: relay's full suite (104 tests) green 4/4 consecutive runs
+against a real Redis. See the commit on `relay/src/routes/pending.ts`,
+`relay/tests/integration/failure-cases.test.ts`, and
+`relay/tests/integration/message-buffer.test.ts` for the full detail.
+
 ## Known gaps, not fixed here (deliberately out of scope)
 
-- **relay's `message-buffer.test.ts` "enqueues delete jobs for acked
-  UUIDs" is timing-sensitive** — failed once (103/104) in this phase's
-  live verification run against a real Redis. Looks like the same class
-  of staggered-random-delay flake the relay README's own "randomized
-  DELETE" cleanup mechanism would produce under a fast/serial test run.
-  Pre-existing in relay's own suite, not introduced by `run.sh` — a relay
-  product-code fix is out of this phase's scope (`run.sh` only
-  orchestrates existing test commands, per Clarification Checkpoint 2).
 - **No cross-run Docker layer cache in `integration-tests.yml`** — a
   cold-cache CI run rebuilds every image from scratch. Plan only asked
   for "cached" toolchains (Rust/Node/pnpm/pip), which are covered;
