@@ -1,6 +1,6 @@
 // Integration test harness: boots the REAL built node-server output
-// (`.output/server/index.mjs`, produced by `npm run build:node`) as a
-// child process and drives it over real HTTP.
+// (`.output-node-server/server/index.mjs`, produced by `npm run
+// build:node`) as a child process and drives it over real HTTP.
 //
 // This exists specifically to catch the class of bug where Nitro's
 // rollup-based bundler flattens two coexisting copies of a transitive
@@ -21,7 +21,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const outputEntry = path.resolve(__dirname, '../../.output/server/index.mjs');
+const outputEntry = path.resolve(__dirname, '../../.output-node-server/server/index.mjs');
 
 export interface NodeServerHarness {
   baseUrl: string;

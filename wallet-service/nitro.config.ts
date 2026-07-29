@@ -7,6 +7,18 @@ export default defineNitroConfig({
   preset: 'cloudflare-module',
   compatibilityDate: '2026-06-29',
   srcDir: 'server',
+  // Nitro doesn't namespace .output by preset, so building for one target
+  // (e.g. the default Cloudflare preset) silently overwrites another's
+  // artifact at .output/server/index.mjs. That collision broke
+  // test/integration/bundled-server-smoke.test.ts: it always spawns
+  // .output/server/index.mjs under plain Node, but a stray Cloudflare
+  // build left there (its entry imports the Workers-only `cloudflare:`
+  // scheme) makes plain Node fail with ERR_UNSUPPORTED_ESM_URL_SCHEME.
+  // Keying the output dir off NITRO_PRESET keeps each target's build
+  // artifact separate and unambiguous.
+  output: {
+    dir: `.output-${process.env['NITRO_PRESET'] ?? 'cloudflare-module'}`,
+  },
   cloudflare: {
     // pg (node-postgres) and node:crypto need real Node builtins, not
     // unenv polyfills. Requires compatibility_flags = ["nodejs_compat"] in

@@ -26,7 +26,7 @@ import { fileURLToPath } from 'node:url';
 import { startNodeServerHarness, type NodeServerHarness } from './node-server-harness.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const outputEntry = path.resolve(__dirname, '../../.output/server/index.mjs');
+const outputEntry = path.resolve(__dirname, '../../.output-node-server/server/index.mjs');
 const hasBuildOutput = existsSync(outputEntry);
 
 describe.runIf(hasBuildOutput)('bundled node-server smoke test', () => {
