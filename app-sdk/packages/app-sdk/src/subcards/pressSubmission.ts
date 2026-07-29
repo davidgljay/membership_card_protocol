@@ -62,7 +62,7 @@ export async function submitSubCardRegistration(
     { kind: 'press', baseUrl: options.pressBaseUrl },
     {
       method: 'POST',
-      path: '/sub-card/register',
+      path: '/api/sub-card/register',
       headers: { 'content-type': 'application/json' },
       body: new TextEncoder().encode(JSON.stringify(toPressRequestBody(document))),
     }

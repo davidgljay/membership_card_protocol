@@ -194,7 +194,7 @@ function makeStubWalletService() {
       // this same transport, exactly as recoverWallet's own deregistration
       // step calls it.
       if (destination.kind === 'press') {
-        if (method === 'POST' && path === '/sub-card/deregister') {
+        if (method === 'POST' && path === '/api/sub-card/deregister') {
           const body = readJsonBody(requestOptions);
           state.subCardDeregistrations.push({ baseUrl: destination.baseUrl, body });
           return jsonResponse(200, { tx_hash: `tx-${state.subCardDeregistrations.length}` });

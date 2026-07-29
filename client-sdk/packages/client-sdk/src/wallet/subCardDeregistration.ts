@@ -64,7 +64,7 @@ export async function deregisterSubCard(options: DeregisterSubCardOptions): Prom
     { kind: 'press', baseUrl: options.press.baseUrl },
     {
       method: 'POST',
-      path: '/sub-card/deregister',
+      path: '/api/sub-card/deregister',
       headers: { 'content-type': 'application/json' },
       body: new TextEncoder().encode(
         JSON.stringify({

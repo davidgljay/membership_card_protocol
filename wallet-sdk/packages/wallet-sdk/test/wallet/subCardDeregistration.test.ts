@@ -50,7 +50,7 @@ describe('deregisterSubCard', () => {
     const { destination, options } = calls[0]!;
     expect(destination).toEqual({ kind: 'press', baseUrl: 'https://press.example' });
     expect(options.method).toBe('POST');
-    expect(options.path).toBe('/sub-card/deregister');
+    expect(options.path).toBe('/api/sub-card/deregister');
 
     const body = readJsonBody(options);
     const expectedSubCardAddress = keccak256(subCardKeypair.publicKey);
