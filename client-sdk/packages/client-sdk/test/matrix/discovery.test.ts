@@ -366,7 +366,7 @@ describe('discoverRooms against a real CardVerifier (no mocked verifier methods)
           deregistered_at: null,
         };
       },
-      async getLogEntries() {
+      async getCardEventLog() {
         return [];
       },
       async getEasAnnotations() {

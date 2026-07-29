@@ -30,7 +30,7 @@ function fakeRpc(overrides: Partial<RpcProvider> = {}): RpcProvider {
     isPolicyAuthorizer: async () => false,
     getPressAuthorization: async () => null,
     getSubCardEntry: async () => null,
-    getLogEntries: async () => [],
+    getCardEventLog: async () => [],
     getEasAnnotations: async () => [],
     ...overrides,
   };

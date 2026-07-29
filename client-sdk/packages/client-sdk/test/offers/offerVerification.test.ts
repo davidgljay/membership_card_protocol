@@ -8,6 +8,28 @@ import { mlDsa44GenerateKeypair, mlDsa44Sign } from '../../src/crypto/mldsa.js';
 import { keccak256 } from '../../src/crypto/hashes.js';
 import { bytesToBase64Url } from '../../src/util/base64url.js';
 import type { SecureKeyProvider } from '../../src/providers/SecureKeyProvider.js';
+// Reused directly from the verifier package's own test suite (same monorepo
+// pattern as client-sdk/test/matrix/discovery.test.ts) — `verifyIssuerChainAndPress`
+// passes `pubkey` to `verifyCard`, so `is_currently_valid` requires a real,
+// decryptable `CardDocument` at the issuer card's `log_head_cid`.
+import {
+  encryptForCard,
+  makeCardDoc,
+} from '../../../../../membership_card_verifier/packages/verifier/test/fixtures.js';
+
+const ISSUER_CARD_CID = 'QmIssuerCardGenesis';
+
+/** A real, self-signed genesis `CardDocument` for the issuer card (no `entry_type` -> Stage 4 treats it as never updated / not revoked). */
+function issuerCardIpfs(issuerPublicKey: Uint8Array, issuerSecretKey: Uint8Array): IpfsProvider {
+  const doc = makeCardDoc(issuerPublicKey, issuerSecretKey, issuerSecretKey, issuerSecretKey, []);
+  const encoded = encryptForCard(issuerPublicKey, Buffer.from(JSON.stringify(doc)));
+  return {
+    fetch: async (cid: string) => {
+      if (cid !== ISSUER_CARD_CID) throw new Error(`unexpected cid: ${cid}`);
+      return encoded;
+    },
+  };
+}
 
 function makeFakeSecureKeyProvider(keyId: string, keypair: { publicKey: Uint8Array; secretKey: Uint8Array }): SecureKeyProvider {
   return {
@@ -24,18 +46,12 @@ function makeFakeSecureKeyProvider(keyId: string, keypair: { publicKey: Uint8Arr
 const POLICY_ADDRESS = 'cc'.repeat(32);
 const PRESS_CARD = 'dd'.repeat(32);
 
-const fakeIpfs: IpfsProvider = {
-  fetch: async () => {
-    throw new Error('not used — fetchAnnotations is false and verifyCard does not fetch card docs today');
-  },
-};
-
 /** Builds a fake RPC with a registered, trusted-root issuer and an authorized press, ready for happy-path tests. */
 function makeHappyPathRpc(issuerAddress: string): RpcProvider {
   return {
     getCardEntry: async (address) =>
       address === issuerAddress
-        ? { log_head_cid: 'cid', policy_address: POLICY_ADDRESS, last_press_address: PRESS_CARD, forward_to: null, exists: true }
+        ? { log_head_cid: ISSUER_CARD_CID, policy_address: POLICY_ADDRESS, last_press_address: PRESS_CARD, forward_to: null, exists: true }
         : null,
     isPolicyAuthorizer: async (address) => address === issuerAddress,
     getPressAuthorization: async (policyAddress, pressAddress) =>
@@ -43,7 +59,7 @@ function makeHappyPathRpc(issuerAddress: string): RpcProvider {
         ? { press_public_key: 'x', mldsa44_key_hash: 'y', active: true, authorized_at: '2026-01-01T00:00:00.000Z', revoked_at: null }
         : null,
     getSubCardEntry: async () => null,
-    getLogEntries: async () => [],
+    getCardEventLog: async () => [],
     getEasAnnotations: async () => [],
   };
 }
@@ -54,7 +70,7 @@ describe('reviewTargetedOffer', () => {
     const issuerAddress = keccak256(issuer.publicKey);
     const secureKeyProvider = makeFakeSecureKeyProvider('issuer-key', issuer);
     const rpc = makeHappyPathRpc(issuerAddress);
-    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
+    const cardVerifier = createCardVerifier({ rpc, ipfs: issuerCardIpfs(issuer.publicKey, issuer.secretKey), appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
 
     const offer = await assembleAndSignTargetedOffer({
       secureKeyProvider,
@@ -81,7 +97,7 @@ describe('reviewTargetedOffer', () => {
     const issuerAddress = keccak256(issuer.publicKey);
     const secureKeyProvider = makeFakeSecureKeyProvider('issuer-key', issuer);
     const rpc = makeHappyPathRpc(issuerAddress);
-    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress });
+    const cardVerifier = createCardVerifier({ rpc, ipfs: issuerCardIpfs(issuer.publicKey, issuer.secretKey), appCertificationRoot: issuerAddress });
 
     const offer = await assembleAndSignTargetedOffer({
       secureKeyProvider,
@@ -105,7 +121,7 @@ describe('reviewTargetedOffer', () => {
     const issuerAddress = keccak256(issuer.publicKey);
     const secureKeyProvider = makeFakeSecureKeyProvider('issuer-key', issuer);
     const rpc = makeHappyPathRpc(issuerAddress);
-    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress });
+    const cardVerifier = createCardVerifier({ rpc, ipfs: issuerCardIpfs(issuer.publicKey, issuer.secretKey), appCertificationRoot: issuerAddress });
 
     const offer = await assembleAndSignTargetedOffer({
       secureKeyProvider,
@@ -128,7 +144,7 @@ describe('reviewTargetedOffer', () => {
     const issuerAddress = keccak256(issuer.publicKey);
     const secureKeyProvider = makeFakeSecureKeyProvider('issuer-key', issuer);
     const rpc = makeHappyPathRpc(issuerAddress);
-    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress });
+    const cardVerifier = createCardVerifier({ rpc, ipfs: issuerCardIpfs(issuer.publicKey, issuer.secretKey), appCertificationRoot: issuerAddress });
 
     const offer = await assembleAndSignTargetedOffer({
       secureKeyProvider,
@@ -155,15 +171,15 @@ describe('reviewTargetedOffer', () => {
     const rpc: RpcProvider = {
       getCardEntry: async (address) =>
         address === issuerAddress
-          ? { log_head_cid: 'cid', policy_address: POLICY_ADDRESS, last_press_address: PRESS_CARD, forward_to: null, exists: true }
+          ? { log_head_cid: ISSUER_CARD_CID, policy_address: POLICY_ADDRESS, last_press_address: PRESS_CARD, forward_to: null, exists: true }
           : null,
       isPolicyAuthorizer: async () => false,
       getPressAuthorization: async () => ({ press_public_key: 'x', mldsa44_key_hash: 'y', active: true, authorized_at: '2026-01-01T00:00:00.000Z', revoked_at: null }),
       getSubCardEntry: async () => null,
-      getLogEntries: async () => [],
+      getCardEventLog: async () => [],
       getEasAnnotations: async () => [],
     };
-    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, trustedRoots: [] });
+    const cardVerifier = createCardVerifier({ rpc, ipfs: issuerCardIpfs(issuer.publicKey, issuer.secretKey), appCertificationRoot: issuerAddress, trustedRoots: [] });
 
     const offer = await assembleAndSignTargetedOffer({
       secureKeyProvider,
@@ -188,15 +204,15 @@ describe('reviewTargetedOffer', () => {
     const rpc: RpcProvider = {
       getCardEntry: async (address) =>
         address === issuerAddress
-          ? { log_head_cid: 'cid', policy_address: POLICY_ADDRESS, last_press_address: PRESS_CARD, forward_to: null, exists: true }
+          ? { log_head_cid: ISSUER_CARD_CID, policy_address: POLICY_ADDRESS, last_press_address: PRESS_CARD, forward_to: null, exists: true }
           : null,
       isPolicyAuthorizer: async (address) => address === issuerAddress,
       getPressAuthorization: async () => null, // not authorized
       getSubCardEntry: async () => null,
-      getLogEntries: async () => [],
+      getCardEventLog: async () => [],
       getEasAnnotations: async () => [],
     };
-    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
+    const cardVerifier = createCardVerifier({ rpc, ipfs: issuerCardIpfs(issuer.publicKey, issuer.secretKey), appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
 
     const offer = await assembleAndSignTargetedOffer({
       secureKeyProvider,
@@ -219,7 +235,7 @@ describe('reviewTargetedOffer', () => {
     const issuerAddress = keccak256(issuer.publicKey);
     const secureKeyProvider = makeFakeSecureKeyProvider('issuer-key', issuer);
     const rpc = makeHappyPathRpc(issuerAddress);
-    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
+    const cardVerifier = createCardVerifier({ rpc, ipfs: issuerCardIpfs(issuer.publicKey, issuer.secretKey), appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
     vi.spyOn(cardVerifier, 'verifyCard').mockRejectedValue(new Error('AES-GCM authentication failed'));
 
     const offer = await assembleAndSignTargetedOffer({
@@ -244,7 +260,7 @@ describe('reviewTargetedOffer', () => {
     const issuerAddress = keccak256(issuer.publicKey);
     const secureKeyProvider = makeFakeSecureKeyProvider('issuer-key', issuer);
     const rpc = makeHappyPathRpc(issuerAddress);
-    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
+    const cardVerifier = createCardVerifier({ rpc, ipfs: issuerCardIpfs(issuer.publicKey, issuer.secretKey), appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
 
     const offer = await assembleAndSignTargetedOffer({
       secureKeyProvider,
@@ -274,7 +290,7 @@ describe('reviewOpenOffer', () => {
     const issuerAddress = keccak256(issuer.publicKey);
     const secureKeyProvider = makeFakeSecureKeyProvider('issuer-key', issuer);
     const rpc = makeHappyPathRpc(issuerAddress);
-    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
+    const cardVerifier = createCardVerifier({ rpc, ipfs: issuerCardIpfs(issuer.publicKey, issuer.secretKey), appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
 
     const { offer } = await assembleAndSignOpenOffer({
       secureKeyProvider,
@@ -296,7 +312,7 @@ describe('reviewOpenOffer', () => {
     const issuerAddress = keccak256(issuer.publicKey);
     const secureKeyProvider = makeFakeSecureKeyProvider('issuer-key', issuer);
     const rpc = makeHappyPathRpc(issuerAddress);
-    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
+    const cardVerifier = createCardVerifier({ rpc, ipfs: issuerCardIpfs(issuer.publicKey, issuer.secretKey), appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
 
     const { offer } = await assembleAndSignOpenOffer({
       secureKeyProvider,
@@ -320,7 +336,7 @@ describe('reviewOpenOffer', () => {
     const issuerAddress = keccak256(issuer.publicKey);
     const secureKeyProvider = makeFakeSecureKeyProvider('issuer-key', issuer);
     const rpc = makeHappyPathRpc(issuerAddress);
-    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
+    const cardVerifier = createCardVerifier({ rpc, ipfs: issuerCardIpfs(issuer.publicKey, issuer.secretKey), appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
 
     const { offer } = await assembleAndSignOpenOffer({
       secureKeyProvider,
@@ -347,15 +363,15 @@ describe('reviewOpenOffer', () => {
     const rpc: RpcProvider = {
       getCardEntry: async (address) =>
         address === issuerAddress
-          ? { log_head_cid: 'cid', policy_address: POLICY_ADDRESS, last_press_address: PRESS_CARD, forward_to: null, exists: true }
+          ? { log_head_cid: ISSUER_CARD_CID, policy_address: POLICY_ADDRESS, last_press_address: PRESS_CARD, forward_to: null, exists: true }
           : null,
       isPolicyAuthorizer: async (address) => address === issuerAddress,
       getPressAuthorization: async () => ({ press_public_key: 'x', mldsa44_key_hash: 'y', active: false, authorized_at: '2026-01-01T00:00:00.000Z', revoked_at: '2026-02-01T00:00:00.000Z' }),
       getSubCardEntry: async () => null,
-      getLogEntries: async () => [],
+      getCardEventLog: async () => [],
       getEasAnnotations: async () => [],
     };
-    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
+    const cardVerifier = createCardVerifier({ rpc, ipfs: issuerCardIpfs(issuer.publicKey, issuer.secretKey), appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
 
     const { offer } = await assembleAndSignOpenOffer({
       secureKeyProvider,

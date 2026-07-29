@@ -26,7 +26,7 @@ function fakeRpc(overrides: Partial<RpcProvider> = {}): RpcProvider {
     isPolicyAuthorizer: async () => false,
     getPressAuthorization: async () => null,
     getSubCardEntry: async () => null,
-    getLogEntries: async () => [],
+    getCardEventLog: async () => [],
     getEasAnnotations: async () => [],
     ...overrides,
   };
@@ -65,7 +65,12 @@ describe('createCardVerifier', () => {
     const result = await verifier.verifyCard(TRUSTED_ROOT);
 
     expect(result.chain_reaches_trusted_root).toBe(true);
-    expect(result.is_currently_valid).toBe(true);
+    // No `options.pubkey` is supplied, so CardVerifier can't decrypt the
+    // card's content and falls back to the documented "verifyCard
+    // limitation" (card_verifier.md §7.4): revocation status is
+    // structurally unknowable without the real chain, so Stage 4 reports
+    // 'skipped' rather than true/false.
+    expect(result.is_currently_valid).toBe('skipped');
     expect(result.errors).toEqual([]);
   });
 

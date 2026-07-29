@@ -108,17 +108,34 @@ const POLICY_ADDRESS = 'cc'.repeat(32);
 const PRESS_CARD = 'dd'.repeat(32);
 const PRESS_BASE_URL = 'https://press.example';
 
-const fakeIpfs: IpfsProvider = {
-  fetch: async () => {
-    throw new Error('not used — fetchAnnotations is false');
-  },
-};
+// Reused directly from the verifier package's own test suite (same monorepo
+// pattern as client-sdk/test/matrix/discovery.test.ts) -- verifyIssuerChainAndPress
+// passes `pubkey` to `verifyCard`, so `is_currently_valid` requires a real,
+// decryptable `CardDocument` at the issuer card's `log_head_cid`.
+import {
+  encryptForCard,
+  makeCardDoc,
+} from '../../../../../membership_card_verifier/packages/verifier/test/fixtures.js';
+
+const ISSUER_CARD_CID = 'QmIssuerCardGenesis';
+
+/** A real, self-signed genesis `CardDocument` for the issuer card (no `entry_type` -> Stage 4 treats it as never updated / not revoked). */
+function issuerCardIpfs(issuerPublicKey: Uint8Array, issuerSecretKey: Uint8Array): IpfsProvider {
+  const doc = makeCardDoc(issuerPublicKey, issuerSecretKey, issuerSecretKey, issuerSecretKey, []);
+  const encoded = encryptForCard(issuerPublicKey, Buffer.from(JSON.stringify(doc)));
+  return {
+    fetch: async (cid: string) => {
+      if (cid !== ISSUER_CARD_CID) throw new Error(`unexpected cid: ${cid}`);
+      return encoded;
+    },
+  };
+}
 
 function makeHappyPathRpc(issuerAddress: string): RpcProvider {
   return {
     getCardEntry: async (address) =>
       address === issuerAddress
-        ? { log_head_cid: 'cid', policy_address: POLICY_ADDRESS, last_press_address: PRESS_CARD, forward_to: null, exists: true }
+        ? { log_head_cid: ISSUER_CARD_CID, policy_address: POLICY_ADDRESS, last_press_address: PRESS_CARD, forward_to: null, exists: true }
         : null,
     isPolicyAuthorizer: async (address) => address === issuerAddress,
     getPressAuthorization: async (policyAddress, pressAddress) =>
@@ -126,7 +143,7 @@ function makeHappyPathRpc(issuerAddress: string): RpcProvider {
         ? { press_public_key: 'x', mldsa44_key_hash: 'y', active: true, authorized_at: '2026-01-01T00:00:00.000Z', revoked_at: null }
         : null,
     getSubCardEntry: async () => null,
-    getLogEntries: async () => [],
+    getCardEventLog: async () => [],
     getEasAnnotations: async () => [],
   };
 }
@@ -238,7 +255,7 @@ describe('acceptOpenOfferForNewWallet', () => {
     });
 
     const rpc = makeHappyPathRpc(issuerAddress);
-    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
+    const cardVerifier = createCardVerifier({ rpc, ipfs: issuerCardIpfs(issuer.publicKey, issuer.secretKey), appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
 
     const { transport, state } = makeCombinedTransport();
     const attestationObject = new TextEncoder().encode('device-attestation');
@@ -322,7 +339,7 @@ describe('acceptOpenOfferForNewWallet', () => {
     });
 
     const rpc = makeHappyPathRpc(issuerAddress);
-    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
+    const cardVerifier = createCardVerifier({ rpc, ipfs: issuerCardIpfs(issuer.publicKey, issuer.secretKey), appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
     const { transport, state } = makeCombinedTransport();
 
     const result = await acceptOpenOfferForNewWallet({

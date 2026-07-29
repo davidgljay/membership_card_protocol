@@ -18,6 +18,14 @@ import type {
   RequestOptions,
   ObliviousResponse,
 } from '../../src/providers/ObliviousProtocolTransport.js';
+// Reused directly from the verifier package's own test suite (same monorepo
+// pattern as client-sdk/test/matrix/discovery.test.ts) — `handleSubCardRequest`
+// passes `pubkey` to `verifyCard`, so `is_currently_valid` requires a real,
+// decryptable `CardDocument` at the app card's `log_head_cid`.
+import {
+  encryptForCard,
+  makeCardDoc,
+} from '../../../../../membership_card_verifier/packages/verifier/test/fixtures.js';
 
 function jsonResponse(status: number, body: unknown): ObliviousResponse {
   return { status, headers: {}, body: new TextEncoder().encode(JSON.stringify(body)) };
@@ -29,12 +37,19 @@ function readJsonBody(options: RequestOptions): Record<string, unknown> {
 
 const GOVERNANCE_APP_CERT_ROOT = 'ff'.repeat(32);
 const PRESS_BASE_URL = 'https://press.example';
+const APP_CARD_CID = 'QmAppCardGenesis';
 
-const fakeIpfs: IpfsProvider = {
-  fetch: async () => {
-    throw new Error('not used — fetchAnnotations is false');
-  },
-};
+/** A real, self-signed genesis `CardDocument` for the app card (no `entry_type` -> Stage 4 treats it as never updated / not revoked). */
+function appCardIpfs(appCardPublicKey: Uint8Array, appCardSecretKey: Uint8Array): IpfsProvider {
+  const doc = makeCardDoc(appCardPublicKey, appCardSecretKey, appCardSecretKey, appCardSecretKey, []);
+  const encoded = encryptForCard(appCardPublicKey, Buffer.from(JSON.stringify(doc)));
+  return {
+    fetch: async (cid: string) => {
+      if (cid !== APP_CARD_CID) throw new Error(`unexpected cid: ${cid}`);
+      return encoded;
+    },
+  };
+}
 
 function makeFakeSecureKeyProvider(): SecureKeyProvider {
   const secretKeys = new Map<string, Uint8Array>();
@@ -54,12 +69,15 @@ function makeFakeSecureKeyProvider(): SecureKeyProvider {
   };
 }
 
-function makeFakeAppCard(): WalletAppCardIdentity {
+function makeFakeAppCard(): { identity: WalletAppCardIdentity; secretKey: Uint8Array } {
   const keypair = mlDsa44GenerateKeypair();
   return {
-    cardPointer: keccak256(keypair.publicKey),
-    publicKey: keypair.publicKey,
-    sign: (message: Uint8Array) => mlDsa44Sign(keypair.secretKey, message),
+    identity: {
+      cardPointer: keccak256(keypair.publicKey),
+      publicKey: keypair.publicKey,
+      sign: (message: Uint8Array) => mlDsa44Sign(keypair.secretKey, message),
+    },
+    secretKey: keypair.secretKey,
   };
 }
 
@@ -74,7 +92,7 @@ function makeStubPressAndRegistry(appCardAddress: string) {
     request: vi.fn(async (destination: ObliviousDestination, options: RequestOptions) => {
       expect(destination).toEqual({ kind: 'press', baseUrl: PRESS_BASE_URL });
 
-      if (options.method === 'POST' && options.path === '/sub-card/register') {
+      if (options.method === 'POST' && options.path === '/api/sub-card/register') {
         const body = readJsonBody(options);
         state.registeredSubCardDocs.push(body);
         return jsonResponse(200, { sub_card_doc_cid: 'sub-card-doc-cid-1', tx_hash: '0xregistertx' });
@@ -91,12 +109,12 @@ function makeStubPressAndRegistry(appCardAddress: string) {
   const rpc: RpcProvider = {
     getCardEntry: async (address) =>
       address === appCardAddress
-        ? { log_head_cid: 'cid', policy_address: 'policy', last_press_address: 'press', forward_to: null, exists: true }
+        ? { log_head_cid: APP_CARD_CID, policy_address: 'policy', last_press_address: 'press', forward_to: null, exists: true }
         : null,
     isPolicyAuthorizer: async (address) => address === appCardAddress,
     getPressAuthorization: async () => null,
     getSubCardEntry: async () => null,
-    getLogEntries: async () => [],
+    getCardEventLog: async () => [],
     getEasAnnotations: async () => {
       throw new Error('getEasAnnotations should never be called — fetchAnnotations is false (OQ-SDK-11)');
     },
@@ -117,7 +135,7 @@ describe('Phase 4 end-to-end: request -> validate -> consent -> countersign -> r
     const { document: appSignedRequest } = await requestSubCard({
       secureKeyProvider: requesterSecureKeyProvider,
       subCardKeyId: 'app-sub-card-key',
-      appCard,
+      appCard: appCard.identity,
       holderPrimaryCard,
       holderPrimaryCardPubkey: holder.publicKey,
       capabilities: ['auth_response', 'exchange_offer'],
@@ -125,11 +143,11 @@ describe('Phase 4 end-to-end: request -> validate -> consent -> countersign -> r
     });
 
     // --- Wallet side: a distinct "SDK instance" acting as the wallet. ---
-    const appCardAddress = keccak256(appCard.publicKey);
+    const appCardAddress = keccak256(appCard.identity.publicKey);
     const { transport, rpc, state } = makeStubPressAndRegistry(appCardAddress);
     const cardVerifier = createCardVerifier({
       rpc,
-      ipfs: fakeIpfs,
+      ipfs: appCardIpfs(appCard.identity.publicKey, appCard.secretKey),
       appCertificationRoot: GOVERNANCE_APP_CERT_ROOT,
       trustedRoots: [GOVERNANCE_APP_CERT_ROOT, appCardAddress],
       fetchAnnotations: false,
