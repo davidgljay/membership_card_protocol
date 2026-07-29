@@ -139,6 +139,22 @@ services:
     volumes:
       - ./env/press-tls/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
+    # Must not start concurrently with wallet-service-tls: both instances
+    # bootstrap the same shared "local" CA (storage:pki/authorities/local)
+    # in the caddy-data volume on first run. Caddy's on-disk PKI storage
+    # isn't safe against two separate processes racing to generate that
+    # root for the first time — whichever writes root.crt last wins on
+    # disk, but the other already signed its own leaf certificate against
+    # its own (now-orphaned) in-memory root. Relay's NODE_EXTRA_CA_CERTS
+    # only trusts whatever ends up on disk, so the loser's leaf cert
+    # fails relay's TLS verification with UNABLE_TO_GET_ISSUER_CERT_LOCALLY
+    # even though the container itself reports healthy. Serializing
+    # startup means only wallet-service-tls ever generates the root; by
+    # the time press-tls starts, it finds the CA already on disk and
+    # reuses it instead of racing to create its own.
+    depends_on:
+      wallet-service-tls:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "test", "-f", "/data/caddy/pki/authorities/local/root.crt"]
       interval: 2s
