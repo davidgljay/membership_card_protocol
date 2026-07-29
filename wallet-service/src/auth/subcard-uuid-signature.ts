@@ -160,7 +160,8 @@ export async function verifyUuidRegistrationEnvelope(
   } catch {
     return { ok: false, reason: 'resolved recipient_pubkey is not valid base64url' };
   }
-  if (derivedHash.toLowerCase() !== payload.subcard_hash.toLowerCase()) {
+  const claimedHash = payload.subcard_hash.toLowerCase().replace(/^0x/, '');
+  if (derivedHash.toLowerCase() !== claimedHash) {
     return { ok: false, reason: 'keccak256(subcard_pubkey) does not match subcard_hash' };
   }
 

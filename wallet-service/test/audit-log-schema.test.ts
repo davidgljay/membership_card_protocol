@@ -95,7 +95,7 @@ describe('audit log schema — required structured events exist', () => {
     ['src/routes/accounts-create.ts', 'service_secret_created'],
     ['src/routes/accounts-create.ts', 'account_created'],
     ['server/routes/accounts/[card_hash]/service-secret.get.ts', 'service_secret_accessed'],
-    ['server/routes/accounts/[card_hash]/backups/index.post.ts', 'backup_registration_created'],
+    ['src/routes/create-backup.ts', 'backup_registration_created'],
     ['server/routes/accounts/[card_hash]/recovery.post.ts', 'recovery_initiated'],
     ['server/routes/recovery/[recovery_id]/cancel.post.ts', 'recovery_cancelled'],
     ['server/routes/recovery/[recovery_id]/release.get.ts', 'recovery_key_released'],

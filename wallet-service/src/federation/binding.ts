@@ -94,7 +94,8 @@ export function verifyAnnouncementEnvelope(envelope: AnnouncementEnvelope): Veri
       return { ok: false, reason: 'card_migration requires a cardholder signature' };
     }
     // cardholder signer is verified by keccak256(public_key) === card_hash
-    if (keccak256OfBase64Url(cardholderSig.public_key).toLowerCase() !== payload.card_hash.toLowerCase()) {
+    const claimedCardHash = payload.card_hash.toLowerCase().replace(/^0x/, '');
+    if (keccak256OfBase64Url(cardholderSig.public_key).toLowerCase() !== claimedCardHash) {
       return { ok: false, reason: 'cardholder public key does not match card_hash' };
     }
     const cardholderValid = verifyMasterCardSignature(message, cardholderSig.signature, cardholderSig.public_key);
