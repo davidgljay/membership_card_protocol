@@ -17,7 +17,7 @@
  *     fetch, decrypt, re-register with a rotated service_secret/keyring_id,
  *     new device sub-card, and post-recovery sub-card deregistration.
  *
- * This suite uses `@membership-card-protocol/client-sdk`'s real
+ * This suite uses `@membership-card-protocol/wallet-sdk`'s real
  * orchestrating functions (`setupWallet`, `registerBackup`,
  * `initiateRecovery`, `cancelRecovery`, `releaseRecoveryKey`,
  * `fetchKeyringBlob`, `recoverWallet`) against the live wallet-service —
@@ -92,7 +92,7 @@
  *     fan-out, the "too early" 425 immediately after initiation, and the
  *     cancellation path (Process 2a Steps 4-5), which needs no time to
  *     elapse. Actual key release (Step 6) is `it.todo`.
- *   - `registerSubCard`/`walletAppCard` (client-sdk's injection points for
+ *   - `registerSubCard`/`walletAppCard` (wallet-sdk's injection points for
  *     Step 9's "posted on Arbitrum One") are stubbed in this suite: the
  *     spec's own annotation on `RegisterSubCardFn` (`deviceSubCard.ts`)
  *     frames on-chain sub-card registration as "Phase 4 Step 4.4's
@@ -119,12 +119,8 @@ import {
   wrapDecryptionKey,
   deriveDecryptionKey,
   passkeyOutputFromPrf,
-  type PasskeyProvider,
-  type StorageProvider,
-  type WalletAppCardIdentity,
-  type RegisterSubCardFn,
   type WalletSetupResult,
-} from '@membership-card-protocol/client-sdk';
+} from '@membership-card-protocol/wallet-sdk';
 import {
   HpkeObliviousProtocolTransport,
   mlDsa44GenerateKeypair,
@@ -133,6 +129,13 @@ import {
   bytesToBase64Url,
   base64UrlToBytes,
   canonicalize,
+  createCardVerifier,
+  type PasskeyProvider,
+  type StorageProvider,
+  type WalletAppCardIdentity,
+  type RegisterSubCardFn,
+  type CardVerifier,
+  type RpcProvider,
 } from '@membership-card-protocol/app-sdk';
 import { InMemorySecureKeyProvider } from '@membership-card-protocol/integration-fixtures';
 import { PRESS_BASE_URL } from '../support/liveCard.js';
@@ -140,7 +143,7 @@ import { PRESS_BASE_URL } from '../support/liveCard.js';
 const WALLET_SERVICE_BASE_URL = (process.env.SUITE_WALLET_SERVICE_URL ?? 'http://localhost:3002').replace(/\/$/, '');
 const RELAY_BASE_URL = (process.env.SUITE_RELAY_URL ?? 'http://localhost:3000').replace(/\/$/, '');
 
-// --- Test doubles for client-sdk's injectable provider interfaces. ---
+// --- Test doubles for wallet-sdk's injectable provider interfaces. ---
 
 /**
  * Minimal in-memory `PasskeyProvider`: no real WebAuthn authenticator is
@@ -227,8 +230,46 @@ function makeStubWalletAppCard(): WalletAppCardIdentity {
 
 const stubRegisterSubCard: RegisterSubCardFn = async () => ({ registered: true });
 
+/**
+ * A `CardVerifier` that trusts any address it's asked about — needed here
+ * only because `setupWallet`/`recoverWallet` (wallet-sdk) validate the
+ * wallet's own app card (`makeStubWalletAppCard` above) through the same
+ * `handleSubCardRequest` pipeline any other app's request would go through
+ * (`deviceSubCard.ts`'s own doc). The stub app card was never actually
+ * certified on any real chain, so a real chain-walking verifier would
+ * reject it; this suite verifies wallet-service's own account/keyring/
+ * backup/recovery endpoints, which never inspect that certification
+ * outcome, so a trivially-trusting verifier (same pattern wallet-sdk's own
+ * `setupWallet.test.ts` uses) is the correct double here, not a real one.
+ */
+function makeAlwaysTrustingCardVerifier(): CardVerifier {
+  const rpc: RpcProvider = {
+    getCardEntry: async () => ({
+      log_head_cid: 'cid',
+      policy_address: 'policy',
+      last_press_address: 'press',
+      forward_to: null,
+      exists: true,
+    }),
+    isPolicyAuthorizer: async () => true,
+    getPressAuthorization: async () => null,
+    getSubCardEntry: async () => null,
+    getCardEventLog: async () => [],
+    getEasAnnotations: async () => {
+      throw new Error('getEasAnnotations should never be called — fetchAnnotations is false');
+    },
+  };
+  return createCardVerifier({
+    rpc,
+    ipfs: { fetch: async () => { throw new Error('not used — fetchAnnotations is false'); } },
+    appCertificationRoot: 'ff'.repeat(32),
+    trustedRoots: ['ff'.repeat(32)],
+    fetchAnnotations: false,
+  });
+}
+
 // bypass:true is applied uniformly by wrapping the transport's `request` —
-// client-sdk's functions don't expose a `bypass` option of their own, so
+// wallet-sdk's functions don't expose a `bypass` option of their own, so
 // this thin wrapper injects it on every call, matching
 // `oblivious_transport.spec.ts`'s confirmed-safe direct-HTTPS mode for
 // wallet-service (no path-prefix mismatch there, unlike press's `/api/*`).
@@ -269,6 +310,7 @@ describe('wallet_backup_and_recovery.md (live stack)', () => {
       secureKeyProvider: new InMemorySecureKeyProvider(),
       walletAppCard: makeStubWalletAppCard(),
       registerSubCard: stubRegisterSubCard,
+      cardVerifier: makeAlwaysTrustingCardVerifier(),
       capabilities: ['text', 'edit'],
       notificationChannels: { email: `holder-${Date.now()}@example.com` },
     });
@@ -505,7 +547,7 @@ describe('wallet_backup_and_recovery.md (live stack)', () => {
       // (accounts/[card_hash]/recovery.post.ts) treats a second initiation
       // against an already-pending backup as idempotent — it returns
       // HTTP 409 with { recovery_id, expires_at } of the *existing* window,
-      // not an error. But client-sdk's `initiateRecovery` (wallet/
+      // not an error. But wallet-sdk's `initiateRecovery` (wallet/
       // recovery.ts) calls the shared `requestJson` helper, which throws
       // on *any* non-2xx status and discards the response body — so the
       // server's idempotent 409 response is indistinguishable, from this
@@ -573,7 +615,7 @@ describe('wallet_backup_and_recovery.md (live stack)', () => {
 
   describe('§Process 3: Post-Recovery Re-registration', () => {
     it('Steps 6-12: recovers sharedSetup\'s wallet from a manually-released blob, re-registers with a rotated service_secret/keyring_id, issues a new device sub-card, and batch-deregisters a previously-active sub-card', async () => {
-      // recoverWallet (client-sdk) takes an *already-released* wrappedBlob
+      // recoverWallet (wallet-sdk) takes an *already-released* wrappedBlob
       // + keyringId (its own doc: "polling releaseRecoveryKey beforehand
       // is the caller's concern"). Since this environment cannot make the
       // 72-hour window genuinely elapse (see file-level doc comment), and
@@ -635,6 +677,7 @@ describe('wallet_backup_and_recovery.md (live stack)', () => {
         passkeyProvider: sharedPasskeyProvider,
         walletAppCard: makeStubWalletAppCard(),
         registerSubCard: stubRegisterSubCard,
+        cardVerifier: makeAlwaysTrustingCardVerifier(),
         capabilities: ['text', 'edit'],
         cardHash: sharedSetup.cardHash,
         method: 'synced_passkey',
@@ -674,7 +717,7 @@ describe('wallet_backup_and_recovery.md (live stack)', () => {
         '(recoverWallet re-registers the device sub-card and re-installs the keyring, but does not itself ' +
         'call registerBackup again or revoke the prior backup registration — this appears to be a real gap: ' +
         'the spec\'s Postconditions state "Backup registration(s) are updated under the new decryption key," ' +
-        'but neither client-sdk\'s recoverWallet nor any wallet-service endpoint this suite found performs ' +
+        'but neither wallet-sdk\'s recoverWallet nor any wallet-service endpoint this suite found performs ' +
         'that update/revocation automatically. Flagged, not fixed here — see suite report.)'
     );
   });

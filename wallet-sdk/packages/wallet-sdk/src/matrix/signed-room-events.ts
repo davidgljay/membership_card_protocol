@@ -1,10 +1,18 @@
+import {
+  canonicalize,
+  mlDsa44GetPublicKey,
+  mlDsa44Sign,
+  mlDsa44Verify,
+  keccak256,
+  bytesToBase64Url,
+  base64UrlToBytes,
+  deriveMatrixUserId,
+  verifyMatrixUserIdBinding,
+  type EnvelopeSignatureEntry,
+  type MessageContentByType,
+  type MessageType,
+} from '@membership-card-protocol/app-sdk';
 import { PROTOCOL_VERSION_0_1 } from '@membership-card-protocol/verifier';
-import { canonicalize } from '../crypto/canonicalize.js';
-import { mlDsa44GetPublicKey, mlDsa44Sign, mlDsa44Verify } from '../crypto/mldsa.js';
-import { keccak256 } from '../crypto/hashes.js';
-import { bytesToBase64Url, base64UrlToBytes } from '../util/base64url.js';
-import type { EnvelopeSignatureEntry, MessageContentByType, MessageType } from '../messaging/envelope.js';
-import { deriveMatrixUserId, verifyMatrixUserIdBinding } from './account-id.js';
 import { encryptRoomEvent, decryptRoomEvent } from './session.js';
 import type { MatrixTimelineEventLike, MegolmCryptoProvider } from './crypto-provider.js';
 
@@ -12,7 +20,9 @@ import type { MatrixTimelineEventLike, MegolmCryptoProvider } from './crypto-pro
  * Card-signed room-message envelope + sender-binding enforcement (Matrix
  * Phase 5, Step 19 — `specs/object_specs/matrix_encryption.md §2` for the
  * envelope shape, `§4` for the sender-binding check this module enforces on
- * receipt).
+ * receipt). Originally lived in `client-sdk`, now split out of that
+ * deprecated package into `wallet-sdk`, since {@link sendCardSignedRoomEvent}
+ * signs with a card's own private key.
  *
  * Wraps Step 18's `encryptRoomEvent`/`decryptRoomEvent`
  * (`matrix/session.ts`), which are themselves thin wrappers over the
@@ -22,18 +32,18 @@ import type { MatrixTimelineEventLike, MegolmCryptoProvider } from './crypto-pro
  * (`receiveCardSignedRoomEvent`).
  *
  * **Envelope shape** (`matrix_encryption.md §2`): the same `payload`/
- * `signatures` shape as `messaging/envelope.ts`'s `CardMessageEnvelope`,
- * minus `recipients`/`senders` (Matrix's own room membership and the
- * event's `sender` field replace those — see §2's "What changes" list),
- * plus an optional `matrix_event_id` cross-reference field. Deliberately a
- * distinct type from `MessagePayload`/`CardMessageEnvelope` rather than a
- * reuse-with-optional-fields hack, since `recipients`/`senders` are
- * structurally absent here, not merely empty.
+ * `signatures` shape as `app-sdk`'s `messaging/envelope.ts`'s
+ * `CardMessageEnvelope`, minus `recipients`/`senders` (Matrix's own room
+ * membership and the event's `sender` field replace those — see §2's "What
+ * changes" list), plus an optional `matrix_event_id` cross-reference field.
+ * Deliberately a distinct type from `MessagePayload`/`CardMessageEnvelope`
+ * rather than a reuse-with-optional-fields hack, since `recipients`/
+ * `senders` are structurally absent here, not merely empty.
  *
- * Signing reuses the exact primitives `messaging/envelope.ts` and
- * `matrix/attestation.ts` already use for every other signed object in this
- * SDK: `canonicalize()` (RFC 8785 JCS) and `mlDsa44Sign`/`mlDsa44Verify` —
- * no new signing or verification logic is introduced here.
+ * Signing reuses the exact primitives `app-sdk`'s `messaging/envelope.ts`
+ * and `matrix/attestation.ts` already use for every other signed object in
+ * this SDK: `canonicalize()` (RFC 8785 JCS) and `mlDsa44Sign`/`mlDsa44Verify`
+ * — no new signing or verification logic is introduced here.
  */
 
 export interface RoomMessagePayload<T extends MessageType = MessageType> {

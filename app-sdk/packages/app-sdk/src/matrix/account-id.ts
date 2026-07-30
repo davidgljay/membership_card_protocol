@@ -1,12 +1,14 @@
 /**
  * Shadow Matrix account derivation (matrix_encryption.md §3).
  *
- * Port of `wallet-service/src/matrix/account-id.ts` into `client-sdk` (Matrix
- * Phase 5, Step 17a) — `matrix/attestation.ts` needs this locally, since a
- * client building its own join attestation has to compute the shadow-account
- * `matrix_user_id` it's about to join with, without a round trip to
- * `wallet-service`. All three implementations of this derivation —
- * `wallet-service/src/matrix/account-id.ts`, the Python mirror in
+ * Port of `wallet-service/src/matrix/account-id.ts` (originally also ported
+ * into `client-sdk`, now split out of that deprecated package into
+ * `app-sdk` since none of this needs a private key) — `wallet-sdk`'s
+ * `matrix/attestation.ts` needs this, since a client building its own join
+ * attestation has to compute the shadow-account `matrix_user_id` it's about
+ * to join with, without a round trip to `wallet-service`. All three
+ * implementations of this derivation — `wallet-service/src/matrix/account-id.ts`,
+ * the Python mirror in
  * `wallet-service/matrix-policy-module/src/matrix_policy_module/attestation.py`
  * (`derive_matrix_user_id`), and this one — must agree on every input
  * (byte-identical output for the same `card_hash`/`server_name`). See
@@ -30,10 +32,10 @@ import { keccak256 } from '../crypto/hashes.js';
 const SHADOW_ACCOUNT_DOMAIN_TAG = 'matrix-shadow-account-v1';
 
 /**
- * Exported (not just an internal helper) so `matrix/attestation.ts` can
- * convert a hex `card_hash` into the raw bytes it needs for the payload's
- * base64url-encoded `card_hash` field, without a second, divergent hex-parse
- * implementation.
+ * Exported (not just an internal helper) so `wallet-sdk`'s
+ * `matrix/attestation.ts` can convert a hex `card_hash` into the raw bytes
+ * it needs for the payload's base64url-encoded `card_hash` field, without a
+ * second, divergent hex-parse implementation.
  */
 export function hexToBytes(value: string): Uint8Array {
   const hex = value.startsWith('0x') || value.startsWith('0X') ? value.slice(2) : value;

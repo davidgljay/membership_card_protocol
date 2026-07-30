@@ -1,10 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import { buildJoinAttestation, JOIN_ATTESTATION_EVENT_CONTENT_KEY } from '../../src/matrix/attestation.js';
-import { deriveMatrixUserId } from '../../src/matrix/account-id.js';
-import { mlDsa44GenerateKeypair, mlDsa44Verify } from '../../src/crypto/mldsa.js';
-import { canonicalize } from '../../src/crypto/canonicalize.js';
-import { keccak256 } from '../../src/crypto/hashes.js';
-import { base64UrlToBytes, bytesToBase64Url } from '../../src/util/base64url.js';
+import {
+  deriveMatrixUserId,
+  mlDsa44GenerateKeypair,
+  mlDsa44Verify,
+  canonicalize,
+  keccak256,
+  base64UrlToBytes,
+  bytesToBase64Url,
+} from '@membership-card-protocol/app-sdk';
 
 const ROOM_ID = '!card-gated-room:matrix.internal';
 const SERVER_NAME = 'matrix.internal';

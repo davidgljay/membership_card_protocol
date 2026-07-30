@@ -4,9 +4,9 @@ import { deriveMatrixUserId, shadowAccountCommitment, verifyMatrixUserIdBinding 
 // Same fixture pair as `wallet-service/test/account-id.test.ts`, cross-checked
 // there against the Python mirror
 // (matrix-policy-module/src/matrix_policy_module/attestation.py's
-// derive_matrix_user_id). This test asserts client-sdk's independently
-// ported implementation produces byte-identical output for the same inputs
-// — the cross-language/cross-package parity Step 17a's done-when criterion
+// derive_matrix_user_id). This test asserts app-sdk's independently ported
+// implementation produces byte-identical output for the same inputs — the
+// cross-language/cross-package parity Step 17a's done-when criterion
 // requires.
 const CARD_HASH_A = '0x' + 'ab'.repeat(32);
 const CARD_HASH_B = '0x' + '01'.repeat(32);
@@ -16,7 +16,7 @@ const OTHER_SERVER_NAME = 'example.org';
 const EXPECTED_MATRIX_USER_ID_A =
   '@card_5571cd3464994aea35d1ca6cbba4b48c7f895e8249b503eb47f46607a34c2c81:matrix.internal';
 
-describe('shadowAccountCommitment / deriveMatrixUserId / verifyMatrixUserIdBinding (client-sdk port)', () => {
+describe('shadowAccountCommitment / deriveMatrixUserId / verifyMatrixUserIdBinding (app-sdk port)', () => {
   it('cross-language/cross-package parity: matches the wallet-service fixture (itself checked against Python)', () => {
     expect(deriveMatrixUserId(CARD_HASH_A, SERVER_NAME)).toBe(EXPECTED_MATRIX_USER_ID_A);
   });

@@ -1,23 +1,25 @@
 /**
  * Platform-agnostic Megolm/Olm crypto-provider interface (Matrix Phase 5,
  * Step 18 — see `plans/milestones/matrix-crypto-binding-decision.md` for the
- * binding decision this interface sits on top of).
+ * binding decision this interface sits on top of). Originally lived in
+ * `client-sdk`, now split out of that deprecated package into `wallet-sdk`,
+ * since every concrete implementation of this interface (and every other
+ * function in this module) operates on room sessions establishing directly
+ * against a card's own private key material.
  *
- * Follows this package's established `providers/` split
+ * Follows this SDK's established `providers/` split
  * (`SecureKeyProvider`, `StorageProvider`, `RealtimeTransportProvider`,
- * ...): the interface lives here, in the shared `client-sdk` package, and
+ * ...): the interface lives here, in the shared `wallet-sdk` package, and
  * says nothing about *how* Olm/Megolm state is actually kept or which
  * binding backs it. Concrete implementations live in the per-platform
  * packages:
- *   - `client-sdk-web`'s `WasmMegolmCryptoProvider` wraps
+ *   - `sdk-providers-web`'s `WasmMegolmCryptoProvider` wraps
  *     `@matrix-org/matrix-sdk-crypto-wasm`'s `OlmMachine` (the official Rust
  *     `matrix-sdk-crypto` state machine, compiled to WASM).
- *   - `client-sdk-rn` has no working implementation yet — WASM does not run
- *     on Hermes (see the binding-decision doc), so React Native needs a
+ *   - `sdk-providers-rn` has no working implementation yet — WASM does not
+ *     run on Hermes (see the binding-decision doc), so React Native needs a
  *     custom Turbo Module against the official crypto-only
  *     `matrix-sdk-crypto-ffi` Rust crate via `uniffi-bindgen-react-native`.
- *     `client-sdk-rn/src/MegolmCryptoProvider.ts` is a scaffold/stub only —
- *     see that file's header comment for exactly what's missing.
  *
  * **Why the interface is shaped around "flush outgoing requests" /
  * "receive sync" rather than exposing raw send/decrypt only:** the

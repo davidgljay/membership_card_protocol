@@ -29,9 +29,10 @@
     "test": "NODE_OPTIONS=--experimental-global-webcrypto vitest run",
     "test:watch": "NODE_OPTIONS=--experimental-global-webcrypto vitest"
   },
-  "//": "TODO: replace file: references with versioned npm refs once @membership-card-protocol/app-sdk(-verifier) is published",
+  "//": "file: ref below is for local/CI builds only -- scripts/rewrite-file-deps.mjs rewrites it to a real npm version at publish time (see DEPLOYMENT.md); the committed file: ref is intentional, not stale.",
   "dependencies": {
     "@membership-card-protocol/app-sdk": "file:../../../app-sdk/packages/app-sdk",
+    "@membership-card-protocol/verifier": "file:../../../membership_card_verifier/packages/verifier",
     "@noble/ciphers": "^1.0.0",
     "@noble/hashes": "^1.7.2",
     "@noble/post-quantum": "^0.5.4"

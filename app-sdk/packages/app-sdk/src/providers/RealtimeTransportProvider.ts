@@ -8,10 +8,10 @@
  * platform.
  *
  * Default implementations: native `EventSource` + `WebSocket` on web
- * (`@membership-card-protocol/client-sdk-web`); native `WebSocket` plus a
+ * (`@membership-card-protocol/sdk-providers-web`); native `WebSocket` plus a
  * shipped SSE implementation (e.g. `react-native-sse` or an equivalent
  * fetch-streaming polyfill) on React Native
- * (`@membership-card-protocol/client-sdk-rn`) — RN does not fall back to
+ * (`@membership-card-protocol/sdk-providers-rn`) — RN does not fall back to
  * `GET /pending` polling as its primary foreground mechanism.
  */
 export interface RealtimeTransportProvider {

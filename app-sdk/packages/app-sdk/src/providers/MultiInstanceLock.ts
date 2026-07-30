@@ -8,8 +8,8 @@
  * React Native's single-foreground-instance model.
  *
  * Default implementations: a `BroadcastChannel`-based lock on web
- * (`@membership-card-protocol/client-sdk-web`); a no-op on React Native
- * (`@membership-card-protocol/client-sdk-rn`).
+ * (`@membership-card-protocol/sdk-providers-web`); a no-op on React Native
+ * (`@membership-card-protocol/sdk-providers-rn`).
  */
 export interface MultiInstanceLock {
   /**

@@ -43,7 +43,7 @@
  * Fixed in `matrix_policy_module/module.py` (`_register_creator_membership`,
  * a new `io.cardprotocol.room_creator_attestation` custom state-event
  * type `check_event_allowed` now recognizes): the creator submits a
- * normal join-attestation envelope (`client-sdk`'s `buildJoinAttestation`,
+ * normal join-attestation envelope (`wallet-sdk`'s `buildJoinAttestation`,
  * reused unchanged) as a follow-up state event once `room_id` is known
  * (it can't be part of the `/createRoom` request itself — `room_id`
  * doesn't exist until that request returns). Unlike an ordinary join, this
@@ -73,7 +73,8 @@
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
-import { mlDsa44GenerateKeypair, keccak256, deriveMatrixUserId, buildJoinAttestation } from '@membership-card-protocol/client-sdk';
+import { mlDsa44GenerateKeypair, keccak256, deriveMatrixUserId } from '@membership-card-protocol/app-sdk';
+import { buildJoinAttestation } from '@membership-card-protocol/wallet-sdk';
 import {
   SYNAPSE_BASE_URL,
   MATRIX_SERVER_NAME,

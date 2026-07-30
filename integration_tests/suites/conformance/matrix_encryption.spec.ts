@@ -12,7 +12,7 @@
  * KEY TEST: §3 Shadow Matrix Account Derivation — Cross-Language Agreement
  * ────────────────────────────────────────────────────────────────────────
  *
- * The TypeScript implementation (client-sdk/packages/client-sdk/src/matrix/
+ * The TypeScript implementation (app-sdk/packages/app-sdk/src/matrix/
  * account-id.ts) and the Python mirror (wallet-service/matrix-policy-module/
  * src/matrix_policy_module/attestation.py) must produce byte-identical output
  * for the same inputs. This suite invokes both and asserts exact agreement.
@@ -28,7 +28,7 @@ import {
   mlDsa44Sign,
   keccak256,
   canonicalize,
-} from '@membership-card-protocol/client-sdk';
+} from '@membership-card-protocol/app-sdk';
 import { mlDsa44Verify } from '@membership-card-protocol/verifier';
 
 // Fixture pair shared with wallet-service/test/account-id.test.ts

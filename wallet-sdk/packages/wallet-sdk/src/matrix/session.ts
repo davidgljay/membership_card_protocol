@@ -1,5 +1,8 @@
 /**
- * Room-join + Megolm session wiring (Matrix Phase 5, Step 18).
+ * Room-join + Megolm session wiring (Matrix Phase 5, Step 18). Originally
+ * lived in `client-sdk`, now split out of that deprecated package into
+ * `wallet-sdk` alongside every other function here that signs with a
+ * card's own private key.
  *
  * Joins a Matrix room via the Client-Server `/join` API, using a Matrix
  * access token minted by `wallet-service`'s `POST /matrix/token`
@@ -63,7 +66,7 @@ export interface JoinRoomResult {
  *   account, as minted by `wallet-service`'s `POST /matrix/token`.
  * @param serverName - Homeserver domain, used both for the attestation's
  *   `server_name` field and to derive the joining shadow account's own
- *   Matrix user ID (via `attestation.ts` -> `account-id.ts`).
+ *   Matrix user ID (via `attestation.ts` -> `app-sdk`'s `account-id.ts`).
  * @param cryptoProvider - Platform crypto provider used to establish/
  *   receive the room's Megolm session after the join succeeds.
  * @param memberUserIds - The room's current member Matrix user IDs (as

@@ -1,22 +1,26 @@
+import { PROTOCOL_VERSION_0_1 } from '@membership-card-protocol/verifier';
+import type { SignedMessageEnvelope } from '@membership-card-protocol/verifier';
 import {
-  PROTOCOL_VERSION_0_1,
-  evaluatePolicyMatch,
-} from '@membership-card-protocol/verifier';
-import type {
-  ChainLink,
-  EnvelopeVerificationResult,
-  PolicyMatchConditions,
-  SignedMessageEnvelope,
-} from '@membership-card-protocol/verifier';
-import { canonicalize } from '../crypto/canonicalize.js';
-import { mlDsa44GetPublicKey, mlDsa44Sign } from '../crypto/mldsa.js';
-import { bytesToBase64Url } from '../util/base64url.js';
+  canonicalize,
+  mlDsa44GetPublicKey,
+  mlDsa44Sign,
+  bytesToBase64Url,
+  evaluateRoomPredicate,
+  type CardChainVerifier,
+  type RoomIndexResponse,
+  type RoomPredicateDocument,
+} from '@membership-card-protocol/app-sdk';
 
 /**
- * Client-side room discovery (Matrix Phase 4, Step 16b — `room_discovery.md
- * §2`). A card holder should be able to figure out which existing card-gated
- * Matrix rooms their card qualifies for, using only public data — no server
- * ever needs to learn which card is asking about which rooms.
+ * Client-side room discovery — signing half (Matrix Phase 4, Step 16b —
+ * `room_discovery.md §2`). Originally ported into `client-sdk`, now split
+ * out of that deprecated package: {@link buildRoomDiscoveryEnvelope} and
+ * {@link discoverRooms} both take a card's secret key directly, so they
+ * live here in `wallet-sdk` alongside every other raw-private-key
+ * operation; the key-independent predicate-evaluation logic and shared
+ * types (`evaluateRoomPredicate`, `RoomIndexResponse`, `RoomPredicateDocument`,
+ * `CardChainVerifier`) live in `app-sdk`'s `matrix/discovery.ts` and are
+ * imported from there.
  *
  * ```
  * discoverRooms(cardSecretKey, roomIndexUrl, ipfsGatewayUrl, cardVerifier) -> [room_id, ...]
@@ -46,13 +50,14 @@ import { bytesToBase64Url } from '../util/base64url.js';
  * carries the pubkey needed to decrypt the card's document. This function
  * now takes the card's secret key directly, builds a minimal self-signed
  * envelope (canonicalized + ML-DSA-44 signed the same way
- * `messaging/envelope.ts` signs real message envelopes), and calls
- * `verifyEnvelope` instead. **Do not "simplify" this back to `verifyCard`
- * with a bare hash — that is precisely the bug this comment documents.**
- * See `plans/membership_card_verifier_todo.md` item 2 for the long-term
- * fix (giving `verifyCard`/`verify_card` an optional pubkey/document input
- * so it can also return a real chain) — not done today, this call site
- * works around it by using the entry point that already supports it.
+ * `app-sdk`'s `messaging/envelope.ts` signs real message envelopes), and
+ * calls `verifyEnvelope` instead. **Do not "simplify" this back to
+ * `verifyCard` with a bare hash — that is precisely the bug this comment
+ * documents.** See `plans/membership_card_verifier_todo.md` item 2 for the
+ * long-term fix (giving `verifyCard`/`verify_card` an optional
+ * pubkey/document input so it can also return a real chain) — not done
+ * today, this call site works around it by using the entry point that
+ * already supports it.
  *
  * **Judgment call retained from the original version:** `room_discovery.md
  * §2` writes the signature with a bare `arbitrum_rpc` argument; this module
@@ -60,10 +65,10 @@ import { bytesToBase64Url } from '../util/base64url.js';
  * (`cardVerifier`) instead of a raw RPC URL, for the same reason
  * `CardVerifier.ts` never bundles or defaults RPC access — see that file's
  * header comment. The parameter is typed against the minimal
- * `CardChainVerifier` interface below (not the concrete `CardVerifier`
- * class) purely so callers/tests can supply anything that can answer
- * "what's this card's chain," without this module depending on
- * `CardVerifier`'s private internals.
+ * `CardChainVerifier` interface (imported from `app-sdk`) rather than the
+ * concrete `CardVerifier` class, purely so callers/tests can supply
+ * anything that can answer "what's this card's chain," without this module
+ * depending on `CardVerifier`'s private internals.
  *
  * **Privacy constraint (the entire point of this being a client-side
  * function rather than a server endpoint, per `room_discovery.md §2`):** no
@@ -81,33 +86,6 @@ import { bytesToBase64Url } from '../util/base64url.js';
  *   this function's behalf. The self-signed envelope itself never leaves
  *   this function — it's constructed and verified entirely locally.
  */
-export interface CardChainVerifier {
-  verifyEnvelope(envelope: SignedMessageEnvelope): Promise<EnvelopeVerificationResult>;
-}
-
-export interface RoomIndexEntry {
-  room_id: string;
-  policy_id: string;
-  created_at: string;
-}
-
-export interface RoomIndexResponse {
-  rooms: RoomIndexEntry[];
-  updated_at: string;
-}
-
-/** `matrix_room.md §The Room Predicate Document` — a flat `policies` list, `any_of`'d. */
-export interface RoomPredicatePolicyEntry {
-  ref_type: 'cid' | 'pointer';
-  ref: string;
-  /** Present only on `pointer`-originated entries; this, not `ref`, is what's actually evaluated. */
-  resolved_ref?: string;
-  field_match?: { field: string; regex: string };
-}
-
-export interface RoomPredicateDocument {
-  policies: RoomPredicatePolicyEntry[];
-}
 
 export interface DiscoverRoomsOptions {
   /**
@@ -122,37 +100,6 @@ export interface DiscoverRoomsOptions {
 
 function joinUrl(base: string, cid: string): string {
   return `${base.replace(/\/+$/, '')}/${cid}`;
-}
-
-function entryConditions(entry: RoomPredicatePolicyEntry): PolicyMatchConditions {
-  const policyId = entry.resolved_ref ?? entry.ref;
-  const fieldMatch = entry.field_match
-    ? { [entry.field_match.field]: { regex: entry.field_match.regex } }
-    : undefined;
-  return { policy_id: policyId, ...(fieldMatch ? { field_match: fieldMatch } : {}) };
-}
-
-/**
- * `predicates.py`'s `evaluate_room_predicate`, ported: a thin `any_of` loop
- * over the predicate document's `policies` list, each entry evaluated via
- * the verifier package's own exported `evaluatePolicyMatch` — never a
- * hand-written field-matching reimplementation. `evaluatePolicyMatch`
- * returns a `PolicyMatchResult | null` (reason codes added for
- * observability, not a plain boolean) — `null` (conditions not supplied —
- * can't happen here since every entry always supplies a `policy_id`) or
- * `{ matched: false, ... }` is treated as non-matching; "no entry matched"
- * denies, per this module's deny-by-default posture.
- */
-export function evaluateRoomPredicate(
-  predicateDocument: RoomPredicateDocument,
-  chain: ChainLink[]
-): boolean {
-  for (const entry of predicateDocument.policies ?? []) {
-    if (evaluatePolicyMatch(chain, entryConditions(entry))?.matched === true) {
-      return true;
-    }
-  }
-  return false;
 }
 
 async function fetchPredicateDocument(
@@ -173,9 +120,9 @@ async function fetchPredicateDocument(
  * Builds and signs a minimal, self-contained statement purely to drive
  * `CardVerifier.verifyEnvelope`'s chain walk — this is not a real protocol
  * message (no recipients, not persisted) and deliberately doesn't reuse
- * `messaging/envelope.ts`'s `MessageType`-typed builders, which carry fields
- * (recipients/senders) this local-only statement has no use for.
- * Canonicalization and signing are the same primitives real message
+ * `app-sdk`'s `messaging/envelope.ts`'s `MessageType`-typed builders, which
+ * carry fields (recipients/senders) this local-only statement has no use
+ * for. Canonicalization and signing are the same primitives real message
  * envelopes use (`canonicalize`, `mlDsa44Sign`) — only the payload shape is
  * intentionally minimal.
  *

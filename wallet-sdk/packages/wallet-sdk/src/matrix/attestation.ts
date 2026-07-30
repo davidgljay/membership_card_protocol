@@ -1,14 +1,24 @@
 import { PROTOCOL_VERSION_0_1 } from '@membership-card-protocol/verifier';
-import { canonicalize } from '../crypto/canonicalize.js';
-import { mlDsa44GetPublicKey, mlDsa44Sign } from '../crypto/mldsa.js';
-import { bytesToBase64Url } from '../util/base64url.js';
-import type { EnvelopeSignatureEntry } from '../messaging/envelope.js';
-import { deriveMatrixUserId, hexToBytes } from './account-id.js';
-import { keccak256 } from '../crypto/hashes.js';
+import {
+  canonicalize,
+  mlDsa44GetPublicKey,
+  mlDsa44Sign,
+  keccak256,
+  bytesToBase64Url,
+  deriveMatrixUserId,
+  hexToBytes,
+  type EnvelopeSignatureEntry,
+} from '@membership-card-protocol/app-sdk';
 
 /**
  * Join-attestation construction (Matrix Phase 5, Step 17a —
  * `specs/process_specs/matrix_join_attestation_and_revocation.md §1`).
+ * Originally ported into `client-sdk`, now split out of that deprecated
+ * package into `wallet-sdk`, since {@link buildJoinAttestation} takes a
+ * card's secret key directly and this SDK is where every other
+ * raw-private-key operation (wallet setup, offer countersigning, subcard
+ * consent) lives; `deriveMatrixUserId` itself (no key needed) stays in
+ * `app-sdk`, imported from there.
  *
  * A card holder's client signs a short-lived statement asserting which card
  * is about to join which room, under which shadow Matrix account, so the
@@ -23,8 +33,8 @@ import { keccak256 } from '../crypto/hashes.js';
  *
  * Reuses the exact same signing primitives every other envelope in this SDK
  * uses (`canonicalize`, `mlDsa44Sign`, `bytesToBase64Url` — the same call
- * site `messaging/envelope.ts`'s `signMessageEnvelopeSync` uses), following
- * the pattern already established by `matrix/discovery.ts`'s
+ * site `app-sdk`'s `messaging/envelope.ts`'s `signMessageEnvelopeSync` uses),
+ * following the pattern already established by `matrix/discovery.ts`'s
  * `buildRoomDiscoveryEnvelope`: a minimal, self-contained, non-`MessageType`
  * payload, canonicalized and signed the same way, rather than a new signing
  * path. Unlike `buildRoomDiscoveryEnvelope`'s payload (no card-identifying

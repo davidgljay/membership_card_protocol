@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { joinRoomWithAttestation, encryptRoomEvent, decryptRoomEvent } from '../../src/matrix/session.js';
 import { JOIN_ATTESTATION_EVENT_CONTENT_KEY } from '../../src/matrix/attestation.js';
-import { mlDsa44GenerateKeypair } from '../../src/crypto/mldsa.js';
+import { mlDsa44GenerateKeypair } from '@membership-card-protocol/app-sdk';
 import type { MegolmCryptoProvider } from '../../src/matrix/crypto-provider.js';
 
 const ROOM_ID = '!card-gated-room:matrix.internal';
