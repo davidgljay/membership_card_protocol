@@ -6,3 +6,4 @@ export * from './offers/index.js';
 export * from './subcards/index.js';
 export * from './messaging/index.js';
 export * from './util/index.js';
+export * from './matrix/index.js';
