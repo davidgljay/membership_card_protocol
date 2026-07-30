@@ -64,13 +64,11 @@
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
+import { mlDsa44GenerateKeypair, keccak256, deriveMatrixUserId } from '@membership-card-protocol/app-sdk';
 import {
-  mlDsa44GenerateKeypair,
-  keccak256,
-  deriveMatrixUserId,
   buildJoinAttestation,
   JOIN_ATTESTATION_EVENT_CONTENT_KEY,
-} from '@membership-card-protocol/client-sdk';
+} from '@membership-card-protocol/wallet-sdk';
 import {
   SYNAPSE_BASE_URL,
   MATRIX_SERVER_NAME,

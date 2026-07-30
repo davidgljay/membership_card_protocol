@@ -17,7 +17,7 @@ import type { MultiInstanceLock } from '../providers/MultiInstanceLock.js';
  * file:
  *
  * ```ts
- * import { storageProviderContractTests } from '@membership-card-protocol/client-sdk/testing';
+ * import { storageProviderContractTests } from '@membership-card-protocol/app-sdk/testing';
  *
  * describe('IndexedDBStorageProvider contract', () => {
  *   for (const [name, run] of Object.entries(storageProviderContractTests(() => new IndexedDBStorageProvider()))) {

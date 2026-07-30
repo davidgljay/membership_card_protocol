@@ -131,8 +131,8 @@ suite for object-level invariants no process suite happens to assert.
 | Object spec | Coverage |
 |---|---|
 | `app_sdk.md` | Named process suites — every `core/`/`extended/` suite imports and exercises `@membership-card-protocol/app-sdk`'s real exported functions (offer assembly, messaging, crypto, transport) as its actual implementation, not a mock. No dedicated suite. |
-| `client_sdk.md` | Named process suites — `extended/wallet_backup_and_recovery.spec.ts`, `extended/card_migration.spec.ts`, and the `matrix-relay/` suites exercise `@membership-card-protocol/client-sdk`'s real `setupWallet`/`recoverWallet`/`registerBackup`/`buildJoinAttestation`/etc. No dedicated suite. |
-| `wallet_sdk.md` | Named process suites (web/RN harnesses, Phase 2) plus the same client-sdk-adjacent coverage above. No dedicated suite. |
+| `client_sdk.md` | Deprecated — superseded by `app_sdk.md`/`wallet_sdk.md` below; no suite exercises `@membership-card-protocol/client-sdk` anymore. |
+| `wallet_sdk.md` | Named process suites — `extended/wallet_backup_and_recovery.spec.ts` and the `matrix-relay/` suites exercise `@membership-card-protocol/wallet-sdk`'s real `setupWallet`/`recoverWallet`/`registerBackup`/`buildJoinAttestation`/etc. (web/RN harnesses, Phase 2) plus the same coverage above. No dedicated suite. |
 | `press.md` | Named process suites — nearly every `core/` and several `extended/` suites (`policy_creation`, `log_auditing`, `subcard_creation_policy`, `oblivious_transport`) exercise press's real HTTP handlers end-to-end. |
 | `wallet.md` | Named process suites — `extended/wallet_backup_and_recovery.spec.ts` (backup/recovery, account creation, rate limits), `extended/card_migration.spec.ts` (`/bindings/announce`), `matrix-relay/*` (`/matrix/token`-equivalent via the bypass documented above). |
 | `relay.md` | Named process suites — `matrix-relay/message_routing.spec.ts`, `matrix-relay/notification_relay.spec.ts`, `extended/oblivious_transport.spec.ts` (the OHTTP forwarding path). |

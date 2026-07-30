@@ -55,7 +55,7 @@
  * real satisfying card.
  *
  * **What CAN be tested:**
- * - `client-sdk`'s `discoverRooms` function's pure logic (envelope
+ * - `wallet-sdk`'s `discoverRooms` function's pure logic (envelope
  *   building, signature verification, `evaluateRoomPredicate`) in isolation,
  *   with synthetic/empty room-index data that doesn't require IPFS.
  * - `wallet-service`'s `discoverEligibleRooms` logic, same way — it's a
@@ -91,9 +91,9 @@ import {
   mlDsa44GenerateKeypair,
   mlDsa44GetPublicKey,
   keccak256,
-  buildRoomDiscoveryEnvelope,
-} from '@membership-card-protocol/client-sdk';
-import { base64UrlToBytes } from '@membership-card-protocol/app-sdk';
+  base64UrlToBytes,
+} from '@membership-card-protocol/app-sdk';
+import { buildRoomDiscoveryEnvelope } from '@membership-card-protocol/wallet-sdk';
 import { canonicalize as verifierCanonicalize, mlDsa44Verify as verifierMlDsa44Verify } from '@membership-card-protocol/verifier';
 
 const WALLET_SERVICE_BASE_URL = (process.env.SUITE_WALLET_SERVICE_URL ?? 'http://localhost:3002').replace(/\/$/, '');
@@ -187,7 +187,7 @@ describe('room_discovery.md (live stack)', () => {
   });
 
   describe('§2 Client-Side Discovery (default algorithm)', () => {
-    it('client-sdk exports buildRoomDiscoveryEnvelope and discoverRooms as expected', () => {
+    it('wallet-sdk exports buildRoomDiscoveryEnvelope and discoverRooms as expected', () => {
       // Verify the client-side functions exist and are callable
       const keypair = mlDsa44GenerateKeypair();
       const envelope = buildRoomDiscoveryEnvelope(keypair.secretKey);
@@ -227,7 +227,7 @@ describe('room_discovery.md (live stack)', () => {
         'real Arbitrum Sepolia, and this repo has no IPFS-pinning capability, ' +
         'so no real card can be minted and no real predicate document can be ' +
         'pinned within this test suite. Testing the pure logic in isolation ' +
-        'against synthetic data would duplicate client-sdk/test/matrix/discovery.test.ts ' +
+        'against synthetic data would duplicate wallet-sdk/test/matrix/discovery.test.ts ' +
         'and wallet-service/test/integration/matrix-room-lifecycle.test.ts ' +
         'exactly — both suites already exist and pass. The integration value ' +
         'of this suite is testing the HTTP endpoints and server-side flow, ' +
@@ -298,7 +298,7 @@ describe('room_discovery.md (live stack)', () => {
         'With no real chain/IPFS available (Blocker 2), the happy path cannot be ' +
         'exercised — every room would be rejected due to unresolvable chain or missing ' +
         'predicate documents. A synthetic test (mocking the chain and predicate ' +
-        'documents) would repeat client-sdk and wallet-service\'s own unit tests. ' +
+        'documents) would repeat wallet-sdk and wallet-service\'s own unit tests. ' +
         'The real integration value would come from a test with actual on-chain cards, ' +
         'which awaits the environment upgrade to local chain/IPFS support.'
     );

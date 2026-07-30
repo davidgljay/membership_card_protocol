@@ -92,15 +92,27 @@ touches a secret key), so it's a port, not a new design.
    `"@membership-card-protocol/wallet-sdk": "file:../../wallet-sdk/packages/wallet-sdk"`
    (app-sdk dependency already present).
 
-5. **Clean up stale references** — remove
-   `.github/workflows/client-sdk-ci.yml`, and update the doc-comment
+5. **Clean up stale doc-comment references** — update the doc-comment
    mentions in `app-sdk/src/providers/RealtimeTransportProvider.ts`,
-   `MultiInstanceLock.ts`, and `testing/providerContracts.ts` to stop
-   naming `client-sdk-web`/`client-sdk-rn`/`client-sdk/testing`.
+   `MultiInstanceLock.ts`, and `testing/providerContracts.ts`, which name
+   long-renamed packages `client-sdk-web`/`client-sdk-rn`/
+   `client-sdk/testing` (now `sdk-providers-web`/`sdk-providers-rn`/
+   `app-sdk/testing`). `.github/workflows/client-sdk-ci.yml` stays — it
+   CIs the `client-sdk` package itself, which still exists and isn't being
+   deleted by this plan (only its `matrix/` module moves out, step 1).
 
-6. **Remove `client-sdk/` and `client-sdk-old/`** once `integration_tests`
-   is green with no remaining references anywhere in the repo (`grep -r
-   client-sdk` should only hit this plan doc and CHANGELOGs).
+6. **Delete `client-sdk/packages/client-sdk/src/matrix/`** (and its tests)
+   once both halves are ported to app-sdk/wallet-sdk and passing, and
+   `integration_tests` no longer imports it — it's now dead, duplicated
+   code inside the client-sdk package itself. **Out of scope for this
+   plan: deleting the rest of the `client-sdk` package.** Only
+   `integration_tests` was found to depend on it (see above);
+   `client-sdk`'s own CI (`.github/workflows/client-sdk-ci.yml`) still
+   builds and tests it standalone, and this plan has no evidence on
+   whether anything outside this repo (a published npm consumer) still
+   depends on it. Retiring the package entirely is a separate, larger
+   decision than redirecting this repo's own integration tests off it —
+   flag it to David rather than deleting unilaterally.
 
 ## Ordering / risk notes
 
@@ -111,5 +123,6 @@ touches a secret key), so it's a port, not a new design.
   the matrix port.
 - Do steps 3-4 together per spec file (or all at once) so
   `integration_tests` never sits with a half-migrated package.json.
-- Keep step 6 last and gated on a full green `integration_tests` run —
-  don't delete client-sdk source until nothing imports it.
+- Step 6's matrix/ deletion is gated on a full green `integration_tests`
+  run — don't delete even that much client-sdk source until nothing
+  imports it. The rest of the package is not this plan's to remove.
