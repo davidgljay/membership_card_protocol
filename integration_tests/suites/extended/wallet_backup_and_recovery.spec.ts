@@ -222,7 +222,11 @@ class InMemoryStorageProvider implements StorageProvider {
 function makeStubWalletAppCard(): WalletAppCardIdentity {
   const keypair = mlDsa44GenerateKeypair();
   return {
-    cardPointer: 'stub-wallet-app-card',
+    // Must be keccak256(publicKey), no 0x prefix — handleSubCardRequest's
+    // app_card_binding_mismatch check (wallet-sdk's handleSubCardRequest.ts)
+    // compares it directly against keccak256()'s raw hex output, matching
+    // wallet-sdk's own setupWallet.test.ts fixture.
+    cardPointer: keccak256(keypair.publicKey),
     publicKey: keypair.publicKey,
     sign: (message: Uint8Array) => mlDsa44Sign(keypair.secretKey, message),
   };
