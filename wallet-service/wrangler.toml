@@ -1,5 +1,12 @@
+# main points into .output-cloudflare-module/, not .output/ — nitro.config.ts
+# keys the output dir off NITRO_PRESET (`.output-${NITRO_PRESET}`) to avoid the
+# cloudflare/node/lambda presets silently overwriting each other's build
+# artifact at a shared .output/ path (see nitro.config.ts's comment). This
+# file must always build with NITRO_PRESET=cloudflare-module (the default)
+# before `wrangler deploy` — scripts/deploy.sh does this — or main below
+# won't exist yet.
 name = "wallet-service"
-main = ".output/server/index.mjs"
+main = ".output-cloudflare-module/server/index.mjs"
 compatibility_date = "2026-06-29"
 compatibility_flags = ["nodejs_compat"]
 
@@ -10,3 +17,23 @@ compatibility_flags = ["nodejs_compat"]
 [[kv_namespaces]]
 binding = "WALLET_KV"
 id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+# Per-environment blocks used by scripts/deploy.sh <dev|prod>. Each
+# environment gets its own Worker name and its own KV namespace so dev and
+# prod state never mix. Provision each namespace with:
+#   npx wrangler kv namespace create WALLET_KV --env dev
+#   npx wrangler kv namespace create WALLET_KV --env prod
+# and replace the id below with the value it prints.
+[env.dev]
+name = "wallet-service-dev"
+
+[[env.dev.kv_namespaces]]
+binding = "WALLET_KV"
+id = "REPLACE_WITH_DEV_KV_NAMESPACE_ID"
+
+[env.prod]
+name = "wallet-service-prod"
+
+[[env.prod.kv_namespaces]]
+binding = "WALLET_KV"
+id = "REPLACE_WITH_PROD_KV_NAMESPACE_ID"
