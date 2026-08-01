@@ -20,9 +20,12 @@
 #                         no other flag alongside a full run.
 #
 # Known, currently-red steps NOT caused by this script: wallet-service's
-# and client-sdk's own unit-test suites have pre-existing gaps unrelated
-# to run.sh's own orchestration (see reports/2026-07-24-unit-test-gaps.md)
-# -- expect those two steps to fail until that's separately fixed.
+# own unit-test suite has pre-existing gaps unrelated to run.sh's own
+# orchestration (see reports/2026-07-24-unit-test-gaps.md) -- expect that
+# step to fail until that's separately fixed.
+#
+# client-sdk is deprecated (renamed to client-sdk-old/) and no longer
+# tested here or in CI -- see plans/deployment/client-sdk-deprecation-plan.md.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -151,11 +154,9 @@ run_unit_tests() {
   # SDK workspaces share file: dependencies across separate top-level pnpm
   # workspaces (not a single pnpm-workspace), so each must be installed
   # *and built* before the next one's install can resolve real dist/
-  # output — same ordering client-sdk-ci.yml already establishes for
-  # membership_card_verifier -> client-sdk. Extended here to the full
-  # chain: membership_card_verifier -> app-sdk -> {sdk-providers-rn,
-  # sdk-providers-web} -> wallet-sdk, and membership_card_verifier ->
-  # client-sdk independently.
+  # output. Chain: membership_card_verifier -> app-sdk ->
+  # {sdk-providers-rn, sdk-providers-web} -> wallet-sdk. client-sdk
+  # (renamed client-sdk-old/) is deprecated and no longer built/tested here.
   step "membership_card_verifier: pnpm -r test" \
     bash -c "cd '$ROOT/membership_card_verifier' && pnpm install --frozen-lockfile && pnpm run build && pnpm run typecheck && pnpm run test"
 
@@ -170,9 +171,6 @@ run_unit_tests() {
 
   step "wallet-sdk: pnpm -r test" \
     bash -c "cd '$ROOT/wallet-sdk' && pnpm install --frozen-lockfile && pnpm run build && pnpm run typecheck && pnpm run test"
-
-  step "client-sdk: pnpm -r test" \
-    bash -c "cd '$ROOT/client-sdk' && pnpm install --frozen-lockfile && pnpm run build && pnpm run typecheck && pnpm run test"
 }
 
 run_integration() {

@@ -87,8 +87,7 @@ runs `run.sh` on every pull request, and is invoked as a reusable workflow
 (`workflow_call`) by the deploy-adjacent workflows so a red suite blocks the
 deploy rather than just failing a check no one is required to look at:
 [`relay-deploy.yml`](../.github/workflows/relay-deploy.yml),
-[`wallet-service-ci.yml`](../.github/workflows/wallet-service-ci.yml),
-[`client-sdk-ci.yml`](../.github/workflows/client-sdk-ci.yml), and
+[`wallet-service-ci.yml`](../.github/workflows/wallet-service-ci.yml), and
 [`publish-verifier.yml`](../.github/workflows/publish-verifier.yml) each add
 an `integration-tests` job that calls the reusable workflow, with their own
 deploy/publish job listing it in `needs:`. See

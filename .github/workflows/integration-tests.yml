@@ -9,9 +9,9 @@ name: Integration Tests
 # to main (once standalone, once via the calling deploy workflow).
 #   - `pull_request` — gates PRs directly.
 #   - `workflow_call` — gates deploy workflows (6.3: relay-deploy.yml,
-#     wallet-service-ci.yml, client-sdk-ci.yml, publish-verifier.yml each
-#     add a job that `uses: ./.github/workflows/integration-tests.yml` and
-#     make their deploy job `needs:` it).
+#     wallet-service-ci.yml, publish-verifier.yml each add a job that
+#     `uses: ./.github/workflows/integration-tests.yml` and make their
+#     deploy job `needs:` it).
 #   - `workflow_dispatch` — manual runs, same convention as relay-deploy.yml.
 on:
   pull_request: {}
