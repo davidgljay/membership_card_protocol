@@ -1,0 +1,85 @@
+# DigitalOcean App Platform spec — dev environment.
+#
+# Secret-typed env vars below are declared with no value on purpose (per
+# strategic-plan.md Open Question 5): set their real values once, out of
+# band, in the DO dashboard (App > Settings > <component> > Environment
+# Variables) or via `doctl apps update` run by hand -- never through this
+# checked-in spec or through CI, so secret values never transit a spec file
+# or CI logs. `scripts/deploy.sh` only ever pushes this spec's *structure*
+# (which vars exist, non-secret values), never secret values.
+#
+# Replace <your-github-org>/<your-repo> with the real GitHub remote before
+# first use -- App Platform builds from a GitHub source, not a local
+# Dockerfile push.
+name: relay-dev
+region: nyc
+services:
+  - name: relay
+    github:
+      repo: <your-github-org>/<your-repo>
+      branch: main
+      deploy_on_push: false
+    dockerfile_path: relay/Dockerfile
+    source_dir: /
+    http_port: 3000
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    health_check:
+      http_path: /health
+      initial_delay_seconds: 10
+      period_seconds: 10
+    envs:
+      - key: NODE_ENV
+        scope: RUN_TIME
+        type: GENERAL
+        value: production
+      - key: RELAY_ID
+        scope: RUN_TIME
+        type: GENERAL
+        value: relay-dev-1
+      - key: PORT
+        scope: RUN_TIME
+        type: GENERAL
+        value: "3000"
+      - key: UUID_TTL_SECONDS
+        scope: RUN_TIME
+        type: GENERAL
+        value: "2592000"
+      - key: DEVICE_REGISTRY_RETENTION_DAYS
+        scope: RUN_TIME
+        type: GENERAL
+        value: "90"
+      - key: DELETE_JOB_POLL_INTERVAL_MS
+        scope: RUN_TIME
+        type: GENERAL
+        value: "60000"
+      - key: MAX_DELETE_DELAY_SECONDS
+        scope: RUN_TIME
+        type: GENERAL
+        value: "21600"
+      # DB_PATH intentionally points at local ephemeral disk, not a
+      # persistent volume -- App Platform does not support mounting
+      # persistent volumes into app components. The SQLite device registry
+      # does NOT survive redeploys/restarts on this platform. See
+      # relay/DEPLOYMENT.md "Known limitations" before using this for real
+      # traffic; acceptable for dev, must be resolved before prod cutover.
+      - key: DB_PATH
+        scope: RUN_TIME
+        type: GENERAL
+        value: /tmp/registry.db
+      - key: APP_REGISTRY_PATH
+        scope: RUN_TIME
+        type: GENERAL
+        value: /app/config/apps.json
+      # --- Secrets: values set out-of-band, never via this spec ---
+      - key: REDIS_URL
+        scope: RUN_TIME
+        type: SECRET
+      - key: APP_REGISTRY_JSON
+        scope: RUN_TIME
+        type: SECRET
+      # One <PLATFORM>_<APP_ID>_B64 secret per app in the registry -- see
+      # relay/DEPLOYMENT.md. Example for the sample "example-wallet" app:
+      - key: APNS_KEY_EXAMPLE_WALLET_B64
+        scope: RUN_TIME
+        type: SECRET
