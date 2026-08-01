@@ -1,5 +1,15 @@
 # Card Protocol — Client SDK
 
+> **⚠️ DEPRECATED (2026-07-31).** This package is superseded by the split
+> `app-sdk`/`wallet-sdk` packages and should not be used for new work. Its
+> Matrix module has been ported to `app-sdk`/`wallet-sdk` (see
+> `plans/deployment/client-sdk-deprecation-plan.md`), `integration_tests` no
+> longer depends on it, and it has been renamed from `client-sdk/` to
+> `client-sdk-old/` and dropped from CI (`.github/workflows/client-sdk-ci.yml`
+> removed, `run.sh`'s client-sdk step removed) as the first step of retiring
+> it. It is kept around only in case something outside this repo still
+> depends on the published package; do not build on it further.
+
 Monorepo for `@membership-card-protocol/client-sdk` and its default platform
 providers. See [`plans/client-sdk/strategic-plan.md`](../plans/client-sdk/strategic-plan.md)
 and [`plans/client-sdk/implementation-plan.md`](../plans/client-sdk/implementation-plan.md)

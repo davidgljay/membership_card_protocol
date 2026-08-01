@@ -88,12 +88,13 @@ function rejection(code: OfferRejectionCode, reason: string): OfferRejection {
 
 async function verifyIssuerChainAndPress(
   issuerAddress: string,
+  issuerPubkeyBase64: string,
   pressCard: string,
   options: OfferChainVerificationOptions
 ): Promise<{ issuerVerification: CardVerificationResult; pressAdvisoryWarning?: string } | OfferRejection> {
   let issuerVerification: CardVerificationResult;
   try {
-    issuerVerification = await options.cardVerifier.verifyCard(issuerAddress);
+    issuerVerification = await options.cardVerifier.verifyCard(issuerAddress, { pubkey: issuerPubkeyBase64 });
   } catch (err) {
     return rejection(
       'verification_error',
@@ -167,7 +168,7 @@ export async function reviewTargetedOffer(
     return rejection('issuer_signature_invalid', "issuer_signature does not verify against the issuer's public key.");
   }
 
-  const chainResult = await verifyIssuerChainAndPress(derivedIssuerAddress, offer.press_card, options);
+  const chainResult = await verifyIssuerChainAndPress(derivedIssuerAddress, issuerPubkeyBase64, offer.press_card, options);
   if ('approved' in chainResult) return chainResult;
 
   return {
@@ -204,7 +205,7 @@ export async function reviewOpenOffer(
     return rejection('issuer_signature_invalid', "issuer_signature does not verify against the issuer's public key.");
   }
 
-  const chainResult = await verifyIssuerChainAndPress(derivedIssuerAddress, offer.press_card, options);
+  const chainResult = await verifyIssuerChainAndPress(derivedIssuerAddress, offer.issuer_pubkey, offer.press_card, options);
   if ('approved' in chainResult) return chainResult;
 
   return {

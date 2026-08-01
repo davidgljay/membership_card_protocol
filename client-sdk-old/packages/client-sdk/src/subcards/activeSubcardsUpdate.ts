@@ -1,7 +1,7 @@
 import { canonicalize } from '../crypto/canonicalize.js';
 import { bytesToBase64Url } from '../util/base64url.js';
 import type { ObliviousProtocolTransport } from '../providers/ObliviousProtocolTransport.js';
-import { UpdateIntentSigner } from './revocation.js';
+import type { UpdateIntentSigner } from './revocation.js';
 
 /**
  * Operations on a holder's `active_subcards` directory via update codes 510/511/512.

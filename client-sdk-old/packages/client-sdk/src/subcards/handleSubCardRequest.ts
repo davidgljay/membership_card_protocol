@@ -112,7 +112,9 @@ export async function handleSubCardRequest(options: HandleSubCardRequestOptions)
 
   let appCardVerification: CardVerificationResult;
   try {
-    appCardVerification = await options.cardVerifier.verifyCard(appCardAddress);
+    appCardVerification = await options.cardVerifier.verifyCard(appCardAddress, {
+      pubkey: request.app_card_pubkey,
+    });
   } catch (err) {
     return rejection(
       'verification_error',

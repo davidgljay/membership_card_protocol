@@ -12,14 +12,29 @@ import { keccak256 } from '../../src/crypto/hashes.js';
 import { base64UrlToBytes } from '../../src/util/base64url.js';
 import type { WalletAppCardIdentity } from '../../src/wallet/deviceSubCard.js';
 import type { SecureKeyProvider } from '../../src/providers/SecureKeyProvider.js';
+// Reused directly from the verifier package's own test suite (same monorepo
+// pattern as client-sdk/test/matrix/discovery.test.ts) — `handleSubCardRequest`
+// passes `pubkey` to `verifyCard`, so `is_currently_valid` requires a real,
+// decryptable `CardDocument` at the app card's `log_head_cid`.
+import {
+  encryptForCard,
+  makeCardDoc,
+} from '../../../../../membership_card_verifier/packages/verifier/test/fixtures.js';
 
 const GOVERNANCE_APP_CERT_ROOT = 'ff'.repeat(32);
+const APP_CARD_CID = 'QmAppCardGenesis';
 
-const fakeIpfs: IpfsProvider = {
-  fetch: async () => {
-    throw new Error('not used — fetchAnnotations is false');
-  },
-};
+/** A real, self-signed genesis `CardDocument` for the app card (no `entry_type` -> Stage 4 treats it as never updated / not revoked). */
+function appCardIpfs(appCardPublicKey: Uint8Array, appCardSecretKey: Uint8Array): IpfsProvider {
+  const doc = makeCardDoc(appCardPublicKey, appCardSecretKey, appCardSecretKey, appCardSecretKey, []);
+  const encoded = encryptForCard(appCardPublicKey, Buffer.from(JSON.stringify(doc)));
+  return {
+    fetch: async (cid: string) => {
+      if (cid !== APP_CARD_CID) throw new Error(`unexpected cid: ${cid}`);
+      return encoded;
+    },
+  };
+}
 
 function makeFakeSecureKeyProvider(): SecureKeyProvider & { keys: Map<string, Uint8Array> } {
   const keys = new Map<string, Uint8Array>();
@@ -42,12 +57,15 @@ function makeFakeSecureKeyProvider(): SecureKeyProvider & { keys: Map<string, Ui
   };
 }
 
-function makeFakeAppCard(): WalletAppCardIdentity {
+function makeFakeAppCard(): { identity: WalletAppCardIdentity; secretKey: Uint8Array } {
   const keypair = mlDsa44GenerateKeypair();
   return {
-    cardPointer: keccak256(keypair.publicKey),
-    publicKey: keypair.publicKey,
-    sign: (message: Uint8Array) => mlDsa44Sign(keypair.secretKey, message),
+    identity: {
+      cardPointer: keccak256(keypair.publicKey),
+      publicKey: keypair.publicKey,
+      sign: (message: Uint8Array) => mlDsa44Sign(keypair.secretKey, message),
+    },
+    secretKey: keypair.secretKey,
   };
 }
 
@@ -55,12 +73,12 @@ function makeHappyPathRpc(appCardAddress: string): RpcProvider {
   return {
     getCardEntry: async (address) =>
       address === appCardAddress
-        ? { log_head_cid: 'cid', policy_address: 'policy', last_press_address: 'press', forward_to: null, exists: true }
+        ? { log_head_cid: APP_CARD_CID, policy_address: 'policy', last_press_address: 'press', forward_to: null, exists: true }
         : null,
     isPolicyAuthorizer: async (address) => address === appCardAddress,
     getPressAuthorization: async () => null,
     getSubCardEntry: async () => null,
-    getLogEntries: async () => [],
+    getCardEventLog: async () => [],
     getEasAnnotations: async () => [],
   };
 }
@@ -72,17 +90,17 @@ async function makeConsent(capabilities: string[], grantable: string[]): Promise
   const { document } = await requestSubCard({
     secureKeyProvider,
     subCardKeyId: 'app-sub-card-key',
-    appCard,
+    appCard: appCard.identity,
     holderPrimaryCard: keccak256(holder.publicKey),
     holderPrimaryCardPubkey: holder.publicKey,
     capabilities,
     attestationLevel: 'T1',
   });
 
-  const appCardAddress = keccak256(appCard.publicKey);
+  const appCardAddress = keccak256(appCard.identity.publicKey);
   const cardVerifier = createCardVerifier({
     rpc: makeHappyPathRpc(appCardAddress),
-    ipfs: fakeIpfs,
+    ipfs: appCardIpfs(appCard.identity.publicKey, appCard.secretKey),
     appCertificationRoot: GOVERNANCE_APP_CERT_ROOT,
     trustedRoots: [GOVERNANCE_APP_CERT_ROOT, appCardAddress],
   });
@@ -95,7 +113,7 @@ async function makeConsent(capabilities: string[], grantable: string[]): Promise
     walletGrantableCapabilities: grantable,
   });
 
-  return { consent, holder, appCard };
+  return { consent, holder, appCard: appCard.identity };
 }
 
 describe('countersignSubCardRequest', () => {
@@ -159,7 +177,7 @@ describe('countersignSubCardRequest', () => {
 describe('self-signing exception (Step 2.2, unchanged)', () => {
   it('registers the wallet\'s own device sub-card without any SubCardConsentData ever being constructed', async () => {
     const secureKeyProvider = makeFakeSecureKeyProvider();
-    const walletAppCard = makeFakeAppCard(); // stands in for the wallet's own app card
+    const walletAppCard = makeFakeAppCard().identity; // stands in for the wallet's own app card
     const master = mlDsa44GenerateKeypair();
     const registerSubCard = vi.fn(async (_doc: SignedSubCardDocument) => ({ registered: true }));
 

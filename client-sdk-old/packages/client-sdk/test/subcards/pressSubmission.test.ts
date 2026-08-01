@@ -61,7 +61,7 @@ describe('submitSubCardRegistration', () => {
     expect(result).toEqual({ subCardDocCid: 'cid-123', txHash: '0xabc' });
     expect(calls).toHaveLength(1);
     expect(calls[0]!.destination).toEqual({ kind: 'press', baseUrl: PRESS_BASE_URL });
-    expect(calls[0]!.options.path).toBe('/sub-card/register');
+    expect(calls[0]!.options.path).toBe('/api/sub-card/register');
     expect(calls[0]!.options.method).toBe('POST');
     const sentBody = JSON.parse(new TextDecoder().decode(calls[0]!.options.body));
     expect(sentBody).toEqual(document);

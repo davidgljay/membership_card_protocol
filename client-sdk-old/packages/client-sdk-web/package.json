@@ -29,6 +29,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@matrix-org/matrix-sdk-crypto-wasm": "^18.3.1",
     "@membership-card-protocol/client-sdk": "workspace:*"
   },
   "devDependencies": {

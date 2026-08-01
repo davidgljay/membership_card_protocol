@@ -7,6 +7,15 @@ import { mlDsa44GenerateKeypair, mlDsa44Sign } from '../../src/crypto/mldsa.js';
 import { keccak256 } from '../../src/crypto/hashes.js';
 import type { WalletAppCardIdentity } from '../../src/wallet/deviceSubCard.js';
 import type { SecureKeyProvider } from '../../src/providers/SecureKeyProvider.js';
+// Reused directly from the verifier package's own test suite (same monorepo
+// pattern as client-sdk/test/matrix/discovery.test.ts) — `handleSubCardRequest`
+// now passes `pubkey` to `verifyCard`, so `is_currently_valid` requires a
+// real, decryptable `CardDocument` at the app card's `log_head_cid`, not
+// just an RPC-level stub.
+import {
+  encryptForCard,
+  makeCardDoc,
+} from '../../../../../membership_card_verifier/packages/verifier/test/fixtures.js';
 
 function makeFakeSecureKeyProvider(): SecureKeyProvider {
   const secretKeys = new Map<string, Uint8Array>();
@@ -26,19 +35,24 @@ function makeFakeSecureKeyProvider(): SecureKeyProvider {
   };
 }
 
-function makeFakeAppCard(): WalletAppCardIdentity {
+/** Also returns the app card's own secret key, so tests can build a real, self-signed genesis CardDocument for it (its content is fetched/decrypted via `verifyCard(..., { pubkey })`). */
+function makeFakeAppCard(): { identity: WalletAppCardIdentity; secretKey: Uint8Array } {
   const keypair = mlDsa44GenerateKeypair();
   return {
-    // Must equal keccak256(publicKey) — handleSubCardRequest's own binding
-    // check exercises this, unlike requestSubCard (Step 4.1), which never
-    // needed app_card/app_card_pubkey to be self-consistent.
-    cardPointer: keccak256(keypair.publicKey),
-    publicKey: keypair.publicKey,
-    sign: (message: Uint8Array) => mlDsa44Sign(keypair.secretKey, message),
+    identity: {
+      // Must equal keccak256(publicKey) — handleSubCardRequest's own binding
+      // check exercises this, unlike requestSubCard (Step 4.1), which never
+      // needed app_card/app_card_pubkey to be self-consistent.
+      cardPointer: keccak256(keypair.publicKey),
+      publicKey: keypair.publicKey,
+      sign: (message: Uint8Array) => mlDsa44Sign(keypair.secretKey, message),
+    },
+    secretKey: keypair.secretKey,
   };
 }
 
 const GOVERNANCE_APP_CERT_ROOT = 'ff'.repeat(32);
+const APP_CARD_CID = 'QmAppCardGenesis';
 
 const fakeIpfs: IpfsProvider = {
   fetch: async () => {
@@ -46,17 +60,40 @@ const fakeIpfs: IpfsProvider = {
   },
 };
 
+/**
+ * A real, self-signed genesis `CardDocument` for the app card (no
+ * `entry_type` -> Stage 4 treats it as "never updated" / not revoked),
+ * encrypted so `verifyCard(appCardAddress, { pubkey })` can actually
+ * decrypt it via Stage 3.
+ */
+function appCardIpfs(appCardPublicKey: Uint8Array, appCardSecretKey: Uint8Array): IpfsProvider {
+  const doc = makeCardDoc(appCardPublicKey, appCardSecretKey, appCardSecretKey, appCardSecretKey, []);
+  const encoded = encryptForCard(appCardPublicKey, Buffer.from(JSON.stringify(doc)));
+  return {
+    fetch: async (cid: string) => {
+      if (cid !== APP_CARD_CID) throw new Error(`unexpected cid: ${cid}`);
+      return encoded;
+    },
+  };
+}
+
 /** A stub RPC where `appCardAddress` is registered, reaches the app-cert root, and is not revoked, unless overridden. */
 function makeHappyPathRpc(appCardAddress: string, overrides: Partial<RpcProvider> = {}): RpcProvider {
   return {
     getCardEntry: async (address) =>
       address === appCardAddress
-        ? { log_head_cid: 'cid', policy_address: 'policy', last_press_address: 'press', forward_to: null, exists: true }
+        ? {
+            log_head_cid: APP_CARD_CID,
+            policy_address: 'policy',
+            last_press_address: 'press',
+            forward_to: null,
+            exists: true,
+          }
         : null,
     isPolicyAuthorizer: async (address) => address === appCardAddress,
     getPressAuthorization: async () => null,
     getSubCardEntry: async () => null,
-    getLogEntries: async () => [],
+    getCardEventLog: async () => [],
     getEasAnnotations: async () => {
       throw new Error('getEasAnnotations should never be called — fetchAnnotations is false (OQ-SDK-11)');
     },
@@ -71,7 +108,7 @@ async function makeRequest() {
   const { document } = await requestSubCard({
     secureKeyProvider,
     subCardKeyId: 'app-sub-card-key',
-    appCard,
+    appCard: appCard.identity,
     holderPrimaryCard: keccak256(holder.publicKey),
     holderPrimaryCardPubkey: holder.publicKey,
     capabilities: ['auth_response'],
@@ -83,11 +120,11 @@ async function makeRequest() {
 describe('handleSubCardRequest', () => {
   it('validates a well-formed request: signature, both bindings, and a trusted, non-revoked app card chain', async () => {
     const { document, appCard } = await makeRequest();
-    const appCardAddress = keccak256(appCard.publicKey);
+    const appCardAddress = keccak256(appCard.identity.publicKey);
     const rpc = makeHappyPathRpc(appCardAddress);
     const cardVerifier = createCardVerifier({
       rpc,
-      ipfs: fakeIpfs,
+      ipfs: appCardIpfs(appCard.identity.publicKey, appCard.secretKey),
       appCertificationRoot: GOVERNANCE_APP_CERT_ROOT,
       trustedRoots: [GOVERNANCE_APP_CERT_ROOT, appCardAddress],
       fetchAnnotations: false,
@@ -106,7 +143,7 @@ describe('handleSubCardRequest', () => {
     const { document, appCard } = await makeRequest();
     const wrongHolder = mlDsa44GenerateKeypair();
     const tampered = { ...document, holder_primary_card: keccak256(wrongHolder.publicKey) };
-    const appCardAddress = keccak256(appCard.publicKey);
+    const appCardAddress = keccak256(appCard.identity.publicKey);
     const cardVerifier = createCardVerifier({
       rpc: makeHappyPathRpc(appCardAddress),
       ipfs: fakeIpfs,
@@ -124,7 +161,7 @@ describe('handleSubCardRequest', () => {
     const { document, appCard } = await makeRequest();
     const wrongApp = mlDsa44GenerateKeypair();
     const tampered = { ...document, app_card: keccak256(wrongApp.publicKey) };
-    const appCardAddress = keccak256(appCard.publicKey);
+    const appCardAddress = keccak256(appCard.identity.publicKey);
     const cardVerifier = createCardVerifier({
       rpc: makeHappyPathRpc(appCardAddress),
       ipfs: fakeIpfs,
@@ -141,7 +178,7 @@ describe('handleSubCardRequest', () => {
   it('rejects on an invalid app_signature', async () => {
     const { document, appCard } = await makeRequest();
     const tampered = { ...document, capabilities: [...document.capabilities, 'a_new_capability_not_signed_for'] };
-    const appCardAddress = keccak256(appCard.publicKey);
+    const appCardAddress = keccak256(appCard.identity.publicKey);
     const cardVerifier = createCardVerifier({
       rpc: makeHappyPathRpc(appCardAddress),
       ipfs: fakeIpfs,
@@ -157,7 +194,7 @@ describe('handleSubCardRequest', () => {
 
   it('rejects when the app card chain does not reach the governance app-certification root', async () => {
     const { document, appCard } = await makeRequest();
-    const appCardAddress = keccak256(appCard.publicKey);
+    const appCardAddress = keccak256(appCard.identity.publicKey);
     // Registered, but NOT a trusted root / policy authorizer.
     const rpc = makeHappyPathRpc(appCardAddress, { isPolicyAuthorizer: async () => false });
     const cardVerifier = createCardVerifier({
@@ -175,9 +212,9 @@ describe('handleSubCardRequest', () => {
 
   it('rejects when the app card is currently revoked', async () => {
     const { document, appCard } = await makeRequest();
-    const appCardAddress = keccak256(appCard.publicKey);
+    const appCardAddress = keccak256(appCard.identity.publicKey);
     const rpc = makeHappyPathRpc(appCardAddress, {
-      getLogEntries: async () => [
+      getCardEventLog: async () => [
         {
           card_address: appCardAddress,
           update_code: 811,
@@ -201,7 +238,7 @@ describe('handleSubCardRequest', () => {
 
   it('surfaces a CardVerifier error as a rejection, not an uncaught exception', async () => {
     const { document, appCard } = await makeRequest();
-    const appCardAddress = keccak256(appCard.publicKey);
+    const appCardAddress = keccak256(appCard.identity.publicKey);
     const cardVerifier = createCardVerifier({
       rpc: makeHappyPathRpc(appCardAddress),
       ipfs: fakeIpfs,
@@ -219,14 +256,14 @@ describe('handleSubCardRequest', () => {
 
   it('never calls the annotation board (OQ-SDK-11)', async () => {
     const { document, appCard } = await makeRequest();
-    const appCardAddress = keccak256(appCard.publicKey);
+    const appCardAddress = keccak256(appCard.identity.publicKey);
     const getEasAnnotations = vi.fn(async () => {
       throw new Error('should never be called');
     });
     const rpc = makeHappyPathRpc(appCardAddress, { getEasAnnotations });
     const cardVerifier = createCardVerifier({
       rpc,
-      ipfs: fakeIpfs,
+      ipfs: appCardIpfs(appCard.identity.publicKey, appCard.secretKey),
       appCertificationRoot: GOVERNANCE_APP_CERT_ROOT,
       trustedRoots: [GOVERNANCE_APP_CERT_ROOT, appCardAddress],
       fetchAnnotations: false,
