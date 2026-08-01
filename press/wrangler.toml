@@ -11,7 +11,7 @@ compatibility_flags = ["nodejs_compat"]
 # set the id here or via `wrangler kv namespace create`.
 [[kv_namespaces]]
 binding = "PRESS_KV"
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
+id = "mcard_press"
 
 # Non-secret values can go in [vars] below for local `wrangler dev`;
 # secrets should be supplied via `wrangler secret put` (deployed) or a
@@ -28,7 +28,7 @@ name = "press-dev"
 
 [[env.dev.kv_namespaces]]
 binding = "PRESS_KV"
-id = "REPLACE_WITH_DEV_KV_NAMESPACE_ID"
+id = "c1b3c5ad41674ff5b63e183abfefdb0b"
 
 [env.prod]
 name = "press-prod"

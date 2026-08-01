@@ -17,6 +17,13 @@ export default defineNitroConfig({
   // against an alternate preset via NITRO_PRESET (see package.json scripts
   // build:lambda / build:node) without changing application code.
   preset: 'cloudflare-module',
+  // Without this, Nitro falls back to compatibilityDate 2024-04-03, which
+  // is before the modern cloudflare-module preset's required 2024-09-19 —
+  // silently selecting the legacy Workers Sites preset instead (breaks
+  // with "No such module __STATIC_CONTENT_MANIFEST" since wrangler.toml
+  // has no [site] bucket). Matches wallet-service/nitro.config.ts's fix
+  // for the same issue.
+  compatibilityDate: '2026-06-29',
   srcDir: 'server',
   routeRules: {},
   scheduledTasks: {

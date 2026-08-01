@@ -9,16 +9,23 @@ press/.nitro
 # Claude Code agent worktrees (temporary, local only)
 .claude/worktrees/
 
-# Environment variables (contains private keys)
+# Environment variables (contains private keys). Applies repo-wide, in any
+# directory — .env.dev, .env.prod, etc. .env.example files are templates
+# meant to be committed, so they're explicitly re-allowed below.
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 
 # Local keypairs (not committed)
 contracts/.keys/
 
 # Test wallet files (contain generated private keys — never commit)
 contracts/mock_wallets/*.json
+
+# Blanket key-material protection (private keys must never be committed,
+# regardless of where in the tree they end up)
+*.pem
+*.key
 
 # Cargo build output
 contracts/target/
