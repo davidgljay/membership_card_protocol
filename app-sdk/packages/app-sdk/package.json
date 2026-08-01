@@ -34,7 +34,7 @@
     "test": "NODE_OPTIONS=--experimental-global-webcrypto vitest run",
     "test:watch": "NODE_OPTIONS=--experimental-global-webcrypto vitest"
   },
-  "//": "TODO: replace file: references with versioned npm refs once @membership-card-protocol/verifier(-ipfs-provider) is published",
+  "//": "file: refs below are for local/CI builds only -- scripts/rewrite-file-deps.mjs rewrites these to real npm versions at publish time (see DEPLOYMENT.md); the committed file: refs are intentional, not stale.",
   "dependencies": {
     "@membership-card-protocol/verifier": "file:../../../membership_card_verifier/packages/verifier",
     "@membership-card-protocol/verifier-ipfs-provider": "file:../../../membership_card_verifier/packages/verifier-ipfs-provider",
