@@ -1,0 +1,31 @@
+{
+  "name": "@membership-card-protocol/dev-tests",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Integration test suites for the Card Protocol's process specs, run against a live deployed dev environment (real dev press/wallet-service/relay, real Arbitrum Sepolia, real IPFS) using the npm-published SDKs, not monorepo source.",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "//": "No file: references anywhere in this package on purpose -- every @membership-card-protocol/* dependency below is installed from the registry at the 'next' dist-tag, so these suites exercise the actual artifact a real app/wallet would install. See README.md.",
+  "dependencies": {
+    "@membership-card-protocol/app-sdk": "next",
+    "@membership-card-protocol/wallet-sdk": "next",
+    "@membership-card-protocol/verifier": "next",
+    "@membership-card-protocol/verifier-rpc-provider": "next",
+    "@membership-card-protocol/verifier-ipfs-provider": "next",
+    "viem": "^2.53.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@noble/curves": "^1.9.0",
+    "@noble/hashes": "^1.7.2",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
