@@ -93,7 +93,14 @@ if (!matches) {
   process.exit(1);
 }
 
-const policyAddress = '0x' + Buffer.from(keccak_256(content)).toString('hex');
+// keccak256 of the CID string, not the document bytes -- matches
+// press's own derivation (src/handlers/issue.ts, open-offer.ts:
+// keccak256(new TextEncoder().encode(offer.policy_id))), which is the
+// address press will actually look up at issuance time. Confirmed live:
+// an earlier keccak256(content)-based registration caused every
+// registerCard call to revert with UnrecognizedPolicy() because press
+// computed a different address than what was registered on-chain.
+const policyAddress = '0x' + Buffer.from(keccak_256(new TextEncoder().encode(cid))).toString('hex');
 
 console.log('Pinned and verified.');
 console.log();

@@ -44,7 +44,7 @@ function getS3Client(): S3Client {
 
 export interface PinnedPolicy {
   policyId: string; // the CID
-  policyAddress: `0x${string}`; // keccak256 of the pinned bytes
+  policyAddress: `0x${string}`; // keccak256 of the CID string
 }
 
 /** Pins an arbitrary JSON document (a policy card) to real dev Filebase, returning its CID and on-chain address. */
@@ -77,6 +77,13 @@ export async function pinPolicyDocument(policyDocument: unknown): Promise<Pinned
     throw new Error('pinPolicy: fetched bytes differ from uploaded bytes -- do not use this CID.');
   }
 
-  const policyAddress = keccak256(content);
+  // keccak256 of the CID string, not the document bytes -- matches
+  // press's own derivation (src/handlers/issue.ts, open-offer.ts:
+  // keccak256(new TextEncoder().encode(offer.policy_id))), the address
+  // press will actually look up at issuance time. Confirmed live: a
+  // keccak256(content)-based address here caused every registerCard call
+  // to revert with UnrecognizedPolicy() because press computed a
+  // different address than what was registered on-chain.
+  const policyAddress = keccak256(new TextEncoder().encode(cid));
   return { policyId: cid, policyAddress };
 }
