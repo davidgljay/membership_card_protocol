@@ -2,8 +2,11 @@
 
 Strategic plan: [strategic-plan.md](./strategic-plan.md) · Implementation plan: [implementation-plan.md](./implementation-plan.md) · Previous: [phase-2-summary.md](./phase-2-summary.md)
 
-**Status: 22 of 23 suites ported (21 fully, 1 partially), 1 blocked on a
-narrower governance-authority gap.** The client-sdk blocker from this
+**Status: 23 of 23 suites ported (22 fully, 1 partially).** Body 1
+(PressRegistryBody) has since been rotated to a dev-tests-owned quorum too
+(this dev deployment's main use case turned out to be dev-tests itself),
+fully unblocking `log_auditing.spec.ts` — see the update below. The
+client-sdk blocker from this
 phase's earlier state is fully resolved — a separate session ported
 client-sdk's `matrix/` module into `app-sdk`/`wallet-sdk` and migrated
 `integration_tests` off client-sdk entirely (see
@@ -83,12 +86,11 @@ policy + `AuthorizePress` for the dev press, both on real Sepolia).
 | `matrix-relay/matrix_join_attestation_and_revocation.spec.ts` | ✅ Ported | `app-sdk`/`wallet-sdk` imports + `../../support/matrixAdmin.ts` (new). Needs a dev Synapse deployment (unconfirmed — see Outstanding). |
 | `matrix-relay/matrix_room_membership.spec.ts` | ✅ Ported | Same adaptation as above. |
 | `matrix-relay/room_discovery.spec.ts` | ✅ Ported | No Synapse dependency at all — exercises wallet-service's own `/matrix/*` endpoints and wallet-sdk's pure `buildRoomDiscoveryEnvelope`. |
-| `extended/dns_governance_verifier.spec.ts` | ✅ Ported (option 2) | Resolved via a narrower, dev-tests-owned governance credential — see below. Reuses the shared pre-provisioned policy for AuthorizePress (Body 1 stays out of scope) rather than registering a new one; every DNS-specific op (RegisterDomain/DeregisterDomain/SetDnsGovernancePolicyAddress) is now a real call through Body 2's dev-tests quorum. |
-| `extended/policy_creation.spec.ts` | 🟡 Partially ported (option 2) | "Phase 0: RegisterPolicy" is now a real call through Body 0's dev-tests quorum. "Phase 2+3" and "Full happy path" stay `it.todo` — they need `AuthorizePress` (Body 1), which dev-tests was not granted. |
-| `extended/log_auditing.spec.ts` | ⛔ Still blocked | Every test case needs to *issue a card* under a freshly-`AuthorizePress`'d policy (to observe auditor-notification behavior) — Body 1 authority, not part of this rotation. Not resolved by the Body 0/2 rotation; would need a further, separate decision to rotate Body 1 too. |
+| `extended/dns_governance_verifier.spec.ts` | ✅ Ported (option 2) | Resolved via a narrower, dev-tests-owned governance credential — see below. Reuses the shared pre-provisioned policy for AuthorizePress rather than registering a new one; every DNS-specific op (RegisterDomain/DeregisterDomain/SetDnsGovernancePolicyAddress) is a real call through Body 2's dev-tests quorum. |
+| `extended/policy_creation.spec.ts` | 🟡 Partially ported (option 2) | "Phase 0: RegisterPolicy" is a real call through Body 0's dev-tests quorum. "Phase 2+3" and "Full happy path" remain `it.todo` in this file, though Body 1's rotation (below) means they could now be resolved the same way `log_auditing.spec.ts` was — not yet done, flagged as a follow-up rather than silently expanded here. |
+| `extended/log_auditing.spec.ts` | ✅ Ported | Unblocked once Body 1 (PressRegistryBody) was also rotated to a dev-tests-owned quorum — see "Body 1 rotation" below. Each test case now pins its own fresh policy document to real dev Filebase (`support/pinPolicy.ts`) and registers + authorizes it entirely through dev-tests' own governance (`support/devPolicy.ts`), rather than reusing the shared pre-provisioned policy. Auditor-side (E2E receipt/decrypt/inspect) stays `it.todo`, same as the original suite — that's a Phase 4 product gap, not a dev-tests gap. |
 
-**Final count: 21 fully ported + 1 partially ported, 1 (`log_auditing`)
-still blocked pending a further decision on Body 1. The client-sdk blocker
+**Final count: 22 fully ported + 1 partially ported. The client-sdk blocker
 is fully resolved — 0 suites remain blocked on it.**
 
 ## The client-sdk blocker — resolved
@@ -141,16 +143,32 @@ body; dev-tests holds all 3 keys of a 2-of-3 quorum instead (safe since it's
 a dev/test-only environment, no cross-party coordination needed at
 test-run time).
 
-**Scope actually rotated, after a follow-up clarifying question: Body 0
+**Scope initially rotated, after a follow-up clarifying question: Body 0
 (RootPolicyBody) and Body 2 (DnsGovernanceBody) — not Body 1
-(PressRegistryBody)**, which governs `AuthorizePress` and stays under
-whatever already authorizes the shared dev press. This fully unblocks DNS
+(PressRegistryBody)**, which governs `AuthorizePress` and stayed under
+whatever already authorized the shared dev press. This fully unblocked DNS
 governance (Body 2 alone covers RegisterDomain/DeregisterDomain/
-SetDnsGovernancePolicyAddress) and partially unblocks policy creation (Body
+SetDnsGovernancePolicyAddress) and partially unblocked policy creation (Body
 0 covers RegisterPolicy, but not authorizing a press under a fresh policy).
-It does **not** unblock `log_auditing`, whose entire subject requires
-issuing a real card under a freshly-authorized policy — that needs Body 1
-too, a further scope decision not yet made.
+It did **not** unblock `log_auditing`, whose entire subject requires
+issuing a real card under a freshly-authorized policy — that needed Body 1
+too, a further scope decision not made at the time.
+
+**Update: Body 1 rotation.** Once this dev deployment's real-world use
+turned out to be dev-tests itself (rather than a narrow test-only carve-out
+alongside some other primary use), the original reason to leave Body 1
+un-rotated no longer applied — decision (David): rotate it the same way.
+`contracts/scripts/gen-dev-governance-keys.mjs` was extended to also
+generate Body 1's 3 keys, and `contracts/scripts/rotate_governance_body.sh`
+was extended to accept the current signer as a PEM file
+(`CURRENT_GOV_SECP256R1_KEY_PEM`) in addition to raw hex — needed because
+the original deployer key (Body 1's only key pre-rotation) turned out to be
+stored as a SEC1 PEM, not hex, discovered while running
+`authorize_dev_press.sh` earlier in this session. David generated and
+rotated Body 1 himself, same process as Body 0/2. This fully unblocks
+`log_auditing.spec.ts` (see the table above) and means dev-tests, not the
+original deployer key, now controls `AuthorizePress` for this deployment
+going forward.
 
 **What shipped for this**:
 - `contracts/scripts/gen-dev-governance-keys.mjs` — keypair generation,

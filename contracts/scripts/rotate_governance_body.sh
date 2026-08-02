@@ -33,7 +33,9 @@
 #   export LOGIC_ADDRESS=0x...          # from deployments/sepolia.json
 #   export PRIVATE_KEY=...              # Ethereum wallet paying gas
 #   export ARBITRUM_SEPOLIA_RPC=...     # RPC endpoint
-#   export CURRENT_GOV_SECP256R1_PRIVKEY=...   # current signer(s) for the body being rotated
+#   # Current signer for the body being rotated -- either:
+#   export CURRENT_GOV_SECP256R1_PRIVKEY=...        # 32-byte hex, OR
+#   export CURRENT_GOV_SECP256R1_KEY_PEM=/path/to/key.pem   # SEC1 PEM file
 #   ./contracts/scripts/rotate_governance_body.sh <body_id> <new_quorum> <pubkey1> <pubkey2> <pubkey3> [<pubkey4> ...]
 #
 # Example (rotate DNS governance body to 3 keys, quorum 2):
@@ -58,12 +60,16 @@ if (( NEW_QUORUM * 2 <= NEW_KEY_COUNT )); then
   exit 1
 fi
 
-for VAR in PRIVATE_KEY ARBITRUM_SEPOLIA_RPC CURRENT_GOV_SECP256R1_PRIVKEY LOGIC_ADDRESS; do
+for VAR in PRIVATE_KEY ARBITRUM_SEPOLIA_RPC LOGIC_ADDRESS; do
   if [[ -z "${!VAR:-}" ]]; then
     echo "ERROR: $VAR is not set." >&2
     exit 1
   fi
 done
+if [[ -z "${CURRENT_GOV_SECP256R1_PRIVKEY:-}" && -z "${CURRENT_GOV_SECP256R1_KEY_PEM:-}" ]]; then
+  echo "ERROR: set either CURRENT_GOV_SECP256R1_PRIVKEY (32-byte hex) or CURRENT_GOV_SECP256R1_KEY_PEM (path to a PEM file)." >&2
+  exit 1
+fi
 
 LOGIC="${LOGIC_ADDRESS}"
 RPC="${ARBITRUM_SEPOLIA_RPC}"
@@ -78,9 +84,15 @@ build_gov_payload() {
 }
 sign_gov_payload() {
   local payload="$1"
-  cargo run --manifest-path "$CARGO_MANIFEST" --bin sign_payload --quiet -- \
-    --key-hex "$CURRENT_GOV_SECP256R1_PRIVKEY" \
-    --payload "$payload"
+  if [[ -n "${CURRENT_GOV_SECP256R1_KEY_PEM:-}" ]]; then
+    cargo run --manifest-path "$CARGO_MANIFEST" --bin sign_payload --quiet -- \
+      --key "$CURRENT_GOV_SECP256R1_KEY_PEM" \
+      --payload "$payload"
+  else
+    cargo run --manifest-path "$CARGO_MANIFEST" --bin sign_payload --quiet -- \
+      --key-hex "$CURRENT_GOV_SECP256R1_PRIVKEY" \
+      --payload "$payload"
+  fi
 }
 hex_encode() { echo -n "$1" | xxd -p | tr -d '\n'; }
 to_uint8_array() { hex_to_uint8_array "$1"; }

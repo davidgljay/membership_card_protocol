@@ -11,6 +11,7 @@
   },
   "//": "No file: references anywhere in this package on purpose -- every @membership-card-protocol/* dependency below is installed from the registry at the 'next' dist-tag, so these suites exercise the actual artifact a real app/wallet would install. See README.md.",
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.0.0",
     "@membership-card-protocol/app-sdk": "next",
     "@membership-card-protocol/wallet-sdk": "next",
     "@membership-card-protocol/verifier": "next",

@@ -1,9 +1,9 @@
 /**
- * Narrower-scoped governance helpers for the two dev-tests-owned governance
- * bodies (Body 0 -- RootPolicyBody, Body 2 -- DnsGovernanceBody), rotated
- * away from the shared bootstrap key per
- * plans/deployment/dev-governance-rotation-runbook.md. dev-tests holds all
- * 3 keys for each body's 2-of-3 quorum itself (this is a dev/test-only
+ * Narrower-scoped governance helpers for the three dev-tests-owned
+ * governance bodies (Body 0 -- RootPolicyBody, Body 1 -- PressRegistryBody,
+ * Body 2 -- DnsGovernanceBody), rotated away from the shared bootstrap key
+ * per plans/deployment/dev-governance-rotation-runbook.md. dev-tests holds
+ * all 3 keys for each body's 2-of-3 quorum itself (this is a dev/test-only
  * environment -- no cross-party coordination needed at test-run time), so
  * these helpers can assemble a full quorum signature locally.
  *
@@ -15,31 +15,41 @@
  * integration_tests/suites/extended/dns_governance_verifier.spec.ts
  * followed.
  *
- * Never call `ensureGovernanceBootstrap`-style logic here -- these helpers
- * only rotate/exercise the two bodies dev-tests was explicitly granted
- * narrower authority over; they must not be extended to Body 1
- * (PressRegistryBody), which stays under whatever authorizes the dev press.
+ * Body 1 was rotated later than Body 0/2 (this dev deployment's main use
+ * case turned out to be dev-tests itself, so the narrower-credential scope
+ * was widened -- see plans/deployment/phase-3-summary.md's "pending
+ * decision" note and its resolution). Rotating it means dev-tests, not the
+ * original deployer key, now controls AuthorizePress for this deployment
+ * going forward.
  */
 
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
-import { createPublicClient, createWalletClient, http, parseAbi, type Hex, type Abi } from 'viem';
+import { createPublicClient, createWalletClient, http, parseAbi, keccak256, type Hex, type Abi } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { arbitrumSepolia } from 'viem/chains';
-import { ARBITRUM_RPC_URL, LOGIC_CONTRACT_ADDRESS, DEV_TESTS_GAS_WALLET_PRIVATE_KEY } from './liveCard.js';
+import { ARBITRUM_RPC_URL, LOGIC_CONTRACT_ADDRESS, REGISTRY_CONTRACT_ADDRESS, DEV_TESTS_GAS_WALLET_PRIVATE_KEY } from './liveCard.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../..');
 const CONTRACTS_SCRIPTS_DIR = join(REPO_ROOT, 'contracts/scripts');
 
-export type GovernanceBody = 'policy' | 'dns';
+export type GovernanceBody = 'policy' | 'press' | 'dns';
+
+const BODY_IDS: Record<GovernanceBody, number> = { policy: 0, press: 1, dns: 2 };
 
 function bodyId(body: GovernanceBody): number {
-  return body === 'policy' ? 0 : 2;
+  return BODY_IDS[body];
 }
 
+const BODY_KEY_ENV_PREFIXES: Record<GovernanceBody, string> = {
+  policy: 'DEV_TESTS_POLICY_GOV_PRIVKEY_',
+  press: 'DEV_TESTS_PRESS_GOV_PRIVKEY_',
+  dns: 'DEV_TESTS_DNS_GOV_PRIVKEY_',
+};
+
 function bodyKeyEnvPrefix(body: GovernanceBody): string {
-  return body === 'policy' ? 'DEV_TESTS_POLICY_GOV_PRIVKEY_' : 'DEV_TESTS_DNS_GOV_PRIVKEY_';
+  return BODY_KEY_ENV_PREFIXES[body];
 }
 
 function bodyKeys(body: GovernanceBody): string[] {
@@ -162,4 +172,66 @@ export async function submitGovernanceTx(
   });
   await publicClient.waitForTransactionReceipt({ hash, timeout: 120_000 });
   return hash;
+}
+
+const AUTHORIZE_PRESS_ABI = parseAbi([
+  'function authorizePress(bytes32 policy_address, bytes32 press_address, uint8[] press_pubkey, bytes32 mldsa_hash, uint8[] governance_payload, uint8[][] governance_sigs) external',
+]);
+const IS_PRESS_ACTIVE_ABI = parseAbi([
+  'function isPressActive(bytes32 policy_address, bytes32 press_address) external view returns (bool)',
+]);
+
+/**
+ * Authorizes the shared dev press under a freshly-registered policy, using
+ * dev-tests' own Body 1 (PressRegistryBody) quorum -- the missing piece
+ * that previously left log_auditing.spec.ts blocked (see
+ * plans/deployment/phase-3-summary.md). The press's own public keys are
+ * public values (safe in a committed .env.example placeholder-only, real
+ * values still gitignored) -- only its *private* keys must stay out of any
+ * agent session or repo file. No-ops if this (policy, press) pair is
+ * already active.
+ */
+export async function authorizeDevPressUnderPolicy(policyAddress: Hex): Promise<void> {
+  const pressPubkey = process.env['DEV_TESTS_PRESS_SECP256R1_PUBLIC_KEY'];
+  const mldsaPubkey = process.env['DEV_TESTS_PRESS_MLDSA44_PUBLIC_KEY'];
+  if (!pressPubkey || !mldsaPubkey) {
+    throw new Error(
+      'authorizeDevPressUnderPolicy: DEV_TESTS_PRESS_SECP256R1_PUBLIC_KEY / ' +
+        'DEV_TESTS_PRESS_MLDSA44_PUBLIC_KEY are not set -- see dev-tests/.env.example. ' +
+        'These are the dev press\'s public keys (from press/scripts/gen-press-keys.mjs), ' +
+        'safe to record, distinct from its private keys.',
+    );
+  }
+
+  const client = createPublicClient({ transport: http(ARBITRUM_RPC_URL) });
+  const pressAddress = keccak256(pressPubkey as Hex);
+
+  // isPressActive is a storage-contract read -- cast/viem calls to the
+  // logic contract's cross-contract storage reads revert under a
+  // STATICCALL (see contract_helpers.sh's note); REGISTRY_CONTRACT_ADDRESS
+  // is dev-tests' name for the storage contract (see liveCard.ts).
+  const alreadyActive = await client.readContract({
+    address: REGISTRY_CONTRACT_ADDRESS as Hex,
+    abi: IS_PRESS_ACTIVE_ABI,
+    functionName: 'isPressActive',
+    args: [policyAddress, pressAddress],
+  });
+  if (alreadyActive) return;
+
+  const mldsaHash = keccak256(mldsaPubkey as Hex);
+  const { payload, signatures } = await buildAndSignGovernanceOp('press', [
+    '--op', 'authorize_press',
+    '--policy', policyAddress,
+    '--press', pressAddress,
+    '--press-pubkey', pressPubkey,
+  ]);
+
+  await submitGovernanceTx('authorizePress', AUTHORIZE_PRESS_ABI, [
+    policyAddress,
+    pressAddress,
+    sigToUint8Array(pressPubkey),
+    mldsaHash,
+    payloadToUint8Array(payload),
+    signatures.map(sigToUint8Array),
+  ]);
 }

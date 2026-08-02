@@ -27,6 +27,12 @@ const bodies = {
   // deployment. 3 keys, quorum 2 (contract minimum: MIN_GOVERNANCE_KEYS=3,
   // quorum must exceed key_count/2).
   body0_RootPolicyBody: [genKeypair('body0-key-1'), genKeypair('body0-key-2'), genKeypair('body0-key-3')],
+  // Body 1 -- PressRegistryBody. Governs AuthorizePress only. Rotated so
+  // dev-tests can issue cards under freshly-authorized policies at
+  // test-run time (needed by log_auditing.spec.ts) -- this is now the
+  // main use case for this dev deployment, so it's in scope alongside
+  // Body 0/2 rather than staying pinned to the original deployer key.
+  body1_PressRegistryBody: [genKeypair('body1-key-1'), genKeypair('body1-key-2'), genKeypair('body1-key-3')],
   // Body 2 -- DnsGovernanceBody. Governs RegisterDomain/DeregisterDomain/
   // SetDnsGovernancePolicyAddress only -- cannot be used for RegisterPolicy
   // or AuthorizePress (enforced on-chain, see write_gate.rs's per-body
