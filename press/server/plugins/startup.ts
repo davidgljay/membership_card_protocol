@@ -77,12 +77,36 @@ export default defineNitroPlugin((nitroApp) => {
 });
 
 async function runStartup(): Promise<void> {
+  try {
+    await runStartupSteps();
+  } catch (err) {
+    // Steps 4/4b/5 below have no try/catch of their own (unlike 1-3) --
+    // without this outer guard, any throw there (e.g. a malformed
+    // PRESS_MLDSA44_PRIVATE_KEY reaching mlDsa44PublicKeyFromPrivate, or a
+    // constructor throwing in createRegistryClient/createGasManager)
+    // rejects this promise instead of resolving it. Since the request hook
+    // just awaits startupPromise once and every later request reuses the
+    // same memoized (now-rejected) promise, that previously produced a
+    // permanently-stuck 503 with no error message and no console output at
+    // all -- found live via wrangler tail showing a completed request with
+    // zero logging. Now every failure path is visible in both
+    // getPressStartupError() and the console.
+    pressStartupError = `Unexpected startup error: ${String(err)}`;
+    // console.error(err) alone only serializes the message in wrangler
+    // tail's output, not the stack -- log .stack explicitly so a real
+    // file/line is visible instead of just a minified "X is not a function".
+    console.error('[press] runStartup failed:', err instanceof Error ? err.stack : err);
+  }
+}
+
+async function runStartupSteps(): Promise<void> {
   // ── Step 1: config ──────────────────────────────────────────────────────────
   let config: PressConfig;
   try {
     config = loadConfig();
-  } catch {
+  } catch (err) {
     pressStartupError = 'Config validation failed — see process logs.';
+    console.error('[press] Config validation failed:', err);
     return;
   }
 
@@ -92,6 +116,7 @@ async function runStartup(): Promise<void> {
     await ipfs.checkHealth();
   } catch (err) {
     pressStartupError = `IPFS provider (${config.IPFS_PROVIDER}): ${String(err)}`;
+    console.error('[press]', pressStartupError);
     return;
   }
 
@@ -105,10 +130,12 @@ async function runStartup(): Promise<void> {
     if (chainId !== config.EXPECTED_CHAIN_ID) {
       pressStartupError =
         `ARBITRUM_RPC_URL: connected to chain ${chainId}, expected ${config.EXPECTED_CHAIN_ID}`;
+      console.error('[press]', pressStartupError);
       return;
     }
   } catch (err) {
     pressStartupError = `ARBITRUM_RPC_URL: RPC not responding — ${String(err)}`;
+    console.error('[press]', pressStartupError);
     return;
   }
 

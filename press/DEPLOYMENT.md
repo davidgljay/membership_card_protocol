@@ -76,11 +76,12 @@ preset, which uses the `PRESS_KV` binding provisioned per-environment in
 | `FILEBASE_SECRET` | Filebase S3 secret key. |
 | `FILEBASE_BUCKET` | Filebase bucket name — use separate dev/prod buckets so dev pinning never touches prod content. |
 | `PRESS_ADMIN_API_KEY` | Bearer token gating the operator-facing `/api/admin/*` endpoints (trusted-root registration, app gas crediting). Never share with end users, apps, or federation peers. |
+| `EXPECTED_CHAIN_ID` | The chain ID `startup.ts` expects `ARBITRUM_RPC_URL` to resolve to — **not operator-supplied**: this script derives and pushes it automatically (`421614` for dev/Arbitrum Sepolia, `42161` for prod/Arbitrum One), listed here only so `config.ts`'s `loadConfig()` and this table stay in sync. `config.ts`'s own default (`42161`) is prod-only-safe; leaving a dev deploy on that default makes `startup.ts`'s chain-ID check fail permanently and the Worker gets stuck returning `503` forever (found live while running dev-tests against a real deploy). |
 
 See `OPERATOR.md`'s "Optional" table (`FILEBASE_GATEWAY_URL`, `LOG_LEVEL`,
-`MAX_BATCH_SIZE`, `STALENESS_WINDOW_SECONDS`) plus `EXPECTED_CHAIN_ID`,
-`FILEBASE_ENDPOINT`, `FILEBASE_REGION` (all have safe defaults in
-`config.ts`) for variables this script does not require setting.
+`MAX_BATCH_SIZE`, `STALENESS_WINDOW_SECONDS`), `FILEBASE_ENDPOINT`,
+`FILEBASE_REGION` (all have safe defaults in `config.ts`) for variables
+this script does not require setting.
 
 ## Per-environment config
 

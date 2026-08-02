@@ -49,7 +49,22 @@ WORKER_SECRETS=(
   FILEBASE_SECRET
   FILEBASE_BUCKET
   PRESS_ADMIN_API_KEY
+  EXPECTED_CHAIN_ID
 )
+
+# EXPECTED_CHAIN_ID defaults to 42161 (Arbitrum One) in config.ts -- correct
+# for prod, but wrong for dev (Arbitrum Sepolia, chain 421614). Leaving this
+# to operator-supplied config is a footgun: startup.ts's chain-ID check
+# fails permanently against the wrong default and the Worker gets stuck
+# returning 503 forever (found live -- see dev-tests suites all failing
+# with "mintCard: GET /press failed: HTTP 503" until this was diagnosed).
+# Derive and push it automatically instead of requiring the operator to
+# know to set it.
+if [[ "$ENVIRONMENT" == "dev" ]]; then
+  export EXPECTED_CHAIN_ID="421614"
+else
+  export EXPECTED_CHAIN_ID="42161"
+fi
 
 missing=()
 for var in "${WRANGLER_AUTH_VARS[@]}" "${WORKER_SECRETS[@]}"; do

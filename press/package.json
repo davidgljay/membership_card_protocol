@@ -17,7 +17,7 @@
   },
   "//": "TODO: replace file: reference with versioned npm ref once @membership-card-protocol/verifier is published",
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.0.0",
+    "aws4fetch": "^1.0.20",
     "@membership-card-protocol/verifier": "file:../membership_card_verifier/packages/verifier",
     "@noble/ciphers": "^2.2.0",
     "@noble/curves": "^1.9.0",

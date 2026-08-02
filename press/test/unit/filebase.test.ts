@@ -1,7 +1,7 @@
 /**
  * Filebase IPFS provider unit tests.
  *
- * All S3 and network calls are mocked so these run offline.
+ * All aws4fetch and network calls are mocked so these run offline.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -21,23 +21,27 @@ const SAMPLE_BYTES = new TextEncoder().encode('{"card":"data","version":1}');
 const MOCK_CID = 'bafybeiabc123testcid';
 
 // ---------------------------------------------------------------------------
-// Mock @aws-sdk/client-s3
+// Mock aws4fetch
 //
-// The real implementation (filebase.ts) does a two-round-trip upload:
-// PutObjectCommand, then HeadObjectCommand to recover the Filebase-assigned
-// CID from object metadata. It never reads response middleware/headers, so
-// the mock only needs to answer `send()` for those two command types.
+// The real implementation (filebase.ts) does a two-round-trip upload: PUT,
+// then HEAD to recover the Filebase-assigned CID from the x-amz-meta-cid
+// response header. The mock only needs to answer `.fetch()` for PUT/HEAD
+// requests against the object URL.
 // ---------------------------------------------------------------------------
 
-const mockSend = vi.fn();
+const mockAwsFetch = vi.fn();
 
-vi.mock('@aws-sdk/client-s3', () => ({
-  S3Client: vi.fn().mockImplementation(() => ({
-    send: mockSend,
+vi.mock('aws4fetch', () => ({
+  AwsClient: vi.fn().mockImplementation(() => ({
+    fetch: mockAwsFetch,
   })),
-  PutObjectCommand: vi.fn().mockImplementation((input) => ({ input, _type: 'PutObject' })),
-  HeadObjectCommand: vi.fn().mockImplementation((input) => ({ input, _type: 'HeadObject' })),
 }));
+
+function jsonHeaders(cid?: string): Headers {
+  const h = new Headers();
+  if (cid) h.set('x-amz-meta-cid', cid);
+  return h;
+}
 
 // ---------------------------------------------------------------------------
 // Mock fetch for gateway requests
@@ -54,11 +58,10 @@ function makeFetchMock(responseBytes: Uint8Array) {
 describe('pinToIPFS', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Default sequence: PutObject succeeds, then HeadObject returns the CID
-    // in object metadata (the only mechanism the real code reads from).
-    mockSend
-      .mockResolvedValueOnce({}) // PutObjectCommand response (unused)
-      .mockResolvedValueOnce({ Metadata: { cid: MOCK_CID } }); // HeadObjectCommand response
+    // Default sequence: PUT succeeds, then HEAD returns the CID via header.
+    mockAwsFetch
+      .mockResolvedValueOnce({ ok: true, status: 200 }) // PUT
+      .mockResolvedValueOnce({ ok: true, status: 200, headers: jsonHeaders(MOCK_CID) }); // HEAD
   });
 
   it('returns the CID when upload succeeds and content matches', async () => {
@@ -66,8 +69,8 @@ describe('pinToIPFS', () => {
     const client = createFilebaseProvider(MOCK_CONFIG);
     const cid = await client.pinToIPFS(SAMPLE_BYTES);
     expect(cid).toBe(MOCK_CID);
-    expect(mockSend).toHaveBeenCalledWith(expect.objectContaining({ _type: 'PutObject' }));
-    expect(mockSend).toHaveBeenCalledWith(expect.objectContaining({ _type: 'HeadObject' }));
+    expect(mockAwsFetch).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ method: 'PUT' }));
+    expect(mockAwsFetch).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ method: 'HEAD' }));
   });
 
   it('throws P-10 when fetched bytes differ from uploaded bytes', async () => {
@@ -79,11 +82,11 @@ describe('pinToIPFS', () => {
     });
   });
 
-  it('throws P-24 when HeadObject metadata has no cid', async () => {
-    mockSend.mockReset();
-    mockSend
-      .mockResolvedValueOnce({}) // PutObjectCommand response
-      .mockResolvedValueOnce({ Metadata: {} }); // HeadObjectCommand: no cid
+  it('throws P-24 when the HEAD response has no cid header', async () => {
+    mockAwsFetch.mockReset();
+    mockAwsFetch
+      .mockResolvedValueOnce({ ok: true, status: 200 }) // PUT
+      .mockResolvedValueOnce({ ok: true, status: 200, headers: jsonHeaders() }); // HEAD: no cid
     global.fetch = makeFetchMock(SAMPLE_BYTES) as typeof fetch;
 
     const client = createFilebaseProvider(MOCK_CONFIG);
@@ -92,9 +95,9 @@ describe('pinToIPFS', () => {
     });
   });
 
-  it('throws P-24 when the S3 upload itself throws', async () => {
-    mockSend.mockReset();
-    mockSend.mockRejectedValueOnce(new Error('Network error'));
+  it('throws P-24 when the PUT itself fails', async () => {
+    mockAwsFetch.mockReset();
+    mockAwsFetch.mockResolvedValueOnce({ ok: false, status: 500 });
     const client = createFilebaseProvider(MOCK_CONFIG);
     await expect(client.pinToIPFS(SAMPLE_BYTES)).rejects.toMatchObject({
       pressCode: 'P-24',
@@ -133,15 +136,15 @@ describe('checkHealth', () => {
     vi.clearAllMocks();
   });
 
-  it('resolves when HeadObject rejects with NotFound (bucket reachable, key absent)', async () => {
-    mockSend.mockRejectedValueOnce(Object.assign(new Error('not found'), { name: 'NotFound' }));
+  it('resolves when HEAD returns 404 (bucket reachable, key absent)', async () => {
+    mockAwsFetch.mockResolvedValueOnce({ ok: false, status: 404 });
     const client = createFilebaseProvider(MOCK_CONFIG);
     await expect(client.checkHealth()).resolves.toBeUndefined();
   });
 
-  it('throws when HeadObject fails for any other reason', async () => {
-    mockSend.mockRejectedValueOnce(Object.assign(new Error('access denied'), { name: 'AccessDenied' }));
+  it('throws when HEAD fails for any other reason', async () => {
+    mockAwsFetch.mockResolvedValueOnce({ ok: false, status: 403 });
     const client = createFilebaseProvider(MOCK_CONFIG);
-    await expect(client.checkHealth()).rejects.toThrow('access denied');
+    await expect(client.checkHealth()).rejects.toThrow('403');
   });
 });
