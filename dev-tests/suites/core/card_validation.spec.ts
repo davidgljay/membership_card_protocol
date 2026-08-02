@@ -229,7 +229,12 @@ describe('card_validation.md (live dev deployment, full CardVerifier)', () => {
     cardVerifier = new CardVerifier({
       rpc,
       ipfs,
-      trustedRoots: [trustedRoot.address, secondCard.address],
+      // secondCard is deliberately NOT a trusted root -- "Stage 3: card
+      // outside trustedRoots fails chain walk" below needs a card that
+      // genuinely isn't one to exercise the negative case. Including it
+      // here made that assertion unsatisfiable (chain_reaches_trusted_root
+      // would always be true for a card that's itself in trustedRoots).
+      trustedRoots: [trustedRoot.address],
       appCertificationRoot: trustedRoot.address,
       fetchAnnotations: false,
       returnChain: true,

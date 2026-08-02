@@ -274,7 +274,14 @@ describe('card_validation.md (live stack, full CardVerifier)', () => {
     cardVerifier = new CardVerifier({
       rpc,
       ipfs,
-      trustedRoots: [trustedRoot.address, secondCard.address],
+      // secondCard is deliberately NOT a trusted root -- per the comment
+      // above, it's meant to exercise the negative case (untrusted cards
+      // outside the list fail). Including it here made that case
+      // unsatisfiable (chain_reaches_trusted_root would always be true for
+      // a card that's itself in trustedRoots) -- found live running
+      // dev-tests/suites/core/card_validation.spec.ts's identical copy
+      // against a real deployment.
+      trustedRoots: [trustedRoot.address],
       appCertificationRoot: trustedRoot.address,
       fetchAnnotations: false,
       // Include optional chain data so we can inspect the full walk.
