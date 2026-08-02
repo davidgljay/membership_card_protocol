@@ -2,14 +2,16 @@
 # authorize_dev_press.sh — Submit AuthorizePress on-chain for the shared dev
 # press, under the dev-tests policy registered by register_dev_policy.sh.
 #
-# PressRegistryBody (Body 1) was never rotated (see
-# plans/deployment/dev-governance-rotation-runbook.md — only Body 0 and
-# Body 2 were rotated to dev-tests-owned keys). Body 1 therefore still holds
-# its original 1-of-1 deployer keyset, set at deploy time via
-# storage.initialize(logic_address, deployer_pubkey) (see deploy.sh). So
-# this script signs with the original deployer's SECP256R1_PRIVKEY, not any
-# dev-tests key — modeled directly on setup_dns.sh's tested AuthorizePress
-# step.
+# Signs with a 2-of-3 quorum from dev-tests' own rotated Body 1
+# (PressRegistryBody) keyset -- DEV_TESTS_PRESS_GOV_PRIVKEY_1/2 -- not the
+# original deployer key. Body 1 was initially left un-rotated (see
+# plans/deployment/phase-3-summary.md's "pending decision"), but this dev
+# deployment's real use case turned out to be dev-tests itself, so it was
+# rotated the same way as Body 0/2. This script predates that rotation and
+# originally signed with the deployer's own key -- that now fails with
+# InvalidGovernanceSignature (0xf21458ad) since Body 1 no longer trusts it,
+# found live running this script after the rotation. Modeled on the same
+# tested pattern as register_dev_policy.sh / rotate_governance_body.sh.
 #
 # The press's own secp256r1 and ML-DSA-44 public keys (from
 # press/scripts/gen-press-keys.mjs) are public values, safe to pass as
@@ -17,13 +19,10 @@
 # agent session.
 #
 # Usage:
+#   source dev-tests/.env   # provides DEV_TESTS_PRESS_GOV_PRIVKEY_1/2/3
 #   export PRIVATE_KEY=...              # Ethereum wallet paying gas
 #   export ARBITRUM_SEPOLIA_RPC=...
 #   export LOGIC_ADDRESS=0x...
-#   export DEPLOYER_SECP256R1_PUBKEY=... # original 1-of-1 deploy-time key
-#   # Signing key: either
-#   export SECP256R1_PRIVKEY=...          # 32-byte hex, OR
-#   export SECP256R1_KEY_PEM=/path/to/key.pem   # SEC1 PEM file (-----BEGIN EC PRIVATE KEY-----)
 #   ./contracts/scripts/authorize_dev_press.sh <policy_address> <press_secp256r1_pubkey> <press_mldsa44_pubkey>
 set -euo pipefail
 
@@ -35,17 +34,12 @@ POLICY_ADDRESS="${1:?Usage: $0 <policy_address> <press_secp256r1_pubkey> <press_
 PRESS_PUBKEY="${2:?Usage: $0 <policy_address> <press_secp256r1_pubkey> <press_mldsa44_pubkey>}"
 PRESS_MLDSA_PUBKEY="${3:?Usage: $0 <policy_address> <press_secp256r1_pubkey> <press_mldsa44_pubkey>}"
 
-for VAR in PRIVATE_KEY ARBITRUM_SEPOLIA_RPC LOGIC_ADDRESS DEPLOYER_SECP256R1_PUBKEY; do
+for VAR in PRIVATE_KEY ARBITRUM_SEPOLIA_RPC LOGIC_ADDRESS DEV_TESTS_PRESS_GOV_PRIVKEY_1 DEV_TESTS_PRESS_GOV_PRIVKEY_2; do
   if [[ -z "${!VAR:-}" ]]; then
     echo "ERROR: $VAR is not set." >&2
     exit 1
   fi
 done
-
-if [[ -z "${SECP256R1_PRIVKEY:-}" && -z "${SECP256R1_KEY_PEM:-}" ]]; then
-  echo "ERROR: set either SECP256R1_PRIVKEY (32-byte hex) or SECP256R1_KEY_PEM (path to a PEM file)." >&2
-  exit 1
-fi
 
 LOGIC="${LOGIC_ADDRESS}"
 RPC="${ARBITRUM_SEPOLIA_RPC}"
@@ -59,14 +53,10 @@ source "$SCRIPT_DIR/contract_helpers.sh"
 build_gov_payload() {
   cargo run --manifest-path "$CARGO_MANIFEST" --bin build_governance_payload --quiet -- "$@"
 }
-sign_gov_payload() {
-  if [[ -n "${SECP256R1_KEY_PEM:-}" ]]; then
-    cargo run --manifest-path "$CARGO_MANIFEST" --bin sign_payload --quiet -- \
-      --key "$SECP256R1_KEY_PEM" --payload "$1"
-  else
-    cargo run --manifest-path "$CARGO_MANIFEST" --bin sign_payload --quiet -- \
-      --key-hex "$SECP256R1_PRIVKEY" --payload "$1"
-  fi
+sign_with_key() {
+  local key="$1" payload="$2"
+  cargo run --manifest-path "$CARGO_MANIFEST" --bin sign_payload --quiet -- \
+    --key-hex "$key" --payload "$payload"
 }
 hex_encode() { echo -n "$1" | xxd -p | tr -d '\n'; }
 to_uint8_array() { hex_to_uint8_array "$1"; }
@@ -99,22 +89,27 @@ CURRENT_VERSION=$(parse_gov_keyset_version "$RAW")
 CURRENT_COUNT=$(parse_gov_keyset_count "$RAW")
 CURRENT_QUORUM=$(parse_gov_keyset_quorum "$RAW")
 echo "  Current: key_count=$CURRENT_COUNT quorum=$CURRENT_QUORUM version=$CURRENT_VERSION"
-if [[ "$CURRENT_COUNT" != "1" ]]; then
-  echo "WARNING: expected key_count=1 (Body 1 was never rotated) but got $CURRENT_COUNT." >&2
-  echo "Confirm SECP256R1_PRIVKEY still matches Body 1's current keyset before continuing." >&2
+if [[ "$CURRENT_COUNT" != "3" ]]; then
+  echo "WARNING: expected key_count=3 (the rotated dev-tests keyset) but got $CURRENT_COUNT." >&2
+  echo "Confirm Body 1 was actually rotated before continuing." >&2
 fi
 echo ""
 
-PAYLOAD=$(build_gov_payload --op authorize_press --version "$CURRENT_VERSION")
-SIG=$(sign_gov_payload "$PAYLOAD")
+PAYLOAD=$(build_gov_payload --op authorize_press --version "$CURRENT_VERSION" \
+  --policy "$POLICY_ADDRESS" --press "$PRESS_ADDR" --press-pubkey "$PRESS_PUBKEY")
+
+# Quorum = 2: sign with DEV_TESTS_PRESS_GOV_PRIVKEY_1 and _2.
+SIG1=$(sign_with_key "$DEV_TESTS_PRESS_GOV_PRIVKEY_1" "$PAYLOAD")
+SIG2=$(sign_with_key "$DEV_TESTS_PRESS_GOV_PRIVKEY_2" "$PAYLOAD")
 
 PAYLOAD_ARR=$(to_uint8_array "0x$(hex_encode "$PAYLOAD")")
-SIG_ARR=$(to_uint8_array "$SIG")
+SIG1_ARR=$(to_uint8_array "$SIG1")
+SIG2_ARR=$(to_uint8_array "$SIG2")
 PUBKEY_ARR=$(to_uint8_array "$PRESS_PUBKEY")
-DEPLOYER_PUBKEY_ARR=$(to_uint8_array "$DEPLOYER_SECP256R1_PUBKEY")
 
 echo "  Payload: $PAYLOAD"
-echo "  Sig:     $SIG"
+echo "  Sig 1:   $SIG1"
+echo "  Sig 2:   $SIG2"
 echo ""
 read -r -p "Submit AuthorizePress transaction for $PRESS_ADDR? (y/N) " CONFIRM
 [[ "$CONFIRM" =~ ^[yY]$ ]] || { echo "Aborted."; exit 0; }
@@ -126,7 +121,7 @@ cast send "$LOGIC" \
   "$PUBKEY_ARR" \
   "$MLDSA_HASH" \
   "$PAYLOAD_ARR" \
-  "[${SIG_ARR}]" \
+  "[${SIG1_ARR},${SIG2_ARR}]" \
   --private-key "$PRIVATE_KEY" \
   --rpc-url "$RPC"
 
