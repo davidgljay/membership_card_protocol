@@ -45,7 +45,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { arbitrum, arbitrumSepolia } from 'viem/chains';
 import type { PressConfig } from '../config.js';
 import { canonicalize } from '../serialization.js';
-import { secp256r1Sign, keccak256, toBase64url } from '../functions/crypto.js';
+import { secp256r1Sign, secp256r1PublicKeyFromPrivate, keccak256, toBase64url } from '../functions/crypto.js';
 
 // ---------------------------------------------------------------------------
 // ABIs — from `cargo stylus export-abi` against the deployed contracts, not
@@ -240,14 +240,6 @@ export interface BatchUpdateParams {
 // ---------------------------------------------------------------------------
 
 export function createRegistryClient(config: PressConfig): RegistryClient {
-  // Signing account: the secp256r1 key whose pubkey is registered on-chain in PressAuthorizations.
-  // Used only for signing press payloads — never submits transactions directly.
-  const account: Account = privateKeyToAccount(
-    (config.PRESS_SECP256R1_PRIVATE_KEY.startsWith('0x')
-      ? config.PRESS_SECP256R1_PRIVATE_KEY
-      : `0x${config.PRESS_SECP256R1_PRIVATE_KEY}`) as Hex
-  );
-
   // Gas wallet: a separate Ethereum account that holds ETH and pays transaction fees.
   // msg.sender on all transactions is this account, not the press signing account.
   const gasAccount: Account = privateKeyToAccount(
@@ -286,15 +278,23 @@ export function createRegistryClient(config: PressConfig): RegistryClient {
   // a PressAuthorizations[policy][press] lookup key (the actual signature
   // check is against a separately-stored press_public_key, not anything
   // derived from this value), so it just needs to be a stable, unique
-  // bytes32. Left-padded to match Solidity's standard address→bytes32
-  // conversion (`bytes32(uint256(uint160(address)))`) — the same value
-  // AuthorizePress must have registered this press under. This secp256r1
-  // account's address is a separate identity from `pressAddress`
-  // (context.ts, keccak256 of the ML-DSA-44 content-signing key): chain
-  // writes authenticate via secp256r1 (RIP-7212); IPFS content signing
-  // uses ML-DSA-44. Both derive from different keys and are deliberately
-  // not the same address.
-  const pressAddress = ('0x' + account.address.slice(2).padStart(64, '0')) as Hex;
+  // bytes32: keccak256 of the raw 64-byte (x||y) secp256r1 public key —
+  // the same derivation AuthorizePress registered this press under (see
+  // contracts/scripts/authorize_dev_press.sh). This secp256r1 identity is
+  // separate from `pressAddress` (context.ts, keccak256 of the ML-DSA-44
+  // content-signing key): chain writes authenticate via secp256r1
+  // (RIP-7212); IPFS content signing uses ML-DSA-44. Both derive from
+  // different keys and are deliberately not the same address.
+  //
+  // Previously this used viem's privateKeyToAccount(...).address, which is
+  // hardcoded to secp256k1 (Ethereum) curve math — calling it on a
+  // secp256r1 private key silently derives an unrelated, meaningless
+  // address instead of throwing. Every on-chain write reverted with an
+  // undecodable custom error as a result, found live running the first
+  // real dev-tests suite against a real deployment.
+  const pressAddress = ('0x' + Buffer.from(
+    keccak256(secp256r1PublicKeyFromPrivate(config.PRESS_SECP256R1_PRIVATE_KEY))
+  ).toString('hex')) as Hex;
 
   // ---- ABI-shape helpers ----
   // uint8[] round-trips as plain number[] in viem, not Uint8Array — every

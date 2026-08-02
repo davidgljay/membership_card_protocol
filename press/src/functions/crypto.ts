@@ -49,6 +49,28 @@ export function secp256r1Sign(privateKeyHex: string, messageHash: Uint8Array): U
   return sig.toCompactRawBytes();
 }
 
+/**
+ * Extract the raw 64-byte (x||y) secp256r1 public key from the private key.
+ *
+ * viem's `privateKeyToAccount` must never be used for this key — it's
+ * hardcoded to secp256k1 (standard Ethereum) curve math, so calling it on a
+ * secp256r1 (P-256) private key silently derives an unrelated, meaningless
+ * address rather than throwing. That exact bug shipped in registry.ts's
+ * on-chain `pressAddress` derivation: it produced a bytes32 value that
+ * never matched what AuthorizePress actually registered on-chain
+ * (`keccak256` of *this* function's output — see
+ * contracts/scripts/authorize_dev_press.sh's identical derivation), so
+ * every on-chain write reverted with an undecodable custom error. Found
+ * live running the first real dev-tests suite against a real deployment.
+ */
+export function secp256r1PublicKeyFromPrivate(privateKeyHex: string): Uint8Array {
+  const privKey = privateKeyHex.startsWith('0x')
+    ? privateKeyHex.slice(2)
+    : privateKeyHex;
+  // drop the 0x04 uncompressed-point prefix -> 64 bytes x||y
+  return p256.getPublicKey(privKey, false).slice(1);
+}
+
 // ---------------------------------------------------------------------------
 // keccak256 digest
 // ---------------------------------------------------------------------------
