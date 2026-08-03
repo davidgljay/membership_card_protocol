@@ -1,0 +1,13 @@
+# Caddy reverse proxy for the Droplet deployment (docker-compose.droplet.yml).
+# Caddy automatically obtains and renews Let's Encrypt certificates for
+# both hostnames -- no manual certificate management. Requires both DNS
+# A records to already point at this Droplet's public IP before first run
+# (Let's Encrypt's HTTP-01 challenge needs to reach this host on port 80).
+
+relay.membershipcard.io {
+    reverse_proxy relay-prod:3000
+}
+
+dev.relay.membershipcard.io {
+    reverse_proxy relay-dev:3000
+}

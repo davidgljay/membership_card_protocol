@@ -1,11 +1,99 @@
 # Relay — Deployment
 
-This document covers automated deployment of `relay/` to DigitalOcean App
-Platform via `scripts/deploy.sh`. For the protocol/API surface, see
+> **Current path: Droplet, not App Platform.** David chose a single
+> Droplet running both dev and prod via `docker-compose.droplet.yml` (see
+> "Droplet deployment" below) over App Platform, on cost grounds while
+> usage stays low — cheaper than App Platform + Managed Redis for both
+> environments, at the price of self-managing the host. Easy to move back
+> to App Platform later if usage grows (see "Why App Platform, not a
+> Droplet" below for that path's own tradeoffs). The App Platform path
+> (`scripts/deploy.sh`, `.do/app.*.yaml`) is left in place, documented
+> below, and still works — just not what's actually running right now.
+
+This document covers deployment of `relay/` to either DigitalOcean App
+Platform (`scripts/deploy.sh`) or a single Droplet
+(`docker-compose.droplet.yml`). For the protocol/API surface, see
 [`README.md`](./README.md); for local development, see its "Quick start"
 section (unchanged by this document — local dev still uses
 `docker-compose.yml` + `docker-compose.dev.yml` with a self-hosted Redis
 container).
+
+## Droplet deployment (current path)
+
+One Droplet runs both `dev` and `prod` side by side via
+`docker-compose.droplet.yml`, fronted by Caddy for automatic TLS. Chosen
+over App Platform + Managed Redis (~$40/mo for both environments) or
+App Platform + a self-hosted Redis worker (~$20/mo) as the cheapest option
+while usage stays low — see the cost comparison this decision came from
+in the conversation that added this section, or re-derive it from DO's
+current pricing page if it's been a while.
+
+**Real, deliberate tradeoffs, not oversights:**
+- **Host management is back.** Unlike App Platform, you're responsible for
+  OS patching, Docker upgrades, and uptime on this Droplet — the exact
+  thing "Why App Platform, not a Droplet" below argues against. Accepted
+  for now because usage is low; revisit if that changes.
+- **Redis has persistence deliberately disabled** in both environments
+  (`--save "" --appendonly no`, no volume mounted) — a design requirement,
+  not a gap: message UUID TTL state is expected to be lost on every
+  container restart. Do not add a volume or re-enable RDB/AOF without
+  updating this note.
+- **Single point of failure.** One Droplet down takes out both
+  environments at once (unlike separate App Platform apps, which fail
+  independently).
+- **The SQLite device-registry gap disappears for free**, as a side
+  effect: a Droplet's local disk is real persistent storage (unlike App
+  Platform, which has no persistent-volume support at all), so
+  `docker-compose.droplet.yml` gives each environment's `/data` a real
+  named volume instead of App Platform's ephemeral `/tmp`.
+
+### Prerequisites
+
+- A Droplet sized at least 2GB RAM (the 1GB/$6 tier risks OOM running two
+  Node processes + two Redis instances + Caddy simultaneously) with Docker
+  and the Docker Compose plugin installed (DigitalOcean's "Docker on
+  Ubuntu" marketplace image has both preinstalled).
+- A domain you control, with two DNS `A` records pointing at the
+  Droplet's public IP: `relay.membershipcard.io` (prod) and
+  `dev.relay.membershipcard.io` (dev). Both must resolve *before* first
+  starting Caddy — its automatic Let's Encrypt provisioning needs to reach
+  the Droplet over port 80 via each hostname to complete the HTTP-01
+  challenge.
+- `relay/.env.dev.droplet` and `relay/.env.prod.droplet` on the Droplet
+  itself (gitignored, never committed) — see "Required environment
+  variables" below for what each needs. Same secret-handling principle as
+  every other package in this repo: real values never pass through an
+  agent session.
+
+### Running it
+
+```bash
+# On the Droplet, after cloning this repo:
+cd relay
+# Create .env.dev.droplet and .env.prod.droplet first (see below).
+docker compose -f docker-compose.droplet.yml up -d --build
+```
+
+Redeploying after a code change:
+```bash
+git pull
+docker compose -f docker-compose.droplet.yml up -d --build
+```
+
+Verify:
+```bash
+curl https://relay.membershipcard.io/health
+curl https://dev.relay.membershipcard.io/health
+# expect {"status":"ok","redis":"ok","sqlite":"ok"} from both
+```
+
+### Required environment variables (`.env.dev.droplet` / `.env.prod.droplet`)
+
+Same variables as App Platform's secret set below (`APP_REGISTRY_JSON`,
+`APNS_KEY_<APP_ID>_B64`/`FCM_SERVICE_ACCOUNT_<APP_ID>_B64`) — `REDIS_URL`,
+`RELAY_ID`, and the rest of the non-secret config are already set directly
+in `docker-compose.droplet.yml` per environment, not read from these
+files.
 
 ## Why App Platform, not a Droplet
 
@@ -14,7 +102,8 @@ rationale (cost parity with the smallest usable Droplet, zero host/OS
 management). The actual platform call lives in one isolated function,
 `deploy_to_app_platform()` in `scripts/deploy.sh`, so a future service that's
 a worse App Platform fit can be pointed at a Droplet instead by swapping
-that one function.
+that one function. (Superseded for now by the Droplet path above, kept
+here as the rationale for switching back if usage grows.)
 
 ## Known limitations — read before relying on this for real traffic
 

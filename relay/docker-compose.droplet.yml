@@ -1,0 +1,95 @@
+# Droplet-based deployment (dev + prod on one host) — an alternative to
+# scripts/deploy.sh's DigitalOcean App Platform path, chosen for cost
+# during a low-usage phase. See DEPLOYMENT.md's "Droplet deployment"
+# section for the full rationale and prerequisites (Droplet size, DNS,
+# Docker/Compose install).
+#
+# Redis in both environments is deliberately configured with persistence
+# disabled (--save "" --appendonly no) — a design requirement, not an
+# oversight: message UUID TTL state is expected to be lost on every
+# container restart. No volume is mounted for either redis service on
+# purpose.
+#
+# Caddy terminates TLS for both public hostnames (free, auto-renewing
+# Let's Encrypt certs — no manual certificate management) and
+# reverse-proxies to the right relay container by service name by port.
+#
+# Unlike the App Platform path, a Droplet's local disk is real persistent
+# storage, so — unlike app.dev.yaml's ephemeral /tmp/registry.db — the
+# SQLite device registry gets a real volume here and survives restarts.
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - relay-dev
+      - relay-prod
+
+  redis-dev:
+    image: redis:7-alpine
+    restart: always
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+
+  relay-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    env_file:
+      - .env.dev.droplet
+    environment:
+      NODE_ENV: production
+      RELAY_ID: relay-dev-1
+      PORT: "3000"
+      REDIS_URL: redis://redis-dev:6379
+      UUID_TTL_SECONDS: "2592000"
+      DEVICE_REGISTRY_RETENTION_DAYS: "90"
+      DELETE_JOB_POLL_INTERVAL_MS: "60000"
+      MAX_DELETE_DELAY_SECONDS: "21600"
+      DB_PATH: /data/registry.db
+      APP_REGISTRY_PATH: /app/config/apps.json
+    volumes:
+      - relay_dev_data:/data
+    depends_on:
+      - redis-dev
+
+  redis-prod:
+    image: redis:7-alpine
+    restart: always
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+
+  relay-prod:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    env_file:
+      - .env.prod.droplet
+    environment:
+      NODE_ENV: production
+      RELAY_ID: relay-prod-1
+      PORT: "3000"
+      REDIS_URL: redis://redis-prod:6379
+      UUID_TTL_SECONDS: "2592000"
+      DEVICE_REGISTRY_RETENTION_DAYS: "90"
+      DELETE_JOB_POLL_INTERVAL_MS: "60000"
+      MAX_DELETE_DELAY_SECONDS: "21600"
+      DB_PATH: /data/registry.db
+      APP_REGISTRY_PATH: /app/config/apps.json
+    volumes:
+      - relay_prod_data:/data
+    depends_on:
+      - redis-prod
+
+volumes:
+  caddy_data:
+  caddy_config:
+  relay_dev_data:
+  relay_prod_data:
