@@ -118,7 +118,7 @@ describe('policy_creation.md (live dev deployment)', () => {
       args: [policyAddress],
     });
     expect(exists).toBe(true);
-  });
+  }, 60_000);
 
   it.todo(
     'Phase 2 + Phase 3: authorizer issues policy card and it registers on-chain -- ' +

@@ -330,7 +330,7 @@ describe('dns_governance_verifier.md (live dev deployment)', () => {
       args: [adminCardAddress],
     })) as unknown as readonly number[];
     expect(clearedKey.length).toBe(0);
-  });
+  }, 60_000);
 
   it.todo(
     'Stage A1 (txt-verification.ts): real DNS TXT record resolution at _mcard.<domain> — ' +

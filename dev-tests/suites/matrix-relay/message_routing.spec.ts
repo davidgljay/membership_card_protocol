@@ -170,7 +170,7 @@ describe('message_routing.md (live dev deployment)', () => {
       expect(secondResponse.status).toBe(409);
       const body = (await secondResponse.json()) as { message?: string };
       expect(body.message).toMatch(/nonce|replay/i);
-    });
+    }, 60_000);
 
     it('Phase 3: fetches the routing table via GET /bindings', async () => {
       const announcement = buildRegistrationAnnouncement(
@@ -266,7 +266,7 @@ describe('message_routing.md (live dev deployment)', () => {
       const table = (await tableResponse.json()) as { bindings?: AnnouncementEnvelope[] };
       const entry = table.bindings?.find((b) => b.payload.card_hash === cardHash);
       expect(entry?.payload.endpoint).toBe('https://newer-endpoint.example.com');
-    });
+    }, 60_000);
   });
 
   describe('§Message Delivery', () => {

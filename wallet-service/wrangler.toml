@@ -29,7 +29,7 @@ name = "wallet-service-dev"
 
 [[env.dev.kv_namespaces]]
 binding = "WALLET_KV"
-id = "REPLACE_WITH_DEV_KV_NAMESPACE_ID"
+id = "77067017e4aa4c3caf60b61acd067623"
 
 [env.prod]
 name = "wallet-service-prod"
