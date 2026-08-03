@@ -2,11 +2,14 @@
 
 Strategic plan: [strategic-plan.md](./strategic-plan.md) · Implementation plan: [implementation-plan.md](./implementation-plan.md) · Previous: [phase-2-summary.md](./phase-2-summary.md)
 
-**Status: 23 of 23 suites ported (22 fully, 1 partially).** Body 1
-(PressRegistryBody) has since been rotated to a dev-tests-owned quorum too
-(this dev deployment's main use case turned out to be dev-tests itself),
-fully unblocking `log_auditing.spec.ts` — see the update below. The
-client-sdk blocker from this
+**Status: 23 of 23 suites ported (22 fully, 1 partially), and a real
+`dev-tests` run has since executed against a real dev deployment: 92 of
+242 tests passing.** Body 1 (PressRegistryBody) has since been rotated to
+a dev-tests-owned quorum too (this dev deployment's main use case turned
+out to be dev-tests itself), fully unblocking `log_auditing.spec.ts` — see
+"Update: real dev deployment executed" below for the full account,
+including four real bugs found and fixed along the way and one (stale
+`registerSubCard` ABI) deliberately deferred. The client-sdk blocker from this
 phase's earlier state is fully resolved — a separate session ported
 client-sdk's `matrix/` module into `app-sdk`/`wallet-sdk` and migrated
 `integration_tests` off client-sdk entirely (see
@@ -215,18 +218,79 @@ pushed a Worker that crash-loops immediately. Found while porting
 and needed `PRESS_ADMIN_API_KEY` to exist as a concept at all. Fixed in both
 files; see `phase-1-summary.md`'s updated bug list.
 
+## Update: real dev deployment executed, real `dev-tests` run against it
+
+All of the "Outstanding" items below this point were resolved in a later
+session that actually executed the deployment this plan describes, not
+just built the tooling for it:
+
+- All six npm packages (`verifier`, `verifier-ipfs-provider`,
+  `verifier-rpc-provider`, `app-sdk`, `sdk-providers-web`,
+  `sdk-providers-rn`, `wallet-sdk`) published for real to a new
+  `@membership-card-protocol` npm org. Two bugs found: `verifier-ipfs-provider`/
+  `verifier-rpc-provider` were missing `publishConfig.access: "public"`
+  (402 Payment Required on first publish of a new scoped package without it).
+- Body 0/2 rotation (from the runbook above) executed for real, then Body 1
+  (PressRegistryBody) rotated too — the "pending decision" above was
+  resolved: this dev deployment's real use case turned out to be dev-tests
+  itself, so the original reason to leave Body 1 un-rotated no longer
+  applied. Fully unblocked `log_auditing.spec.ts`.
+- The shared dev policy pinned to real Filebase and registered on-chain —
+  but initially under the *wrong* address. `pin-dev-policy.mjs` and
+  `dev-tests/support/pinPolicy.ts` derived `policy_address` as
+  `keccak256(document bytes)`; press's own production code
+  (`issue.ts`/`open-offer.ts`) derives it as `keccak256(the policy_id CID
+  string)` — a different value. Confirmed live (every `registerCard` call
+  reverted `UnrecognizedPolicy()`) and fixed in both scripts; the policy
+  and the press's `AuthorizePress` entry were re-registered under the
+  correct address.
+- Press deployed for real to Cloudflare Workers. Found and fixed three
+  more real bugs along the way (see `press: fix dev deployment` and
+  `press: fix on-chain pressAddress derivation` commits): `EXPECTED_CHAIN_ID`
+  defaulting to Arbitrum One instead of Sepolia for dev (permanent 503);
+  `startup.ts` swallowing any step-4/5 exception with no error message or
+  log output at all (permanent 503, silently); and `registry.ts` deriving
+  its on-chain `pressAddress` via `viem`'s `privateKeyToAccount()` — hardcoded
+  to secp256k1 — on a secp256r1 private key, silently producing a
+  meaningless address instead of throwing (`InvalidGovernanceSignature`/
+  undecodable revert on every on-chain write). Also replaced
+  `@aws-sdk/client-s3` with `aws4fetch` in `src/ipfs/filebase.ts`: the SDK's
+  Node-targeted `runtimeConfig.js` doesn't work under Workers'
+  `nodejs_compat` polyfill (confirmed via `wrangler tail`'s stack trace —
+  `new S3Client()` threw from deep inside AWS SDK internals).
+- A real `dev-tests/run.sh` (`npm test`) pass against this live deployment:
+  92 of 242 tests passing, 89 skipped, 32 `it.todo`. Two more real bugs
+  found this way: `card_validation.spec.ts`'s "card outside trustedRoots"
+  test listed both test cards as trusted roots, making its own negative
+  case unsatisfiable (fixed in both `dev-tests` and `integration_tests`,
+  inherited unchanged from the latter); and `registerSubCard`'s on-chain
+  ABI changed (a parameter dropped, `contracts` commit `97e988ff`) the day
+  *after* the currently-deployed contracts were built — the live contract
+  predates that change, so every `subcard_creation_policy.spec.ts` call
+  reverts with no decodable error at all (a raw selector mismatch, not a
+  handled `Err`). Left as a known gap for now (see below) rather than
+  redeploying contracts mid-session — that would invalidate every
+  governance address set up above.
+
+**Remaining failures in the 92/242 run are all either the tracked
+`registerSubCard` staleness gap above, or genuinely pending future
+deployments** (wallet-service, relay, dev Matrix/Synapse) — not additional
+bugs. Contracts should be redeployed once those are done, to pick up the
+`registerSubCard` fix and confirm the full suite end-to-end; that redeploy
+will require redoing the Body 0/1/2 rotation + RegisterPolicy +
+AuthorizePress sequence again against the new addresses.
+
 ## Outstanding before Phase 3 can close
 
-- David needs to actually run the key-generation and rotation steps in
-  `dev-governance-rotation-runbook.md` (Claude cannot, by design — see
-  above). Until then, `dns_governance_verifier`/`policy_creation` will fail
-  loudly at their env-var check, not silently.
-- Whether to also rotate Body 1 (PressRegistryBody) — the one remaining
-  decision, needed only to unblock `log_auditing.spec.ts` fully.
-- Dev governance (the shared pre-provisioned policy) still needs to be
-  provisioned for real (David, out-of-band) before *any* of the 22 ported
-  suites can actually run green — this is a separate, earlier prerequisite
-  than the governance body rotation above.
+- **Contracts redeploy** — pending, deliberately deferred until after
+  wallet-service/relay/Synapse are deployed too, so governance only needs
+  redoing once. Unblocks `subcard_creation_policy.spec.ts`.
+- Wallet-service dev deployment — tooling exists (Phase 1), not yet run for
+  real. Blocks `wallet_backup_and_recovery`, `room_discovery`,
+  `card_migration`, `message_routing`, half of `oblivious_transport`.
+- Relay dev deployment — tooling exists (Phase 1), not yet run for real.
+  Blocks `relay_data_model`, `notification_relay`, the other half of
+  `oblivious_transport`.
 - A dev Matrix/Synapse deployment's existence needs confirming and its
   connection details (`DEV_SYNAPSE_URL`, `DEV_MATRIX_SERVER_NAME`,
   `DEV_MATRIX_ENFORCEMENT_USER_ID`, `DEV_MATRIX_REGISTRATION_SHARED_SECRET`)
@@ -235,8 +299,4 @@ files; see `phase-1-summary.md`'s updated bug list.
   `wallet-service/DEPLOYMENT.md`'s "Out of scope" section, Synapse deploys
   as its own docker-compose service, separate from wallet-service's Worker
   deploy, with no clear dev-deployment path documented yet.
-  `room_discovery.spec.ts` and every other ported suite need no Synapse
-  dependency at all.
-- A full `dev-tests/run.sh` pass against real dev infrastructure still needs
-  to happen at least once — not possible in this session (no real deployed
-  dev environment or provisioned/rotated governance exists yet).
+  `room_discovery.spec.ts` needs no Synapse dependency at all.
