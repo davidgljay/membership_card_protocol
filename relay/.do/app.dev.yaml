@@ -11,12 +11,32 @@
 # Replace <your-github-org>/<your-repo> with the real GitHub remote before
 # first use -- App Platform builds from a GitHub source, not a local
 # Dockerfile push.
+# Dev-only: `redis` below is a self-hosted Redis worker component instead
+# of DO Managed Redis (cheaper for a throwaway dev deployment -- a worker
+# at the smallest instance size runs well under Managed Redis's ~$15/mo
+# minimum). Real tradeoff, same class as the SQLite device-registry gap
+# documented above: App Platform gives this component no persistent
+# volume either, so Redis's data (message UUID TTL state, not just
+# analytics) is wiped on every redeploy/restart. Acceptable for dev/test;
+# do not carry this pattern into app.prod.yaml -- use DO Managed Redis
+# there. REDIS_URL below points at this component via App Platform's
+# internal component-to-component networking (component name as
+# hostname) -- verify this resolves on first deploy; Managed Redis is the
+# documented fallback in DEPLOYMENT.md if it doesn't.
 name: relay-dev
 region: nyc
+workers:
+  - name: redis
+    image:
+      registry_type: DOCKER_HUB
+      repository: library/redis
+      tag: 7-alpine
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-0.5gb
 services:
   - name: relay
     github:
-      repo: <your-github-org>/<your-repo>
+      repo: davidgljay/membership_card_protocol
       branch: main
       deploy_on_push: false
     dockerfile_path: relay/Dockerfile

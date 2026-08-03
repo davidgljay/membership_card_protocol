@@ -52,10 +52,20 @@ there), so local dev is unaffected.
 - `doctl` installed and authenticated (`doctl auth init`), or a
   `DIGITALOCEAN_ACCESS_TOKEN` for non-interactive use (what
   `scripts/deploy.sh` uses).
-- A DigitalOcean Managed Redis database provisioned per environment
-  (replaces the self-hosted `redis` container from `docker-compose.yml` —
-  see Open Question 2's note on avoiding host management through the back
-  door). Note its connection string for `REDIS_URL`.
+- **Prod**: a DigitalOcean Managed Redis database provisioned per
+  environment (replaces the self-hosted `redis` container from
+  `docker-compose.yml` — see Open Question 2's note on avoiding host
+  management through the back door). Note its connection string for
+  `REDIS_URL`.
+- **Dev**: `app.dev.yaml` instead runs Redis as a self-hosted worker
+  component in the same app (cheaper for a throwaway deployment) — see
+  the file's own doc comment for the tradeoff (no persistent volume, data
+  wiped on every redeploy/restart, same class of gap as the SQLite device
+  registry below). Set `REDIS_URL=redis://redis:6379` (the worker
+  component's name as hostname, via App Platform's internal
+  component-to-component networking) rather than a Managed Redis
+  connection string. If that hostname doesn't resolve on first deploy,
+  fall back to provisioning Managed Redis the same way prod does.
 - `.do/app.dev.yaml` / `.do/app.prod.yaml` updated with your real GitHub
   `repo`/`branch` (App Platform builds from a GitHub source, not a local
   Dockerfile push — replace the `<your-github-org>/<your-repo>` placeholder
@@ -116,12 +126,15 @@ already set in `.do/app.dev.yaml` / `.do/app.prod.yaml` and pushed by
 
 1. Confirm DO account/billing with David (Claude cannot provision billed
    infrastructure).
-2. Provision a Managed Redis database for the environment; note its
-   connection string.
+2. **Prod only**: provision a Managed Redis database for the environment;
+   note its connection string. **Dev**: no provisioning needed —
+   `app.dev.yaml` already declares a self-hosted `redis` worker component.
 3. Replace the GitHub `repo`/`branch` placeholder in
    `.do/app.<environment>.yaml`.
 4. Run `./scripts/deploy.sh <environment>` once to create the app.
-5. In the DO dashboard, set `REDIS_URL`, `APP_REGISTRY_JSON`, and each app's
+5. In the DO dashboard, set `REDIS_URL` (dev: `redis://redis:6379`; prod:
+   the Managed Redis connection string from step 2), `APP_REGISTRY_JSON`,
+   and each app's
    `APNS_KEY_*_B64`/`FCM_SERVICE_ACCOUNT_*_B64` secret, then trigger a
    redeploy from the dashboard (or re-run `scripts/deploy.sh` — it will
    update the app and trigger a new deployment; secret values you already
