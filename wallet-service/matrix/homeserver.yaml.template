@@ -17,17 +17,29 @@ listeners:
           - federation
         compress: false
 
-# PostgreSQL database configuration
+# PostgreSQL database configuration. Templated (not hardcoded to the local
+# docker-compose synapse-postgres container) so the same template also
+# works against an external managed Postgres (e.g. Neon) for the Droplet
+# deployment -- see relay/DEPLOYMENT.md's "Droplet deployment" section.
+# allow_unsafe_locale: managed Postgres providers generally don't expose
+# C collation/ctype at database creation (Synapse's own hard requirement
+# otherwise -- see synapse/storage/engines/postgres.py's check_database,
+# which raises IncorrectDatabaseSetup without this). This is Synapse's own
+# documented override for exactly this case, not a workaround outside its
+# support surface. Leave false for local dev, where synapse-postgres is
+# already created with --locale=C (docker-compose.yml).
 database:
   name: psycopg2
   args:
-    user: synapse
-    password: synapse
-    database: synapse
-    host: synapse-postgres
-    port: 5432
+    user: ${MATRIX_DB_USER}
+    password: ${MATRIX_DB_PASSWORD}
+    database: ${MATRIX_DB_NAME}
+    host: ${MATRIX_DB_HOST}
+    port: ${MATRIX_DB_PORT}
+    sslmode: ${MATRIX_DB_SSLMODE}
     cp_min: 5
     cp_max: 10
+    allow_unsafe_locale: ${MATRIX_DB_ALLOW_UNSAFE_LOCALE}
 
 # Paths
 media_store_path: /data/media

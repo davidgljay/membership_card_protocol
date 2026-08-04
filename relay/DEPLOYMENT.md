@@ -46,29 +46,89 @@ current pricing page if it's been a while.
   Platform, which has no persistent-volume support at all), so
   `docker-compose.droplet.yml` gives each environment's `/data` a real
   named volume instead of App Platform's ephemeral `/tmp`.
+- **This Droplet also runs Matrix/Synapse** (`synapse-dev`/`synapse-prod`
+  — wallet-service's homeserver, not a relay concern in itself, but
+  co-located here on the same host/Caddy instance for the same low-usage
+  cost reasons). Synapse is meaningfully heavier than relay+redis; kept on
+  the same 2GB Droplet by choice (David's call — "keep current and see"),
+  not because it's known to comfortably fit. Watch for OOM once both
+  Synapse instances are actually handling traffic, not just idling.
 
 ### Prerequisites
 
-- A Droplet sized at least 2GB RAM (the 1GB/$6 tier risks OOM running two
-  Node processes + two Redis instances + Caddy simultaneously) with Docker
-  and the Docker Compose plugin installed (DigitalOcean's "Docker on
-  Ubuntu" marketplace image has both preinstalled).
-- A domain you control, with two DNS `A` records pointing at the
-  Droplet's public IP: `relay.membershipcard.io` (prod) and
-  `dev.relay.membershipcard.io` (dev). Both must resolve *before* first
-  starting Caddy — its automatic Let's Encrypt provisioning needs to reach
-  the Droplet over port 80 via each hostname to complete the HTTP-01
-  challenge.
+- A Droplet sized at least 2GB RAM (the 1GB/$6 tier risks OOM even before
+  Synapse; with two Synapse instances added, treat 2GB as the *floor*, not
+  a comfortable margin — resize up if you see OOM kills) with Docker and
+  the Docker Compose plugin installed (DigitalOcean's "Docker on Ubuntu"
+  marketplace image has both preinstalled).
+- A domain you control, with **four** DNS `A` records pointing at the
+  Droplet's public IP: `relay.membershipcard.io` / `dev.relay.membershipcard.io`
+  (relay, prod/dev) and `matrix.membershipcard.io` /
+  `dev.matrix.membershipcard.io` (Synapse, prod/dev). All four must
+  resolve *before* first starting Caddy — its automatic Let's Encrypt
+  provisioning needs to reach the Droplet over port 80 via each hostname
+  to complete the HTTP-01 challenge.
+- **Two more external Neon Postgres databases** (dev + prod), for
+  Synapse's own storage — separate from wallet-service's own Neon
+  database. Synapse requires `UTF8` encoding and `C` collation/ctype on
+  its database; Neon (like most managed Postgres) won't give you `C`
+  collation, so `homeserver.yaml.template` sets Synapse's own documented
+  override (`allow_unsafe_locale: true`) for these two databases — see
+  that template's comment for why this is a supported escape hatch, not a
+  workaround outside Synapse's support surface.
 - `relay/.env.dev.droplet` and `relay/.env.prod.droplet` on the Droplet
   itself (gitignored, never committed) — see "Required environment
-  variables" below for what each needs. Same secret-handling principle as
+  variables" below for what each needs (now shared between the relay and
+  synapse services in that environment). Same secret-handling principle as
   every other package in this repo: real values never pass through an
   agent session.
+
+### One-time Matrix config generation (before first `docker compose up`)
+
+`wallet-service/scripts/generate-matrix-secrets.ts` and
+`render-matrix-config.ts` are single-environment-oriented — each run
+overwrites the same fixed output paths (`matrix/secrets/`,
+`matrix/homeserver.yaml`, `matrix/appservice-registration.yaml`). Since
+`synapse-dev` and `synapse-prod` run **simultaneously** and need
+genuinely separate signing keys/tokens/config, run each script twice —
+once per environment — moving its output into an environment-suffixed
+path between runs, rather than modifying either script's fixed-path
+design (avoids risk to the already-working single-environment local dev
+flow both scripts were built for):
+
+```bash
+cd wallet-service
+
+# --- Dev pass ---
+export MATRIX_SERVER_NAME=dev.matrix.membershipcard.io
+export MATRIX_DB_USER=... MATRIX_DB_PASSWORD=... MATRIX_DB_NAME=...
+export MATRIX_DB_HOST=<dev Neon host> MATRIX_DB_PORT=5432
+export MATRIX_DB_SSLMODE=require MATRIX_DB_ALLOW_UNSAFE_LOCALE=true
+export ARBITRUM_RPC_URL=https://sepolia-rollup.arbitrum.io/rpc
+export ARBITRUM_RPC_WS_URL=...  # WS-capable Sepolia endpoint
+export REGISTRY_CONTRACT_ADDRESS=0x22206625803bcb584268b57dd6bd78cf61181399
+export IPFS_GATEWAY_URL=https://ipfs.filebase.io
+export DATABASE_URL=...  # wallet-service's OWN Neon DB (generate-matrix-secrets.ts uses its secrets backend)
+export SECRETS_BACKEND=webcrypto WEBCRYPTO_MASTER_KEY=...
+npx tsx scripts/generate-matrix-secrets.ts
+npx tsx scripts/render-matrix-config.ts
+mv matrix/secrets matrix/secrets.dev
+mv matrix/homeserver.yaml matrix/homeserver.dev.yaml
+mv matrix/appservice-registration.yaml matrix/appservice-registration.dev.yaml
+
+# --- Prod pass: repeat with MATRIX_SERVER_NAME=matrix.membershipcard.io,
+#     the prod Neon DB for Synapse, and .prod output filenames. ---
+```
+
+You'd only re-run either script for one environment if rotating that
+environment's signing key or AS/HS tokens — not as part of normal
+operation.
 
 ### Running it
 
 ```bash
-# On the Droplet, after cloning this repo:
+# On the Droplet, after cloning this repo and completing the Matrix
+# config generation above:
 cd relay
 # Create .env.dev.droplet and .env.prod.droplet first (see below).
 docker compose -f docker-compose.droplet.yml up -d --build
@@ -85,15 +145,29 @@ Verify:
 curl https://relay.membershipcard.io/health
 curl https://dev.relay.membershipcard.io/health
 # expect {"status":"ok","redis":"ok","sqlite":"ok"} from both
+
+curl https://matrix.membershipcard.io/health
+curl https://dev.matrix.membershipcard.io/health
+# expect Synapse's own health response from both
 ```
 
 ### Required environment variables (`.env.dev.droplet` / `.env.prod.droplet`)
 
-Same variables as App Platform's secret set below (`APP_REGISTRY_JSON`,
-`APNS_KEY_<APP_ID>_B64`/`FCM_SERVICE_ACCOUNT_<APP_ID>_B64`) — `REDIS_URL`,
-`RELAY_ID`, and the rest of the non-secret config are already set directly
-in `docker-compose.droplet.yml` per environment, not read from these
-files.
+Each environment's file is now shared between that environment's relay
+and synapse services:
+
+- **Relay**: same as App Platform's secret set below (`APP_REGISTRY_JSON`,
+  `APNS_KEY_<APP_ID>_B64`/`FCM_SERVICE_ACCOUNT_<APP_ID>_B64`) —
+  `REDIS_URL`, `RELAY_ID`, and the rest of relay's non-secret config are
+  already set directly in `docker-compose.droplet.yml`, not read from
+  these files.
+- **Synapse**: `ARBITRUM_RPC_URL`, `ARBITRUM_RPC_WS_URL`,
+  `REGISTRY_CONTRACT_ADDRESS`, `IPFS_GATEWAY_URL` — `MATRIX_SERVER_NAME`,
+  `MATRIX_ENFORCEMENT_USER_ID`, and the membership-registry paths are
+  already set directly in `docker-compose.droplet.yml` per environment.
+  Synapse's Postgres connection and `allow_unsafe_locale` live inside the
+  pre-rendered `homeserver.dev.yaml`/`homeserver.prod.yaml` from the
+  one-time generation step above, not in these files.
 
 ## Why App Platform, not a Droplet
 

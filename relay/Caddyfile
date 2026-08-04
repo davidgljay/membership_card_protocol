@@ -11,3 +11,14 @@ relay.membershipcard.io {
 dev.relay.membershipcard.io {
     reverse_proxy relay-dev:3000
 }
+
+# Synapse listens on 8008 for both client and federation traffic (see
+# wallet-service/matrix/homeserver.yaml.template's listeners block) --
+# Caddy fronts both with TLS the same way it does for relay above.
+matrix.membershipcard.io {
+    reverse_proxy synapse-prod:8008
+}
+
+dev.matrix.membershipcard.io {
+    reverse_proxy synapse-dev:8008
+}

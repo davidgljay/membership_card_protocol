@@ -17,6 +17,19 @@
 # Unlike the App Platform path, a Droplet's local disk is real persistent
 # storage, so — unlike app.dev.yaml's ephemeral /tmp/registry.db — the
 # SQLite device registry gets a real volume here and survives restarts.
+#
+# synapse-dev/synapse-prod: two simultaneously-running Matrix homeservers
+# on the same Droplet, same pattern as relay-dev/relay-prod. Each reads
+# its own pre-rendered homeserver.yaml/appservice-registration.yaml and
+# its own secrets/ directory from wallet-service/matrix/ (see
+# DEPLOYMENT.md's "Droplet deployment" section for the one-time generation
+# steps that produce the .dev/.prod variants of those files — the
+# generation scripts themselves are single-environment-oriented, so this
+# split happens by moving their output between two runs, not by any
+# runtime dev/prod switch). Each points at its own external Neon Postgres
+# (via the pre-rendered homeserver.yaml, not container env vars — psycopg2
+# args live inside that file). media/membership-registry storage is a
+# per-environment named volume, isolated the same way relay's /data is.
 services:
   caddy:
     image: caddy:2-alpine
@@ -31,6 +44,8 @@ services:
     depends_on:
       - relay-dev
       - relay-prod
+      - synapse-dev
+      - synapse-prod
 
   redis-dev:
     image: redis:7-alpine
@@ -88,8 +103,64 @@ services:
     depends_on:
       - redis-prod
 
+  synapse-dev:
+    build:
+      context: ..
+      dockerfile: wallet-service/matrix/Dockerfile
+    restart: always
+    env_file:
+      - .env.dev.droplet
+    environment:
+      PYTHONUNBUFFERED: "1"
+      SYNAPSE_SERVER_NAME: dev.matrix.membershipcard.io
+      MATRIX_SERVER_NAME: dev.matrix.membershipcard.io
+      MATRIX_ENFORCEMENT_USER_ID: "@matrix-policy-bot:dev.matrix.membershipcard.io"
+      MATRIX_MEMBERSHIP_REGISTRY_PATH: /data/membership_registry/registry.enc
+      MATRIX_MEMBERSHIP_REGISTRY_KEY_PATH: /data/secrets/membership-registry.key
+      JOIN_ATTESTATION_FRESHNESS_SECONDS: "300"
+      WATCHER_BACKSTOP_INTERVAL_SECONDS: "3600"
+    volumes:
+      - ../wallet-service/matrix/homeserver.dev.yaml:/data/homeserver.yaml:ro
+      - ../wallet-service/matrix/appservice-registration.dev.yaml:/data/appservice-registration.yaml:ro
+      - ../wallet-service/matrix/secrets.dev:/data/secrets:ro
+      - synapse_dev_media:/data/media
+      - synapse_dev_membership_registry:/data/membership_registry
+    command: ["run", "--config-path=/data/homeserver.yaml", "--config-path=/data/secrets/registration-shared-secret.yaml"]
+    healthcheck:
+      start_period: 5m
+
+  synapse-prod:
+    build:
+      context: ..
+      dockerfile: wallet-service/matrix/Dockerfile
+    restart: always
+    env_file:
+      - .env.prod.droplet
+    environment:
+      PYTHONUNBUFFERED: "1"
+      SYNAPSE_SERVER_NAME: matrix.membershipcard.io
+      MATRIX_SERVER_NAME: matrix.membershipcard.io
+      MATRIX_ENFORCEMENT_USER_ID: "@matrix-policy-bot:matrix.membershipcard.io"
+      MATRIX_MEMBERSHIP_REGISTRY_PATH: /data/membership_registry/registry.enc
+      MATRIX_MEMBERSHIP_REGISTRY_KEY_PATH: /data/secrets/membership-registry.key
+      JOIN_ATTESTATION_FRESHNESS_SECONDS: "300"
+      WATCHER_BACKSTOP_INTERVAL_SECONDS: "3600"
+    volumes:
+      - ../wallet-service/matrix/homeserver.prod.yaml:/data/homeserver.yaml:ro
+      - ../wallet-service/matrix/appservice-registration.prod.yaml:/data/appservice-registration.yaml:ro
+      - ../wallet-service/matrix/secrets.prod:/data/secrets:ro
+      - synapse_prod_media:/data/media
+      - synapse_prod_membership_registry:/data/membership_registry
+    command: ["run", "--config-path=/data/homeserver.yaml", "--config-path=/data/secrets/registration-shared-secret.yaml"]
+    healthcheck:
+      start_period: 5m
+
 volumes:
   caddy_data:
   caddy_config:
   relay_dev_data:
   relay_prod_data:
+  synapse_dev_media:
+  synapse_dev_membership_registry:
+  synapse_prod_media:
+  synapse_prod_membership_registry:
