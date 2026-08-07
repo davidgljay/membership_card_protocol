@@ -30,6 +30,17 @@
 # (via the pre-rendered homeserver.yaml, not container env vars — psycopg2
 # args live inside that file). media/membership-registry storage is a
 # per-environment named volume, isolated the same way relay's /data is.
+# "prod" services (redis-prod, relay-prod, synapse-prod) are tagged with
+# `profiles: ["prod"]` -- deliberately excluded from a plain
+# `docker compose up` (even one naming `caddy`, whose own depends_on
+# does NOT list them for exactly this reason: Compose implicitly
+# activates a dependency's profile if a profile-less service depends on
+# it, which would silently defeat the point). Bring the prod tier up
+# explicitly, once it's actually ready, with:
+#   docker compose -f docker-compose.droplet.yml --profile prod up -d --build
+# Caddy doesn't need its proxy targets to already be running to start
+# itself -- it just 502s on that route until they exist, so omitting
+# them from depends_on costs nothing.
 services:
   caddy:
     image: caddy:2-alpine
@@ -43,9 +54,7 @@ services:
       - caddy_config:/config
     depends_on:
       - relay-dev
-      - relay-prod
       - synapse-dev
-      - synapse-prod
 
   redis-dev:
     image: redis:7-alpine
@@ -78,6 +87,7 @@ services:
   redis-prod:
     image: redis:7-alpine
     restart: always
+    profiles: ["prod"]
     command: ["redis-server", "--save", "", "--appendonly", "no"]
 
   relay-prod:
@@ -85,6 +95,7 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: always
+    profiles: ["prod"]
     env_file:
       - .env.prod.droplet
     environment:
@@ -134,6 +145,7 @@ services:
       context: ..
       dockerfile: wallet-service/matrix/Dockerfile
     restart: always
+    profiles: ["prod"]
     env_file:
       - .env.prod.droplet
     environment:

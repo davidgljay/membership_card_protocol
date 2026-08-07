@@ -126,18 +126,37 @@ operation.
 
 ### Running it
 
+`redis-prod`, `relay-prod`, and `synapse-prod` are tagged with
+`profiles: ["prod"]` — a plain `docker compose up` only brings up the dev
+tier (`caddy`, `redis-dev`, `relay-dev`, `synapse-dev`). This is
+deliberate, not an oversight: bringing up the whole file at once before
+the prod tier's config actually exists (Matrix config generation done for
+prod, `.env.prod.droplet` populated) starts `synapse-prod` against
+bind-mounts that don't exist yet. `.env.prod.droplet` still needs to
+exist as an empty file even when you're not using the prod tier yet —
+Compose validates every service's `env_file:` reference before deciding
+which ones to actually start, regardless of `--profile`.
+
 ```bash
 # On the Droplet, after cloning this repo and completing the Matrix
 # config generation above:
 cd relay
-# Create .env.dev.droplet and .env.prod.droplet first (see below).
+touch .env.prod.droplet  # even if empty -- see note above
+# Create .env.dev.droplet with real values first (see below).
 docker compose -f docker-compose.droplet.yml up -d --build
+```
+
+Bring up the prod tier once it's actually ready (Matrix config generated
+for prod, `.env.prod.droplet` populated for real):
+```bash
+docker compose -f docker-compose.droplet.yml --profile prod up -d --build
 ```
 
 Redeploying after a code change:
 ```bash
 git pull
 docker compose -f docker-compose.droplet.yml up -d --build
+# add --profile prod once that tier is in use, so it gets redeployed too
 ```
 
 Verify:
