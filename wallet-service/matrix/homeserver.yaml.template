@@ -28,8 +28,17 @@ listeners:
 # documented override for exactly this case, not a workaround outside its
 # support surface. Leave false for local dev, where synapse-postgres is
 # already created with --locale=C (docker-compose.yml).
+#
+# allow_unsafe_locale must be a sibling of `args`, NOT nested inside it --
+# confirmed against synapse/config/database.py's DatabaseConnectionConfig
+# (self.config = db_config is the whole `database:` block, read directly
+# for this key). Nesting it inside `args` instead sends it straight into
+# psycopg2.connect() as a literal DSN parameter, which psycopg2 rejects
+# outright ("invalid dsn: invalid connection option") -- found live on
+# first real render against Neon.
 database:
   name: psycopg2
+  allow_unsafe_locale: ${MATRIX_DB_ALLOW_UNSAFE_LOCALE}
   args:
     user: ${MATRIX_DB_USER}
     password: ${MATRIX_DB_PASSWORD}
@@ -39,7 +48,6 @@ database:
     sslmode: ${MATRIX_DB_SSLMODE}
     cp_min: 5
     cp_max: 10
-    allow_unsafe_locale: ${MATRIX_DB_ALLOW_UNSAFE_LOCALE}
 
 # Paths
 media_store_path: /data/media
