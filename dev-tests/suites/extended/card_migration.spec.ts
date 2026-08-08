@@ -148,7 +148,7 @@ describe('card_migration.md (live dev deployment)', () => {
       publicKey: keypair.publicKey,
       secretKey: keypair.secretKey,
     };
-  }, 60_000);
+  }, 120_000);
 
   describe('§Announcement Construction and Verification', () => {
     it('Step 1-3: posts a dual-signed card_migration announcement and receives 200 OK', async () => {
