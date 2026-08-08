@@ -27,7 +27,7 @@ import { buildJoinAttestation } from '@membership-card-protocol/wallet-sdk';
 import {
   SYNAPSE_BASE_URL,
   MATRIX_SERVER_NAME,
-  registerMatrixUserViaSharedSecret,
+  registerMatrixUserViaAppService,
   createCardGatedRoom,
   submitRoomCreatorAttestation,
   type RegisteredMatrixUser,
@@ -61,7 +61,7 @@ describe('matrix_join_attestation_and_revocation.md (live dev deployment)', () =
     const creatorKeypair = mlDsa44GenerateKeypair();
     const { localpart, matrixUserId } = localpartFor(creatorKeypair);
     creatorMatrixUserId = matrixUserId;
-    creator = await registerMatrixUserViaSharedSecret(localpart);
+    creator = await registerMatrixUserViaAppService(localpart);
 
     const room = await createCardGatedRoom({
       creatorMatrixUserId,
@@ -84,7 +84,7 @@ describe('matrix_join_attestation_and_revocation.md (live dev deployment)', () =
     it('a post from an account with no membership-registry entry at all is denied the same way (baseline, not creator-specific)', async () => {
       const strangerKeypair = mlDsa44GenerateKeypair();
       const { localpart } = localpartFor(strangerKeypair);
-      const stranger = await registerMatrixUserViaSharedSecret(localpart);
+      const stranger = await registerMatrixUserViaAppService(localpart);
       const res = await sendTextMessage(roomId, stranger.accessToken);
       expect(res.status).toBe(403);
     }, 15_000);
@@ -92,7 +92,7 @@ describe('matrix_join_attestation_and_revocation.md (live dev deployment)', () =
     it('a creator who never submits the creator attestation is still denied — the fix is opt-in, not a bypass', async () => {
       const otherCreatorKeypair = mlDsa44GenerateKeypair();
       const { localpart, matrixUserId } = localpartFor(otherCreatorKeypair);
-      const otherCreator = await registerMatrixUserViaSharedSecret(localpart);
+      const otherCreator = await registerMatrixUserViaAppService(localpart);
 
       const otherRoom = await createCardGatedRoom({
         creatorMatrixUserId: matrixUserId,

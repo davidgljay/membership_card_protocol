@@ -12,9 +12,12 @@
  * dev-tests/support/matrixAdmin.ts's header comment and
  * plans/deployment/phase-3-summary.md's outstanding items.
  *
- * Scoping, unchanged from the original suite: no Application Service wired
- * into Synapse (worked around entirely via direct admin-shared-secret user
- * registration -- see matrixAdmin.ts), and Synapse's policy module points
+ * Scoping: unlike integration_tests' copy, this deployment's Synapse *does*
+ * have wallet-service's Application Service wired in with an exclusive
+ * `card_*` namespace, so test users are registered via the AS's own
+ * as_token rather than shared-secret admin registration (see matrixAdmin.ts's
+ * header comment) -- still bypassing wallet-service's HTTP API, just not
+ * Synapse's AS-ownership check. Synapse's policy module points
  * at real Arbitrum Sepolia with no IPFS-pinning capability here, so any
  * scenario requiring a *satisfying* card is out of scope. Every deny path
  * that doesn't depend on a real chain resolving is fully in scope and
@@ -32,7 +35,7 @@ import {
   SYNAPSE_BASE_URL,
   MATRIX_SERVER_NAME,
   MATRIX_ENFORCEMENT_USER_ID,
-  registerMatrixUserViaSharedSecret,
+  registerMatrixUserViaAppService,
   createCardGatedRoom,
   fetchRoomState,
   type RegisteredMatrixUser,
@@ -55,7 +58,7 @@ describe('matrix_room_membership.md + matrix_join_attestation_and_revocation.md 
     const creatorKeypair = mlDsa44GenerateKeypair();
     const { localpart, matrixUserId } = localpartFor(creatorKeypair);
     creatorMatrixUserId = matrixUserId;
-    creator = await registerMatrixUserViaSharedSecret(localpart);
+    creator = await registerMatrixUserViaAppService(localpart);
     expect(creator.userId).toBe(creatorMatrixUserId);
 
     policyId = 'bafyreig' + Buffer.from(keccak256(new TextEncoder().encode('matrix-room-membership-suite')).slice(0, 32), 'hex').toString('hex') + 'fixturepolicy';
@@ -100,7 +103,9 @@ describe('matrix_room_membership.md + matrix_join_attestation_and_revocation.md 
 
   describe('§2 Revised Join Sequence — deny paths (real module, live join attempts)', () => {
     it('denies a join with no attestation content at all', async () => {
-      const joiner = await registerMatrixUserViaSharedSecret('room-membership-suite-noattest-' + Date.now());
+      const joinerKeypair = mlDsa44GenerateKeypair();
+      const { localpart } = localpartFor(joinerKeypair);
+      const joiner = await registerMatrixUserViaAppService(localpart);
       const res = await fetch(`${SYNAPSE_BASE_URL}/_matrix/client/v3/join/${encodeURIComponent(roomId)}`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${joiner.accessToken}`, 'Content-Type': 'application/json' },
@@ -114,7 +119,7 @@ describe('matrix_room_membership.md + matrix_join_attestation_and_revocation.md 
     it('denies a join with a malformed attestation (empty signatures array) — a distinct check from the no-attestation case, run before any chain walk', async () => {
       const joinerKeypair = mlDsa44GenerateKeypair();
       const { localpart, matrixUserId } = localpartFor(joinerKeypair);
-      const joiner = await registerMatrixUserViaSharedSecret(localpart);
+      const joiner = await registerMatrixUserViaAppService(localpart);
 
       const res = await fetch(`${SYNAPSE_BASE_URL}/_matrix/client/v3/join/${encodeURIComponent(roomId)}`, {
         method: 'POST',
@@ -142,7 +147,7 @@ describe('matrix_room_membership.md + matrix_join_attestation_and_revocation.md 
     it('denies (403) a join with a validly-signed, correctly-bound attestation for a card that does not exist on-chain', async () => {
       const joinerKeypair = mlDsa44GenerateKeypair();
       const { localpart, matrixUserId } = localpartFor(joinerKeypair);
-      const joiner = await registerMatrixUserViaSharedSecret(localpart);
+      const joiner = await registerMatrixUserViaAppService(localpart);
       expect(joiner.userId).toBe(matrixUserId);
 
       const attestation = buildJoinAttestation(joinerKeypair.secretKey, roomId, MATRIX_SERVER_NAME);
