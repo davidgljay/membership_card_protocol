@@ -217,6 +217,20 @@ docker compose -f docker-compose.droplet.yml up -d --build
 # add --profile prod once that tier is in use, so it gets redeployed too
 ```
 
+**Or, scripted (this is what CI runs — see "Phase 4: CI/CD pipeline"
+below)**: `scripts/deploy.sh <dev|prod>` does the same `git pull` +
+`docker compose up -d --build <service>` sequence over SSH, scoped to just
+that environment's `relay-<env>` service (not the whole compose file).
+Requires `DROPLET_SSH_HOST`, `DROPLET_SSH_USER`, `DROPLET_SSH_PRIVATE_KEY`
+(the key's contents, not a path) as env vars — in CI these come from the
+`dev`/`prod` GitHub Environment's secrets; running it yourself, export
+them in your own shell first (never paste the private key into an agent
+session). This is now `scripts/deploy.sh`'s default behavior
+(`RELAY_DEPLOY_TARGET=droplet`); the original App Platform path from Phase
+1 is still there, reachable with `RELAY_DEPLOY_TARGET=app_platform`, for
+if usage ever grows enough to switch back (see "Why App Platform, not a
+Droplet" below).
+
 **`docker compose restart <service>` does not reload `env_file:` contents
 or `environment:` values** — it restarts the existing container process
 with whatever environment it already has. Editing `.env.dev.droplet` /
@@ -420,6 +434,17 @@ update` leaves an existing secret's value untouched when the spec omits it.
 ## Required environment variables
 
 ### For `scripts/deploy.sh` itself
+
+Default target (`RELAY_DEPLOY_TARGET=droplet`, or unset):
+
+| Variable | Description |
+|---|---|
+| `DROPLET_SSH_HOST` | The Droplet's hostname or IP. |
+| `DROPLET_SSH_USER` | SSH user to connect as (whatever user owns `~/membership_card_protocol` on the Droplet). |
+| `DROPLET_SSH_PRIVATE_KEY` | The private key's contents (not a path) — an SSH keypair authorized on the Droplet, dedicated to CI use rather than a personal key. |
+
+`RELAY_DEPLOY_TARGET=app_platform` (fallback, not the live path — see "Why
+App Platform, not a Droplet" above):
 
 | Variable | Description |
 |---|---|

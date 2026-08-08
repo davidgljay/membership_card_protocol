@@ -94,9 +94,22 @@ publish_step "publish wallet-sdk" \
 
 # Service deploys. No dependency between these three, order kept stable for
 # readable logs.
+#
+# REGISTRY_CONTRACT_ADDRESS means a DIFFERENT contract in press
+# (logic-contract, its write target) than in wallet-service (storage-contract,
+# its read target) -- see relay/DEPLOYMENT.md's naming-landmine note. Both
+# scripts read the same env var name, so running them in the same process
+# environment (as this script does) needs each one scoped to its own value,
+# not one shared REGISTRY_CONTRACT_ADDRESS. Callers set
+# REGISTRY_CONTRACT_ADDRESS_LOGIC / REGISTRY_CONTRACT_ADDRESS_STORAGE (e.g.
+# .github/workflows/deploy-pipeline.yml's per-environment vars); this falls
+# back to a bare REGISTRY_CONTRACT_ADDRESS for either if the split var isn't
+# set, so existing single-var local setups keep working unchanged.
 run_step "deploy press" \
+  env REGISTRY_CONTRACT_ADDRESS="${REGISTRY_CONTRACT_ADDRESS_LOGIC:-${REGISTRY_CONTRACT_ADDRESS:-}}" \
   "$REPO_ROOT/press/scripts/deploy.sh" "$ENVIRONMENT"
 run_step "deploy wallet-service" \
+  env REGISTRY_CONTRACT_ADDRESS="${REGISTRY_CONTRACT_ADDRESS_STORAGE:-${REGISTRY_CONTRACT_ADDRESS:-}}" \
   "$REPO_ROOT/wallet-service/scripts/deploy.sh" "$ENVIRONMENT"
 run_step "deploy relay" \
   "$REPO_ROOT/relay/scripts/deploy.sh" "$ENVIRONMENT"
