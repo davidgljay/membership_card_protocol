@@ -2,23 +2,40 @@
 
 Strategic plan: [strategic-plan.md](./strategic-plan.md) · Implementation plan: [implementation-plan.md](./implementation-plan.md) · Previous: [phase-2-summary.md](./phase-2-summary.md)
 
-**Status: 23 of 23 suites ported (22 fully, 1 partially), and a real
-`dev-tests` run has since executed against a real dev deployment: 92 of
-242 tests passing.** Body 1 (PressRegistryBody) has since been rotated to
-a dev-tests-owned quorum too (this dev deployment's main use case turned
-out to be dev-tests itself), fully unblocking `log_auditing.spec.ts` — see
-"Update: real dev deployment executed" below for the full account,
-including four real bugs found and fixed along the way and one (stale
-`registerSubCard` ABI) deliberately deferred. The client-sdk blocker from this
-phase's earlier state is fully resolved — a separate session ported
-client-sdk's `matrix/` module into `app-sdk`/`wallet-sdk` and migrated
-`integration_tests` off client-sdk entirely (see
-`plans/deployment/client-sdk-deprecation-plan.md`); this session ported all
-5 previously-blocked dev-tests suites against those same published
-packages. All 22 typecheck cleanly against the real published package
-types. Nothing has been run against real infrastructure — that requires
-both dev governance and the governance body rotation to be provisioned for
-real first, same standing limitation as Phases 1-2.
+**Status: CLOSED. 23 of 23 suites ported, and a full `dev-tests` run
+against the complete live dev deployment (press, wallet-service, relay,
+Matrix/Synapse, and freshly-redeployed contracts) passes with 194 real
+tests green and zero failures** (48 `it.todo`/skipped, all individually
+documented reasons — product gaps or intentionally-out-of-scope cases, not
+silent holes). This closes every item that was still outstanding as of
+this document's previous update — see "Update: relay/Matrix/Synapse
+deployed, contracts redeployed, Phase 3 closed" below for the full
+account. Per `implementation-plan.md`'s own Phase 3 Milestone Review
+criteria ("every integration test has a confirmed dev-tests counterpart,
+... a full `dev-tests/run.sh` pass is green against a live dev
+deployment"), Phase 3 is done. Ready to move to Phase 4 (CI/CD pipeline).
+
+<details>
+<summary>Earlier status (superseded, kept for history)</summary>
+
+23 of 23 suites ported (22 fully, 1 partially), and a real `dev-tests` run
+has since executed against a real dev deployment: 92 of 242 tests passing.
+Body 1 (PressRegistryBody) has since been rotated to a dev-tests-owned
+quorum too (this dev deployment's main use case turned out to be dev-tests
+itself), fully unblocking `log_auditing.spec.ts` — see "Update: real dev
+deployment executed" below for the full account, including four real bugs
+found and fixed along the way and one (stale `registerSubCard` ABI)
+deliberately deferred. The client-sdk blocker from this phase's earlier
+state is fully resolved — a separate session ported client-sdk's `matrix/`
+module into `app-sdk`/`wallet-sdk` and migrated `integration_tests` off
+client-sdk entirely (see `plans/deployment/client-sdk-deprecation-plan.md`);
+this session ported all 5 previously-blocked dev-tests suites against
+those same published packages. All 22 typecheck cleanly against the real
+published package types. Nothing has been run against real infrastructure
+— that requires both dev governance and the governance body rotation to be
+provisioned for real first, same standing limitation as Phases 1-2.
+
+</details>
 
 ## Clarification resolved before porting began
 
@@ -280,23 +297,140 @@ bugs. Contracts should be redeployed once those are done, to pick up the
 will require redoing the Body 0/1/2 rotation + RegisterPolicy +
 AuthorizePress sequence again against the new addresses.
 
-## Outstanding before Phase 3 can close
+## Update: relay/Matrix/Synapse deployed, contracts redeployed, Phase 3 closed
 
-- **Contracts redeploy** — pending, deliberately deferred until after
-  wallet-service/relay/Synapse are deployed too, so governance only needs
-  redoing once. Unblocks `subcard_creation_policy.spec.ts`.
-- Wallet-service dev deployment — tooling exists (Phase 1), not yet run for
-  real. Blocks `wallet_backup_and_recovery`, `room_discovery`,
-  `card_migration`, `message_routing`, half of `oblivious_transport`.
-- Relay dev deployment — tooling exists (Phase 1), not yet run for real.
-  Blocks `relay_data_model`, `notification_relay`, the other half of
-  `oblivious_transport`.
-- A dev Matrix/Synapse deployment's existence needs confirming and its
-  connection details (`DEV_SYNAPSE_URL`, `DEV_MATRIX_SERVER_NAME`,
-  `DEV_MATRIX_ENFORCEMENT_USER_ID`, `DEV_MATRIX_REGISTRATION_SHARED_SECRET`)
-  filled into `.env` before `matrix_join_attestation_and_revocation.spec.ts`
-  or `matrix_room_membership.spec.ts` can run — per
-  `wallet-service/DEPLOYMENT.md`'s "Out of scope" section, Synapse deploys
-  as its own docker-compose service, separate from wallet-service's Worker
-  deploy, with no clear dev-deployment path documented yet.
-  `room_discovery.spec.ts` needs no Synapse dependency at all.
+This session resolved every item the previous update left outstanding —
+wallet-service's own dev deployment had already gone live in an earlier
+session (see the `wallet-service: fix dev deployment`-era commits and the
+`wallet-service: add federation keypair generation script` /
+`wallet-service: fix allow_unsafe_locale placement in homeserver template`
+commits from that work), leaving relay, Matrix/Synapse, and the contracts
+redeploy as the actual remaining gaps. All three are done.
+
+### Relay deployed — as a Droplet, not App Platform
+
+Cost-driven pivot mid-session: a single DigitalOcean Droplet running dev
+and prod side by side via `docker-compose.droplet.yml` + Caddy, chosen over
+App Platform + Managed Redis on cost grounds while usage stays low (see
+`relay/DEPLOYMENT.md`'s "Current path: Droplet, not App Platform" banner
+for the full tradeoff list — Redis persistence deliberately disabled,
+single point of failure accepted, host management responsibility back in
+exchange). The App Platform path (`scripts/deploy.sh`, `.do/app.*.yaml`)
+from Phase 1 is left in place, documented, and still works if usage grows
+enough to justify switching back.
+
+### Matrix/Synapse deployed onto the same Droplet — the hard part
+
+`synapse-dev`/`synapse-prod` run alongside relay on the same Droplet.
+Getting `synapse-dev` actually healthy surfaced a long chain of real,
+non-obvious bugs, each now documented at its source (see
+`relay/DEPLOYMENT.md`'s "Troubleshooting — quick reference" table for the
+full list with fixes) rather than just here:
+
+- **Neon pooled vs. direct endpoint**: Synapse's schema installer sends its
+  entire initial schema as one multi-statement query, which breaks against
+  PgBouncer transaction-mode pooling (what Neon's pooled endpoint runs) —
+  silently left the database in a partially-migrated state that needed a
+  `DROP SCHEMA public CASCADE` reset once the direct endpoint was used
+  instead.
+- **UID 991 permissions**: the Synapse image's `/start.py` drops root
+  privileges to `991:991` before running — applies to bind-mounted config
+  *and* named volumes (`media`/`membership_registry`), the latter easy to
+  miss since nothing chowns them until Synapse's first write, which can
+  happen well after the container looks healthy.
+- **`allow_unsafe_locale` placement bug**: had to be a sibling of `args:`
+  in the rendered `homeserver.yaml`, not nested inside it — nesting sends
+  it straight into `psycopg2.connect()` as an invalid DSN parameter.
+- **EIP-55 checksum requirement**: `REGISTRY_CONTRACT_ADDRESS` must be
+  checksummed for `web3.py` — caught a self-inflicted instance of exactly
+  this bug twice more later in the session (see "Contracts redeployed"
+  below), underscoring why it's now documented with the exact compute
+  command rather than left as a one-off fix.
+- **`docker compose restart` vs. `up -d`**: `restart` doesn't reload
+  `env_file`/`environment` changes — needs `up -d <service>` to recreate
+  the container. Cost real debugging time before being identified and
+  documented.
+- **Real AS namespace vs. `integration_tests`' stub**: dev's Synapse has
+  wallet-service's Application Service genuinely registered with an
+  exclusive `card_*` namespace (`integration_tests`' local Synapse has no
+  AS at all), so `dev-tests/support/matrixAdmin.ts`'s original
+  shared-secret-registration approach — copied from `integration_tests` —
+  can never work here. Fixed by registering test users via the AS's own
+  `as_token` instead (`type: m.login.application_service`), which Synapse
+  exempts from its exclusive-namespace check.
+
+### OHTTP oblivious-forwarding wired up
+
+`OBLIVIOUS_TARGETS_PATH` was never set on the Droplet, so relay's
+`/ohttp/*` routes were silently disabled. Extended
+`materialize-secrets.mjs`'s existing `APP_REGISTRY_JSON` pattern with a
+matching `OBLIVIOUS_TARGETS_JSON` var (same materialize-at-startup
+mechanism) and registered press's and wallet-service's real `target_id`s
+(each service's own `/ohttp/key-config` endpoint, not invented values) with
+real gateway URLs (`POST /ohttp/gateway`, which both services already
+implement — no new gateway component needed). Unblocks
+`oblivious_transport.spec.ts` and the behavioral half of
+`relay_data_model.spec.ts` fully.
+
+### Contracts redeployed — `registerSubCard` fixed, full governance re-bootstrap
+
+Redeployed `storage-contract` + `logic-contract` on Sepolia (kept
+`verifier_module` unchanged) to pick up commit `97e988ff`'s
+`registerSubCard` signature fix, which the prior deployment's bytecode
+predated. Chose the fresh-redeploy path over the storage-preserving
+`ProposeLogicUpgrade`/`ConfirmLogicUpgrade` path (§4.14) — that path's
+mandatory 7-day timelock was judged too slow for a dev deployment; the
+accepted tradeoff was redoing the governance-rotation/policy/press
+bootstrap this dev deployment had already built up, once, rather than
+waiting a week. New addresses in `contracts/deployments/sepolia.json`;
+previous record preserved at `sepolia-2026-07-20-superseded.json`.
+
+Full re-bootstrap against the new contract, in order: rotated all three
+governance bodies back onto the *same* keys `dev-tests/.env` already held
+(re-derived their public keys locally from the existing private keys —
+never regenerated), re-registered the shared dev policy, re-authorized the
+shared dev press, propagated the new addresses to press/wallet-service/
+relay/dev-tests/Synapse (mind the naming landmine:
+`REGISTRY_CONTRACT_ADDRESS` means the *logic* contract in press but the
+*storage* contract everywhere else), and redeployed all three live
+services. Two real mistakes surfaced and were corrected during this, both
+worth remembering:
+
+- A `redeploy_logic.sh` script bug (validated an env var it never
+  actually used) and a wrong-working-directory accident (deployed a stray,
+  unused instance of `verifier-module` on one retry, harmless but real gas
+  spent) — both documented inline in the script/deployment record.
+- The script's own reported failure (`InvalidGovernanceSignature` on
+  Body 0's rotation) turned out to be a stale gas-estimation race against
+  an already-successful submission — the *actual* on-chain state (verified
+  independently via a proper ABI decode) showed the rotation had in fact
+  succeeded. Lesson generalized into the deployment docs: trust a direct
+  on-chain read over a script's exit status when they conflict.
+- A hand-typed EIP-55 checksum (one wrong character) in `dev-tests/.env`
+  broke 7 governance-dependent test files after the redeploy — caught by
+  re-verifying every address written this session against the
+  programmatically-computed checksum, not by assuming the first typed
+  value was right. Exactly the class of bug the Matrix deployment's own
+  troubleshooting docs already warned about, self-inflicted anyway.
+- Also: an overly broad `grep` while looking up press's key variable names
+  printed `PRESS_MLDSA44_PRIVATE_KEY`'s actual value into a tool-call
+  transcript. Flagged immediately; that key should be rotated via
+  `press/scripts/gen-press-keys.mjs` (regenerate, push the new secret) at
+  the next convenient opportunity — it's no longer safe to treat as
+  private, even though the exposure stayed within this session.
+
+### Final `dev-tests` result
+
+194 real tests passing, 0 failing, 48 `it.todo`/skipped — every one with a
+documented reason (auditor-side E2E is a Phase 4 product gap; a handful of
+endpoints genuinely aren't implemented yet; `subcard_creation_policy`'s
+Mechanism 3 deregistration endpoint isn't functional). No unexplained
+gaps. Full suite, including `subcard_creation_policy.spec.ts`'s two
+`registerSubCard`-calling tests that were the whole reason for the
+contracts redeploy, is green.
+
+**Phase 3 is closed.** Per `implementation-plan.md`'s Phase 3 Milestone
+Review "Done when" criteria — every integration test has a confirmed
+dev-tests counterpart, a full `dev-tests/run.sh` pass is green against a
+live dev deployment — both conditions are met. Next: Phase 4 (CI/CD
+pipeline), per `implementation-plan.md`.
