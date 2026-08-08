@@ -1,25 +1,25 @@
 {
   "network": "sepolia",
-  "deployed_at": "2026-07-20T07:50:05Z",
+  "deployed_at": "2026-08-08T06:04:09Z",
   "rpc_url": "https://sepolia-rollup.arbitrum.io/rpc",
   "contracts": {
     "verifier_module": "0xffd8ff017b79f511e32ae7c1629bed99609dc8fe",
-    "storage_contract": "0xeb80867de14183b8a95a6547027f344995a014ac",
-    "logic_contract": "0x22206625803bcb584268b57dd6bd78cf61181399"
+    "storage_contract": "0xb72d0219a23827287f32956bf1c2221648b59a98",
+    "logic_contract": "0xb3a55cbc7d8a475f036692e52f6ff347796c6b05"
   },
   "deployment_txs": {
     "verifier_module": "0x20365a66870c09badca2a4a881e41a0ef8190243756fe76f42fdbf9f3147cf93",
-    "storage_contract": "0xd656c900c97000f45b7bf3d7f9c228af0fc139f0bc8f13d8d68aa15599ef195a",
-    "logic_contract": "0x56905fc9caf800f29263a5ddfda08ea10000b665bb76e5399d28dd32c0396b81"
+    "storage_contract": "0xaa8ce36049264f2ae2b3e04ee0e208cabd511b3491cb53d880a61be82886ce6f",
+    "logic_contract": "0x323f9e94a4665b1a0dcb38474d28435361064419afe43f45eefa4bbd54d076b4"
   },
   "activation_txs": {
     "verifier_module": null,
-    "storage_contract": "0xe0e911abc420404bb963e2ad4501c2985e8ef5e77c55ce613423266d07d32a25",
-    "logic_contract": "0x3ab29b9da69d86db3e6fb50bca0901db508c5c19f50835f3d5c9f204c121b443"
+    "storage_contract": null,
+    "logic_contract": "0xb61c112ac95a831f814e1c20c156031d29471bf73f1ef548360b6b0ade675410"
   },
   "wiring_txs": {
-    "init_storage": "0x4b52af4ec9bfbbbed85e6e7c608648efaa4260f548f10e337d1442d159d36d4b",
-    "init_logic": "0x0c9ee6b5f32da4fc9375d796af32e83a6aafe0cc45718395a1c888469bc4aac8"
+    "init_storage": "0x763fc410cebf25bb808c681e0d2681d1bc1d263d580b9ac5179b08ee8b89871c",
+    "init_logic": "0x274d8b745cc14a29fec99e3c6d955b7a979c15170e6805f2440e04d88a56c809"
   },
-  "notes": "Redeployed 2026-07-20 to fix the registry.ts ABI casing bug (press's REGISTRY_ABI used PascalCase/snake_case function names instead of Stylus's real camelCase ABI dispatch — every on-chain call, read and write, was reverting) and to pick up getProtocolVersion(), which didn't exist in the 2026-06-28 deployment's bytecode (added to source after that deployment). Confirmed via raw eth_call: getProtocolVersion() now returns \"0.1\". Full three-contract fresh deployment, not a logic-only upgrade — the logic-only upgrade path (proposeLogicUpgrade/confirmLogicUpgrade) has a mandatory 7-day timelock, too slow to unblock integration testing; since the 2026-06-28 deployment had no real users/value (test/integration use only), abandoning its state was the accepted tradeoff. Superseded deployment record (including its DNS bootstrap) preserved at sepolia-2026-06-28-superseded.json. This deployment has NOT yet run governance bootstrap (RegisterPolicy/AuthorizePress) or DNS bootstrap — see integration_tests/reports/phase-1-environment-notes.md for what's been done since."
+  "notes": "Redeployed 2026-08-08 to fix registerSubCard's stale on-chain ABI (commit 97e988ff, 2026-07-21, dropped master_sig_payload/master_signature params from the source signature after the 2026-07-20 deployment's bytecode had already shipped with the old 12-param signature -- every registerSubCard call reverted on a selector mismatch). Full three-contract-shaped redeploy of storage+logic (verifier_module kept unchanged, same address as the 2026-07-20 deployment) rather than the storage-preserving ProposeLogicUpgrade/ConfirmLogicUpgrade path (§4.14) -- that path's mandatory 7-day timelock was judged too slow for a dev deployment, and the tradeoff (abandoning the 2026-07-20 deployment's built-up governance-rotation/policy/press state) was accepted deliberately. Superseded deployment record preserved at sepolia-2026-07-20-superseded.json. storage.initialize() and logic.initialize() wiring verified live via getLogicContract()/getStorageContract()/getVerifierModule() before this record was written. This deployment has NOT yet run governance rotation (Body 0/1/2), RegisterPolicy, AuthorizePress, or DNS bootstrap -- all reset to genesis by the fresh storage contract; see dev-governance-rotation-runbook.md for the keys already generated for this (same public keys, need re-rotating onto this new logic_contract). One stray, unused verifier-module instance was also accidentally deployed to 0xc1b883e145bd5f285dcdaf77be2eee970f2f11f9 during this process (wrong working directory on a retry after a transient gas-price failure) -- never wired to anything, safe to ignore, not referenced here."
 }

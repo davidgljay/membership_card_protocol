@@ -19,7 +19,10 @@
 #   ./contracts/scripts/redeploy_logic.sh
 #
 # Required env vars: PRIVATE_KEY, ARBITRUM_SEPOLIA_RPC,
-#                    DEPLOYER_SECP256R1_PUBKEY, SECP256R1_PRIVKEY
+#                    DEPLOYER_SECP256R1_PUBKEY
+# (DEPLOYER_SECP256R1_PUBKEY seeds the fresh storage contract's genesis
+# governance keyset via storage.initialize() -- no signature needed for
+# that call, so no matching private key is required here.)
 
 set -euo pipefail
 
@@ -36,7 +39,7 @@ if [[ "$ARBITRUM_SEPOLIA_RPC" != *"sepolia"* ]]; then
     exit 1
 fi
 
-for VAR in PRIVATE_KEY ARBITRUM_SEPOLIA_RPC DEPLOYER_SECP256R1_PUBKEY SECP256R1_PRIVKEY; do
+for VAR in PRIVATE_KEY ARBITRUM_SEPOLIA_RPC DEPLOYER_SECP256R1_PUBKEY; do
     if [[ -z "${!VAR:-}" ]]; then
         echo "ERROR: $VAR is not set. Run: set -a; source contracts/.env; set +a" >&2
         exit 1
