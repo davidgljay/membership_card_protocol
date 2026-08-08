@@ -77,6 +77,23 @@ app_service_config_files:
   - /data/appservice-registration.yaml
 
 # Matrix Policy Module for card-gated room authorization
+#
+# registry_contract_address MUST be EIP-55 checksummed (mixed-case) --
+# web3.py's Web3().eth.contract() hard-rejects an all-lowercase address
+# with InvalidAddress ("only accepts checksum addresses"), and this is
+# caught at module init time, so a wrong-case address takes Synapse's
+# whole startup down, not just this feature. Compute it, don't hand-type
+# it -- a manually-cased guess produces a DIFFERENT wrong error
+# ("invalid EIP-55 checksum") that looks similar but isn't the same bug:
+#   docker run --rm --entrypoint python3 <synapse-image> -c \
+#     "from web3 import Web3; print(Web3.to_checksum_address('0x...'))"
+# (any image with web3 installed works -- the already-built synapse image
+# is the easy one to reach for). Also note this value is rendered into
+# this file ONCE at generation time (scripts/render-matrix-config.ts) --
+# Synapse reads it from here, not from a live REGISTRY_CONTRACT_ADDRESS
+# container env var, so changing the container's env alone (e.g. in
+# relay/.env.*.droplet) does nothing until you re-run render-matrix-config.ts
+# and replace this file.
 modules:
   - module: "matrix_policy_module.module.PolicyModule"
     config:

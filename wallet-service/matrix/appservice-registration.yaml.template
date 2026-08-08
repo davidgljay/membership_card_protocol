@@ -53,3 +53,18 @@ namespaces:
       regex: '@card_[0-9a-f]{64}:${MATRIX_SERVER_NAME_REGEX}'
   aliases: []
   rooms: []
+
+# exclusive: true has a real downstream consequence for any tooling that
+# registers users against this homeserver, not just wallet-service's own
+# bridge: Synapse's check_user_id_not_appservice_exclusive
+# (synapse/handlers/register.py) unconditionally rejects ANY registration
+# into this namespace that doesn't come from this AS's own as_token --
+# including Synapse's shared-secret admin registration API
+# (/_synapse/admin/v1/register), which has no bypass for it. Any script or
+# test suite that needs to create `card_*` users against a homeserver
+# where this AS is actually registered (i.e. anywhere past local dev's
+# stub Synapse, which has no AS wired in at all) must authenticate as this
+# AS -- `POST /_matrix/client/v3/register?kind=user` with
+# `Authorization: Bearer <as_token>` and `type: m.login.application_service`
+# -- not use the shared secret. See dev-tests/support/matrixAdmin.ts's
+# header comment for the concrete fix this required there.
