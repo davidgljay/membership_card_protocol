@@ -102,11 +102,19 @@ cd wallet-service
 # --- Dev pass ---
 export MATRIX_SERVER_NAME=dev.matrix.membershipcard.io
 export MATRIX_DB_USER=... MATRIX_DB_PASSWORD=... MATRIX_DB_NAME=...
-export MATRIX_DB_HOST=<dev Neon host> MATRIX_DB_PORT=5432
+# MATRIX_DB_HOST: Neon's DIRECT endpoint (no "-pooler" in the hostname) --
+# see wallet-service/.env.example's MATRIX_DB_HOST comment for why the
+# pooled endpoint breaks Synapse's schema install partway through, and
+# how to recover a database that already got left in that state.
+export MATRIX_DB_HOST=<dev Neon host, direct not pooled> MATRIX_DB_PORT=5432
 export MATRIX_DB_SSLMODE=require MATRIX_DB_ALLOW_UNSAFE_LOCALE=true
 export ARBITRUM_RPC_URL=https://sepolia-rollup.arbitrum.io/rpc
 export ARBITRUM_RPC_WS_URL=...  # WS-capable Sepolia endpoint
-export REGISTRY_CONTRACT_ADDRESS=0x22206625803bcb584268b57dd6bd78cf61181399
+# REGISTRY_CONTRACT_ADDRESS must be EIP-55 checksummed -- compute it, don't
+# hand-type a guess (see wallet-service/matrix/homeserver.yaml.template's
+# comment for the exact command and why a wrong-case guess fails
+# differently, and more confusingly, than an all-lowercase address does).
+export REGISTRY_CONTRACT_ADDRESS=<checksummed address, computed not typed>
 export IPFS_GATEWAY_URL=https://ipfs.filebase.io
 export DATABASE_URL=...  # wallet-service's OWN Neon DB (generate-matrix-secrets.ts uses its secrets backend)
 export SECRETS_BACKEND=webcrypto WEBCRYPTO_MASTER_KEY=...
@@ -122,7 +130,57 @@ mv matrix/appservice-registration.yaml matrix/appservice-registration.dev.yaml
 
 You'd only re-run either script for one environment if rotating that
 environment's signing key or AS/HS tokens — not as part of normal
-operation.
+operation. If you do need to re-render (e.g. after fixing a wrong env var)
+**after** having already moved `matrix/secrets` to `matrix/secrets.<env>`:
+`render-matrix-config.ts` still reads AS/HS tokens from the fixed
+`matrix/secrets/` path even on a re-render, so copy it back first
+(`cp -r matrix/secrets.<env> matrix/secrets`), re-run
+`render-matrix-config.ts`, move/chown the freshly rendered
+`homeserver.yaml`/`appservice-registration.yaml` into place, then remove
+the temporary copy (`rm -rf matrix/secrets`) — leave the real copy only at
+`secrets.<env>`.
+
+Every file this generates must be owned by UID:GID `991:991` before
+Synapse starts (or after any of the above re-render steps) — see
+"Required file/volume permissions" below.
+
+### Required file/volume permissions (UID 991)
+
+The `matrixdotorg/synapse` image's `/start.py` entrypoint drops root
+privileges to UID:GID `991:991` via `gosu` before actually running Synapse
+(confirmed by reading `/start.py` inside the built image; not documented
+anywhere obvious). That applies to **everything** Synapse reads or writes,
+not just the bind-mounted config:
+
+- The bind-mounted files generated above: `matrix/secrets.<env>/`,
+  `matrix/homeserver.<env>.yaml`, `matrix/appservice-registration.<env>.yaml`.
+- The **named volumes** `docker-compose.droplet.yml` mounts at
+  `/data/media` and `/data/membership_registry` for each Synapse service.
+  These are easy to miss: Docker creates a fresh named volume owned by
+  `root`, and unlike the bind-mounted files above (chowned once, up front,
+  as part of the generation steps), nothing chowns these until Synapse
+  actually tries to write to them for the first time — which, for
+  `membership_registry`, may not happen until well after the container
+  looks healthy (its first write is the room-creator-attestation flow, not
+  startup). A `PermissionError` here shows up as a 500 from Synapse on an
+  otherwise-working-looking deployment, not a startup crash.
+
+Fix, for the bind-mounted files (from the host, after generation):
+```bash
+chown 991:991 matrix/secrets.<env>/* matrix/homeserver.<env>.yaml matrix/appservice-registration.<env>.yaml
+```
+
+Fix, for the named volumes (from inside the container, as root -- there is
+no host-side path to chown for a named volume):
+```bash
+docker exec -u root relay-synapse-<env>-1 chown -R 991:991 /data/media /data/membership_registry
+```
+
+Do the volume fix once, right after first bringing that environment's
+Synapse up (or immediately if you ever see a 500 on a Matrix
+state-event/message call whose logs show `PermissionError` under
+`/data/...`) — it doesn't need repeating on ordinary restarts since the
+volume's ownership persists.
 
 ### Running it
 
@@ -159,6 +217,19 @@ docker compose -f docker-compose.droplet.yml up -d --build
 # add --profile prod once that tier is in use, so it gets redeployed too
 ```
 
+**`docker compose restart <service>` does not reload `env_file:` contents
+or `environment:` values** — it restarts the existing container process
+with whatever environment it already has. Editing `.env.dev.droplet` /
+`.env.prod.droplet` (or `docker-compose.droplet.yml`'s `environment:`
+block) and then running `restart` silently keeps the old values; the
+service will keep failing (or keep using stale config) with no indication
+why. Any env var change needs `docker compose -f docker-compose.droplet.yml
+up -d <service>` instead, which recreates the container against the
+current config. `restart` is only correct for picking up a change to a
+**bind-mounted file's contents** (e.g. a freshly re-rendered
+`homeserver.<env>.yaml` — Synapse just re-reads the file from disk) or for
+recovering a crashed/stuck process with unchanged config.
+
 Verify:
 ```bash
 curl https://relay.membershipcard.io/health
@@ -170,6 +241,29 @@ curl https://dev.matrix.membershipcard.io/health
 # expect Synapse's own health response from both
 ```
 
+### Troubleshooting — quick reference
+
+Everything below was hit for real getting `synapse-dev` up on this
+deployment; each was confusing enough in isolation (several look like a
+different problem than they are) that this table exists so the prod pass
+doesn't rediscover them one at a time. Check this before deep-diving a new
+Synapse failure — full detail is linked inline.
+
+| Symptom | Real cause | Fix |
+|---|---|---|
+| `psycopg2.ProgrammingError: invalid dsn: invalid connection option "allow_unsafe_locale"` | `allow_unsafe_locale` nested inside `database.args` in the rendered `homeserver.yaml` instead of being a sibling of `args:` | Already fixed in `homeserver.yaml.template` — if you see this, the template got edited wrong or an old render is in place; re-render. |
+| `psycopg2.OperationalError: ... password authentication failed` right after fixing the DB host | Stale/wrong `MATRIX_DB_USER`/`MATRIX_DB_PASSWORD` in the shell, or copy-pasted pooled-endpoint credentials against the direct endpoint | Pull the real direct-endpoint credentials from Neon's dashboard (toggle "Pooled connection" off) and re-export all `MATRIX_DB_*` vars fresh in the same shell you render in — `echo` them right before rendering to confirm, don't assume an earlier export in a long-lived shell is still what you think it is. |
+| `psycopg2.errors.DuplicateTable: relation "..." already exists`, different table each retry | See "MATRIX_DB_HOST must be Neon's DIRECT endpoint" in `wallet-service/.env.example` — the pooled endpoint broke schema install partway through on an earlier attempt, and each retry restarts `_setup_new_database` against the now-partially-populated database, getting a little further before colliding on the next already-created table | Connect to the **direct** endpoint and run `DROP SCHEMA public CASCADE; CREATE SCHEMA public;`, then retry with `MATRIX_DB_HOST` pointed at the direct endpoint. |
+| `PermissionError: [Errno 13] Permission denied` on a path under `/data/...` | UID 991 privilege drop — see "Required file/volume permissions (UID 991)" above | `chown 991:991` the specific bind-mounted file, or `docker exec -u root <container> chown -R 991:991 <path>` for a named volume. |
+| `web3.exceptions.InvalidAddress: ... only accepts checksum addresses` | `REGISTRY_CONTRACT_ADDRESS` is all-lowercase | Compute the checksummed form — see `homeserver.yaml.template`'s comment. |
+| `web3.exceptions.InvalidAddress: ... invalid EIP-55 checksum` | A *hand-typed* checksummed address with a wrong-cased character (different bug from the one above — this one already looks checksummed) | Recompute it with `Web3.to_checksum_address(...)`, copy-paste the output, never retype it. |
+| Config change (env var or rendered file) doesn't seem to take effect after `docker compose restart` | `restart` doesn't reload `env_file:`/`environment:` values | Use `docker compose -f docker-compose.droplet.yml up -d <service>` instead — see "Redeploying after a code change" above. |
+| Asked for only dev services but prod containers start anyway | A profile-less service's `depends_on` listed a `profiles: ["prod"]` service, which implicitly activates that profile | Already fixed (`caddy`'s `depends_on` only lists the dev services) — if this recurs after editing `docker-compose.droplet.yml`, check `depends_on` lists don't reference prod-tagged services from profile-less ones. |
+| `env file .env.prod.droplet not found` when only asking for dev services | Compose validates every service's `env_file:` reference regardless of `--profile`/explicit service list | `touch .env.prod.droplet` even if you're not using the prod tier yet. |
+| Registering a `card_*`-localpart test user returns `M_EXCLUSIVE` | This homeserver has wallet-service's real Application Service registered with an exclusive `card_*` namespace — only the AS's own `as_token` can register into it, not Synapse's shared-secret admin API | See `wallet-service/matrix/appservice-registration.yaml.template`'s comment on `exclusive: true`; use AS-token registration (`dev-tests/support/matrixAdmin.ts` is a working example). |
+| `target_id is required and must be a string` / registry rejects a target at container start | `OBLIVIOUS_TARGETS_JSON`'s shape is wrong — must be `{"targets":[{"target_id","ohttp_gateway_url"}]}`, `ohttp_gateway_url` must start with `https://`, `target_id`s must be unique | Fix the JSON; `materialize-secrets.mjs` fails the container's startup loudly (`process.exit(1)` via `oblivious_targets.ts`'s own validation) rather than silently loading a broken registry, so this shows up immediately in `docker logs`, not as a mysterious later 404. |
+| A registered `target_id` still 404s from `/ohttp/<target_id>` | It doesn't exactly match what that target's own `/ohttp/key-config` reports as `targetId` right now (press's is its on-chain card address; wallet-service's is its `WALLET_SERVICE_ID` — neither is something you invent) | `curl <press-or-wallet-service-url>/ohttp/key-config` and use its `targetId` verbatim in `OBLIVIOUS_TARGETS_JSON`. |
+
 ### Required environment variables (`.env.dev.droplet` / `.env.prod.droplet`)
 
 Each environment's file is now shared between that environment's relay
@@ -179,7 +273,9 @@ and synapse services:
   `APNS_KEY_<APP_ID>_B64`/`FCM_SERVICE_ACCOUNT_<APP_ID>_B64`) —
   `REDIS_URL`, `RELAY_ID`, and the rest of relay's non-secret config are
   already set directly in `docker-compose.droplet.yml`, not read from
-  these files.
+  these files. Also **`OBLIVIOUS_TARGETS_JSON`** (see "Oblivious-forwarding
+  targets" below) — same materialize-at-startup mechanism as
+  `APP_REGISTRY_JSON`, added alongside it in `scripts/materialize-secrets.mjs`.
 - **Synapse**: `ARBITRUM_RPC_URL`, `ARBITRUM_RPC_WS_URL`,
   `REGISTRY_CONTRACT_ADDRESS`, `IPFS_GATEWAY_URL` — `MATRIX_SERVER_NAME`,
   `MATRIX_ENFORCEMENT_USER_ID`, and the membership-registry paths are
@@ -187,6 +283,46 @@ and synapse services:
   Synapse's Postgres connection and `allow_unsafe_locale` live inside the
   pre-rendered `homeserver.dev.yaml`/`homeserver.prod.yaml` from the
   one-time generation step above, not in these files.
+
+### Oblivious-forwarding targets (`OBLIVIOUS_TARGETS_JSON`)
+
+Wired the same way as the app registry: `docker-compose.droplet.yml` sets
+`OBLIVIOUS_TARGETS_PATH: /app/config/oblivious_targets.json` for
+`relay-dev`/`relay-prod`, and `scripts/materialize-secrets.mjs` writes
+`OBLIVIOUS_TARGETS_JSON`'s contents there at container start if that env
+var is set (no-op, feature stays off, if it isn't — see
+`src/utils/oblivious_targets.ts`'s own comment).
+
+`OBLIVIOUS_TARGETS_JSON`'s value is `{"targets":[{"target_id":"...","ohttp_gateway_url":"..."}]}`,
+one entry per destination relay should forward `/ohttp/<target_id>`
+requests to. Press and wallet-service each already implement their own
+gateway endpoint (`POST /ohttp/gateway` — `press/server/routes/ohttp/gateway.post.ts`,
+`wallet-service/server/routes/ohttp/gateway.post.ts`), so `ohttp_gateway_url`
+is just `<that service's base URL>/ohttp/gateway` — no separate gateway
+component to stand up. `target_id` is **not** something you pick: it must
+exactly match what that service's own `GET /ohttp/key-config` currently
+reports as `targetId` (press's is its on-chain card address; wallet-service's
+is its `WALLET_SERVICE_ID`) — confirm live rather than assuming, since a
+mismatch fails as a silent-looking 404 from relay, not a validation error:
+
+```bash
+curl https://<press-host>/ohttp/key-config
+curl https://<wallet-service-host>/ohttp/key-config
+# each response's "targetId" field is the value to use
+```
+
+Example dev value (real press/wallet-service dev URLs, fetched live):
+```json
+{"targets":[{"target_id":"<press's live targetId>","ohttp_gateway_url":"https://<press-dev-host>/ohttp/gateway"},{"target_id":"<wallet-service's live targetId>","ohttp_gateway_url":"https://<wallet-service-dev-host>/ohttp/gateway"}]}
+```
+
+Set `OBLIVIOUS_TARGETS_JSON` to this in `.env.dev.droplet` (real values —
+same secret-handling principle as everything else in that file), then
+recreate the container (env var change — `restart` won't pick it up, see
+above):
+```bash
+docker compose -f docker-compose.droplet.yml up -d relay-dev
+```
 
 ## Why App Platform, not a Droplet
 
@@ -297,6 +433,7 @@ update` leaves an existing secret's value untouched when the spec omits it.
 | `APP_REGISTRY_JSON` | Full contents of `config/apps.json` — see `README.md`'s "App registry config" section for the schema. |
 | `APNS_KEY_<APP_ID>_B64` | Base64-encoded `.p8` file content, one per app with `platform: "apns"` in the registry. `<APP_ID>` is that app's `app_id`, uppercased with non-alphanumerics replaced by `_` (e.g. `example-wallet` → `EXAMPLE_WALLET`). |
 | `FCM_SERVICE_ACCOUNT_<APP_ID>_B64` | Base64-encoded service account JSON, one per app with `platform: "fcm"`. Same `<APP_ID>` naming rule. |
+| `OBLIVIOUS_TARGETS_JSON` | Full contents of the oblivious-forwarding targets registry — see the Droplet section's "Oblivious-forwarding targets" above for the schema and how to get real `target_id` values (same mechanism, `scripts/materialize-secrets.mjs`, works on both paths). Optional — omit to leave OHTTP forwarding disabled. |
 
 Non-secret config (`RELAY_ID`, `PORT`, `UUID_TTL_SECONDS`,
 `DEVICE_REGISTRY_RETENTION_DAYS`, `DELETE_JOB_POLL_INTERVAL_MS`,

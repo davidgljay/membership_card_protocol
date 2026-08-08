@@ -79,6 +79,7 @@ services:
       MAX_DELETE_DELAY_SECONDS: "21600"
       DB_PATH: /data/registry.db
       APP_REGISTRY_PATH: /app/config/apps.json
+      OBLIVIOUS_TARGETS_PATH: /app/config/oblivious_targets.json
     volumes:
       - relay_dev_data:/data
     depends_on:
@@ -109,6 +110,7 @@ services:
       MAX_DELETE_DELAY_SECONDS: "21600"
       DB_PATH: /data/registry.db
       APP_REGISTRY_PATH: /app/config/apps.json
+      OBLIVIOUS_TARGETS_PATH: /app/config/oblivious_targets.json
     volumes:
       - relay_prod_data:/data
     depends_on:

@@ -1,12 +1,24 @@
 #!/usr/bin/env node
-// Materializes the app registry and per-app push credential files from env
-// vars, for platforms with no persistent/mountable volume (DigitalOcean App
-// Platform). No-op if APP_REGISTRY_JSON isn't set -- docker-compose's
-// bind-mounted ./config/apps.json + ./config/secrets/ are used unchanged in
-// that case, since server.ts / utils/apps.ts only ever read files off disk,
-// never env vars directly.
+// Materializes the app registry, oblivious-targets registry, and per-app
+// push credential files from env vars, for platforms with no
+// persistent/mountable volume (DigitalOcean App Platform) or where baking
+// a plain-JSON registry into the image isn't wanted (the Droplet path --
+// see relay/DEPLOYMENT.md's "Required environment variables"). No-op per
+// registry if its *_JSON var isn't set -- docker-compose's bind-mounted
+// ./config/apps.json (local dev) is used unchanged in that case, since
+// server.ts / utils/apps.ts / utils/oblivious_targets.ts only ever read
+// files off disk, never env vars directly.
 import fs from 'node:fs';
 import path from 'node:path';
+
+const targetsJson = process.env.OBLIVIOUS_TARGETS_JSON;
+if (targetsJson) {
+  const targetsPath = process.env.OBLIVIOUS_TARGETS_PATH ?? '/app/config/oblivious_targets.json';
+  fs.mkdirSync(path.dirname(targetsPath), { recursive: true });
+  fs.writeFileSync(targetsPath, targetsJson);
+  const parsedTargets = JSON.parse(targetsJson);
+  console.log(`Materialized oblivious-targets registry (${parsedTargets.targets?.length ?? 0} target(s)) from env var.`);
+}
 
 const registryJson = process.env.APP_REGISTRY_JSON;
 if (!registryJson) {
