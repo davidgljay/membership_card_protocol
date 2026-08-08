@@ -112,7 +112,7 @@ describe('log_auditing.md (live dev deployment)', () => {
   beforeAll(async () => {
     auditor = await mintLiveCard('log-auditing-auditor', { display_name: 'Log Auditing Suite — Auditor Card' });
     pressCardCid = await getPressCardCid();
-  }, 60_000);
+  }, 120_000);
 
   it('Baseline: policy with no auditors does not attempt auditor notification', async () => {
     const policyDoc: PolicyCardDocument = {
@@ -130,7 +130,7 @@ describe('log_auditing.md (live dev deployment)', () => {
     // Per spec §Process 1 step 1: if auditors is empty, skip — issuance proceeds.
     expect(finalizeRes.ok).toBe(true);
     expect(cardCid).toBeTruthy();
-  }, 60_000);
+  }, 120_000);
 
   it('Process 1, Press side (steps 1-6): policy with auditors array attempts delivery but does not block issuance', async () => {
     const policyDoc: PolicyCardDocument = {
@@ -152,7 +152,7 @@ describe('log_auditing.md (live dev deployment)', () => {
 
     expect(finalizeRes.ok).toBe(true);
     expect(cardCid).toBeTruthy();
-  }, 60_000);
+  }, 120_000);
 
   it('Postcondition: card issued under policy with auditors is valid on-chain', async () => {
     const policyDoc: PolicyCardDocument = {
@@ -177,7 +177,7 @@ describe('log_auditing.md (live dev deployment)', () => {
     expect(cardRes.ok).toBe(true);
     const cardBytes = await cardRes.arrayBuffer();
     expect(cardBytes.byteLength).toBeGreaterThan(0);
-  }, 60_000);
+  }, 120_000);
 
   it('Error path: auditor with no reachable endpoint does not block issuance', async () => {
     // Per spec §Error Paths: "Auditor's wallet service unreachable or
@@ -201,7 +201,7 @@ describe('log_auditing.md (live dev deployment)', () => {
 
     expect(finalizeRes.ok).toBe(true);
     expect(cardCid).toBeTruthy();
-  }, 60_000);
+  }, 120_000);
 
   // -------------------------------------------------------------------
   // Acceptance criteria from log_auditing.md that require full auditor

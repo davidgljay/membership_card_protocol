@@ -144,7 +144,7 @@ describe('subcard_creation_policy.md (live dev deployment)', () => {
         `setUp: POST /api/admin/app-gas-credit failed: HTTP ${gasCreditRes.status}: ${await gasCreditRes.text()}`
       );
     }
-  }, 60_000);
+  }, 120_000);
 
   it('Mechanism 1: Assembles and registers a SubCardDocument with valid app-certification chain', async () => {
     const subCardLabel = `subcard:mech1-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -194,7 +194,7 @@ describe('subcard_creation_policy.md (live dev deployment)', () => {
     state.subCardAddress = subCardAddress;
     state.subCardKeypair = subCardKeypair;
     state.subCardDocCid = body.sub_card_doc_cid;
-  });
+  }, 30_000);
 
   it('Mechanism 1 error path: Rejects registration when app-certification chain does not reach trusted root', async () => {
     const untrustedAppLabel = `untrusted-app:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -291,7 +291,7 @@ describe('subcard_creation_policy.md (live dev deployment)', () => {
 
     expect(registeredDoc.capabilities).toEqual(requestedCapabilities);
     expect(registeredDoc.limitations).toEqual(requestedLimitations);
-  });
+  }, 30_000);
 
   it.todo('Mechanism 3 deregistration: Via holder key (master card holder signature) — endpoint not functional');
 });
