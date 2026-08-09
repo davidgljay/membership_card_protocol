@@ -241,7 +241,13 @@ run_integration() {
     step "suites: npm test (all)" npm test
 
     cd "$INTEGRATION_DIR/harnesses/web"
-    step "harness: web (playwright)" bash -c "npm ci && npm test"
+    # --with-deps also installs the OS-level libraries a fresh Ubuntu CI
+    # runner doesn't have (fonts, codecs, etc.), not just the browser
+    # binary -- previously masked on dev machines by an already-downloaded
+    # local browser cache (~/.cache/ms-playwright), missing on a genuinely
+    # clean checkout (confirmed live in CI: "Executable doesn't exist at
+    # .../chromium_headless_shell...").
+    step "harness: web (playwright)" bash -c "npm ci && npx playwright install --with-deps chromium && npm test"
 
     cd "$INTEGRATION_DIR/harnesses/rn"
     step "harness: rn (jest)" bash -c "npm ci && npm test"
