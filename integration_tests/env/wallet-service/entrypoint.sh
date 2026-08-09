@@ -15,6 +15,6 @@ LOGIC_ADDRESS=$(node -e "console.log(require('$DEPLOYMENT_FILE').contracts.logic
 
 echo "Using local devnode contract: logic=$LOGIC_ADDRESS"
 
-exec npx wrangler dev .output/server/index.mjs --assets .output/public --ip 0.0.0.0 --port 3000 \
+exec npx wrangler dev .output-cloudflare-module/server/index.mjs --assets .output-cloudflare-module/public --ip 0.0.0.0 --port 3000 \
   --var ARBITRUM_RPC_URL:http://nitro-devnode:8547 \
   --var REGISTRY_CONTRACT_ADDRESS:"$LOGIC_ADDRESS"
