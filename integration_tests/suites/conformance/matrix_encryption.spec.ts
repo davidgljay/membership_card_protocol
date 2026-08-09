@@ -20,6 +20,8 @@
 
 import { describe, it, expect } from 'vitest';
 import { execSync } from 'child_process';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 import {
   deriveMatrixUserId,
   verifyMatrixUserIdBinding,
@@ -45,8 +47,10 @@ const EXPECTED_MATRIX_USER_ID_A =
  * Invokes the Python implementation of derive_matrix_user_id via the venv
  * at wallet-service/matrix-policy-module/.venv.
  */
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+
 function derivePythonMatrixUserId(cardHash: string, serverName: string): string {
-  const pythonVenv = '/Users/davidjay/Projects/Claude/card_protocol/wallet-service/matrix-policy-module/.venv/bin/python3';
+  const pythonVenv = path.join(REPO_ROOT, 'wallet-service/matrix-policy-module/.venv/bin/python3');
   const code = `from matrix_policy_module.attestation import derive_matrix_user_id; print(derive_matrix_user_id('${cardHash}', '${serverName}'))`;
   const result = execSync(`${pythonVenv} -c "${code}"`, { encoding: 'utf-8' }).trim();
   return result;

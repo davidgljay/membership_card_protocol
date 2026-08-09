@@ -92,10 +92,33 @@ run_unit_tests() {
   step "contracts: cargo test -p protocol-types" \
     bash -c "cd '$ROOT/contracts' && cargo test -p protocol-types"
 
+  # Built here, before press/wallet-service's own steps below, not down with
+  # the rest of the SDK chain (line ~160) -- press and wallet-service both
+  # depend on membership_card_verifier's *built* dist/ (a `file:` dependency
+  # resolving real types, not just a symlink), same reason the SDK chain
+  # comment below explains. Confirmed live: running press's step before this
+  # one built for real (a genuinely clean checkout, not this dev machine's
+  # already-built local dist/) fails with "Cannot find module
+  # '@membership-card-protocol/verifier'".
+  step "membership_card_verifier: pnpm -r test" \
+    bash -c "cd '$ROOT/membership_card_verifier' && pnpm install --frozen-lockfile && pnpm run build && pnpm run typecheck && pnpm run test"
+
   # press/wallet-service use pnpm (pnpm-lock.yaml only, no package-lock.json)
   # -- `npm ci` here would fail with EUSAGE (confirmed live).
+  #
+  # `npx nitro prepare` generates .nitro/types/ (nitro.d.ts, the generated
+  # tsconfig.json press's own tsconfig.json extends) -- press's tsconfig
+  # extends that generated config for its real target/lib settings and
+  # Nitro's auto-imported globals (defineEventHandler, readBody, etc.).
+  # Never run before `pnpm run typecheck` here, previously masked on dev
+  # machines by an already-generated local .nitro/types/ left over from a
+  # manual `nitro dev`/`build` run, but missing on a genuinely clean
+  # checkout (confirmed live in CI: dozens of "Cannot find name
+  # 'defineEventHandler'" / "BigInt literals are not available when
+  # targeting lower than ES2020" errors, both symptoms of the same missing
+  # directory, not two separate bugs).
   step "press: pnpm test" \
-    bash -c "cd '$ROOT/press' && pnpm install --frozen-lockfile && pnpm run typecheck && pnpm test"
+    bash -c "cd '$ROOT/press' && pnpm install --frozen-lockfile && npx nitro prepare && pnpm run typecheck && pnpm test"
 
   # wallet-service's own test suite needs a real Postgres, migrations run
   # first, and a batch of env vars (webcrypto secrets backend, WebAuthn
@@ -154,12 +177,10 @@ run_unit_tests() {
   # SDK workspaces share file: dependencies across separate top-level pnpm
   # workspaces (not a single pnpm-workspace), so each must be installed
   # *and built* before the next one's install can resolve real dist/
-  # output. Chain: membership_card_verifier -> app-sdk ->
+  # output. Chain: membership_card_verifier (built above, before press/
+  # wallet-service's own steps -- see that step's comment) -> app-sdk ->
   # {sdk-providers-rn, sdk-providers-web} -> wallet-sdk. client-sdk
   # (renamed client-sdk-old/) is deprecated and no longer built/tested here.
-  step "membership_card_verifier: pnpm -r test" \
-    bash -c "cd '$ROOT/membership_card_verifier' && pnpm install --frozen-lockfile && pnpm run build && pnpm run typecheck && pnpm run test"
-
   step "app-sdk: pnpm -r test" \
     bash -c "cd '$ROOT/app-sdk' && pnpm install --frozen-lockfile && pnpm run build && pnpm run typecheck && pnpm run test"
 
@@ -178,6 +199,18 @@ run_integration() {
   echo "########## Integration stack ##########"
 
   cd "$INTEGRATION_DIR"
+
+  # fixtures/ has its own package.json ("@membership-card-protocol/
+  # integration-fixtures") with a real `build` step (tsc -> dist/), consumed
+  # by suites/ and both harnesses via a real dist/ import, not a source
+  # reference -- never built anywhere before this, previously masked on dev
+  # machines by an already-built local dist/ left over from manual runs, but
+  # missing on a genuinely clean checkout (confirmed live in CI: "Cannot
+  # find module '@membership-card-protocol/integration-fixtures'" from
+  # suites' typecheck and the web harness alike). Built once here, before
+  # anything in this stack needs it.
+  step "fixtures: npm run build" \
+    bash -c "cd '$INTEGRATION_DIR/fixtures' && npm ci && npm run build"
 
   # No --build: `up` already builds any image that doesn't exist yet (the
   # clean-checkout/CI case), and forcing a rebuild of every service on
