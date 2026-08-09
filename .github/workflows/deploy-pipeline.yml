@@ -41,9 +41,16 @@ jobs:
         with:
           version: 9
 
+      # registry-url is required for NODE_AUTH_TOKEN to actually
+      # authenticate npm publish -- without it, actions/setup-node doesn't
+      # write the .npmrc entry that makes npm read that env var at all, so
+      # `npm publish` fails with ENEEDAUTH even though NODE_AUTH_TOKEN is
+      # genuinely set correctly. Confirmed live: the first real run of this
+      # job got past every other step and failed exactly here.
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
 
       - name: scripts/deploy-all.sh dev
         env:
@@ -210,9 +217,16 @@ jobs:
         with:
           version: 9
 
+      # registry-url is required for NODE_AUTH_TOKEN to actually
+      # authenticate npm publish -- without it, actions/setup-node doesn't
+      # write the .npmrc entry that makes npm read that env var at all, so
+      # `npm publish` fails with ENEEDAUTH even though NODE_AUTH_TOKEN is
+      # genuinely set correctly. Confirmed live: the first real run of this
+      # job got past every other step and failed exactly here.
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
 
       - name: scripts/deploy-all.sh prod
         env:
