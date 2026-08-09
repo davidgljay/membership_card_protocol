@@ -1,5 +1,17 @@
 # Unit-test gaps found running `run.sh --unit-only` for the first time
 
+> **Resolved as of 2026-08-09.** All three gaps below are gone: the
+> `app-sdk`/`client-sdk` `getCardEventLog` mock drift and wallet-service's
+> `ARBITRUM_RPC_URL`/`registerFirst`/ESM-`cloudflare:` issues were fixed or
+> turned into deliberate `.skip()`s by a separate, later session (not
+> documented further here). wallet-service's suite is now fully green (219
+> passed, 13 intentionally skipped) once a real, separate bug --
+> `run.sh` never running `npx nitro prepare` before wallet-service's own
+> `pnpm run typecheck`, previously masked by an already-generated local
+> `.nitro/types/` -- was found and fixed running `integration-tests.yml`
+> for real via `deploy-pipeline.yml` for the first time. See that commit
+> for detail. Kept below for history.
+
 `run.sh` (Phase 6.1) had never actually been run end-to-end before this —
 only spot-checked step by step against a partially-warm local environment.
 The first real `--unit-only` run surfaced two different classes of
