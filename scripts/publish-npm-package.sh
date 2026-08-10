@@ -53,8 +53,17 @@ WORKSPACE_ROOT="$(cd ../.. && pwd)"
 # npm, recover that SHA, and diff this package's directory (plus any local
 # file: dependency it embeds -- see FILE_DEP_DIRS below) against HEAD. A
 # clean diff means the tarball we'd produce is byte-identical in substance
-# to what's already published under the 'next' tag, so skip the
-# install/build/test/publish cycle entirely.
+# to what's already published under the 'next' tag, so skip testing,
+# version-bumping, and npm publish itself.
+#
+# Deliberately does NOT also skip install/build: other packages deployed in
+# this same run (press, wallet-service, and any sibling package that
+# embeds this one via a file: link) resolve straight to this package's own
+# dist/ on disk, in this same checkout -- not to anything on npm. Skipping
+# the build here left a stale/missing dist/ and broke every downstream
+# consumer in the same run even though nothing was actually wrong --
+# confirmed live (press failed with ENOENT on verifier's dist/index.js the
+# first time this shipped without the build carve-out).
 #
 # Deliberately scoped to dev only. Prod versions are human-bumped, not
 # derived from a commit SHA (publish-verifier.yml's existing tag-triggered
@@ -68,6 +77,7 @@ WORKSPACE_ROOT="$(cd ../.. && pwd)"
 # through to a normal publish -- this only ever skips work, never silently
 # skips a real change. Set FORCE_PUBLISH=1 to bypass entirely (e.g.
 # re-publishing after a registry-side mishap with no corresponding commit).
+SKIP_PUBLISH=0
 if [[ "$ENVIRONMENT" == "dev" && "${FORCE_PUBLISH:-}" != "1" ]]; then
   LAST_DEV_VERSION="$(npm view "$PACKAGE_NAME" dist-tags.next 2>/dev/null || true)"
   LAST_SHA="$(node -e '
@@ -96,8 +106,8 @@ if [[ "$ENVIRONMENT" == "dev" && "${FORCE_PUBLISH:-}" != "1" ]]; then
     ')"
 
     if git -C "$WORKSPACE_ROOT" diff --quiet "$LAST_SHA" HEAD -- "$PWD" $FILE_DEP_DIRS; then
-      echo "[$PACKAGE_NAME] No changes since $LAST_SHA (published as $LAST_DEV_VERSION) -- skipping publish."
-      exit 0
+      echo "[$PACKAGE_NAME] No changes since $LAST_SHA (published as $LAST_DEV_VERSION) -- will build (for any in-repo file: consumer) but skip test/publish."
+      SKIP_PUBLISH=1
     fi
   fi
 fi
@@ -116,7 +126,7 @@ cp package.json "$PACKAGE_JSON_SNAPSHOT"
 trap 'cp "$PACKAGE_JSON_SNAPSHOT" "'"$PACKAGE_DIR"'/package.json"; rm -f "$PACKAGE_JSON_SNAPSHOT"' EXIT
 
 ORIGINAL_VERSION="$(node -p "require('./package.json').version")"
-if [[ "$ENVIRONMENT" == "dev" ]]; then
+if [[ "$ENVIRONMENT" == "dev" && "$SKIP_PUBLISH" == "0" ]]; then
   # Dev publishes happen on every push, unlike prod's tag-triggered,
   # human-versioned flow (publish-verifier.yml's existing convention) -- a
   # fixed version would collide with a prior dev publish, so derive a unique
@@ -129,6 +139,11 @@ fi
 
 echo "[$PACKAGE_NAME] Building..."
 pnpm run build
+
+if [[ "$SKIP_PUBLISH" == "1" ]]; then
+  echo "[$PACKAGE_NAME] Built only -- publish skipped (unchanged, see above)."
+  exit 0
+fi
 
 echo "[$PACKAGE_NAME] Testing..."
 pnpm run test
