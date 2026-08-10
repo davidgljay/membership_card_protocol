@@ -66,6 +66,15 @@ jobs:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
+      # Trusted Publishing (OIDC) needs npm CLI >= 11.5.1 to know how to
+      # request an id-token at all -- the bundled npm on the node:22 runner
+      # image is 10.9.8. Without this, npm silently publishes with no auth
+      # (not even a clear auth error), which the registry rejects as
+      # anonymous -- surfaces as the same misleading E404 as the missing-
+      # NODE_AUTH_TOKEN case above. Confirmed live.
+      - name: Upgrade npm for Trusted Publishing support
+        run: npm install -g npm@latest
+
       - name: scripts/deploy-all.sh dev
         env:
           # --- press ---
@@ -239,6 +248,10 @@ jobs:
         with:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
+
+      # See deploy-dev's identical comment above.
+      - name: Upgrade npm for Trusted Publishing support
+        run: npm install -g npm@latest
 
       - name: scripts/deploy-all.sh prod
         env:

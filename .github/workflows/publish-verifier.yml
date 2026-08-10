@@ -34,6 +34,13 @@ jobs:
           cache: 'pnpm'
           cache-dependency-path: membership_card_verifier/pnpm-lock.yaml
 
+      # Trusted Publishing (OIDC) needs npm CLI >= 11.5.1 -- the node:22
+      # runner image bundles 10.9.8, which doesn't know to request an
+      # id-token at all and silently publishes unauthenticated, surfacing as
+      # a misleading E404. See deploy-pipeline.yml's matching comment.
+      - name: Upgrade npm for Trusted Publishing support
+        run: npm install -g npm@latest
+
       - name: Install dependencies
         working-directory: membership_card_verifier
         run: pnpm install --frozen-lockfile
