@@ -221,7 +221,7 @@ describe('dns_governance_verifier.md (live dev deployment)', () => {
       args: [adminCardAddress],
     })) as unknown as readonly number[];
     expect(Uint8Array.from(storedKey)).toEqual(adminSecpPubkeyXY);
-  });
+  }, 120_000);
 
   it('Script C target (PolicyAddressSet, registry_contract.md §4.19): a real SetPolicyAddress write emits a decodable on-chain event', async () => {
     if (!pressSecp256r1PrivateKey) {
@@ -299,7 +299,7 @@ describe('dns_governance_verifier.md (live dev deployment)', () => {
     expect(hexToUtf8(match!.args.path as unknown as string)).toBe(path);
     expect((match!.args.admin_card_address as string).toLowerCase()).toBe(adminCardAddress.toLowerCase());
     expect((match!.args.press_address as string).toLowerCase()).toBe(pressAddress.toLowerCase());
-  });
+  }, 120_000);
 
   it('Script B (DeregisterDomain, registry_contract.md §4.18): clears the domain admin pointer and the admin secp256r1 key', async () => {
     const { payload, signatures } = await buildAndSignGovernanceOp('dns', [
