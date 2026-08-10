@@ -71,11 +71,38 @@ jobs:
           cache: 'pnpm'
           cache-dependency-path: wallet-service/pnpm-lock.yaml
 
+      # wallet-service depends on @membership-card-protocol/verifier via a
+      # file: link straight to its source directory (see
+      # wallet-service/package.json) -- pnpm install symlinks it, but
+      # nothing builds it. Without a real dist/, both TS resolution
+      # ("Cannot find module '@membership-card-protocol/verifier'") and the
+      # actual runtime import fail. Same root cause integration_tests/run.sh
+      # already works around for press/wallet-service (see its matching
+      # comment); this job never had it. Confirmed live.
+      - name: "Build verifier (file: dependency)"
+        working-directory: membership_card_verifier
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run build
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Lint
         run: pnpm run lint
+
+      # Generates .nitro/types/ (nitro.d.ts + the tsconfig.json
+      # wallet-service's own tsconfig.json extends) -- without it, typecheck
+      # fails with two symptom classes from the same missing directory:
+      # "Cannot find name 'defineTask'/'createError'/'getHeader'/etc." (the
+      # Nitro auto-imported globals) and "BigInt literals are not available
+      # when targeting lower than ES2020" (the extended tsconfig's target).
+      # Previously masked by an already-generated local .nitro/types/ on a
+      # dev machine; missing on a genuinely clean checkout. Same fix
+      # integration_tests/run.sh already applies for both press and
+      # wallet-service -- this job never had it. Confirmed live.
+      - name: Generate Nitro types
+        run: npx nitro prepare
 
       - name: Typecheck
         run: pnpm run typecheck
