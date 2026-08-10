@@ -7,6 +7,9 @@
 # flags stay identical across all six packages instead of drifting.
 #
 # Usage: scripts/publish-npm-package.sh <path/to/packages/<name>> <dev|prod> [--dry-run]
+# Dev publishes are skipped automatically when nothing changed since the
+# last one -- see the skip-if-unchanged block below. Set FORCE_PUBLISH=1 to
+# always publish regardless.
 set -euo pipefail
 
 PACKAGE_DIR="${1:?Usage: $0 <package-dir> <dev|prod> [--dry-run]}"
@@ -43,6 +46,61 @@ PACKAGE_NAME="$(node -p "require('./package.json').name")"
 # Every package here lives at <workspace-root>/packages/<name> -- the
 # pnpm-workspace.yaml convention all six packages share.
 WORKSPACE_ROOT="$(cd ../.. && pwd)"
+
+# Skip-if-unchanged (dev only): every dev publish embeds the git SHA it was
+# built from in the version string (see NEW_VERSION below,
+# "-dev.<sha>.<timestamp>"). Pull the last-published dev version back off
+# npm, recover that SHA, and diff this package's directory (plus any local
+# file: dependency it embeds -- see FILE_DEP_DIRS below) against HEAD. A
+# clean diff means the tarball we'd produce is byte-identical in substance
+# to what's already published under the 'next' tag, so skip the
+# install/build/test/publish cycle entirely.
+#
+# Deliberately scoped to dev only. Prod versions are human-bumped, not
+# derived from a commit SHA (publish-verifier.yml's existing tag-triggered
+# convention), so there's no SHA to recover from a prod version string --
+# and prod's `npm publish` already refuses to overwrite an unchanged
+# version on its own (E403), which is the correct behavior there (forces a
+# human to bump the version), not something to route around.
+#
+# Any failure to determine the last-published SHA (never published before,
+# ambiguous/unresolvable SHA, shallow clone that doesn't reach it) falls
+# through to a normal publish -- this only ever skips work, never silently
+# skips a real change. Set FORCE_PUBLISH=1 to bypass entirely (e.g.
+# re-publishing after a registry-side mishap with no corresponding commit).
+if [[ "$ENVIRONMENT" == "dev" && "${FORCE_PUBLISH:-}" != "1" ]]; then
+  LAST_DEV_VERSION="$(npm view "$PACKAGE_NAME" dist-tags.next 2>/dev/null || true)"
+  LAST_SHA="$(node -e '
+    const m = (process.argv[1] || "").match(/-dev\.([0-9a-f]+)\./);
+    if (m) process.stdout.write(m[1]);
+  ' "$LAST_DEV_VERSION")"
+
+  if [[ -n "$LAST_SHA" ]] && git -C "$WORKSPACE_ROOT" cat-file -e "${LAST_SHA}^{commit}" 2>/dev/null; then
+    # file: deps count toward the diff too -- a change in an upstream
+    # in-repo package (e.g. verifier) must still trigger app-sdk to
+    # republish, since app-sdk's own tarball embeds verifier's resolved
+    # code at publish time (see rewrite-file-deps.mjs below). Unquoted on
+    # purpose when used below: these are always plain repo-relative paths
+    # with no spaces/globs, and deploy-all.sh already avoids bash arrays
+    # here for the same "empty array + set -u" portability reason (see its
+    # own publish_step comment).
+    FILE_DEP_DIRS="$(node -e '
+      const path = require("path");
+      const pkg = require("./package.json");
+      const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+      for (const v of Object.values(deps)) {
+        if (typeof v === "string" && v.startsWith("file:")) {
+          console.log(path.resolve(process.cwd(), v.slice("file:".length)));
+        }
+      }
+    ')"
+
+    if git -C "$WORKSPACE_ROOT" diff --quiet "$LAST_SHA" HEAD -- "$PWD" $FILE_DEP_DIRS; then
+      echo "[$PACKAGE_NAME] No changes since $LAST_SHA (published as $LAST_DEV_VERSION) -- skipping publish."
+      exit 0
+    fi
+  fi
+fi
 
 echo "[$PACKAGE_NAME] Installing workspace dependencies ($WORKSPACE_ROOT)..."
 (cd "$WORKSPACE_ROOT" && pnpm install --frozen-lockfile)

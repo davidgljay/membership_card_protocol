@@ -45,7 +45,17 @@ jobs:
       contents: read
       id-token: write
     steps:
+      # fetch-depth: 0 (full history, not the default shallow depth-1
+      # clone) -- scripts/publish-npm-package.sh diffs each package's
+      # directory against the commit its last-published dev version was
+      # built from, to skip republishing when nothing changed. That commit
+      # is very often more than 1 commit back; a shallow clone would make
+      # the diff target unresolvable and silently defeat the skip check
+      # every time (falls back to publishing, not an error -- see that
+      # script's comment).
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v4
         with:
@@ -234,7 +244,10 @@ jobs:
       contents: read
       id-token: write
     steps:
+      # See deploy-dev's identical fetch-depth comment above.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v4
         with:
