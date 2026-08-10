@@ -8,11 +8,18 @@ name: Integration Tests
 # `push` trigger alongside `workflow_call` would double-run it on every push
 # to main (once standalone, once via the calling deploy workflow).
 #   - `pull_request` — gates PRs directly.
-#   - `workflow_call` — gates deploy workflows (6.3: relay-deploy.yml,
-#     wallet-service-ci.yml, publish-verifier.yml each add a job that
+#   - `workflow_call` — gates deploy workflows: deploy-pipeline.yml's `test`
+#     job and publish-verifier.yml's `integration-tests` job both
 #     `uses: ./.github/workflows/integration-tests.yml` and make their
-#     deploy job `needs:` it).
-#   - `workflow_dispatch` — manual runs, same convention as relay-deploy.yml.
+#     deploy/publish job `needs:` it. wallet-service-ci.yml used to call it
+#     the same way (Phase 6.3) but was dropped from there -- once
+#     deploy-pipeline.yml existed with no path filter, any push touching
+#     wallet-service/ was running this full suite twice in parallel for the
+#     same commit. deploy-pipeline.yml is the one place it needs to gate a
+#     deploy; wallet-service-ci.yml now just runs its own fast lint/test/
+#     build directly. relay-deploy.yml (the other former caller) was
+#     deleted outright -- superseded by deploy-pipeline.yml's relay stage.
+#   - `workflow_dispatch` — manual runs.
 on:
   pull_request: {}
   workflow_call: {}

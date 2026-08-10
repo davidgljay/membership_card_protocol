@@ -11,14 +11,17 @@ on:
       - '.github/workflows/wallet-service-ci.yml'
 
 jobs:
-  # Phase 6.3: gates this on the full integration suite in parallel with
-  # wallet-service's own unit tests -- see integration-tests.yml.
-  integration-tests:
-    uses: ./.github/workflows/integration-tests.yml
-
+  # Used to gate this on a fresh run of the full integration suite
+  # (Phase 6.3) via `needs: integration-tests`. Dropped: deploy-pipeline.yml
+  # (added later) runs on every push to main with no path filter, so any
+  # push touching wallet-service/ was triggering the full ~15min
+  # integration-tests.yml suite TWICE in parallel for the same commit --
+  # once here, once as deploy-pipeline.yml's own `test` job -- confirmed
+  # live. That workflow is still the one place the full suite actually
+  # gates something (dev/prod deploys); this job now just runs its own
+  # fast lint/typecheck/test/build directly, no redundant re-gate.
   ci:
     runs-on: ubuntu-latest
-    needs: integration-tests
     defaults:
       run:
         working-directory: wallet-service
