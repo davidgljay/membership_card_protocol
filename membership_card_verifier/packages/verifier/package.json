@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Verifies SignedMessageEnvelope objects produced by the Card Protocol",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/davidgljay/membership_card_protocol.git",
+    "directory": "membership_card_verifier/packages/verifier"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

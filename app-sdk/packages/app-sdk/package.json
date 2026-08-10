@@ -3,6 +3,11 @@
   "version": "0.0.1",
   "type": "module",
   "description": "App SDK for the Card Protocol — app-side, key-independent holder functionality: offer construction, sub-card requests, messaging and private relay, shared across web and React Native",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/davidgljay/membership_card_protocol.git",
+    "directory": "app-sdk/packages/app-sdk"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

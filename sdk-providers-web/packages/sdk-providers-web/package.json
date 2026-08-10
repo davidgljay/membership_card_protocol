@@ -3,6 +3,11 @@
   "version": "0.0.1",
   "type": "module",
   "description": "Default web provider implementations (StorageProvider, SecureKeyProvider, PasskeyProvider, RealtimeTransportProvider, MultiInstanceLock) for @membership-card-protocol/app-sdk",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/davidgljay/membership_card_protocol.git",
+    "directory": "sdk-providers-web/packages/sdk-providers-web"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

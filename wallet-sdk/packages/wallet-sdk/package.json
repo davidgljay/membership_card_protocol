@@ -3,6 +3,11 @@
   "version": "0.0.1",
   "type": "module",
   "description": "Wallet SDK for the Card Protocol — wallet-side, key-custody holder functionality: wallet setup, keyring, backup/recovery, sub-card authorization, and card offer review/countersign/acceptance. Depends on @membership-card-protocol/app-sdk.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/davidgljay/membership_card_protocol.git",
+    "directory": "wallet-sdk/packages/wallet-sdk"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
