@@ -84,7 +84,15 @@ if [[ ${#missing[@]} -ne 0 ]]; then
   exit 1
 fi
 
-echo "All required vars present. Building press (cloudflare-module preset)..."
+echo "All required vars present. Installing dependencies..."
+pnpm install --frozen-lockfile
+
+# nitro.config.ts imports 'nitropack' directly -- without a local pnpm
+# install, npx has nothing to resolve it against and silently fetches an
+# unrelated public "nitro" package instead, which fails on that import.
+# Confirmed live: deploy-all.sh calls this script directly with no prior
+# per-service install step.
+echo "Building press (cloudflare-module preset)..."
 NITRO_PRESET=cloudflare-module npx nitro build
 
 echo "Setting Worker secrets for env=$ENVIRONMENT..."
