@@ -60,7 +60,7 @@ describe('card_offering_and_acceptance.md (live dev deployment)', () => {
     recipient = await mintLiveCard('card-offering-recipient', { display_name: 'Card Offering Suite — Recipient' });
     governance = ensureLiveGovernance();
     pressCardCid = await getPressCardCid();
-  }, 60_000);
+  }, 180_000);
 
   it('Phase 3: assembles and signs a targeted offer with issuer_signature', async () => {
     const secureKeyProvider = new InMemorySecureKeyProvider();

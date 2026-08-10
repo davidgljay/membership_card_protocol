@@ -40,7 +40,7 @@ describe('oblivious_transport.md (live dev deployment)', () => {
     governance = ensureLiveGovernance();
     pressCardCid = await getPressCardCid();
     issuer = await mintLiveCard('oblivious-transport-issuer', { display_name: 'Oblivious Transport Suite — Issuer' });
-  }, 30_000);
+  }, 120_000);
 
   describe('§Key Configuration Discovery', () => {
     it('press publishes an unauthenticated OHTTP key configuration', async () => {

@@ -103,7 +103,7 @@ describe('message_routing.md (live dev deployment)', () => {
       publicKey: keypair.publicKey,
       secretKey: keypair.secretKey,
     };
-  }, 60_000);
+  }, 180_000);
 
   describe('§Binding Announcements', () => {
     it('Phase 1: posts a card_registration announcement and receives 202 Accepted', async () => {

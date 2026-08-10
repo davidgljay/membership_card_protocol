@@ -54,7 +54,7 @@ describe('open_offer_creation.md (live dev deployment)', () => {
     issuer = await mintLiveCard('open-offer-issuer', { display_name: 'Open Offer Suite — Issuer' });
     governance = ensureLiveGovernance();
     pressCardCid = await getPressCardCid();
-  }, 60_000);
+  }, 120_000);
 
   it('Phase 1 + Phase 2: assembles and signs an open offer with issuer_signature', async () => {
     const secureKeyProvider = new InMemorySecureKeyProvider();

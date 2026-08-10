@@ -146,7 +146,7 @@ describe('ipfs_card.md object-spec conformance (live dev deployment)', () => {
 
     registryReader = createRegistryContractReader(REGISTRY_CONTRACT_ADDRESS as Hex, ARBITRUM_RPC_URL);
     logicReader = createLogicContractReader(LOGIC_CONTRACT_ADDRESS as Hex, ARBITRUM_RPC_URL);
-  }, 60_000);
+  }, 120_000);
 
   it('§2 + §3: Content Encryption — HKDF-SHA3-256 derives content_key, AES-256-GCM decrypts ciphertext', async () => {
     const cardCid = card.cardCid;

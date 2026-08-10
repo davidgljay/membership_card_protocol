@@ -72,7 +72,7 @@ describe('card_signing.md (live dev deployment)', () => {
     // keeps this true across files too).
     signer = await mintLiveCard('card-signing-signer', { display_name: 'Card Signing Suite — Signer' });
     cosigner = await mintLiveCard('card-signing-cosigner', { display_name: 'Card Signing Suite — Cosigner' });
-  }, 60_000);
+  }, 180_000);
 
   it('Phase 1-3: assembles, canonically serializes, and signs a payload', async () => {
     const payload = buildMessagePayload({

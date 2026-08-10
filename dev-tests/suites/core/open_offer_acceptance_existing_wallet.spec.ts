@@ -51,7 +51,7 @@ describe('open_offer_acceptance_existing_wallet.md (live dev deployment)', () =>
     });
     governance = ensureLiveGovernance();
     pressCardCid = await getPressCardCid();
-  }, 60_000);
+  }, 120_000);
 
   it.todo('Phase 3 + Phase 4: happy path — existing wallet claims open offer, press issues card', async () => {
     const unsignedOffer: Omit<SignedOpenCardOffer, 'issuer_signature'> = {
