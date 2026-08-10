@@ -18,9 +18,19 @@ if [[ "$ENVIRONMENT" != "dev" && "$ENVIRONMENT" != "prod" ]]; then
   exit 1
 fi
 
-if [[ -z "${NODE_AUTH_TOKEN:-}" ]]; then
+# In CI, these packages publish via npm's Trusted Publishing (OIDC,
+# id-token: write -- see deploy-pipeline.yml's `permissions` block and
+# publish-verifier.yml's). Trusted Publishing requires NODE_AUTH_TOKEN to
+# be ABSENT, not just present-and-unused: npm treats a token alongside a
+# Trusted Publisher identity as a token-based publish attempt and rejects
+# it with a 404 (not a clearer 403) if the package's npmjs.com settings
+# only allow the trusted publisher -- confirmed live. So NODE_AUTH_TOKEN
+# is only required outside CI (a human publishing from their own machine,
+# where no OIDC token exists).
+if [[ -z "${GITHUB_ACTIONS:-}" && -z "${NODE_AUTH_TOKEN:-}" ]]; then
   echo "::error::Missing required env var NODE_AUTH_TOKEN (npm auth token with publish rights)." >&2
   echo "See the calling package's DEPLOYMENT.md for how to obtain it." >&2
+  echo "(Not needed in CI -- these packages publish via Trusted Publishing there.)" >&2
   exit 1
 fi
 
@@ -73,11 +83,10 @@ REPO_ROOT="$(git -C "$WORKSPACE_ROOT" rev-parse --show-toplevel)"
 node "$REPO_ROOT/scripts/rewrite-file-deps.mjs" "$ENVIRONMENT"
 
 PUBLISH_ARGS=(--tag "$DIST_TAG")
-if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
-  # --provenance requires OIDC (id-token: write), only available in CI --
-  # see publish-verifier.yml's existing `permissions: id-token: write`.
-  PUBLISH_ARGS+=(--provenance)
-fi
+# No --provenance flag: under Trusted Publishing (npm docs, confirmed live)
+# npm generates and publishes the provenance attestation automatically from
+# the OIDC identity -- passing --provenance explicitly is for the older
+# token+OIDC-signing hybrid flow, not needed (and not used) here.
 if [[ "$DRY_RUN_FLAG" == "--dry-run" ]]; then
   PUBLISH_ARGS+=(--dry-run)
 fi

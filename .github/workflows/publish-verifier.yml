@@ -46,8 +46,12 @@ jobs:
         working-directory: membership_card_verifier/packages/verifier
         run: pnpm run test
 
+      # No --provenance flag and no NODE_AUTH_TOKEN: this package now has
+      # npm Trusted Publishing configured, which requires token auth to be
+      # absent (not just unused) and generates the provenance attestation
+      # automatically from the OIDC identity -- see
+      # scripts/publish-npm-package.sh's matching comment and
+      # deploy-pipeline.yml's, where this was found live.
       - name: Publish
         working-directory: membership_card_verifier/packages/verifier
-        run: npm publish --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish

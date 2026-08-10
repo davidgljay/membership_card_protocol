@@ -34,12 +34,13 @@ jobs:
     runs-on: ubuntu-latest
     environment: dev
     timeout-minutes: 30
-    # id-token: write is required for npm's --provenance flag
-    # (publish-npm-package.sh adds it automatically whenever GITHUB_ACTIONS
-    # is set) -- same pattern as publish-verifier.yml's existing job.
-    # Confirmed live: the first run to get past npm auth (registry-url fix)
-    # failed here next with "Provenance generation ... requires 'write'
-    # access to the 'id-token' permission".
+    # id-token: write is required for npm Trusted Publishing (OIDC) --
+    # these packages are configured on npmjs.com to only accept publishes
+    # via their registered trusted publisher, not a classic token. Same
+    # permission also covers provenance attestation, which Trusted
+    # Publishing generates automatically (see
+    # scripts/publish-npm-package.sh). Same pattern as publish-verifier.yml's
+    # existing job.
     permissions:
       contents: read
       id-token: write
@@ -50,12 +51,16 @@ jobs:
         with:
           version: 9
 
-      # registry-url is required for NODE_AUTH_TOKEN to actually
-      # authenticate npm publish -- without it, actions/setup-node doesn't
-      # write the .npmrc entry that makes npm read that env var at all, so
-      # `npm publish` fails with ENEEDAUTH even though NODE_AUTH_TOKEN is
-      # genuinely set correctly. Confirmed live: the first real run of this
-      # job got past every other step and failed exactly here.
+      # registry-url is required even under Trusted Publishing (npm docs'
+      # own recommended workflow keeps it) -- it's how actions/setup-node
+      # tells npm which registry to request an OIDC token for, not just a
+      # token-auth concern. NODE_AUTH_TOKEN is deliberately NOT set below:
+      # these packages have npm Trusted Publishing configured, which
+      # requires token auth to be absent, not just unused -- npm rejects a
+      # token-bearing publish attempt with a 404 (not a clearer 403) when
+      # the package only allows its trusted publisher. Confirmed live
+      # across two failed runs before landing on this. See
+      # scripts/publish-npm-package.sh's matching comment.
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -63,11 +68,6 @@ jobs:
 
       - name: scripts/deploy-all.sh dev
         env:
-          # --- npm publishes (verifier x3, app-sdk, sdk-providers-web,
-          #     sdk-providers-rn, wallet-sdk) -- one shared token, not
-          #     per-package. ---
-          NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
-
           # --- press ---
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -231,12 +231,10 @@ jobs:
         with:
           version: 9
 
-      # registry-url is required for NODE_AUTH_TOKEN to actually
-      # authenticate npm publish -- without it, actions/setup-node doesn't
-      # write the .npmrc entry that makes npm read that env var at all, so
-      # `npm publish` fails with ENEEDAUTH even though NODE_AUTH_TOKEN is
-      # genuinely set correctly. Confirmed live: the first real run of this
-      # job got past every other step and failed exactly here.
+      # See deploy-dev's identical comment above: registry-url stays (needed
+      # for the OIDC token request), NODE_AUTH_TOKEN deliberately absent
+      # (these packages' Trusted Publishing config rejects token-bearing
+      # publishes with a 404).
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -244,7 +242,6 @@ jobs:
 
       - name: scripts/deploy-all.sh prod
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           PRESS_CARD_CID: ${{ vars.PRESS_CARD_CID }}
