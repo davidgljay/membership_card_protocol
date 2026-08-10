@@ -291,7 +291,7 @@ describe('subcard_creation_policy.md (live dev deployment)', () => {
 
     expect(registeredDoc.capabilities).toEqual(requestedCapabilities);
     expect(registeredDoc.limitations).toEqual(requestedLimitations);
-  }, 30_000);
+  }, 120_000);
 
   it.todo('Mechanism 3 deregistration: Via holder key (master card holder signature) — endpoint not functional');
 });

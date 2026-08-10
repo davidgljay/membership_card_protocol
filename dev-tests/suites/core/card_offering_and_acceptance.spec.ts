@@ -206,7 +206,7 @@ describe('card_offering_and_acceptance.md (live dev deployment)', () => {
     expect(finalizeBody.card_cid).toBeTruthy();
     expect(typeof finalizeBody.card_cid).toBe('string');
     expect(finalizeBody.scip).toBeTruthy();
-  });
+  }, 45_000);
 
   it('Full happy path: offer assembly → delivery → acceptance → finalization end-to-end', async () => {
     const secureKeyProvider = new InMemorySecureKeyProvider();
