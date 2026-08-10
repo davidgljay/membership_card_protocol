@@ -34,6 +34,15 @@ jobs:
     runs-on: ubuntu-latest
     environment: dev
     timeout-minutes: 30
+    # id-token: write is required for npm's --provenance flag
+    # (publish-npm-package.sh adds it automatically whenever GITHUB_ACTIONS
+    # is set) -- same pattern as publish-verifier.yml's existing job.
+    # Confirmed live: the first run to get past npm auth (registry-url fix)
+    # failed here next with "Provenance generation ... requires 'write'
+    # access to the 'id-token' permission".
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -210,6 +219,11 @@ jobs:
     runs-on: ubuntu-latest
     environment: prod
     timeout-minutes: 30
+    # See deploy-dev's identical comment above -- required for npm
+    # --provenance.
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
