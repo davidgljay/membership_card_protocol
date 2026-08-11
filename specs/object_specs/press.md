@@ -4,6 +4,8 @@
 **Date:** 2026-06-25
 **Status:** Draft
 
+**Amended 2026-08-11:** §5.3 `processUpdateIntent` gains step 2b and §7 gains `P-25` — the immutable-fields check `process_specs/card_updates.md` step 7 already required (`policy_id`, `issuer_card`, `press_card`, `recipient_pubkey`, `issued_at`, `issuer_signature`, `holder_signature`, `press_signature`, `ancestry_pubkeys`, `past_keys`, `protocol_version`, plus conditionally-immutable `active_subcards`/`successor`/`supersedes`/`supersession_note`) was never actually specified at the implementation level here, and correspondingly never implemented in `press/src/handlers/update.ts` — found live via a real `dev-tests` run finally reaching this code path cleanly for the first time. Implemented in `handleUpdate`, checked immediately after the staleness check, before any registry/IPFS lookup.
+
 **Amended 2026-07-16:** §5.3 `appendLogEntry` updated for the `LogEntry` full-repost design change (`protocol-objects.md §3`, `object_specs/ipfs_card.md §5`) — the press now fetches/decrypts the current head before assembling a new entry, and each entry carries `card_state` (full current field state) and `history` (flat CID provenance list) rather than only a diff.
 
 **Amended 2026-07-18 (workerd fidelity fixes, integration testing):** Three issues surfaced getting press running under real `wrangler dev`/workerd rather than a plain-Node preset (`integration_tests` Phase 1.6), all now fixed:
@@ -529,6 +531,7 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 
 1. Verify `intentSignature` over canonical RFC 8785 JSON of `updateIntent` using the updater's ML-DSA-44 public key. To resolve the updater's public key: call `verifier.verifyCard(updateIntent.updater_card_address)` and extract the public key from the resolved card chain. Reject with `P-09` on signature failure.
 2. Confirm `updateIntent.timestamp` is within the press's staleness window. Reject stale intents.
+2b. Confirm no `field_updates` entry targets a protocol-required immutable field (`process_specs/card_updates.md` step 7, `protocol-objects.md` §1/§1.1) outside its own dedicated update-code mechanism, if it has one (`active_subcards` via codes 510/511/512; `successor` via codes 100/101/102). Reject with `P-25`. Checked before any registry/IPFS lookup, since it needs nothing but the request body itself.
 3. Resolve the target card's policy from the on-chain `CardEntry` (via the press's RPC connection).
 4. **Codes 510/511/512 (`active_subcards` directory updates) are a hardcoded special case, evaluated before the generic `update_policy` step below and never subject to it:** reject with `P-23` unless `updater_card_address` equals `target_card_address` (only a card's own holder may touch its own `active_subcards`), and reject with `P-13` unless `keccak256(intentSignature.public_key)` equals `target_card_address` (the address-equality check above is meaningless without also confirming the signature was actually produced by that address's own key — implemented in `press/src/handlers/update.ts`). This is a hardcoded protocol invariant per `update_codes.md §5xx` and `process_specs/card_updates.md` — no policy's `update_policy` is consulted for these three codes, and `verifier.verifyCard` is not called for them.
 4b. For all other codes: evaluate the relevant `update_policy` predicate for each field in `field_updates` (for 1xx–7xx codes). For revocation codes (8xx–9xx), evaluate `policy.revocation_permissions`. Use `verifier.verifyCard(updateIntent.updater_card_address)` for the chain data required by predicate evaluation.
@@ -924,6 +927,7 @@ Press-side error codes (not on-chain reverts). Returned in the HTTP response bod
 | `P-22` | Offer timestamp is stale (replay prevention) |
 | `P-23` | Code-510/511/512 `active_subcards` update where `updater_card_address` ≠ `target_card_address` (holder-only rule violated) |
 | `P-24` | Filebase upload failed; IPFS pin not confirmed |
+| `P-25` | `field_updates` targets a protocol-required immutable field outside its own dedicated update-code mechanism (if it has one) — see `process_specs/card_updates.md` step 7 and `protocol-objects.md` §1/§1.1 |
 
 **On-chain revert codes this spec surfaces (Fix #2).** These are contract-side reverts (`registry_contract.md §8`), not press-generated codes, but `registerSubCardOnChain` (§5.4) explicitly forwards them to the caller rather than retrying:
 

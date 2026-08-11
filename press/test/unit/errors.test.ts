@@ -384,7 +384,7 @@ describe('P-11', () => {
       target_card_address: HOLDER_ADDR,
       code: 100, // field update — triggers predicate check
       timestamp: new Date().toISOString(),
-      field_updates: { role: 'member' },
+      field_updates: [{ field: 'role', value: 'member' }],
     };
     const toSign = canonicalize(intent as unknown as Record<string, unknown>);
     const sig = ml_dsa44.sign(toSign, ISSUER_SK);
@@ -626,5 +626,84 @@ describe('P-22', () => {
       intent_signature: { public_key: toBase64url(ISSUER_PK), signature: toBase64url(sig) },
     };
     await expect(handleUpdate(ctx, body)).rejects.toMatchObject({ pressCode: 'P-22' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P-25: field_updates targets a protocol-required immutable field
+// (protocol-objects.md §1/§1.1, process_specs/card_updates.md step 7)
+// ---------------------------------------------------------------------------
+
+describe('P-25', () => {
+  it('throws P-25 when field_updates targets policy_id', async () => {
+    const ctx = makeCtx();
+    const intent = {
+      updater_card_address: ISSUER_ADDR,
+      target_card_address: HOLDER_ADDR,
+      code: 100,
+      timestamp: new Date().toISOString(),
+      field_updates: [{ field: 'policy_id', value: 'QmFakeNewPolicyCid' }],
+    };
+    const toSign = canonicalize(intent as unknown as Record<string, unknown>);
+    const sig = ml_dsa44.sign(toSign, ISSUER_SK);
+    const body: UpdateRequest = {
+      update_intent: intent,
+      intent_signature: { public_key: toBase64url(ISSUER_PK), signature: toBase64url(sig) },
+    };
+    await expect(handleUpdate(ctx, body)).rejects.toMatchObject({ pressCode: 'P-25' });
+  });
+
+  it('throws P-25 when a generic field-update code (not 510/511/512) targets active_subcards', async () => {
+    const ctx = makeCtx();
+    const intent = {
+      updater_card_address: ISSUER_ADDR,
+      target_card_address: HOLDER_ADDR,
+      code: 100, // not one of the dedicated 510/511/512 codes
+      timestamp: new Date().toISOString(),
+      field_updates: [{ field: 'active_subcards', value: [] }],
+    };
+    const toSign = canonicalize(intent as unknown as Record<string, unknown>);
+    const sig = ml_dsa44.sign(toSign, ISSUER_SK);
+    const body: UpdateRequest = {
+      update_intent: intent,
+      intent_signature: { public_key: toBase64url(ISSUER_PK), signature: toBase64url(sig) },
+    };
+    await expect(handleUpdate(ctx, body)).rejects.toMatchObject({ pressCode: 'P-25' });
+  });
+
+  it('throws P-25 when a non-100/101/102 code targets successor', async () => {
+    const ctx = makeCtx();
+    const intent = {
+      updater_card_address: ISSUER_ADDR,
+      target_card_address: HOLDER_ADDR,
+      code: 200, // not one of the dedicated 100/101/102 codes
+      timestamp: new Date().toISOString(),
+      field_updates: [{ field: 'successor', value: '0x' + 'aa'.repeat(32) }],
+    };
+    const toSign = canonicalize(intent as unknown as Record<string, unknown>);
+    const sig = ml_dsa44.sign(toSign, ISSUER_SK);
+    const body: UpdateRequest = {
+      update_intent: intent,
+      intent_signature: { public_key: toBase64url(ISSUER_PK), signature: toBase64url(sig) },
+    };
+    await expect(handleUpdate(ctx, body)).rejects.toMatchObject({ pressCode: 'P-25' });
+  });
+
+  it('throws P-25 when field_updates targets supersedes (genesis-only, no update code sets it)', async () => {
+    const ctx = makeCtx();
+    const intent = {
+      updater_card_address: ISSUER_ADDR,
+      target_card_address: HOLDER_ADDR,
+      code: 100,
+      timestamp: new Date().toISOString(),
+      field_updates: [{ field: 'supersedes', value: '0x' + 'bb'.repeat(32) }],
+    };
+    const toSign = canonicalize(intent as unknown as Record<string, unknown>);
+    const sig = ml_dsa44.sign(toSign, ISSUER_SK);
+    const body: UpdateRequest = {
+      update_intent: intent,
+      intent_signature: { public_key: toBase64url(ISSUER_PK), signature: toBase64url(sig) },
+    };
+    await expect(handleUpdate(ctx, body)).rejects.toMatchObject({ pressCode: 'P-25' });
   });
 });

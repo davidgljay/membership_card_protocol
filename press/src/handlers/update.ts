@@ -32,6 +32,48 @@ import type { Hex } from 'viem';
  */
 const ACTIVE_SUBCARDS_DIRECTORY_CODES = new Set([510, 511, 512]);
 
+/**
+ * Codes 100 (rotation), 101 (?), and 102 (issuer-initiated, 72h pending
+ * window) are the only mechanisms that may set `successor` — see
+ * `protocol-objects.md` §1.1 and `key_rotation.md §8`. Once effective,
+ * `successor` is itself immutable (may be set at most once).
+ */
+const SUCCESSOR_CODES = new Set([100, 101, 102]);
+
+/**
+ * Protocol-required immutable fields (protocol-objects.md §1/§1.1,
+ * process_specs/card_updates.md step 7) — an ordinary field_updates entry
+ * may never target these. `active_subcards` and `successor` are each
+ * mutable, but only via their own dedicated update-code mechanism, not a
+ * generic field_updates entry outside it (see isImmutableFieldUpdateAllowed
+ * below). `supersedes`/`supersession_note` are genesis-only per
+ * protocol-objects.md §1.1 (set by the issuer at card creation) — no
+ * update code sets them at all, so they carry no exemption here.
+ */
+const IMMUTABLE_FIELDS = new Set([
+  'policy_id',
+  'issuer_card',
+  'press_card',
+  'recipient_pubkey',
+  'issued_at',
+  'issuer_signature',
+  'holder_signature',
+  'press_signature',
+  'ancestry_pubkeys',
+  'past_keys',
+  'protocol_version',
+  'active_subcards',
+  'successor',
+  'supersedes',
+  'supersession_note',
+]);
+
+function isImmutableFieldUpdateAllowed(field: string, code: number): boolean {
+  if (field === 'active_subcards') return ACTIVE_SUBCARDS_DIRECTORY_CODES.has(code);
+  if (field === 'successor') return SUCCESSOR_CODES.has(code);
+  return false;
+}
+
 export async function handleUpdate(
   ctx: PressContext,
   body: UpdateRequest
@@ -63,6 +105,19 @@ export async function handleUpdate(
       new Error('P-22: UpdateIntent timestamp is stale'),
       { pressCode: 'P-22' }
     );
+  }
+
+  // 2b. Immutable fields (process_specs/card_updates.md step 7,
+  // protocol-objects.md §1/§1.1) -- reject fast, before any registry/IPFS
+  // lookups, if field_updates targets a protocol-required immutable field
+  // outside its own dedicated update-code mechanism (if it has one).
+  for (const update of update_intent.field_updates ?? []) {
+    if (IMMUTABLE_FIELDS.has(update.field) && !isImmutableFieldUpdateAllowed(update.field, update_intent.code)) {
+      throw Object.assign(
+        new Error(`P-25: field_updates targets protocol-required immutable field '${update.field}'`),
+        { pressCode: 'P-25' }
+      );
+    }
   }
 
   // 3. Resolve target card's policy.
