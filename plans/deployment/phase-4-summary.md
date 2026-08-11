@@ -138,14 +138,34 @@ push actually reaching that stage:
 
 ## Open items
 
-- **3 flaky `dev-tests` failures** (`log_auditing.spec.ts` x2,
-  `subcard_creation_policy.spec.ts` x1), currently attributed to real
-  chain-confirmation latency variance rather than a code/timeout bug —
-  both failing tests already sit at this suite's established 120s
-  convention. Being investigated locally next; if a pattern emerges this
-  document (or a dedicated report, following
-  `dev-tests/reports/2026-08-10-ohttp-intermittent-key-length.md`'s
-  precedent) will be updated.
+- ~~5 `dev-tests` failures~~ **Resolved 2026-08-11.** Root cause wasn't
+  chain-confirmation flakiness — it was `press/src/chain/registry.ts`'s
+  `getCardEventLog`, which does an unbounded `eth_getLogs({fromBlock: 0n,
+  toBlock: 'latest'})` scan. `ee406334`'s switch of `ARBITRUM_RPC_URL` to
+  an Alchemy-backed endpoint (fixing a real, different problem — see that
+  commit) introduced a regression here: Alchemy's free tier hard-caps
+  `eth_getLogs` to a 10-block range and rejects the call outright, which
+  surfaced as an unhandled 500 from press wherever `ctx.verifier.verifyCard()`
+  runs a chain walk (`subcard_creation_policy.spec.ts`'s Mechanisms 1/2,
+  and `card_validation.spec.ts`'s `beforeAll`, whose 120s hook timeout was
+  actually eaten by retries against this broken call, not the double
+  mint). Chunking to fit the 10-block cap isn't viable here — the registry
+  contract is ~1M+ blocks of Arbitrum Sepolia history a few days after
+  deploy (~0.25s block time), so a full scan would be 100k+ chunked calls.
+  Fixed by giving `getCardEventLog` its own `publicClient` on viem's
+  built-in public Sepolia RPC (`http()` with no URL override — confirmed
+  live to have no range cap), leaving `ARBITRUM_RPC_URL`/Alchemy in place
+  for the write/confirmation traffic it was actually meant to fix. Verified
+  live against `press-dev` after redeploy. Separately, `card_updates.spec.ts`
+  and `card_validation.spec.ts`'s double-mint `beforeAll` hooks were still
+  at the single-mint 120s convention (bumped to 180s, matching
+  `card_signing.spec.ts`/`card_offering_and_acceptance.spec.ts`), and
+  `log_auditing.spec.ts`'s four tests — each running a full
+  `registerAndAuthorizeDevPolicy` (up to two on-chain governance txs, each
+  internally capped at 120s) plus a full issue/finalize — were bumped from
+  120s to 300s. Full suite now passes 23/23 files, 194/242 tests (48
+  `it.todo`), in 446s (down from 1112s — the broken chain-walk retries were
+  adding real overhead across the whole run, not just the failing tests).
 - **Rare intermittent OHTTP gateway 500** ("Invalid length of the key"),
   observed once, not reproducible in isolation — logged with hypotheses in
   `dev-tests/reports/2026-08-10-ohttp-intermittent-key-length.md`.

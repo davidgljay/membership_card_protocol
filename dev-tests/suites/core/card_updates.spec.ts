@@ -47,7 +47,7 @@ describe('card_updates.md (live dev deployment)', () => {
   beforeAll(async () => {
     updater = await mintLiveCard('card-updates-updater', { display_name: 'Card Updates Suite — Updater' });
     targetCard = await mintLiveCard('card-updates-target', { display_name: 'Card Updates Suite — Target' });
-  }, 120_000);
+  }, 180_000);
 
   it('Phase 1-2: assembles and signs an UpdateIntentPayload for a field update (3xx code)', async () => {
     const timestamp = new Date().toISOString();

@@ -264,6 +264,23 @@ export function createRegistryClient(config: PressConfig): RegistryClient {
     transport: http(config.ARBITRUM_RPC_URL),
   });
 
+  // Dedicated client for getCardEventLog's unbounded (fromBlock: 0n,
+  // toBlock: 'latest') eth_getLogs scans, pointed at viem's built-in
+  // public RPC for `chain` (no `transport` URL override — `http()` with
+  // no argument uses `chain.rpcUrls.default`) rather than
+  // `config.ARBITRUM_RPC_URL`. Confirmed live 2026-08-11: Alchemy's free
+  // tier (the RPC ARBITRUM_RPC_URL now points at, see that config field's
+  // doc) hard-caps eth_getLogs to a 10-block range and rejects this call
+  // outright ("Under the Free tier plan, you can make eth_getLogs
+  // requests with up to a 10 block range") — chunking to 10-block windows
+  // isn't viable either, since a full history scan is 1M+ blocks on
+  // Arbitrum Sepolia's ~0.25s block time even a few days after contract
+  // deploy. The public Sepolia RPC has no such range cap (confirmed via a
+  // direct full-range eth_getLogs call). Only this narrow, low-volume
+  // read path uses it — the write/confirmation traffic that motivated
+  // moving ARBITRUM_RPC_URL to Alchemy in the first place stays there.
+  const logsClient: PublicClient = createPublicClient({ chain, transport: http() });
+
   // walletClient uses the gas wallet for tx submission.
   const walletClient: WalletClient = createWalletClient({
     account: gasAccount,
@@ -493,14 +510,14 @@ export function createRegistryClient(config: PressConfig): RegistryClient {
     cardAddress = normalizeHex(cardAddress);
     // Events are emitted by the logic contract, not storage (file doc, §7).
     const [registeredLogs, headUpdatedLogs] = await Promise.all([
-      publicClient.getLogs({
+      logsClient.getLogs({
         address: logicAddress,
         event: CARD_REGISTERED_EVENT[0],
         args: { card_address: cardAddress },
         fromBlock: 0n,
         toBlock: 'latest',
       }),
-      publicClient.getLogs({
+      logsClient.getLogs({
         address: logicAddress,
         event: CARD_HEAD_UPDATED_EVENT[0],
         args: { card_address: cardAddress },

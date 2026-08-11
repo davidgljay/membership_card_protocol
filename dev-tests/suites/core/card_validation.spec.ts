@@ -239,7 +239,7 @@ describe('card_validation.md (live dev deployment, full CardVerifier)', () => {
       fetchAnnotations: false,
       returnChain: true,
     });
-  }, 120_000);
+  }, 180_000);
 
   it.todo('Stage 3: verifyCard walks chain to trusted root (primary test)', async () => {
     // Blocked by mintLiveCard's synthetic-issuer limitation — see file
