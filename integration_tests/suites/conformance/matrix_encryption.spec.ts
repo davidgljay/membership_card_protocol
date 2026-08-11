@@ -63,23 +63,31 @@ describe('matrix_encryption.md (object-spec conformance)', () => {
         expect(deriveMatrixUserId(CARD_HASH_A, SERVER_NAME)).toBe(EXPECTED_MATRIX_USER_ID_A);
       });
 
+      // execSync spawns a fresh Python interpreter synchronously on every
+      // call, no caching -- under CI load (this runs after ~16+ minutes of
+      // the rest of the suite already executing) a cold Python startup can
+      // occasionally exceed vitest's 5000ms default. Confirmed live: fixture
+      // A timed out in CI while passing consistently in lighter-load local
+      // runs. Same missing-explicit-timeout class as several dev-tests
+      // fixes the same day -- bumped all three Python-invoking tests here,
+      // not just the one that happened to fail.
       it('TypeScript and Python implementations produce identical output for fixture A', () => {
         const tsResult = deriveMatrixUserId(CARD_HASH_A, SERVER_NAME);
         const pythonResult = derivePythonMatrixUserId(CARD_HASH_A, SERVER_NAME);
         expect(tsResult).toBe(pythonResult);
-      });
+      }, 30_000);
 
       it('TypeScript and Python implementations produce identical output for fixture B', () => {
         const tsResult = deriveMatrixUserId(CARD_HASH_B, SERVER_NAME);
         const pythonResult = derivePythonMatrixUserId(CARD_HASH_B, SERVER_NAME);
         expect(tsResult).toBe(pythonResult);
-      });
+      }, 30_000);
 
       it('TypeScript and Python implementations agree with different server names', () => {
         const tsResult = deriveMatrixUserId(CARD_HASH_A, OTHER_SERVER_NAME);
         const pythonResult = derivePythonMatrixUserId(CARD_HASH_A, OTHER_SERVER_NAME);
         expect(tsResult).toBe(pythonResult);
-      });
+      }, 30_000);
     });
 
     describe('Forward verification (no inverse)', () => {
