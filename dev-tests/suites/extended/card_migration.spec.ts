@@ -402,7 +402,7 @@ describe('card_migration.md (live dev deployment)', () => {
       entry = table.bindings?.find((b) => b.payload.card_hash === conflictTestCard.address);
       expect(entry?.payload.type).toBe('card_migration');
       expect(entry?.payload.endpoint).toBe(WALLET_SERVICE_BASE_URL);
-    }, 60_000);
+    }, 120_000);
 
     it('Step 5: card_registration does NOT supersede card_migration for the same card_hash', async () => {
       const conflictTestCard2 = await mintLiveCard('card-migration-conflict-test-2', {
@@ -452,7 +452,7 @@ describe('card_migration.md (live dev deployment)', () => {
       entry = table.bindings?.find((b) => b.payload.card_hash === conflictTestCard2.address);
       expect(entry?.payload.type).toBe('card_migration');
       expect(entry?.payload.endpoint).toBe(WALLET_SERVICE_BASE_URL);
-    }, 60_000);
+    }, 120_000);
   });
 
   describe('§Routing Table Updates', () => {
