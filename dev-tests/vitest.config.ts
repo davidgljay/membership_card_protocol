@@ -10,5 +10,9 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     fileParallelism: false,
+    // Global fetch() timeout + single retry -- see the file's own header
+    // comment for why. Applies to every raw fetch() call across every
+    // suite and support helper, no per-call-site changes needed.
+    setupFiles: ['./support/setupFetchTimeout.ts'],
   },
 });
