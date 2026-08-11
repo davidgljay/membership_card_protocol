@@ -96,7 +96,13 @@ jobs:
           PRESS_SECP256R1_PRIVATE_KEY: ${{ secrets.PRESS_SECP256R1_PRIVATE_KEY }}
           PRESS_GAS_WALLET_PRIVATE_KEY: ${{ secrets.PRESS_GAS_WALLET_PRIVATE_KEY }}
           PRESS_OHTTP_PRIVATE_KEY: ${{ secrets.PRESS_OHTTP_PRIVATE_KEY }}
-          ARBITRUM_RPC_URL: ${{ vars.ARBITRUM_RPC_URL }}
+          # Alchemy-backed, not the public shared Arbitrum Sepolia RPC --
+          # embeds an API key, so this is a secret, not a plain variable
+          # (moved here 2026-08-11 after the public endpoint's soft
+          # rate-limiting under this repo's heavy same-day dev-tests
+          # traffic was suspected of causing intermittent slow/failed
+          # on-chain confirmations).
+          ARBITRUM_RPC_URL: ${{ secrets.ARBITRUM_RPC_URL }}
           # press's REGISTRY_CONTRACT_ADDRESS is the LOGIC contract;
           # wallet-service's REGISTRY_CONTRACT_ADDRESS is the STORAGE
           # contract -- same env var name, different meaning per service
@@ -163,7 +169,8 @@ jobs:
           DEV_PRESS_URL: ${{ vars.DEV_PRESS_URL }}
           DEV_WALLET_SERVICE_URL: ${{ vars.DEV_WALLET_SERVICE_URL }}
           DEV_RELAY_URL: ${{ vars.DEV_RELAY_URL }}
-          DEV_ARBITRUM_RPC_URL: ${{ vars.DEV_ARBITRUM_RPC_URL }}
+          # See ARBITRUM_RPC_URL's identical comment above.
+          DEV_ARBITRUM_RPC_URL: ${{ secrets.DEV_ARBITRUM_RPC_URL }}
           DEV_REGISTRY_CONTRACT_ADDRESS: ${{ vars.REGISTRY_CONTRACT_ADDRESS_STORAGE }}
           DEV_LOGIC_CONTRACT_ADDRESS: ${{ vars.REGISTRY_CONTRACT_ADDRESS_LOGIC }}
           DEV_IPFS_GATEWAY_URL: ${{ vars.DEV_IPFS_GATEWAY_URL }}
@@ -276,7 +283,13 @@ jobs:
           PRESS_SECP256R1_PRIVATE_KEY: ${{ secrets.PRESS_SECP256R1_PRIVATE_KEY }}
           PRESS_GAS_WALLET_PRIVATE_KEY: ${{ secrets.PRESS_GAS_WALLET_PRIVATE_KEY }}
           PRESS_OHTTP_PRIVATE_KEY: ${{ secrets.PRESS_OHTTP_PRIVATE_KEY }}
-          ARBITRUM_RPC_URL: ${{ vars.ARBITRUM_RPC_URL }}
+          # Alchemy-backed, not the public shared Arbitrum Sepolia RPC --
+          # embeds an API key, so this is a secret, not a plain variable
+          # (moved here 2026-08-11 after the public endpoint's soft
+          # rate-limiting under this repo's heavy same-day dev-tests
+          # traffic was suspected of causing intermittent slow/failed
+          # on-chain confirmations).
+          ARBITRUM_RPC_URL: ${{ secrets.ARBITRUM_RPC_URL }}
           # See deploy-dev's identical comment above: split, service-scoped
           # names, not a bare REGISTRY_CONTRACT_ADDRESS.
           REGISTRY_CONTRACT_ADDRESS_LOGIC: ${{ vars.REGISTRY_CONTRACT_ADDRESS_LOGIC }}
