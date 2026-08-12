@@ -1,0 +1,54 @@
+name: TEST -- prod npm publish only
+
+# Temporary, manual-only workflow to verify the npmjs.com Trusted Publisher
+# fix (blanking each package's Environment name so `environment: prod`
+# tokens are accepted, not just `environment: dev`) without touching
+# press/wallet-service/relay -- see plans/deployment/phase-4-summary.md's
+# 2026-08-11 incident + root-cause-corrected notes. Delete this file once
+# the fix is confirmed; it exists only to isolate the npm-publish steps
+# from scripts/deploy-all.sh's service-deploy steps for this one test.
+#
+# workflow_dispatch only -- never runs on push, never runs unattended.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  publish:
+    name: Publish (prod, npm only)
+    runs-on: ubuntu-latest
+    environment: prod
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Upgrade npm for Trusted Publishing support
+        run: npm install -g npm@latest
+
+      - name: publish verifier
+        run: ./membership_card_verifier/scripts/publish.sh verifier prod
+      - name: publish verifier-ipfs-provider
+        run: ./membership_card_verifier/scripts/publish.sh verifier-ipfs-provider prod
+      - name: publish verifier-rpc-provider
+        run: ./membership_card_verifier/scripts/publish.sh verifier-rpc-provider prod
+      - name: publish app-sdk
+        run: ./app-sdk/scripts/publish.sh prod
+      - name: publish sdk-providers-web
+        run: ./sdk-providers-web/scripts/publish.sh prod
+      - name: publish sdk-providers-rn
+        run: ./sdk-providers-rn/scripts/publish.sh prod
+      - name: publish wallet-sdk
+        run: ./wallet-sdk/scripts/publish.sh prod

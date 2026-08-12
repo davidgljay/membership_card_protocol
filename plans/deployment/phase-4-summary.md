@@ -213,6 +213,33 @@ push actually reaching that stage:
   at publishing, which should be a decision made when David is
   deliberately ready to go live, not a side effect of an unrelated fix.
 
+  **Root cause corrected 2026-08-11**, after reading the actual failed
+  run's log (`gh run view 31521258922 --log-failed`) instead of assuming.
+  This was NOT a "package must be registered before OIDC can publish"
+  bootstrap problem -- `npm view @membership-card-protocol/verifier
+  versions` confirms the package already has several published dev
+  versions, all via Trusted Publishing. The real 404
+  (`PUT .../@membership-card-protocol%2fverifier - Not found`) matches
+  this repo's own documented pattern (see `publish-npm-package.sh`'s
+  comment): npm returns a generic 404 for any Trusted Publishing auth
+  mismatch, not just a genuinely-missing package. npm Trusted Publisher
+  entries can be scoped to a specific GitHub Environment name;
+  `deploy-dev` runs under `environment: dev` and `deploy-prod` under
+  `environment: prod` -- if each package's Trusted Publisher entry on
+  npmjs.com only lists `environment: dev`, an OIDC token minted under
+  `environment: prod` won't match and gets this same 404. Per npm's own
+  docs (docs.npmjs.com/trusted-publishers), **each package can only have
+  one Trusted Publisher configuration at a time** -- there's no way to add
+  a second entry scoped to `prod` alongside the existing `dev` one. The
+  fix is to clear/blank the `Environment name` field on the single
+  existing entry, which then matches the repo+workflow regardless of
+  GitHub Environment (covers both `dev` and `prod`). Needs checking on
+  npmjs.com (`npmjs.com/package/<name>/access` -> Trusted Publisher) for
+  all 7 publishable packages (`verifier`, `verifier-ipfs-provider`,
+  `verifier-rpc-provider`, `app-sdk`, `sdk-providers-web`,
+  `sdk-providers-rn`, `wallet-sdk`). Requires David's npm login; not
+  something Claude can verify or fix directly.
+
 ## What's deliberately not done
 
 Per this phase's own clarification checkpoint and Phase 4's plan entry:
