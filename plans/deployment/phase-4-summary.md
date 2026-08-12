@@ -173,20 +173,56 @@ push actually reaching that stage:
   and prod onto separate Droplets (would also allow downsizing the dev
   Droplet from 2GB to 1GB — confirmed safe via 6 hours of real observed
   peak usage never exceeding 33% memory / 45% CPU). Turned out to already
-  be most of the way there: no `prod` GitHub Environment exists yet, so
-  there's no live prod Droplet to migrate away from at all. Remaining
-  action (David, DigitalOcean dashboard access required): resize the
-  current Droplet to 1GB now; provision a genuinely separate Droplet + the
-  `prod` GitHub Environment only when prod actually launches.
+  be most of the way there: no live prod Droplet exists to migrate away
+  from at all (see incident below — `prod` the *GitHub Environment* now
+  exists, but no real prod service infrastructure has been provisioned
+  under it). Remaining action (David, DigitalOcean dashboard access
+  required): resize the current Droplet to 1GB now; provision a genuinely
+  separate Droplet only when prod actually launches.
+- **Incident, 2026-08-11: `deploy-prod` auto-ran on a push, unintended.**
+  Pushing `77feed7e` (the `getCardEventLog` fix) triggered
+  `deploy-pipeline.yml` end to end, including `Deploy (prod)` — with no
+  manual approval step. Root cause: `prod` didn't exist as a GitHub
+  Environment yet, and GitHub Actions auto-creates an environment the
+  first time a workflow job references it via `environment: prod`, **with
+  zero protection rules**, if no one created it explicitly first.
+  `deploy-pipeline.yml`'s own header comment already documented that
+  `prod` "MUST have a required-reviewers protection rule configured...
+  before this workflow can auto-deploy to production" and that the
+  workflow can't set that rule itself — that one-time repo-settings step
+  had just never been done. `deploy-prod` ran for 31 seconds and failed on
+  its first step (`scripts/deploy-all.sh prod`'s `publish verifier`): an
+  `npm error 404`, because this was the very first attempted prod
+  (non-`next`-tag) publish of `@membership-card-protocol/verifier`, and
+  npm Trusted Publishing (OIDC) requires a package+version to already be
+  registered before it can publish via OIDC for the first time.
+  `deploy-all.sh`'s halt-on-failure design worked as intended — nothing
+  after that first step ran (app-sdk, wallet-sdk, press, wallet-service,
+  relay were never touched). Net impact: one empty `prod` environment
+  object plus one failed deployment record, no packages actually
+  published, no services actually deployed, no real prod resources
+  touched. **Fixed**: added a required-reviewers protection rule to the
+  `prod` GitHub Environment (`gh api --method PUT
+  repos/davidgljay/membership_card_protocol/environments/prod` with
+  `reviewers: [{type: "User", id: 680687}]` — davidgljay), confirmed live
+  via `gh api repos/.../environments/prod`'s `protection_rules`. Any
+  future push reaching `deploy-prod` will now pause for manual approval in
+  the Actions UI instead of running immediately. The npm 404 / Trusted
+  Publishing first-publish bootstrap problem is left unresolved
+  deliberately — fixing it would let a future prod push actually succeed
+  at publishing, which should be a decision made when David is
+  deliberately ready to go live, not a side effect of an unrelated fix.
 
 ## What's deliberately not done
 
-Per this phase's own clarification checkpoint and Phase 4's plan
-entry: `deploy-prod` is fully wired (identical structure to `deploy-dev`,
-targeting a `prod` GitHub Environment) but not live — that environment
-doesn't exist yet, and per `deploy-pipeline.yml`'s own header comment,
-wallet-service's prod deployment is explicitly blocked pending CP-3's
-independent security review, with no mainnet contracts and no prod
-Droplet tier brought up either. This is expected, not a bug — per the
-checkpoint, going live with prod auto-deploy needs an explicit walkthrough
-and decision on required-reviewers gating before it's turned on for real.
+Per this phase's own clarification checkpoint and Phase 4's plan entry:
+`deploy-prod` is fully wired (identical structure to `deploy-dev`,
+targeting a `prod` GitHub Environment, now gated behind required-reviewer
+approval — see the incident above) but nothing has actually deployed to
+prod. Per `deploy-pipeline.yml`'s own header comment, wallet-service's
+prod deployment is explicitly blocked pending CP-3's independent security
+review, with no mainnet contracts and no prod Droplet tier brought up
+either, and the npm Trusted Publishing first-publish bootstrap gap (see
+above) still blocks even the npm packages. This is expected, not a bug —
+going live with prod needs an explicit walkthrough and decision on each of
+these before it's turned on for real.
