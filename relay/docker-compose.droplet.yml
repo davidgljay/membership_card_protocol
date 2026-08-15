@@ -32,15 +32,18 @@
 # per-environment named volume, isolated the same way relay's /data is.
 # "prod" services (redis-prod, relay-prod, synapse-prod) are tagged with
 # `profiles: ["prod"]` -- deliberately excluded from a plain
-# `docker compose up` (even one naming `caddy`, whose own depends_on
-# does NOT list them for exactly this reason: Compose implicitly
-# activates a dependency's profile if a profile-less service depends on
-# it, which would silently defeat the point). Bring the prod tier up
-# explicitly, once it's actually ready, with:
+# `docker compose up`. Bring the prod tier up explicitly, once it's
+# actually ready, with:
 #   docker compose -f docker-compose.droplet.yml --profile prod up -d --build
 # Caddy doesn't need its proxy targets to already be running to start
-# itself -- it just 502s on that route until they exist, so omitting
-# them from depends_on costs nothing.
+# itself -- it just 502s on that route until they exist, so caddy has no
+# depends_on at all: not for dev, not for prod. This also matters now that
+# dev and prod can each live on their own separate Droplet (not just the
+# original single-shared-host design) -- an unconditional depends_on on
+# relay-dev/synapse-dev would make a prod-only Droplet's `docker compose
+# --profile prod up` also try to start the dev tier there, which has no
+# real .env.dev.droplet or dev Matrix config on that box. Omitting
+# depends_on entirely is correct and safe on both topologies.
 services:
   caddy:
     image: caddy:2-alpine
@@ -52,9 +55,6 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
-    depends_on:
-      - relay-dev
-      - synapse-dev
 
   redis-dev:
     image: redis:7-alpine
