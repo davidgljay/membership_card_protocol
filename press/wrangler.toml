@@ -31,7 +31,7 @@ binding = "PRESS_KV"
 id = "c1b3c5ad41674ff5b63e183abfefdb0b"
 
 [env.prod]
-name = "press-prod"
+name = "press"
 
 [[env.prod.kv_namespaces]]
 binding = "PRESS_KV"

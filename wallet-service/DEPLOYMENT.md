@@ -112,7 +112,7 @@ are not required here.
 ## Per-environment config
 
 `wrangler.toml` defines `[env.dev]` and `[env.prod]` blocks, each with its
-own Worker name (`wallet-service-dev` / `wallet-service-prod`) and its own
+own Worker name (`wallet-service-dev` / `wallet-service`) and its own
 `WALLET_KV` namespace id. Provision each namespace (only needed if using
 `KV_BACKEND=cloudflare-kv`) with:
 

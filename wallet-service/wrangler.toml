@@ -32,7 +32,7 @@ binding = "WALLET_KV"
 id = "77067017e4aa4c3caf60b61acd067623"
 
 [env.prod]
-name = "wallet-service-prod"
+name = "wallet-service"
 
 [[env.prod.kv_namespaces]]
 binding = "WALLET_KV"

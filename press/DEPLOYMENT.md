@@ -86,7 +86,7 @@ this script does not require setting.
 ## Per-environment config
 
 `wrangler.toml` defines `[env.dev]` and `[env.prod]` blocks, each with its own
-Worker name (`press-dev` / `press-prod`) and its own `PRESS_KV` namespace id
+Worker name (`press-dev` / `press`) and its own `PRESS_KV` namespace id
 — dev and prod state never share a KV namespace. Provision each namespace
 once with:
 
