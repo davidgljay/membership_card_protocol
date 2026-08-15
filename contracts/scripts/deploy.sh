@@ -11,7 +11,11 @@
 #
 # Usage:
 #   export ARBITRUM_SEPOLIA_RPC=https://...
-#   export PRIVATE_KEY=0x...    # or use --ledger flag
+#   export PRIVATE_KEY=0x...    # or export KEYSTORE_PATH=/path/to/keystore.json
+#                                 (e.g. from `cast wallet new`) -- preferred for
+#                                 real funds; cargo-stylus has no hardware-wallet
+#                                 support, so an encrypted keystore file is the
+#                                 most secure option it actually offers.
 #   ./scripts/deploy.sh sepolia
 #   ./scripts/deploy.sh mainnet
 #
@@ -72,10 +76,39 @@ case "$NETWORK" in
     ;;
 esac
 
-# Require private key
+# Signing: either an encrypted keystore (KEYSTORE_PATH, e.g. from
+# `cast wallet new`) or a bare PRIVATE_KEY env var. Keystore is preferred
+# for real funds -- cargo-stylus's own --private-key flag warns it "exposes
+# your key to shell history". cargo-stylus needs a password FILE (no
+# interactive prompt of its own), so the password is read once here and
+# written to a chmod-600 temp file cleaned up on exit -- same pattern as
+# relay/scripts/deploy.sh's SSH private key handling. Never put a keystore
+# password in an env var or pass it as a literal CLI arg.
+KEYSTORE_PATH="${KEYSTORE_PATH:-}"
 PRIV_KEY="${PRIVATE_KEY:-}"
-if [[ -z "$PRIV_KEY" ]]; then
-  echo "ERROR: PRIVATE_KEY not set. Export it before running this script."
+SIGN_ARGS_CARGO=""
+SIGN_ARGS_CAST=""
+
+if [[ -n "$KEYSTORE_PATH" ]]; then
+  if [[ ! -f "$KEYSTORE_PATH" ]]; then
+    echo "ERROR: KEYSTORE_PATH '$KEYSTORE_PATH' not found." >&2
+    exit 1
+  fi
+  echo "Using encrypted keystore: $KEYSTORE_PATH"
+  read -r -s -p "Keystore password: " KEYSTORE_PW
+  echo ""
+  KEYSTORE_PW_FILE="$(mktemp)"
+  chmod 600 "$KEYSTORE_PW_FILE"
+  trap 'rm -f "$KEYSTORE_PW_FILE"' EXIT
+  printf '%s' "$KEYSTORE_PW" > "$KEYSTORE_PW_FILE"
+  unset KEYSTORE_PW
+  SIGN_ARGS_CARGO="--keystore-path $KEYSTORE_PATH --keystore-password-path $KEYSTORE_PW_FILE"
+  SIGN_ARGS_CAST="--keystore $KEYSTORE_PATH --password-file $KEYSTORE_PW_FILE"
+elif [[ -n "$PRIV_KEY" ]]; then
+  SIGN_ARGS_CARGO="--private-key $PRIV_KEY"
+  SIGN_ARGS_CAST="--private-key $PRIV_KEY"
+else
+  echo "ERROR: Neither KEYSTORE_PATH nor PRIVATE_KEY is set. Export one before running this script." >&2
   exit 1
 fi
 
@@ -192,7 +225,7 @@ echo "[3/7] Deploying verifier-module..."
 VERIFIER_DEPLOY_OUTPUT=$(
   cd "$CONTRACTS_DIR/verifier-module" && cargo stylus deploy \
     --endpoint "$RPC_URL" \
-    --private-key "$PRIV_KEY" \
+    $SIGN_ARGS_CARGO \
     --no-verify \
     --max-fee-per-gas-gwei 0.1 \
     2>&1
@@ -209,7 +242,7 @@ echo "[4/7] Deploying storage-contract..."
 STORAGE_DEPLOY_OUTPUT=$(
   cd "$CONTRACTS_DIR/storage-contract" && cargo stylus deploy \
     --endpoint "$RPC_URL" \
-    --private-key "$PRIV_KEY" \
+    $SIGN_ARGS_CARGO \
     --no-verify \
     --max-fee-per-gas-gwei 0.1 \
     2>&1
@@ -226,7 +259,7 @@ echo "[5/7] Deploying logic-contract..."
 LOGIC_DEPLOY_OUTPUT=$(
   cd "$CONTRACTS_DIR/logic-contract" && cargo stylus deploy \
     --endpoint "$RPC_URL" \
-    --private-key "$PRIV_KEY" \
+    $SIGN_ARGS_CARGO \
     --no-verify \
     --max-fee-per-gas-gwei 0.1 \
     2>&1
@@ -265,7 +298,7 @@ else
     "$LOGIC_ADDRESS" \
     "$PUBKEY_ARRAY" \
     --rpc-url "$RPC_URL" \
-    --private-key "$PRIV_KEY" \
+    $SIGN_ARGS_CAST \
     --json \
     2>&1)
   echo "$INIT_STORAGE_OUTPUT"
@@ -277,7 +310,7 @@ else
     "$STORAGE_ADDRESS" \
     "$VERIFIER_ADDRESS" \
     --rpc-url "$RPC_URL" \
-    --private-key "$PRIV_KEY" \
+    $SIGN_ARGS_CAST \
     --json \
     2>&1)
   echo "$INIT_LOGIC_OUTPUT"

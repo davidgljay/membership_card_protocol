@@ -67,12 +67,27 @@ foundryup
 export ARBITRUM_SEPOLIA_RPC=https://sepolia-rollup.arbitrum.io/rpc
 export ARBITRUM_MAINNET_RPC=https://arb1.arbitrum.io/rpc
 
-# For deployment: use a hardware wallet or set PRIVATE_KEY (testnet only)
+# deploy.sh has no hardware-wallet support (cargo-stylus's deploy command
+# doesn't offer one) -- for real funds, prefer an encrypted keystore over a
+# bare PRIVATE_KEY:
+#   cast wallet new ~/.foundry/keystores deployer-mainnet
+#   export KEYSTORE_PATH=~/.foundry/keystores/deployer-mainnet.json
+# deploy.sh prompts for the keystore password itself; nothing else to export.
+# PRIVATE_KEY remains fine for local/sepolia (no real funds at risk).
 export PRIVATE_KEY=0x...
 
 # The secp256r1 public key (x||y, 64 bytes hex) for bootstrap governance.
-# Generate with: cargo run --bin gen_test_vectors (uses p256 crate).
-# For mainnet: export from a hardware wallet that supports P-256.
+# For local/sepolia test fixtures only: cargo run --bin gen_test_vectors
+# (uses p256 crate) -- these keys are derived from hardcoded, PUBLICLY
+# VISIBLE seed strings in gen_test_vectors.rs (e.g. b"card_protocol_test_key_1"),
+# so the private key is trivially recoverable by anyone reading the source.
+# NEVER use this for a real deployment's bootstrap key. For mainnet, generate
+# a real random secp256r1 keypair (e.g. @noble/curves' p256.getPublicKey with
+# a properly random private key) -- this key is only used to bootstrap 1-of-1
+# governance, which RotateGovernanceKeys immediately expands to multi-sig
+# after deployment (see "NEXT STEPS" in deploy.sh's own output), so it's
+# lower-stakes than the deployer's PRIVATE_KEY/KEYSTORE_PATH above, but still
+# shouldn't be a publicly-derivable key even briefly.
 export DEPLOYER_SECP256R1_PUBKEY=0x...
 ```
 
