@@ -32,6 +32,17 @@ export function loadObliviousTargets(path: string | undefined): void {
   try {
     raw = fs.readFileSync(path, "utf-8");
   } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      // OBLIVIOUS_TARGETS_PATH is set unconditionally in
+      // docker-compose.droplet.yml regardless of whether the operator has
+      // actually populated OBLIVIOUS_TARGETS_JSON yet -- materialize-secrets.mjs
+      // only writes this file when that content var is set. A missing file
+      // here means "not configured yet", same as an unset path -- not a
+      // fatal error (see this function's own docstring).
+      registry = new Map();
+      console.log(`[oblivious-targets] No registry file at ${path} — OHTTP forwarding disabled`);
+      return;
+    }
     console.error(`Failed to read oblivious-targets registry at ${path}:`, err);
     process.exit(1);
   }
