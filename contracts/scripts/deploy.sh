@@ -201,6 +201,66 @@ tx_cost() {
   echo "${gas}:${price}:${cost_eth}"
 }
 
+# ─── Helper: extract deploy/activate tx hashes from cargo-stylus output ──────
+# cargo-stylus's output format has changed across versions. Older versions
+# (what deploy.sh originally targeted) print exactly two bare "0x<64hex>"
+# strings with nothing else distinguishing them, so the original extraction
+# just took the first/second such match anywhere in the output. Newer
+# versions (0.10.7, confirmed live on this repo's first real mainnet
+# deployment) print explicit labeled lines instead -- "deployment tx hash:
+# 0x<64hex>" and "...with tx \"<64hex>\"" -- and critically, the activation
+# hash in that second line has NO 0x prefix. The old positional regex
+# (0x[hex]{64}) never matches an unprefixed hash, so activation_txs came
+# back empty for all three contracts on that run, and (compounding with the
+# subshell bug below) the whole deployment silently reported "Total gas
+# cost: 0 ETH" despite real gas being spent. These helpers try the labeled
+# format first (unambiguous) and fall back to the old positional heuristic
+# for older cargo-stylus versions.
+extract_deploy_tx() {
+  local output="$1"
+  local labeled
+  labeled=$(echo "$output" | grep -oE 'deployment tx hash: 0x[0-9a-fA-F]{64}' | grep -oE '0x[0-9a-fA-F]{64}' | head -1)
+  if [[ -n "$labeled" ]]; then
+    echo "$labeled"
+  else
+    echo "$output" | grep -oE '0x[0-9a-fA-F]{64}' | sed -n '1p'
+  fi
+}
+
+extract_activate_tx() {
+  local output="$1"
+  local labeled
+  labeled=$(echo "$output" | grep -oE 'with tx "[0-9a-fA-F]{64}"' | grep -oE '[0-9a-fA-F]{64}' | head -1)
+  if [[ -n "$labeled" ]]; then
+    echo "0x$labeled"
+  else
+    echo "$output" | grep -oE '0x[0-9a-fA-F]{64}' | sed -n '2p'
+  fi
+}
+
+# ─── Helper: accumulate a tx's cost into the running total ───────────────────
+# Deliberately called as a plain statement, NEVER via $(...) command
+# substitution -- command substitution forks a subshell, and a mutation to
+# total_cost_wei (a variable that already exists in the parent shell) made
+# inside that subshell is discarded the moment the subshell exits. This
+# exact bug previously lived inside cost_json_for()/wire_cost_json_for()
+# themselves (both called via X=$(fn ...) for their JSON return string),
+# silently zeroing total_cost_wei for the entire script regardless of how
+# much gas each individual step actually used -- found live on this repo's
+# first real mainnet deployment (reported "Total gas cost: 0 ETH" despite a
+# real ~0.0012 ETH having been spent, confirmed by checking the deployer
+# wallet's balance directly). Costs a few extra `cast receipt` RPC calls
+# (tx_cost() also runs once per hash inside cost_json_for/wire_cost_json_for
+# for display purposes) in exchange for the total actually being correct.
+accumulate_tx_cost() {
+  local tx="$1"
+  [[ -z "$tx" ]] && return
+  local gas price eth
+  IFS=':' read -r gas price eth <<< "$(tx_cost "$tx")"
+  [[ -z "$gas" || -z "$price" ]] && return
+  total_cost_wei=$(echo "$total_cost_wei + ($gas * $price)" | bc)
+}
+
 # ─── Build all WASM contracts (release profile) ───────────────────────────────
 echo "[1/7] Building contracts..."
 cd "$CONTRACTS_DIR"
@@ -232,8 +292,8 @@ VERIFIER_DEPLOY_OUTPUT=$(
 )
 echo "$VERIFIER_DEPLOY_OUTPUT"
 VERIFIER_ADDRESS=$(echo "$VERIFIER_DEPLOY_OUTPUT" | grep -oE '0x[0-9a-fA-F]{40}' | head -1)
-VERIFIER_DEPLOY_TX=$(echo "$VERIFIER_DEPLOY_OUTPUT" | grep -oE '0x[0-9a-fA-F]{64}' | sed -n '1p')
-VERIFIER_ACTIVATE_TX=$(echo "$VERIFIER_DEPLOY_OUTPUT" | grep -oE '0x[0-9a-fA-F]{64}' | sed -n '2p')
+VERIFIER_DEPLOY_TX=$(extract_deploy_tx "$VERIFIER_DEPLOY_OUTPUT")
+VERIFIER_ACTIVATE_TX=$(extract_activate_tx "$VERIFIER_DEPLOY_OUTPUT")
 echo "  verifier-module deployed at: $VERIFIER_ADDRESS"
 
 # ─── Deploy storage contract ──────────────────────────────────────────────────
@@ -249,8 +309,8 @@ STORAGE_DEPLOY_OUTPUT=$(
 )
 echo "$STORAGE_DEPLOY_OUTPUT"
 STORAGE_ADDRESS=$(echo "$STORAGE_DEPLOY_OUTPUT" | grep -oE '0x[0-9a-fA-F]{40}' | head -1)
-STORAGE_DEPLOY_TX=$(echo "$STORAGE_DEPLOY_OUTPUT" | grep -oE '0x[0-9a-fA-F]{64}' | sed -n '1p')
-STORAGE_ACTIVATE_TX=$(echo "$STORAGE_DEPLOY_OUTPUT" | grep -oE '0x[0-9a-fA-F]{64}' | sed -n '2p')
+STORAGE_DEPLOY_TX=$(extract_deploy_tx "$STORAGE_DEPLOY_OUTPUT")
+STORAGE_ACTIVATE_TX=$(extract_activate_tx "$STORAGE_DEPLOY_OUTPUT")
 echo "  storage-contract deployed at: $STORAGE_ADDRESS"
 
 # ─── Deploy logic contract ────────────────────────────────────────────────────
@@ -266,8 +326,8 @@ LOGIC_DEPLOY_OUTPUT=$(
 )
 echo "$LOGIC_DEPLOY_OUTPUT"
 LOGIC_ADDRESS=$(echo "$LOGIC_DEPLOY_OUTPUT" | grep -oE '0x[0-9a-fA-F]{40}' | head -1)
-LOGIC_DEPLOY_TX=$(echo "$LOGIC_DEPLOY_OUTPUT" | grep -oE '0x[0-9a-fA-F]{64}' | sed -n '1p')
-LOGIC_ACTIVATE_TX=$(echo "$LOGIC_DEPLOY_OUTPUT" | grep -oE '0x[0-9a-fA-F]{64}' | sed -n '2p')
+LOGIC_DEPLOY_TX=$(extract_deploy_tx "$LOGIC_DEPLOY_OUTPUT")
+LOGIC_ACTIVATE_TX=$(extract_activate_tx "$LOGIC_DEPLOY_OUTPUT")
 echo "  logic-contract deployed at: $LOGIC_ADDRESS"
 
 # ─── Wire contracts together ──────────────────────────────────────────────────
@@ -322,6 +382,12 @@ echo "[7/7] Collecting gas costs and saving deployment record..."
 
 total_cost_wei=0
 
+# Build the display/JSON fragment only -- these are called via X=$(fn ...)
+# for their echoed string, which forks a subshell, so they must NOT try to
+# mutate total_cost_wei themselves (see accumulate_tx_cost's comment above
+# for why that silently broke the grand total on the first real mainnet
+# deployment). Callers separately call accumulate_tx_cost() as a plain
+# statement for the actual running total.
 cost_json_for() {
   local deploy_tx="$1" activate_tx="$2"
   local d_gas d_price d_eth a_gas a_price a_eth total_eth
@@ -330,21 +396,13 @@ cost_json_for() {
   IFS=':' read -r a_gas a_price a_eth <<< "$(tx_cost "$activate_tx")"
   total_eth=$(echo "scale=7; $d_eth + $a_eth" | bc)
 
-  # Accumulate total
-  local d_wei a_wei
-  d_wei=$(echo "$d_gas * $d_price" | bc)
-  a_wei=$(echo "$a_gas * $a_price" | bc)
-  total_cost_wei=$(echo "$total_cost_wei + $d_wei + $a_wei" | bc)
-
   echo "\"deploy_gas\": $d_gas, \"deploy_cost_eth\": \"$d_eth\", \"activate_gas\": $a_gas, \"activate_cost_eth\": \"$a_eth\", \"total_cost_eth\": \"$total_eth\""
 }
 
 wire_cost_json_for() {
   local tx="$1" label="$2"
-  local gas price eth cost_wei_tx
+  local gas price eth
   IFS=':' read -r gas price eth <<< "$(tx_cost "$tx")"
-  cost_wei_tx=$(echo "$gas * $price" | bc)
-  total_cost_wei=$(echo "$total_cost_wei + $cost_wei_tx" | bc)
   echo "\"${label}_gas\": $gas, \"${label}_cost_eth\": \"$eth\""
 }
 
@@ -352,11 +410,20 @@ VERIFIER_COSTS=$(cost_json_for "$VERIFIER_DEPLOY_TX" "$VERIFIER_ACTIVATE_TX")
 STORAGE_COSTS=$(cost_json_for "$STORAGE_DEPLOY_TX" "$STORAGE_ACTIVATE_TX")
 LOGIC_COSTS=$(cost_json_for "$LOGIC_DEPLOY_TX" "$LOGIC_ACTIVATE_TX")
 
+accumulate_tx_cost "$VERIFIER_DEPLOY_TX"
+accumulate_tx_cost "$VERIFIER_ACTIVATE_TX"
+accumulate_tx_cost "$STORAGE_DEPLOY_TX"
+accumulate_tx_cost "$STORAGE_ACTIVATE_TX"
+accumulate_tx_cost "$LOGIC_DEPLOY_TX"
+accumulate_tx_cost "$LOGIC_ACTIVATE_TX"
+
 WIRE_COSTS='"note": "wiring skipped (DEPLOYER_SECP256R1_PUBKEY not set)"'
 if [[ -n "$INIT_STORAGE_TX" && -n "$INIT_LOGIC_TX" ]]; then
   STORAGE_WIRE=$(wire_cost_json_for "$INIT_STORAGE_TX" "init_storage")
   LOGIC_WIRE=$(wire_cost_json_for "$INIT_LOGIC_TX" "init_logic")
   WIRE_COSTS="$STORAGE_WIRE, $LOGIC_WIRE"
+  accumulate_tx_cost "$INIT_STORAGE_TX"
+  accumulate_tx_cost "$INIT_LOGIC_TX"
 fi
 
 GRAND_TOTAL_ETH=$(echo "scale=7; $total_cost_wei / 1000000000000000000" | bc)

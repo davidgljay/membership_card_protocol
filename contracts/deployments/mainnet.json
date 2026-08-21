@@ -1,0 +1,33 @@
+{
+  "network": "mainnet",
+  "deployed_at": "2026-08-20T23:22:53Z",
+  "rpc_url": "https://arb1.arbitrum.io/rpc",
+  "contracts": {
+    "verifier_module": "0x931adbd93695175e6384bc326329a2eb3fc0ab92",
+    "storage_contract": "0x89ef9d61a63e1a0fac25bdb45bc4a414e61a7844",
+    "logic_contract": "0x91fe18c3551cb90a921472e80879a624de34b325"
+  },
+  "deployment_txs": {
+    "verifier_module": "0xb2e351218c336dbd4add0a37a6488dde7d8dd475ffbcc4b967267a8fa3c70558",
+    "storage_contract": "0x3c307b45efff294d98f6d6b80221cd40c2bae4272d4196c6c7e8b7e777b9d6bb",
+    "logic_contract": "0x29c30c30778bcb60074a0134a2297efeee8a0736f7558e9fc17a2295093e84dc"
+  },
+  "activation_txs": {
+    "verifier_module": "UNKNOWN -- see gas_costs.note",
+    "storage_contract": "UNKNOWN -- see gas_costs.note",
+    "logic_contract": "0x4b6a88ad0c4ee551c386f4650dfda73fa9493b45f9b4f41d1fa468eb0370d6bf"
+  },
+  "wiring_txs": {
+    "init_storage": "0xbc72ba3eee2b4352944fbef3c984854f9e3467659faa6647a0b0a523af027f08",
+    "init_logic": "0xe1b5eb56d2747008970b893ecc827b07fdc07bd324b07865b09a81619643c5f5"
+  },
+  "gas_costs": {
+    "note": "Corrected 2026-08-20 after the fact -- deploy.sh's original run of this deployment reported grand_total_eth as a flat 0 due to two bugs (fixed in scripts/deploy.sh: an activation-tx-hash regex that didn't match cargo-stylus 0.10.7's unprefixed hash format, and a subshell variable-scoping bug that discarded the running total). verifier_module/storage_contract's activation tx hashes could not be recovered after the fact (the deployer's nonce sequence places them at nonces 1 and 3-6, but block-scanning the public RPC to find them by nonce got rate-limited: HTTP 403). logic_contract's activation was recoverable from the run's own printed log output. grand_total_eth below is the AUTHORITATIVE real total, confirmed directly from the deployer wallet's balance delta (0xF879bf165eA8396b1164e842f9DC21442da29a62: 0.006 ETH before, ~0.0048025 ETH after) -- trust this over summing the individual per-step figures, since verifier_module/storage_contract's activate_gas below are known-incomplete (missing their activation cost, folded into the ~0.0008764 ETH gap between the summed known components and this real total).",
+    "verifier_module": { "deploy_gas": 1856209, "deploy_cost_eth": ".0000372", "activate_gas": "UNKNOWN", "activate_cost_eth": "UNKNOWN", "total_cost_eth": "UNKNOWN" },
+    "storage_contract": { "deploy_gas": 5306200, "deploy_cost_eth": ".0001061", "activate_gas": "UNKNOWN", "activate_cost_eth": "UNKNOWN", "total_cost_eth": "UNKNOWN" },
+    "logic_contract": { "deploy_gas": 68191, "deploy_cost_eth": ".0000013", "activate_gas": 8302118, "activate_cost_eth": ".0001662", "total_cost_eth": ".0001675" },
+    "wiring": { "init_storage_gas": 377994, "init_storage_cost_eth": ".0000075", "init_logic_gas": 144505, "init_logic_cost_eth": ".0000028" },
+    "grand_total_eth": ".0011975"
+  },
+  "notes": "storage_contract is the stable protocol identifier — never redeployed."
+}
