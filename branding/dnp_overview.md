@@ -1,3 +1,5 @@
+> **Superseded 2026-08-10.** Retained for reference. Canonical name is Membership Card Protocol.
+
 # Membership Card Protocol
 *A secure tool for building trust and exchanging resources in community.*
 

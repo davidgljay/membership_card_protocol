@@ -1,43 +1,43 @@
 # Color Palette
 
-## Primary Direction: Deep Teal + Warm Sand
+## Primary Direction: Green + Coral
 
 Chosen palette for the Card Protocol's identity — wallet app UI, website, and documentation chrome. Individual card issuers design their own card faces; this palette governs the protocol's own visual presence.
 
-**Rationale:** Evokes library card and transit card energy — institutional trust without corporate coldness. Neutral enough not to compete with issuer-designed cards. Reads as networked and purposeful without feeling like a startup or crypto project. Aligns with the design principle: "trustworthy, not flashy."
+**Rationale:** Green reads as growth, community, and "go" — warmer and more approachable than the earlier teal/sand direction, while still avoiding startup-neon or crypto-coin associations. Coral provides a warm, human accent for alerts, highlights, and calls to action without leaning corporate-red or alarming. White keeps the palette light and legible against community-organizer-facing copy.
 
 ---
 
 ## Color Stops
 
-### Teal (primary)
+### Green (primary)
 
 | Role | Name | Hex |
 |------|------|-----|
-| Deep background / card face | Teal 800 | `#085041` |
-| Primary brand / interactive | Teal 600 | `#0F6E56` |
-| Accent / highlight | Teal 400 | `#1D9E75` |
-| Light surface / tint | Teal 100 | `#9FE1CB` |
-| Lightest fill | Teal 50 | `#E1F5EE` |
+| Deep background / card face | Green 800 | `#1d741b` |
+| Primary brand / interactive | Green 600 | `#5eb229` |
+| Light surface / tint | Green 200 | `#d2fba4` |
 
-### Sand / Gray (secondary)
+### Coral (secondary)
 
 | Role | Name | Hex |
 |------|------|-----|
-| Body text on light bg | Gray 900 | `#2C2C2A` |
-| Secondary text | Gray 700 | `#444441` |
-| Muted text / borders | Gray 600 | `#5F5E5A` |
-| Subtle borders | Gray 400 | `#888780` |
-| Surface / background | Gray 200 | `#B4B2A9` |
-| Warm light surface | Gray 100 | `#D3D1C7` |
-| Page background / warm white | Gray 50 | `#F1EFE8` |
+| Accent / highlight / CTA | Coral 500 | `#ff6260` |
+| Light surface / tint | Coral 200 | `#ffcbc4` |
+
+### Neutral
+
+| Role | Name | Hex |
+|------|------|-----|
+| Page background / surface | White | `#ffffff` |
 
 ---
 
 ## Usage Notes
 
-- **Teal 800** (`#085041`) is the default card face background for the protocol's own demonstration cards and UI chrome.
-- **Gray 50** (`#F1EFE8`) is the preferred page/app background — it reads as warm white rather than clinical white, reinforcing the community-warmth direction.
-- **Teal 100** (`#9FE1CB`) works as text on Teal 800 backgrounds (as shown in card mockups).
-- **Gray 50 + Teal 600** is the recommended combination for primary CTAs and key UI elements on light backgrounds.
+- **Green 800** (`#1d741b`) is the default card face background for the protocol's own demonstration cards and UI chrome.
+- **White** (`#ffffff`) is the preferred page/app background.
+- **Green 200** (`#d2fba4`) and **Coral 200** (`#ffcbc4`) work as light tints for secondary surfaces, badges, and highlight blocks — check contrast before using as text-on-color.
+- **Coral 500** (`#ff6260`) is the accent for primary CTAs and key interactive highlights; use sparingly against the green/white base so it retains its signal value.
+- Text and border neutrals (grays) are not yet specified — needed before this palette can fully replace the previous teal/sand system for body copy and borders. Flag for follow-up before the brand guide (2.2) locks visual direction.
 - Avoid using this palette on issuer-facing card design guidance — issuers should have full freedom to express their own identity.

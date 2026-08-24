@@ -1,3 +1,5 @@
+> **Superseded 2026-08-10.** Retained for reference. Canonical name is Membership Card Protocol.
+
 # Card Design Guide
 
 ## The Core Metaphor: Physical Cards

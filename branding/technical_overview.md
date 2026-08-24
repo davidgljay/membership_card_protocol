@@ -1,3 +1,5 @@
+> **Superseded 2026-08-10.** Retained for reference. Canonical name is Membership Card Protocol.
+
 # About The Digital Neighborhood Protocol
 
 The Digital Neighborhood Protocol is designed to help communities securely share resources and build trust online. With it, community members can easily prove their affiliation to others, gain access to resources for the community, and create those resources themselves.
