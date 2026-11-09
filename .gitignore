@@ -36,3 +36,8 @@ contracts/tests/out/
 contracts/tests/cache/
 contracts/tests/lib/
 .aider*
+
+# Accidental JS artifacts (contracts/ and repo root have no package.json)
+contracts/node_modules/
+contracts/yarn.lock
+/package-lock.json
