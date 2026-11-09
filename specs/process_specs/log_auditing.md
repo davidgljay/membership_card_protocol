@@ -14,6 +14,8 @@
 
 Every targeted or open-offer card issuance under a policy is reported directly to the policy's auditors. Immediately after a press assembles and signs the completed `CardDocument`, it sends a `PressIssuanceRecord` — an E2E-encrypted message, not an IPFS-posted artifact — to each card address listed in the policy's `auditors` array. There is no epoch structure, no shared symmetric key, and no key-wrapping step: each auditor receives their own independently-encrypted copy of each record via the normal message routing layer, encrypted directly to that auditor card's public key.
 
+The same record is also delivered to the issuing card and the policy card's holder, which use it to build up a list of the cards issued through them and to message those cards (`protocol-objects.md §11`). That delivery is best-effort and needs no confirmation; this spec covers the auditor relationship.
+
 Auditors maintain their own local records of the issuance notifications they receive. There is no press-side audit log artifact posted to IPFS under this model — auditing is a point-to-point notification relationship between the press and each auditor, not a shared encrypted ledger.
 
 This spec covers two processes: the press delivering a `PressIssuanceRecord` and the auditor confirming receipt (Process 1), and the auditor's later inspection of an issued card for policy compliance (Process 2).

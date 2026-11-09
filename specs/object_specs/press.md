@@ -4,6 +4,8 @@
 **Date:** 2026-06-25
 **Status:** Draft
 
+**Amended 2026-10-23:** §5.5 `appendIssuanceRecord` delivers each `PressIssuanceRecord` to the issuer card and the policy card as well as to auditors, and the record gains `issuer_card`, `policy_id`, and `offer_id`; §5.1 `issueScip` no longer sends an administrator courtesy copy.
+
 **Amended 2026-08-11:** §5.3 `processUpdateIntent` gains step 2b and §7 gains `P-25` — the immutable-fields check `process_specs/card_updates.md` step 7 already required (`policy_id`, `issuer_card`, `press_card`, `recipient_pubkey`, `issued_at`, `issuer_signature`, `holder_signature`, `press_signature`, `ancestry_pubkeys`, `past_keys`, `protocol_version`, plus conditionally-immutable `active_subcards`/`successor`/`supersedes`/`supersession_note`) was never actually specified at the implementation level here, and correspondingly never implemented in `press/src/handlers/update.ts` — found live via a real `dev-tests` run finally reaching this code path cleanly for the first time. Implemented in `handleUpdate`, checked immediately after the staleness check, before any registry/IPFS lookup.
 
 **Amended 2026-07-16:** §5.3 `appendLogEntry` updated for the `LogEntry` full-repost design change (`protocol-objects.md §3`, `object_specs/ipfs_card.md §5`) — the press now fetches/decrypts the current head before assembling a new entry, and each entry carries `card_state` (full current field state) and `history` (flat CID provenance list) rather than only a diff.
@@ -471,7 +473,7 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 2. Serialize as canonical RFC 8785 JSON excluding `press_signature`.
 3. Sign with the press's ML-DSA-44 private key → `press_signature`.
 4. Deliver the completed SCIP to the recipient's wallet service endpoint via HTTPS.
-5. Deliver a courtesy copy to the administrator's wallet service endpoint via HTTPS (if configured in the policy).
+   (The issuer and the policy card's holder learn of the issuance from the `PressIssuanceRecord` sent by `appendIssuanceRecord`, which carries `scip_cid`.)
 
 **Returns:** SCIP object.
 
@@ -497,7 +499,7 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 9. Call `assembleCardDocument(policy, offer, submission.claim_payload.recipient_pubkey)`.
 10. Call `signCardDocument`, `publishCard`.
 11. Call `claimOpenOfferOnChain(offer_id, max_acceptances, expires_at, card_address, card_cid, policy_address)`.
-12. Call `appendIssuanceRecord(policy_cid, card_cid, recipient_pubkey, 'open')`.
+12. Call `appendIssuanceRecord(policy_cid, card_cid, recipient_pubkey, offer.issuer_card, 'open', offer_id)`.
 13. Call `issueScip(...)`.
 
 **Returns:** `{ card_cid, scip }` on success.
@@ -713,31 +715,34 @@ Implemented in `press/src/functions/notifications.ts` (`diffActiveSubcards` iden
 
 ---
 
-#### `appendIssuanceRecord(policyCid, cardCid, recipientPubkey, offerType)`
+#### `appendIssuanceRecord(policyCid, cardCid, recipientPubkey, issuerCard, offerType, offerId?)`
 
 **Called by:** `/issue/finalize` handler, `processOpenOfferClaim`
-**Purpose:** Build a `PressIssuanceRecord`, deliver it to each auditor listed in the policy, and await confirmations.
+**Purpose:** Build a `PressIssuanceRecord` and deliver it to the policy's auditors, the issuing card, and the policy card; await auditor confirmations.
 
 **Steps:**
 
 1. Resolve the policy card via the Filebase gateway to get `policy.auditors`.
-2. If `policy.auditors` is empty or absent, skip — no auditors to notify.
-3. Assemble the `PressIssuanceRecord` plaintext:
+2. Build the recipient set: every card address in `policy.auditors`, `issuerCard`, and the policy card's own address (which reaches the policy card's holder). Remove duplicates.
+3. Assemble the `PressIssuanceRecord` plaintext (`protocol-objects.md §11`):
    ```json
    {
      "card_cid": "<cardCid>",
      "recipient_pubkey": "<base64url — ML-DSA-44 pubkey>",
+     "issuer_card": "<issuerCard>",
+     "policy_id": "<policyCid>",
      "scip_cid": "<scip_cid>",
      "issued_at": "<ISO 8601>",
-     "offer_type": "<offerType>"
+     "offer_type": "<offerType>",
+     "offer_id": "<offerId — open offers only; omitted otherwise>"
    }
    ```
-4. For each card address in `policy.auditors`, send the `PressIssuanceRecord` as an E2E encrypted message via the normal message routing layer (HTTPS to the auditor's wallet service endpoint, encrypted to the auditor card's public key).
-5. Await a confirmation message from each auditor acknowledging receipt and recording. Apply a configurable timeout (default: 30 seconds per auditor).
+4. For each card address in the recipient set, send the `PressIssuanceRecord` as an E2E-encrypted message via the normal message routing layer (HTTPS to that card's wallet service endpoint, encrypted to that card's public key).
+5. Await a confirmation message from each auditor acknowledging receipt and recording. Apply a configurable timeout (default: 30 seconds per auditor). Delivery to the issuer card and the policy card (when they are not also auditors) is best-effort and needs no confirmation.
 6. If an auditor does not confirm within the timeout, log a warning and continue — issuance is not blocked by an unresponsive auditor. Alert the policy administrator.
 7. Record which auditors confirmed and which timed out in the KV store (local state only — not on IPFS).
 
-**Returns:** `{ confirmed_auditors: string[], timed_out_auditors: string[] }`.
+**Returns:** `{ confirmed_auditors: string[], timed_out_auditors: string[], notified: string[] }`.
 
 ---
 

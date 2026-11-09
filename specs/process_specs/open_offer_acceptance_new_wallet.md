@@ -130,7 +130,7 @@ For recipients who already have a wallet, see `open_offer_acceptance_existing_wa
 
 18. The press registers the card on Arbitrum One (included in the atomic transaction from Step 16).
 
-19. The press logs the issuance in the policy's encrypted audit log (see `log_auditing.md`) with `offer_type: "open"`.
+19. The press delivers a `PressIssuanceRecord` (`offer_type: "open"`, with the `offer_id`) to every active auditor in `policy.auditors`, the issuer's card, and the policy card's holder (see `log_auditing.md` and `protocol-objects.md §11`). The issuer and the policy holder each add the new card to their list of issued cards and can message it.
 
 20. The press sends a confirmation to the wallet service.
 
@@ -152,7 +152,7 @@ For recipients who already have a wallet, see `open_offer_acceptance_existing_wa
 - The recipient holds the private key for the new card in their keyring.
 - The card is pinned on IPFS and registered on Arbitrum One.
 - The on-chain acceptance counter for the offer has been atomically incremented.
-- The issuance is recorded in the policy's encrypted audit log.
+- A `PressIssuanceRecord` for the issuance has been delivered to the policy's auditors, the issuer, and the policy card's holder.
 
 ---
 

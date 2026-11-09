@@ -6,6 +6,8 @@
 
 **Amended 2026-07-16 (spec-consistency Phase 2, Fix #11):** dropped the stale audit-epoch/AEK precondition and rewrote steps 19–21 (issuance-notification assembly and delivery), step 24 (administrator courtesy copy), the Actors table, and the Postconditions bullet on audit recording — all to match the direct E2E-encrypted `PressIssuanceRecord`-to-`policy.auditors` model in `press.md §5.5` and `protocol-objects.md §11`. See `plans/spec-consistency/inconsistencies/phase-2-consolidated-fixes.md` Fix #11.
 
+**Amended 2026-10-23:** steps 20–22 deliver the `PressIssuanceRecord` to the issuer and the policy card's holder as well as to auditors; step 24's SCIP courtesy copy is replaced by that record.
+
 > **Terminology note.** This spec now uses "card" as the canonical term per the Naming Convention.
 
 ---
@@ -21,10 +23,10 @@ Card offering and acceptance is the process by which a press issues a targeted c
 | Actor | Role |
 |---|---|
 | **Requester** | Initiates the issuance request (may be the administrator, the recipient, or a third party, depending on policy) |
-| **Issuer (offerer) / their wallet service** | Constructs the card offer and signs it with the **offerer's own card key** (`issuer_signature`); presents it to the recipient for countersignature; validates the countersigned result before forwarding it to the press |
+| **Issuer (offerer) / their wallet service** | Constructs the card offer and signs it with the **offerer's own card key** (`issuer_signature`); presents it to the recipient for countersignature; validates the countersigned result before forwarding it to the press; receives a `PressIssuanceRecord` for each card it issues, building up a list of those cards it can message |
 | **Press** | Verifies predicates and policy compliance; signs the completed, countersigned card with the **press sub-card key** (`press_signature`); posts to IPFS and registers on-chain |
 | **Recipient** | Reviews the offer, generates a keypair, countersigns to accept ownership (`holder_signature`) |
-| **Administrator** | Receives the SCIP courtesy copy; does not receive the `PressIssuanceRecord` itself (that goes to auditors, see below) |
+| **Administrator** | Holds the policy card; receives a `PressIssuanceRecord` for every card issued under the policy, building up a list of those cards it can message |
 | **Auditor** | A card address listed in the policy's `auditors` array; receives a `PressIssuanceRecord` via E2E-encrypted message for every issuance under the policy, confirms receipt, and locally records it (see `log_auditing.md`) |
 
 ---
@@ -115,22 +117,24 @@ Card offering and acceptance is the process by which a press issues a targeted c
     - `issued_at` — matching the card's `issued_at`.
     - `press_signature` — ML-DSA-44 signature over all above fields.
 
-20. The press resolves `policy.auditors` from the policy card (fetched via its own IPFS gateway; the policy card is a public document). If `policy.auditors` is empty or absent, the press skips steps 21–23 below — there are no auditors to notify.
+20. The press determines the issuance-record recipients: every active auditor in `policy.auditors` (resolved from the policy card, a public document fetched via the press's own IPFS gateway), the issuing card (`issuer_card`), and the policy card (`policy_id`'s card address, which reaches the policy card's holder). A card that fills more than one role receives one record.
 
-21. For each auditor listed in `policy.auditors`, the press assembles a `PressIssuanceRecord`:
+21. The press assembles the `PressIssuanceRecord`:
     - `card_cid` — CID of the completed card document.
     - `recipient_pubkey` — the recipient's ML-DSA-44 public key from the completed card.
+    - `issuer_card` — copied from the completed card.
+    - `policy_id` — copied from the completed card.
     - `scip_cid` — CID of the SCIP posted to IPFS.
     - `issued_at` — matching the card's `issued_at` field.
     - `offer_type: "targeted"`.
 
     (See `protocol-objects.md §11` for the full schema.)
 
-22. The press delivers the `PressIssuanceRecord` to each auditor as an E2E-encrypted message via the normal message routing layer (HTTPS to the auditor's wallet service endpoint, encrypted to the auditor card's public key), per `press.md §5.5`'s `appendIssuanceRecord`. The press awaits a confirmation message from each auditor acknowledging receipt and local recording, applying a configurable timeout (default: 30 seconds per auditor). An auditor that does not confirm within the timeout does not block issuance — the press logs a warning, alerts the policy administrator, and continues; which auditors confirmed and which timed out is recorded in the press's local state (not on IPFS).
+22. The press delivers the `PressIssuanceRecord` to each recipient from step 20 as an E2E-encrypted message via the normal message routing layer (HTTPS to the recipient's wallet service endpoint, encrypted to that card's public key), per `press.md §5.5`'s `appendIssuanceRecord`. The press awaits a confirmation message from each auditor acknowledging receipt and local recording, applying a configurable timeout (default: 30 seconds per auditor). An auditor that does not confirm within the timeout does not block issuance — the press logs a warning, alerts the policy administrator, and continues; which auditors confirmed and which timed out is recorded in the press's local state (not on IPFS). Delivery to the issuer and the policy card's holder is best-effort and needs no confirmation.
 
 23. The press sends the SCIP and a confirmation to the recipient via HTTPS to their wallet service endpoint.
 
-24. The press sends the SCIP as a courtesy copy to the administrator via HTTPS to their wallet service endpoint (if configured in the policy). The `PressIssuanceRecord` itself is not sent to the administrator — it goes only to the addresses in `policy.auditors` per steps 20–22 above.
+24. The issuer and the policy card's holder each add the issued card to their list of issued cards from the record received in step 22, and can now message it.
 
 ---
 

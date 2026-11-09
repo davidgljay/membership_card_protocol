@@ -3,6 +3,7 @@
 **Version:** 0.2 (draft)  
 **Date:** 2026-06-14  
 **Status:** In Review  
+**Amended 2026-10-23:** §11 `PressIssuanceRecord` gains `issuer_card`, `policy_id`, and `offer_id`, and is delivered to the issuer and the policy card's holder as well as to auditors; §10 SCIP no longer has an administrator courtesy copy.  
 **Amends:** v0.1 — §14 write authorization updated from ML-DSA-44/Stylus to secp256r1/RIP-7212 per ADR-012. Press dual-key model note added.
 
 This document is the canonical reference for every structured object in the Card Protocol. Each object is shown as an annotated JSON template (the developer-facing input surface). Objects that are signed or hashed use **canonical RFC 8785 JSON** (JSON Canonicalization Scheme — deterministic Unicode code-point ordered JSON, no whitespace) as the byte sequence over which signatures are computed — see Appendix A of `card_protocol_spec.md` for the full serialization rules.
@@ -619,7 +620,7 @@ The requesting site verifies `signed_statement` per §7 (chain walk, revocation 
 
 **Signed Card Inclusion Proof**  
 **Produced by:** Press  
-**Delivered to:** Recipient (and courtesy copy to administrator) via HTTPS to wallet service endpoints  
+**Delivered to:** Recipient, via HTTPS to their wallet service endpoint. The issuer, the policy card's holder, and auditors learn of the issuance from the `PressIssuanceRecord` (§11), which carries `scip_cid`.  
 **Serialized for signing:** Canonical RFC 8785 JSON of all fields except `press_signature`
 
 A small signed object that binds a newly-issued card's CID to its position in the policy's issuance log at time of inclusion. The recipient retains this as verifiable proof of issuance.
@@ -649,30 +650,44 @@ A small signed object that binds a newly-issued card's CID to its position in th
 
 ## 11. PressIssuanceRecord
 
-**Delivered by:** Press, via E2E encrypted message to each card address in `policy.auditors` immediately after assembling and signing the `CardDocument`  
-**Written by:** Press (immediately after assembling and signing the `CardDocument`; the press already holds `recipient_pubkey` at that point — it is in the `CardDocument` the press just assembled)
+**Delivered by:** Press, via E2E-encrypted message (normal message routing layer) immediately after assembling and signing the `CardDocument`
+**Delivered to:** Every active auditor in `policy.auditors`, the issuing card (`issuer_card`), and the policy card (the card at `policy_id`, whose messaging address reaches the policy card's holder). Duplicates are removed: a card that fills more than one of these roles receives one record.
 
-The content of each issuance notification sent to auditors. The `PressIssuanceRecord` is delivered directly to each auditor card address listed in `policy.auditors` via E2E encrypted message using the normal message routing layer. Auditors maintain their own local records of issuance notifications received from the press.
+The record of a single issuance. Each recipient receives its own independently encrypted copy and keeps it locally. Together, a recipient's records form its **list of issued cards**:
+
+- **Auditors** use the list to inspect issuances for policy compliance (`log_auditing.md`).
+- **The issuer** gets records only for cards it issued, and uses the list to see and message those cards.
+- **The policy card's holder** gets records for every card issued under the policy, including cards issued by delegated issuers.
+
+`recipient_pubkey` is the issued card's messaging address (`keccak256(recipient_pubkey)`) and the key to its content, so holding the record is enough to message the card individually or as part of a collective `announcement`. The list is visible only to the parties that receive these records. It is never posted to IPFS or on-chain.
 
 ```json
 {
   "card_cid":         "<base64url — CID of the issued CardDocument>",
   "recipient_pubkey": "<base64url — ML-DSA-44 public key of the issued CardDocument, 1312 bytes raw>",
+  "issuer_card":      "<card-pointer — the issuing card>",
+  "policy_id":        "<cid — the policy the card was issued under>",
   "scip_cid":         "<base64url — CID of the SCIP posted to IPFS>",
   "issued_at":        "<ISO 8601 timestamp>",
-  "offer_type":       "targeted | open"
+  "offer_type":       "targeted | open",
+  "offer_id":         "<hex — open offers only; omitted for targeted issuance>"
 }
 ```
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `card_cid` | `cid` | Yes | Links to the issued card; gives auditors an issuance record for the policy |
-| `recipient_pubkey` | `base64url` | Yes | ML-DSA-44 public key of the issued `CardDocument` (1312 bytes raw). Auditor usage: derive `content_key = HKDF-SHA3-256(recipient_pubkey, info="card-content-v1")`, decrypt the issued card at `card_cid`, then inspect its field values and verify predicate compliance against the policy. This field is populated by the press from the `CardDocument` it just assembled — no extra work is required at issuance time. |
+| `card_cid` | `cid` | Yes | Links to the issued card |
+| `recipient_pubkey` | `base64url` | Yes | ML-DSA-44 public key of the issued `CardDocument` (1312 bytes raw). Gives the card's messaging address (`keccak256(recipient_pubkey)`) and its content key (`HKDF-SHA3-256(recipient_pubkey, info="card-content-v1")`), which recipients use to decrypt the card, read its current log state, and message it. Populated by the press from the `CardDocument` it just assembled. |
+| `issuer_card` | `card-pointer` | Yes | Copied from the issued card's `issuer_card`. Lets the policy holder and auditors group cards by issuer (for example, by delegated steward). |
+| `policy_id` | `cid` | Yes | Copied from the issued card's `policy_id`. Lets a holder of several policies, or an issuer under several policies, group cards by policy. |
 | `scip_cid` | `cid` | Yes | Links to the SCIP for this issuance |
 | `issued_at` | `timestamp` | Yes | Must match the card's `issued_at` |
 | `offer_type` | `text` | Yes | `"targeted"` or `"open"` |
+| `offer_id` | `text` | Open offers only | The open offer's `offer_id`, letting the issuer see which invite link a card was claimed through. Omitted for targeted issuance. |
 
-**Binding and consistency check.** After decrypting the issued card at `card_cid`, the auditor SHOULD confirm `keccak256(recipient_pubkey)` equals the card's on-chain registry address (the card's mutable pointer in the registry). A mismatch indicates a malformed or forged record and MUST be flagged in the audit findings.
+**Binding and consistency check.** After decrypting the issued card at `card_cid`, a recipient SHOULD confirm `keccak256(recipient_pubkey)` equals the card's on-chain registry address, and that `issuer_card` and `policy_id` match the decrypted card. A mismatch indicates a malformed or forged record; an auditor MUST flag it in the audit findings, and an issuer or policy holder MUST NOT add the card to their list.
+
+**Current state and display.** The record is a snapshot at issuance. Wallets resolve each listed card's current state from its log. Revoked cards (8xx or 9xx) remain in the list and are shown greyed out.
 
 ---
 
@@ -860,7 +875,7 @@ The genesis document for a sub-card — a device-bound, app-specific credential 
 PolicyCardDocument (IPFS)
   └── approved_presses → [CardDocument (press sub-card)] (IPFS)
   └── auditors → [CardDocument (auditor card)] (IPFS)
-  └── policy press log → [PressIssuanceRecord (encrypted)] (IPFS)
+  └── issuance records → [PressIssuanceRecord] (E2E message to auditors, issuer_card, and policy card holder; kept locally by each)
        └── card_cid → CardDocument (issued card) (IPFS)
        └── scip_cid → SCIP (IPFS)
 
