@@ -82,8 +82,10 @@ describe('buildMessagePayload / signMessageEnvelope', () => {
       { type: 'card_offer_accepted', content: { card_cid: 'cid2', offer_cid: 'cid1', holder_signature: 'sig', recipient_pubkey: 'pk' } },
       { type: 'card_offer_declined', content: { offer_cid: 'cid1' } },
       { type: 'card_update_notification', content: { card_pointer: 'p1', update_code: 100, log_entry_cid: 'cid3' } },
-      { type: 'auth_request', content: { requester_card: 'p1', policy_cid: 'cid4', nonce: 'n', purpose: 'login', session_id: 's1', callback: 'https://example.com/cb', expires: new Date().toISOString() } },
-      { type: 'auth_response', content: { statement: 'I am me', context: { session_id: 's1' }, nonce: 'n' } },
+      { type: 'auth_request', content: { request_uri: 'https://example.com/login/r/abc' } },
+      { type: 'auth_response', content: { audience: 'https://example.com', nonce: 'n', request_hash: 'h', state: 's1', statement: 'Log in to https://example.com' } },
+      { type: 'auth_confirmation', content: { code: 'ABCD2345', expires_at: new Date().toISOString(), request_hash: 'h' } },
+      { type: 'error', content: { code: 'access_denied', state: 's1' } },
     ];
 
     for (const fixture of fixtures) {

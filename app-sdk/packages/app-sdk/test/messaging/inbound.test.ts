@@ -84,6 +84,7 @@ describe('handleInboundRoutingEnvelope (Step 5.2)', () => {
       rpc: fakeRpc(),
       ipfs: fakeIpfs,
       appCertificationRoot: TRUSTED_ROOT,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       trustedRoots: [TRUSTED_ROOT],
       fetchAnnotations: false,
     });
@@ -123,6 +124,7 @@ describe('handleInboundRoutingEnvelope (Step 5.2)', () => {
       rpc: fakeRpc(),
       ipfs: fakeIpfs,
       appCertificationRoot: TRUSTED_ROOT,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       trustedRoots: [TRUSTED_ROOT],
       fetchAnnotations: false,
     });
@@ -147,6 +149,7 @@ describe('handleInboundRoutingEnvelope (Step 5.2)', () => {
       rpc: fakeRpc(),
       ipfs: fakeIpfs,
       appCertificationRoot: TRUSTED_ROOT,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       trustedRoots: [TRUSTED_ROOT],
       fetchAnnotations: false,
     });

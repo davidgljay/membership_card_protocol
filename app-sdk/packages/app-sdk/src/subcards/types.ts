@@ -19,7 +19,7 @@ export interface SubCardDocumentFields {
   recipient_pubkey: string;
   issued_at: string;
   valid_until?: string;
-  attestation_level: 'T1' | 'T2';
+  attestation_level: 'T1' | 'T2' | 'S1';
   attestation_proof?: string;
 }
 

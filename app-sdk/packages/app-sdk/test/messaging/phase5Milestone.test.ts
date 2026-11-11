@@ -104,6 +104,7 @@ describe('Phase 5 Milestone: independent per-subcard message delivery across two
       rpc: fakeRpc(),
       ipfs: fakeIpfs,
       appCertificationRoot: TRUSTED_ROOT,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       trustedRoots: [TRUSTED_ROOT],
       fetchAnnotations: false,
     });
@@ -111,6 +112,7 @@ describe('Phase 5 Milestone: independent per-subcard message delivery across two
       rpc: fakeRpc(),
       ipfs: fakeIpfs,
       appCertificationRoot: TRUSTED_ROOT,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       trustedRoots: [TRUSTED_ROOT],
       fetchAnnotations: false,
     });

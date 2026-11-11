@@ -262,6 +262,41 @@ const storageProvider = new AsyncStorageProvider('my-app-namespace');
 
 ---
 
+## Card Login (site side)
+
+The `login` module lets a website log people in with a membership card ([`process_specs/card_login.md`](../specs/process_specs/card_login.md)). A site needs three routes: start a login, serve the signed request, and receive the response. The reference site used in the integration tests does this in 26 lines (`integration_tests/harnesses/web/test/login/referenceSite.ts`).
+
+```ts
+import {
+  createLoginRequest, serveLoginRequest, handleFormPost, createInMemoryLoginStore,
+  stateCookie, readStateCookie, routerLoginUrl,
+} from '@membership-card-protocol/app-sdk';
+
+const store = createInMemoryLoginStore();
+
+// GET /login/start — sign a request and send the browser to the login router
+const { requestId, state, request } = await createLoginRequest({
+  server, keyProvider, store,                       // the site's server card and its key
+  policies: [{ id: MEMBER_POLICY, include_children: true }],
+  responseMode: 'form_post', responseUri: `${ORIGIN}/login/cb`, purpose: 'Log in to the member forum',
+});
+redirect(routerLoginUrl({ routerOrigin: ROUTER, requestUri: `${ORIGIN}/login/r/${requestId}` }),
+  { 'set-cookie': stateCookie(state, request.expires_at, '/login') });
+
+// GET /login/r/:id — the wallet fetches the signed request (once)
+const r = await serveLoginRequest(store, id);       // 200 with the request, or 410
+
+// POST /login/cb — verify the wallet's answer against this browser's state cookie
+const result = await handleFormPost({ body: form, cookieState: readStateCookie(cookieHeader), store, verifier, expectedOrigin: ORIGIN });
+if (result.ok) startSession(result.presentedCard);  // logged in as this card
+```
+
+Before the first login, the site's operator gets a **server card**: `createServerCardRequest` builds it, and the login service card's wallet authorizes it (wallet-sdk `authorizeServerCard`). The login service card must be certified under the login service branch and bound to the site's domain by its DNS admin card.
+
+Other pieces: `mountLoginButton` (browser button), `crossDeviceLink` and `parseWalletStart` (QR and wallet-initiated logins), `handleLoginMessage` and `redeemLoginCode` (the cross-device `mcard_message` path, where the user types a one-time code), `loginStatus`, and `buildLoginServiceMetadata` (`/.well-known/membership-login`). Use a shared `LoginStore` instead of the in-memory one when the site runs on more than one instance. `createDevSecureKeyProvider` in `@membership-card-protocol/app-sdk/testing` is a non-secure key provider for tests.
+
+---
+
 ## Development
 
 ```sh
