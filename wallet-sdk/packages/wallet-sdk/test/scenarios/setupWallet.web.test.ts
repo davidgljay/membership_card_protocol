@@ -102,6 +102,7 @@ function makeAlwaysTrustingCardVerifier(walletAppCardAddress: string) {
     rpc,
     ipfs: fakeIpfs,
     appCertificationRoot: 'ff'.repeat(32),
+    loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
     trustedRoots: ['ff'.repeat(32), walletAppCardAddress],
   });
 }

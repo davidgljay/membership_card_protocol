@@ -332,6 +332,7 @@ describe('discoverRooms against a real CardVerifier (no mocked verifier methods)
       rpc,
       ipfs,
       appCertificationRoot: appCertRoot.address,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       trustedRoots: [root.address],
       returnChain: true,
     });

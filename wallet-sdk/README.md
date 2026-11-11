@@ -184,6 +184,35 @@ if (result.countersigned) {
 }
 ```
 
+## Card Login (wallet side)
+
+The `login` module answers a website's login request ([`process_specs/card_login.md`](../specs/process_specs/card_login.md), [`wallet_sdk.md §7a`](../specs/object_specs/wallet_sdk.md)).
+
+```ts
+// 1. The router opened handler_url#request_uri=…, or the user scanned an mcard://auth QR code
+const handoff = WalletSDK.parseLoginHandoff({ url: location.href });
+if ('error' in handoff) return showError(handoff.error);
+
+// 2. Fetch the request and check who is asking (server card, login service card, domain binding)
+const validated = await WalletSDK.fetchAndValidateLoginRequest({ handoff, verifier, fetch });
+if (!validated.valid) return showError(validated.code);   // e.g. LOGIN_ORIGIN_NOT_BOUND
+
+// 3. Find the user's cards that meet the request's policies
+const matches = await WalletSDK.matchLoginCredentials({ request: validated.request, heldCards, chain });
+
+// 4. After the user picks a card and confirms, sign with that card's device sub-card
+const { response } = await WalletSDK.buildLoginResponse({ validated, presentedCard: matches[0].card, signer, protocolVersion: '0.1' });
+
+// 5a. Same device: post the response back to the site
+const { action, fields } = WalletSDK.formPostFields(validated.request, response);
+// 5b. Cross device: send it as a card message instead (sendLoginMessage), then show
+//     the one-time code from the site's auth_confirmation (handleAuthConfirmation)
+```
+
+`buildDecline` sends a refusal. Wallet-initiated logins use `startWalletInitiatedLogin` and `shouldSkipPrompt`. For login service operators: `authorizeServerCard` issues a server card, `signDomainBindingAttestation` and `postDomainBinding` bind a login service card to a domain (code 520), and `resolveEffectiveServices` reads a policy's `preferred_services`. Wallets register with the login router using `signWalletRegistrationToken` and `routerRegistrationUrl`; `registrationField` adds that step to card-offer acceptance.
+
+**Limit today:** cross-device delivery needs the server card's ML-KEM key, which no protocol field records yet, so `sendLoginMessage` takes an injected `resolveRecipients`.
+
 ## Specification
 
 See [`specs/object_specs/wallet_sdk.md`](../specs/object_specs/wallet_sdk.md) for the complete specification, including all exported functions, types, security invariants, and design decisions.

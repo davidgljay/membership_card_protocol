@@ -92,6 +92,7 @@ async function makeConsent(capabilities: string[], grantable: string[]): Promise
     rpc: makeHappyPathRpc(appCardAddress),
     ipfs: fakeIpfs,
     appCertificationRoot: GOVERNANCE_APP_CERT_ROOT,
+    loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
     trustedRoots: [GOVERNANCE_APP_CERT_ROOT, appCardAddress],
   });
   const validated = await handleSubCardRequest({ cardVerifier, request: document });
@@ -176,6 +177,7 @@ describe('self-signing exception (device sub-card collapse)', () => {
       rpc: makeHappyPathRpc(walletAppCardAddress),
       ipfs: fakeIpfs,
       appCertificationRoot: GOVERNANCE_APP_CERT_ROOT,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       trustedRoots: [GOVERNANCE_APP_CERT_ROOT, walletAppCardAddress],
     });
 

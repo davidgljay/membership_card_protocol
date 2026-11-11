@@ -6,7 +6,7 @@ import {
   mlDsa44Sign,
   mlDsa44Verify,
 } from '@membership-card-protocol/app-sdk';
-import { base64UrlToBytes } from '@membership-card-protocol/app-sdk';
+import { base64UrlToBytes, bytesToBase64Url } from '@membership-card-protocol/app-sdk';
 import type {
   ObliviousProtocolTransport,
   ObliviousDestination,
@@ -43,6 +43,7 @@ describe('revokeSubCard', () => {
     const deviceSubCard = mlDsa44GenerateKeypair();
     const updater = {
       cardPointer: 'device-sub-card-pointer',
+      publicKey: bytesToBase64Url(deviceSubCard.publicKey),
       sign: (message: Uint8Array) => mlDsa44Sign(deviceSubCard.secretKey, message),
     };
 
@@ -50,6 +51,7 @@ describe('revokeSubCard', () => {
       transport,
       pressBaseUrl: PRESS_BASE_URL,
       targetSubCard: TARGET_SUB_CARD,
+      targetSubCardPublicKey: 'target-sub-card-pk',
       updater,
       code: 801,
       note: 'user revoked app access',
@@ -67,7 +69,7 @@ describe('revokeSubCard', () => {
     expect(updateIntent.revocation).toEqual({ effective_date: expect.any(String), note: 'user revoked app access' });
     expect('field_updates' in updateIntent).toBe(false);
 
-    const signature = base64UrlToBytes(body.intent_signature as string);
+    const signature = base64UrlToBytes((body.intent_signature as { signature: string }).signature);
     expect(mlDsa44Verify(deviceSubCard.publicKey, canonicalize(updateIntent), signature)).toBe(true);
   });
 
@@ -76,6 +78,7 @@ describe('revokeSubCard', () => {
     const appCard = mlDsa44GenerateKeypair();
     const updater = {
       cardPointer: 'app-installation-card-pointer',
+      publicKey: bytesToBase64Url(appCard.publicKey),
       sign: (message: Uint8Array) => mlDsa44Sign(appCard.secretKey, message),
     };
 
@@ -83,6 +86,7 @@ describe('revokeSubCard', () => {
       transport,
       pressBaseUrl: PRESS_BASE_URL,
       targetSubCard: TARGET_SUB_CARD,
+      targetSubCardPublicKey: 'target-sub-card-pk',
       updater,
       code: 811,
       notifyHolder: false,
@@ -94,7 +98,7 @@ describe('revokeSubCard', () => {
     expect(updateIntent.code).toBe(811);
     expect(updateIntent.notify_holder).toBe(false);
 
-    const signature = base64UrlToBytes(calls[0]!.body.intent_signature as string);
+    const signature = base64UrlToBytes((calls[0]!.body.intent_signature as { signature: string }).signature);
     expect(mlDsa44Verify(appCard.publicKey, canonicalize(updateIntent), signature)).toBe(true);
   });
 
@@ -107,7 +111,9 @@ describe('revokeSubCard', () => {
         transport,
         pressBaseUrl: PRESS_BASE_URL,
         targetSubCard: TARGET_SUB_CARD,
-        updater: { cardPointer: 'x', sign: (m) => mlDsa44Sign(keypair.secretKey, m) },
+        targetSubCardPublicKey: 'target-sub-card-pk',
+      targetSubCardPublicKey: 'target-sub-card-pk',
+        updater: { cardPointer: 'x', publicKey: bytesToBase64Url(keypair.publicKey), sign: (m) => mlDsa44Sign(keypair.secretKey, m) },
         // `as` cast required — SubCardRevocationCode's type (800 | 801 | 810 | 811)
         // has no 9xx member, so this is not reachable without bypassing TypeScript,
         // which is exactly the structural exclusion this test also confirms holds
@@ -131,7 +137,9 @@ describe('revokeSubCard', () => {
         transport,
         pressBaseUrl: PRESS_BASE_URL,
         targetSubCard: TARGET_SUB_CARD,
-        updater: { cardPointer: 'x', sign: (m) => mlDsa44Sign(keypair.secretKey, m) },
+        targetSubCardPublicKey: 'target-sub-card-pk',
+      targetSubCardPublicKey: 'target-sub-card-pk',
+        updater: { cardPointer: 'x', publicKey: bytesToBase64Url(keypair.publicKey), sign: (m) => mlDsa44Sign(keypair.secretKey, m) },
         code: 801,
       })
     ).rejects.toThrow(/returned status 403/);

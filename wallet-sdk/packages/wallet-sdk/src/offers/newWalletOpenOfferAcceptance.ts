@@ -1,3 +1,4 @@
+import { registrationField, type LoginRouterRegistration } from './loginRouterHook.js';
 import { setupWallet, type WalletSetupOptions, type WalletSetupResult } from '../wallet/setupWallet.js';
 import { reviewOpenOffer, type OfferChainVerificationOptions, type OfferRejection } from './offerVerification.js';
 import { acceptOpenOfferAndCountersign } from './countersign.js';
@@ -34,6 +35,8 @@ import type { SignedOpenCardOffer, Scip } from '@membership-card-protocol/app-sd
  * @property pressBaseUrl - The offer's named press URL — claim submission destination.
  */
 export interface AcceptOpenOfferForNewWalletOptions extends Omit<WalletSetupOptions<void>, 'postSetupHook'> {
+  /** Register with the login router after acceptance (card_login.md §Router Registration). */
+  loginRouter?: LoginRouterRegistration;
   offer: SignedOpenCardOffer;
   chainVerification: OfferChainVerificationOptions;
   pressBaseUrl: string;
@@ -50,6 +53,8 @@ export interface AcceptOpenOfferForNewWalletOptions extends Omit<WalletSetupOpti
  */
 export interface AcceptedOpenOfferForNewWallet {
   approved: true;
+  /** Present when `loginRouter` was supplied and the wallet is not yet registered: navigate here instead of the redirect. */
+  routerRegistrationUrl?: string;
   walletSetup: Omit<WalletSetupResult<unknown>, 'postSetupHookResult'>;
   cardCid: string;
   scip: Scip;
@@ -93,6 +98,7 @@ export async function acceptOpenOfferForNewWallet(
 
   return {
     approved: true,
+    ...registrationField(options.loginRouter),
     walletSetup: walletSetupWithoutHookResult,
     cardCid: postSetupHookResult.cardCid,
     scip: postSetupHookResult.scip,

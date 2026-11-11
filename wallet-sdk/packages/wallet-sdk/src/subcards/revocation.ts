@@ -1,5 +1,4 @@
-import { canonicalize } from '@membership-card-protocol/app-sdk';
-import { bytesToBase64Url } from '@membership-card-protocol/app-sdk';
+import { postCardUpdate } from '../updates/postCardUpdate.js';
 import type { ObliviousProtocolTransport } from '@membership-card-protocol/app-sdk';
 
 /**
@@ -41,6 +40,8 @@ const VALID_CODES: ReadonlySet<number> = new Set([800, 801, 810, 811]);
 export interface UpdateIntentSigner {
   /** `updater_card` — mutable pointer of the signer's own card. */
   cardPointer: string;
+  /** base64url public key of the signer's card — the press verifies the intent signature with it. */
+  publicKey: string;
   sign: (message: Uint8Array) => Uint8Array | Promise<Uint8Array>;
 }
 
@@ -50,6 +51,8 @@ export interface RevokeSubCardOptions {
   pressBaseUrl: string;
   /** Mutable pointer of the sub-card being revoked (`target_card`). */
   targetSubCard: string;
+  /** base64url public key of the sub-card being revoked — the press uses it to append to the sub-card's encrypted log (press.md §5.3). */
+  targetSubCardPublicKey: string;
   /** Whoever is submitting this revocation — see this module's doc for the two expected cases. */
   updater: UpdateIntentSigner;
   code: SubCardRevocationCode;
@@ -65,10 +68,6 @@ export interface RevokeSubCardResult {
   newLogHeadCid: string;
 }
 
-interface UpdateResponseBody {
-  log_entry_cid: string;
-  new_log_head_cid: string;
-}
 
 export async function revokeSubCard(options: RevokeSubCardOptions): Promise<RevokeSubCardResult> {
   if (!VALID_CODES.has(options.code)) {
@@ -89,24 +88,16 @@ export async function revokeSubCard(options: RevokeSubCardOptions): Promise<Revo
     timestamp: new Date().toISOString(),
   };
 
-  const intentSignature = await options.updater.sign(canonicalize(updateIntent));
-
-  const response = await options.transport.request(
-    { kind: 'press', baseUrl: options.pressBaseUrl },
-    {
-      method: 'POST',
-      path: '/update',
-      headers: { 'content-type': 'application/json' },
-      body: new TextEncoder().encode(
-        JSON.stringify({ update_intent: updateIntent, intent_signature: bytesToBase64Url(intentSignature) })
-      ),
-    }
-  );
-
-  if (response.status < 200 || response.status >= 300) {
-    throw new Error(`revokeSubCard: POST /update returned status ${response.status}`);
+  try {
+    return await postCardUpdate({
+      transport: options.transport,
+      pressBaseUrl: options.pressBaseUrl,
+      intent: updateIntent,
+      sign: options.updater.sign,
+      signerPublicKey: options.updater.publicKey,
+      targetCardPublicKey: options.targetSubCardPublicKey,
+    });
+  } catch (err) {
+    throw new Error(`revokeSubCard: ${(err as Error).message}`);
   }
-
-  const body = JSON.parse(new TextDecoder().decode(response.body)) as UpdateResponseBody;
-  return { logEntryCid: body.log_entry_cid, newLogHeadCid: body.new_log_head_cid };
 }

@@ -1,5 +1,5 @@
-import { canonicalize, mlDsa44Sign } from '@membership-card-protocol/app-sdk';
-import { bytesToBase64Url } from '@membership-card-protocol/app-sdk';
+import { mlDsa44Sign } from '@membership-card-protocol/app-sdk';
+import { postCardUpdate } from '../updates/postCardUpdate.js';
 import type { ObliviousProtocolTransport } from '@membership-card-protocol/app-sdk';
 
 /**
@@ -46,6 +46,8 @@ interface ActiveSubcardsUpdateBaseOptions {
   masterCardPointer: string;
   /** The holder's primary (master) card private key — the only signer these operations accept. */
   masterSecretKey: Uint8Array;
+  /** base64url public key of the master card — the press needs it to verify the signature and to encrypt the log entry (press.md §5.3). */
+  masterPublicKey: string;
   /** Defaults to now. */
   timestamp?: string;
   /** Defaults to `false`. */
@@ -79,10 +81,6 @@ export interface ActiveSubcardsUpdateResult {
   newLogHeadCid: string;
 }
 
-interface UpdateResponseBody {
-  log_entry_cid: string;
-  new_log_head_cid: string;
-}
 
 interface FieldUpdate {
   field: string;
@@ -125,26 +123,17 @@ export async function postSubCardAddedToDirectory(
     notify_holder: options.notifyHolder ?? false,
   };
 
-  const intentSignature = mlDsa44Sign(options.masterSecretKey, canonicalize(updateIntent));
-
-  const response = await options.transport.request(
-    { kind: 'press', baseUrl: options.pressBaseUrl },
-    {
-      method: 'POST',
-      path: '/update',
-      headers: { 'content-type': 'application/json' },
-      body: new TextEncoder().encode(
-        JSON.stringify({ update_intent: updateIntent, intent_signature: bytesToBase64Url(intentSignature) })
-      ),
-    }
-  );
-
-  if (response.status < 200 || response.status >= 300) {
-    throw new Error(`postSubCardAddedToDirectory: POST /update returned status ${response.status}`);
+  try {
+    return await postCardUpdate({
+      transport: options.transport,
+      pressBaseUrl: options.pressBaseUrl,
+      intent: updateIntent,
+      sign: (message) => mlDsa44Sign(options.masterSecretKey, message),
+      signerPublicKey: options.masterPublicKey,
+    });
+  } catch (err) {
+    throw new Error(`postSubCardAddedToDirectory: ${(err as Error).message}`);
   }
-
-  const body = JSON.parse(new TextDecoder().decode(response.body)) as UpdateResponseBody;
-  return { logEntryCid: body.log_entry_cid, newLogHeadCid: body.new_log_head_cid };
 }
 
 /**
@@ -175,24 +164,15 @@ export async function postSubCardRemovedFromDirectory(
     ...(options.note ? { note: options.note } : {}),
   };
 
-  const intentSignature = mlDsa44Sign(options.masterSecretKey, canonicalize(updateIntent));
-
-  const response = await options.transport.request(
-    { kind: 'press', baseUrl: options.pressBaseUrl },
-    {
-      method: 'POST',
-      path: '/update',
-      headers: { 'content-type': 'application/json' },
-      body: new TextEncoder().encode(
-        JSON.stringify({ update_intent: updateIntent, intent_signature: bytesToBase64Url(intentSignature) })
-      ),
-    }
-  );
-
-  if (response.status < 200 || response.status >= 300) {
-    throw new Error(`postSubCardRemovedFromDirectory: POST /update returned status ${response.status}`);
+  try {
+    return await postCardUpdate({
+      transport: options.transport,
+      pressBaseUrl: options.pressBaseUrl,
+      intent: updateIntent,
+      sign: (message) => mlDsa44Sign(options.masterSecretKey, message),
+      signerPublicKey: options.masterPublicKey,
+    });
+  } catch (err) {
+    throw new Error(`postSubCardRemovedFromDirectory: ${(err as Error).message}`);
   }
-
-  const body = JSON.parse(new TextDecoder().decode(response.body)) as UpdateResponseBody;
-  return { logEntryCid: body.log_entry_cid, newLogHeadCid: body.new_log_head_cid };
 }

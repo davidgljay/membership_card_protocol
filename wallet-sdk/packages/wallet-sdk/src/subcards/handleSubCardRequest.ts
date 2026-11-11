@@ -54,6 +54,7 @@ export type SubCardRequestRejectionCode =
   | 'app_card_binding_mismatch'
   | 'app_card_chain_not_trusted'
   | 'app_card_not_currently_valid'
+  | 'LOGIN_SERVICE_SCOPE'
   | 'verification_error';
 
 export interface SubCardRequestRejection {
@@ -75,6 +76,13 @@ export interface HandleSubCardRequestOptions {
   cardVerifier: CardVerifier;
   /** The raw, received request — an `AppSignedSubCardDocument` (App SDK's `requestSubCard` output), untrusted until this function returns `{ valid: true }`. */
   request: AppSignedSubCardDocument;
+  /**
+   * Address of the login service branch node (card_verifier.md §5). When set,
+   * a login service card is refused as the app for any sub-card here
+   * (wallet_sdk.md §6.1): it may only authorize its own server cards, which go
+   * through `authorizeServerCard` instead. Wallets should always set it.
+   */
+  loginServiceCertificationRoot?: string;
 }
 
 function rejection(code: SubCardRequestRejectionCode, reason: string): SubCardRequestRejection {
@@ -113,7 +121,7 @@ export async function handleSubCardRequest(options: HandleSubCardRequestOptions)
 
   let appCardVerification: CardVerificationResult;
   try {
-    appCardVerification = await options.cardVerifier.verifyCard(appCardAddress);
+    appCardVerification = await options.cardVerifier.verifyCard(appCardAddress, { pubkey: request.app_card_pubkey });
   } catch (err) {
     return rejection(
       'verification_error',
@@ -137,6 +145,17 @@ export async function handleSubCardRequest(options: HandleSubCardRequestOptions)
   // rejection.
   if (appCardVerification.is_currently_valid === false) {
     return rejection('app_card_not_currently_valid', 'app card is revoked or not currently valid.');
+  }
+
+  // wallet_sdk.md §6.1 — login service scope rule. A login service card can
+  // never be the app for a third-party sub-card request, and S1 (server
+  // keys) never arrives through this path.
+  if ((request.attestation_level as string) === 'S1') {
+    return rejection('LOGIN_SERVICE_SCOPE', 'attestation_level S1 is only for server cards.');
+  }
+  const loginRoot = options.loginServiceCertificationRoot?.toLowerCase().replace(/^0x/, '');
+  if (loginRoot && (appCardVerification.chain_card_addresses ?? []).map((a) => a.toLowerCase().replace(/^0x/, '')).includes(loginRoot)) {
+    return rejection('LOGIN_SERVICE_SCOPE', 'a login service card may only authorize its own server cards.');
   }
 
   return { valid: true, request, appCardVerification };

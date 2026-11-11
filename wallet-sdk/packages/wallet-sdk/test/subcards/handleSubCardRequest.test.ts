@@ -95,6 +95,7 @@ describe('handleSubCardRequest', () => {
       rpc,
       ipfs: fakeIpfs,
       appCertificationRoot: GOVERNANCE_APP_CERT_ROOT,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       trustedRoots: [GOVERNANCE_APP_CERT_ROOT, appCardAddress],
       fetchAnnotations: false,
     });
@@ -120,6 +121,7 @@ describe('handleSubCardRequest', () => {
       rpc: makeHappyPathRpc(appCardAddress),
       ipfs: fakeIpfs,
       appCertificationRoot: GOVERNANCE_APP_CERT_ROOT,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       trustedRoots: [GOVERNANCE_APP_CERT_ROOT, appCardAddress],
     });
 
@@ -138,6 +140,7 @@ describe('handleSubCardRequest', () => {
       rpc: makeHappyPathRpc(appCardAddress),
       ipfs: fakeIpfs,
       appCertificationRoot: GOVERNANCE_APP_CERT_ROOT,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       trustedRoots: [GOVERNANCE_APP_CERT_ROOT, appCardAddress],
     });
 
@@ -155,6 +158,7 @@ describe('handleSubCardRequest', () => {
       rpc: makeHappyPathRpc(appCardAddress),
       ipfs: fakeIpfs,
       appCertificationRoot: GOVERNANCE_APP_CERT_ROOT,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       trustedRoots: [GOVERNANCE_APP_CERT_ROOT, appCardAddress],
     });
 
@@ -173,6 +177,7 @@ describe('handleSubCardRequest', () => {
       rpc,
       ipfs: fakeIpfs,
       appCertificationRoot: GOVERNANCE_APP_CERT_ROOT,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       trustedRoots: [], // deliberately excludes appCardAddress and the governance root
     });
 
@@ -199,6 +204,7 @@ describe('handleSubCardRequest', () => {
       rpc,
       ipfs: fakeIpfs,
       appCertificationRoot: GOVERNANCE_APP_CERT_ROOT,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       trustedRoots: [GOVERNANCE_APP_CERT_ROOT, appCardAddress],
     });
 
@@ -215,6 +221,7 @@ describe('handleSubCardRequest', () => {
       rpc: makeHappyPathRpc(appCardAddress),
       ipfs: fakeIpfs,
       appCertificationRoot: GOVERNANCE_APP_CERT_ROOT,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       trustedRoots: [GOVERNANCE_APP_CERT_ROOT, appCardAddress],
     });
     vi.spyOn(cardVerifier, 'verifyCard').mockRejectedValue(new Error('registry RPC unavailable'));
@@ -237,6 +244,7 @@ describe('handleSubCardRequest', () => {
       rpc,
       ipfs: fakeIpfs,
       appCertificationRoot: GOVERNANCE_APP_CERT_ROOT,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       trustedRoots: [GOVERNANCE_APP_CERT_ROOT, appCardAddress],
       fetchAnnotations: false,
     });

@@ -9,7 +9,7 @@ import {
   canonicalize,
   bytesToBase64Url,
 } from '@membership-card-protocol/app-sdk';
-import { base64UrlToBytes } from '@membership-card-protocol/app-sdk';
+import { base64UrlToBytes, bytesToBase64Url } from '@membership-card-protocol/app-sdk';
 import type {
   ObliviousProtocolTransport,
   ObliviousDestination,
@@ -45,6 +45,7 @@ describe('activeSubcardsUpdate', () => {
         pressBaseUrl: 'https://press.example',
         masterCardPointer: 'master-card-ptr',
         masterSecretKey: master.secretKey,
+        masterPublicKey: bytesToBase64Url(master.publicKey),
         currentActiveSubcards: [existingPubkey],
         newSubCardPublicKey: newPubkey,
       });
@@ -56,7 +57,7 @@ describe('activeSubcardsUpdate', () => {
       const { destination, options: reqOptions } = calls[0]!;
       expect(destination).toEqual({ kind: 'press', baseUrl: 'https://press.example' });
       expect(reqOptions.method).toBe('POST');
-      expect(reqOptions.path).toBe('/update');
+      expect(reqOptions.path).toBe('/api/update');
 
       const body = readJsonBody(reqOptions);
       const updateIntent = body.update_intent as Record<string, unknown>;
@@ -71,7 +72,7 @@ describe('activeSubcardsUpdate', () => {
       expect(fieldUpdates[0]!.value).toEqual([existingPubkey, newPubkey]);
 
       // Verify signature is over the canonicalized update intent, signed by master key
-      const signature = base64UrlToBytes(body.intent_signature as string);
+      const signature = base64UrlToBytes((body.intent_signature as { signature: string }).signature);
       expect(mlDsa44Verify(master.publicKey, canonicalize(updateIntent), signature)).toBe(true);
     });
 
@@ -91,6 +92,7 @@ describe('activeSubcardsUpdate', () => {
         pressBaseUrl: 'https://press.example',
         masterCardPointer: 'master-card-ptr',
         masterSecretKey: master.secretKey,
+        masterPublicKey: bytesToBase64Url(master.publicKey),
         currentActiveSubcards: null,
         newSubCardPublicKey: newPubkey,
       });
@@ -119,6 +121,7 @@ describe('activeSubcardsUpdate', () => {
         pressBaseUrl: 'https://press.example',
         masterCardPointer: 'master-card-ptr',
         masterSecretKey: master.secretKey,
+        masterPublicKey: bytesToBase64Url(master.publicKey),
         currentActiveSubcards: [pubkey],
         newSubCardPublicKey: pubkey,
       });
@@ -146,13 +149,14 @@ describe('activeSubcardsUpdate', () => {
         pressBaseUrl: 'https://press.example',
         masterCardPointer: 'master-card-ptr',
         masterSecretKey: master.secretKey,
+        masterPublicKey: bytesToBase64Url(master.publicKey),
         currentActiveSubcards: [],
         newSubCardPublicKey: newPubkey,
       });
 
       const body = readJsonBody(calls[0]!.options);
       const updateIntent = body.update_intent as Record<string, unknown>;
-      const signature = base64UrlToBytes(body.intent_signature as string);
+      const signature = base64UrlToBytes((body.intent_signature as { signature: string }).signature);
 
       // Verify against master key succeeds
       expect(mlDsa44Verify(master.publicKey, canonicalize(updateIntent), signature)).toBe(true);
@@ -181,6 +185,7 @@ describe('activeSubcardsUpdate', () => {
           pressBaseUrl: 'https://press.example',
           masterCardPointer: 'master-card-ptr',
           masterSecretKey: master.secretKey,
+        masterPublicKey: bytesToBase64Url(master.publicKey),
           currentActiveSubcards: [],
           newSubCardPublicKey: newPubkey,
         })
@@ -207,6 +212,7 @@ describe('activeSubcardsUpdate', () => {
         pressBaseUrl: 'https://press.example',
         masterCardPointer: 'master-card-ptr',
         masterSecretKey: master.secretKey,
+        masterPublicKey: bytesToBase64Url(master.publicKey),
         currentActiveSubcards: [pubkey1, pubkey2, pubkey3],
         removedSubCardPublicKey: pubkey2,
       });
@@ -242,6 +248,7 @@ describe('activeSubcardsUpdate', () => {
         pressBaseUrl: 'https://press.example',
         masterCardPointer: 'master-card-ptr',
         masterSecretKey: master.secretKey,
+        masterPublicKey: bytesToBase64Url(master.publicKey),
         currentActiveSubcards: [pubkey1, pubkey2],
         removedSubCardPublicKey: absentPubkey,
       });
@@ -268,6 +275,7 @@ describe('activeSubcardsUpdate', () => {
         pressBaseUrl: 'https://press.example',
         masterCardPointer: 'master-card-ptr',
         masterSecretKey: master.secretKey,
+        masterPublicKey: bytesToBase64Url(master.publicKey),
         currentActiveSubcards: [pubkey],
         removedSubCardPublicKey: pubkey,
         note: 'device lost',
@@ -294,6 +302,7 @@ describe('activeSubcardsUpdate', () => {
         pressBaseUrl: 'https://press.example',
         masterCardPointer: 'master-card-ptr',
         masterSecretKey: master.secretKey,
+        masterPublicKey: bytesToBase64Url(master.publicKey),
         currentActiveSubcards: [pubkey],
         removedSubCardPublicKey: pubkey,
       });
@@ -320,13 +329,14 @@ describe('activeSubcardsUpdate', () => {
         pressBaseUrl: 'https://press.example',
         masterCardPointer: 'master-card-ptr',
         masterSecretKey: master.secretKey,
+        masterPublicKey: bytesToBase64Url(master.publicKey),
         currentActiveSubcards: [pubkey],
         removedSubCardPublicKey: pubkey,
       });
 
       const body = readJsonBody(calls[0]!.options);
       const updateIntent = body.update_intent as Record<string, unknown>;
-      const signature = base64UrlToBytes(body.intent_signature as string);
+      const signature = base64UrlToBytes((body.intent_signature as { signature: string }).signature);
 
       // Verify against master key succeeds
       expect(mlDsa44Verify(master.publicKey, canonicalize(updateIntent), signature)).toBe(true);
@@ -354,6 +364,7 @@ describe('activeSubcardsUpdate', () => {
           pressBaseUrl: 'https://press.example',
           masterCardPointer: 'master-card-ptr',
           masterSecretKey: master.secretKey,
+        masterPublicKey: bytesToBase64Url(master.publicKey),
           currentActiveSubcards: [pubkey],
           removedSubCardPublicKey: pubkey,
         })

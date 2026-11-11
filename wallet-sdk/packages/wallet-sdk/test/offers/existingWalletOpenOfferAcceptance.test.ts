@@ -149,6 +149,7 @@ function makeAlwaysTrustingCardVerifier(): CardVerifier {
     rpc,
     ipfs: fakeIpfs,
     appCertificationRoot: GOVERNANCE_APP_CERT_ROOT,
+    loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
     trustedRoots: [GOVERNANCE_APP_CERT_ROOT],
     fetchAnnotations: false,
   });
@@ -292,7 +293,7 @@ describe('acceptOpenOfferForExistingWallet', () => {
     });
 
     const rpc = makeHappyPathRpc(issuerAddress);
-    const cardVerifierForReview = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
+    const cardVerifierForReview = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, loginServiceCertificationRoot: '5e'.repeat(32), trustedRoots: [issuerAddress] });
 
     const registerSpyBeforeClaim = (passkeyProvider.register as ReturnType<typeof vi.fn>).mock.calls.length;
 
@@ -352,7 +353,7 @@ describe('acceptOpenOfferForExistingWallet', () => {
 
     const issuerAddress = keccak256(issuer.publicKey);
     const rpc = makeHappyPathRpc(issuerAddress);
-    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
+    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, loginServiceCertificationRoot: '5e'.repeat(32), trustedRoots: [issuerAddress] });
 
     const result = await acceptOpenOfferForExistingWallet({
       offer,

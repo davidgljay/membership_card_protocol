@@ -1,3 +1,4 @@
+import { registrationField, type LoginRouterRegistration } from './loginRouterHook.js';
 import { reviewTargetedOffer, type OfferChainVerificationOptions, type OfferRejection } from './offerVerification.js';
 import { acceptTargetedOfferAndCountersign, type KeyringWriteOptions } from './countersign.js';
 import type { SignedTargetedOffer, CountersignedTargetedOffer } from '@membership-card-protocol/app-sdk';
@@ -34,6 +35,8 @@ import type { SignedTargetedOffer, CountersignedTargetedOffer } from '@membershi
  * @property storageKey - Optional key name for storage; defaults to standard keyring storage key.
  */
 export interface AcceptTargetedOfferOptions {
+  /** Register with the login router after acceptance (card_login.md §Router Registration). */
+  loginRouter?: LoginRouterRegistration;
   offer: SignedTargetedOffer;
   chainVerification: OfferChainVerificationOptions;
   storageProvider: KeyringWriteOptions['storageProvider'];
@@ -50,6 +53,8 @@ export interface AcceptTargetedOfferOptions {
  */
 export interface AcceptedTargetedOffer {
   approved: true;
+  /** Present when `loginRouter` was supplied and the wallet is not yet registered: navigate here instead of the redirect. */
+  routerRegistrationUrl?: string;
   countersignedOffer: CountersignedTargetedOffer;
   newCardPublicKey: Uint8Array;
 }
@@ -71,5 +76,5 @@ export async function acceptTargetedOffer(options: AcceptTargetedOfferOptions): 
     ...(options.storageKey ? { storageKey: options.storageKey } : {}),
   });
 
-  return { approved: true, countersignedOffer, newCardPublicKey };
+  return { approved: true, countersignedOffer, newCardPublicKey , ...registrationField(options.loginRouter) };
 }
