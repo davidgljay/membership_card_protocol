@@ -1,3 +1,13 @@
+import {
+  verifyServerCard as verifyServerCardImpl,
+  verifyLoginResponse as verifyLoginResponseImpl,
+  type LoginDeps,
+  type VerifyServerCardOptions,
+  type ServerCardVerificationResult,
+  type VerifyLoginResponseInput,
+  type LoginVerificationResult,
+} from "./login/verify.js";
+import { decryptCardHead } from "./head.js";
 import { canonicalize } from "./canonicalize.js";
 import { PROTOCOL_VERSION_0_1 } from "./constants.js";
 import { keccak256, hkdfSha3256, aes256gcmDecrypt, base64UrlToBytes } from "./crypto.js";
@@ -34,12 +44,15 @@ const DEFAULTS = {
 } as const;
 
 export class CardVerifier {
+  /** The config as supplied, for constructing the chain-returning variant used by card login. */
+  readonly #rawConfig: VerifierConfig;
   private readonly config: Required<
-    Omit<VerifierConfig, "registryEndpoint" | "conditions" | "appCertificationRoot">
+    Omit<VerifierConfig, "registryEndpoint" | "conditions" | "appCertificationRoot" | "loginServiceCertificationRoot">
   > & {
     registryEndpoint: string | undefined;
     conditions: VerifierConfig["conditions"];
     appCertificationRoot: string | undefined;
+    loginServiceCertificationRoot: string | undefined;
   };
 
   constructor(config: VerifierConfig) {
@@ -53,10 +66,12 @@ export class CardVerifier {
     // whenever this verifier instance actually encounters a sub-card signature.
     // Stage 2 hard-rejects with APP_CERTIFICATION_ROOT_NOT_CONFIGURED at the point
     // it would otherwise attempt the app-cert chain walk, if this is unset.
+    this.#rawConfig = config;
     this.config = {
       rpc: config.rpc,
       ipfs: config.ipfs,
       appCertificationRoot: config.appCertificationRoot,
+      loginServiceCertificationRoot: config.loginServiceCertificationRoot,
       trustedRoots: config.trustedRoots ?? DEFAULTS.trustedRoots,
       revocationFreshnessWindowSeconds:
         config.revocationFreshnessWindowSeconds ?? DEFAULTS.revocationFreshnessWindowSeconds,
@@ -133,6 +148,27 @@ export class CardVerifier {
     };
   }
 
+  /** card_verifier.md §6.4 — who is asking, for a login request or service metadata. */
+  verifyServerCard(serverCardPubkey: string, options: VerifyServerCardOptions): Promise<ServerCardVerificationResult> {
+    return verifyServerCardImpl(this.#loginDeps(), serverCardPubkey, options);
+  }
+
+  /** card_verifier.md §6.3 — the site's check of a login response. */
+  verifyLoginResponse(input: VerifyLoginResponseInput): Promise<LoginVerificationResult> {
+    return verifyLoginResponseImpl(this.#loginDeps(), input);
+  }
+
+  #loginDeps(): LoginDeps {
+    const withChain = this.config.returnChain ? this : new CardVerifier({ ...this.#rawConfig, returnChain: true });
+    return {
+      rpc: this.config.rpc,
+      ipfs: this.config.ipfs,
+      config: this.config,
+      verifyCard: (address, options) => this.verifyCard(address, options),
+      verifyEnvelope: (envelope) => withChain.verifyEnvelope(envelope),
+    };
+  }
+
   async verifyCard(
     cardAddress: string,
     options?: VerifyCardOptions
@@ -188,9 +224,7 @@ export class CardVerifier {
       } else {
         const contentKey = hkdfSha3256(pubkeyBytes, "card-content-v1");
         try {
-          const encrypted = await this.config.ipfs.fetch(cardEntry.log_head_cid);
-          const decrypted = await aes256gcmDecrypt(contentKey, encrypted);
-          const cardDoc = JSON.parse(new TextDecoder().decode(decrypted)) as CardDocument;
+          const cardDoc = await decryptCardHead(cardEntry.log_head_cid, contentKey, this.config.ipfs);
 
           const stage3 = await verifyStage3(cardDoc, cardAddress, this.config.rpc, this.config.ipfs, this.config, pubkeyBytes);
           stage3Errors.push(...stage3.errors);
@@ -267,6 +301,7 @@ export class CardVerifier {
     // Stage 2
     const stage2 = await verifyStage2(publicKeyBytes, this.config.rpc, this.config.ipfs, {
       appCertificationRoot: this.config.appCertificationRoot,
+      loginServiceCertificationRoot: this.config.loginServiceCertificationRoot,
       maxChainDepth: this.config.maxChainDepth,
     });
     errors.push(...stage2.errors);
@@ -274,14 +309,14 @@ export class CardVerifier {
     if (stage2.scope_clean === false && !stage2.master_card_doc) {
       // Hard rejection: skip stages 3–5. No CardDocument was ever resolved, so
       // there is no chain data to compute policy_match from beyond "not found".
-      return this.#buildResult(signerCard, signatureValid, stage2.scope_clean, "skipped", stage2.app_card_chain_valid, errors, {
+      return { ...this.#buildResult(signerCard, signatureValid, stage2.scope_clean, "skipped", stage2.app_card_chain_valid, errors, {
         revocation: { status: "unknown", code: null, effective_date: null, data_freshness_seconds: 0 },
         was_valid_at_signing_time: "skipped",
         is_currently_valid: "skipped",
         log_updates: [],
         policy_compliant: "skipped",
         chain: [],
-      });
+      }), ...(stage2.app_card_branch ? { app_card_branch: stage2.app_card_branch } : {}) };
     }
 
     // Stage 3
@@ -306,14 +341,14 @@ export class CardVerifier {
       // Hard rejection mid-chain: skip stages 4–5. stage3.chain is partial (as far as
       // the walk got before the failure) — still exposed/used per the plan's decision
       // to keep partial chains rather than discard them.
-      return this.#buildResult(signerCard, signatureValid, stage2.scope_clean, stage3.chain_reaches_trusted_root, stage2.app_card_chain_valid, errors, {
+      return { ...this.#buildResult(signerCard, signatureValid, stage2.scope_clean, stage3.chain_reaches_trusted_root, stage2.app_card_chain_valid, errors, {
         revocation: { status: "unknown", code: null, effective_date: null, data_freshness_seconds: 0 },
         was_valid_at_signing_time: "skipped",
         is_currently_valid: "skipped",
         log_updates: [],
         policy_compliant: "skipped",
         chain: stage3.chain,
-      });
+      }), ...(stage2.app_card_branch ? { app_card_branch: stage2.app_card_branch } : {}) };
     }
 
     // Stage 4. Reuses Stage 3's already-fetched-and-decrypted `chain` (no second
@@ -373,6 +408,7 @@ export class CardVerifier {
       chain_reaches_trusted_root: stage3.chain_reaches_trusted_root,
       chain_card_addresses: stage3.chain_card_addresses,
       app_card_chain_valid: stage2.app_card_chain_valid,
+      ...(stage2.app_card_branch ? { app_card_branch: stage2.app_card_branch } : {}),
       revocation: stage4.revocation,
       was_valid_at_signing_time: stage4.was_valid_at_signing_time,
       is_currently_valid: stage4.is_currently_valid,

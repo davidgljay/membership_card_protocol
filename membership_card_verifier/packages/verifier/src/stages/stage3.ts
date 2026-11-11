@@ -1,3 +1,4 @@
+import { decryptCardHead } from "../head.js";
 import { keccak256, hkdfSha3256, aes256gcmDecrypt, bytesToBase64Url, base64UrlToBytes } from "../crypto.js";
 import { CardProtocolError } from "../errors.js";
 import type {
@@ -40,6 +41,13 @@ export async function verifyStage3(
 
   let currentDoc = startCardDoc;
   let currentAddress = startCardAddress;
+
+  // A card that is itself a trusted root reaches a trusted root, whatever its
+  // own ancestry says (a root minted by an issuer still has ancestry_pubkeys).
+  // Matches verifyCard's no-pubkey path, which only ever checked this.
+  if (trustedRoots.includes(startCardAddress) || (await rpc.isPolicyAuthorizer(startCardAddress))) {
+    return { chain_reaches_trusted_root: true, chain_card_addresses: chainAddresses, chain, errors };
+  }
 
   for (let depth = 0; depth < maxDepth; depth++) {
     const ancestryPubkeys = currentDoc.ancestry_pubkeys;
@@ -90,9 +98,7 @@ export async function verifyStage3(
     const contentKey = hkdfSha3256(nextPubkeyBytes, "card-content-v1");
     let ancestorDoc: CardDocument;
     try {
-      const encrypted = await ipfs.fetch(cardEntry.log_head_cid);
-      const decrypted = await aes256gcmDecrypt(contentKey, encrypted);
-      ancestorDoc = JSON.parse(new TextDecoder().decode(decrypted)) as CardDocument;
+      ancestorDoc = await decryptCardHead(cardEntry.log_head_cid, contentKey, ipfs);
     } catch (e) {
       const code = e instanceof CardProtocolError ? e.code : "DECRYPTION_FAILED";
       errors.push({ stage: 3, code, message: String(e) });

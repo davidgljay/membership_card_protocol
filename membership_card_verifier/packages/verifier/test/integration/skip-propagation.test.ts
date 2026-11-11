@@ -49,7 +49,7 @@ describe("hard rejection skip propagation", () => {
   it("stage2 card not found → stages 3–5 are skipped", async () => {
     const sub = generateKeypair();
     const rpc = mockRpc({ getCardEntry: vi.fn().mockResolvedValue(null) });
-    const verifier = new CardVerifier({ rpc, ipfs: mockIpfs(), appCertificationRoot: DUMMY_APP_CERT_ROOT });
+    const verifier = new CardVerifier({ rpc, ipfs: mockIpfs(), appCertificationRoot: DUMMY_APP_CERT_ROOT, loginServiceCertificationRoot: '5e'.repeat(32) });
     const result = await verifier.verifyEnvelope(makeEnvelope(sub.publicKey, sub.secretKey));
     const r = result.signatures[0]!;
     expect(r.scope_clean).toBe(false);
@@ -66,7 +66,7 @@ describe("hard rejection skip propagation", () => {
     });
     // Provide garbage bytes that will fail AES-GCM auth
     const ipfs = mockIpfs({ QmSub: new Uint8Array(40).fill(0xaa) });
-    const verifier = new CardVerifier({ rpc, ipfs, appCertificationRoot: DUMMY_APP_CERT_ROOT });
+    const verifier = new CardVerifier({ rpc, ipfs, appCertificationRoot: DUMMY_APP_CERT_ROOT, loginServiceCertificationRoot: '5e'.repeat(32) });
     const result = await verifier.verifyEnvelope(makeEnvelope(sub.publicKey, sub.secretKey));
     const r = result.signatures[0]!;
     expect(r.scope_clean).toBe(false);
@@ -119,7 +119,7 @@ describe("hard rejection skip propagation", () => {
     });
     const ipfs = mockIpfs({ QmSub: encSub, QmMaster: encMaster, QmAncestor: encAncestor, QmApp: encApp });
 
-    const verifier = new CardVerifier({ rpc, ipfs, maxChainDepth: 2, appCertificationRoot: appCertRoot.address });
+    const verifier = new CardVerifier({ rpc, ipfs, maxChainDepth: 2, appCertificationRoot: appCertRoot.address, loginServiceCertificationRoot: '5e'.repeat(32) });
     const result = await verifier.verifyEnvelope(makeEnvelope(sub.publicKey, sub.secretKey));
     const r = result.signatures[0]!;
     // Stage 2 should pass (scope_clean: true)

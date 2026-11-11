@@ -80,3 +80,19 @@ describe("EthersRpcProvider", () => {
     expect(result[0]?.uid).toBe("0xuid");
   });
 });
+
+describe("getDomainRegistration (card_verifier.md §4.1, card login)", () => {
+  it("maps an existing registration and normalizes the address and domain", async () => {
+    const getDomainRegistration = vi.fn().mockResolvedValue({ admin_card_address: "0xABCD", fraud_risk: 2, suspension_expires_at: 1900000000n, exists: true });
+    const provider = new EthersRpcProvider(mockContract({ getDomainRegistration }));
+    expect(await provider.getDomainRegistration("Example.org.")).toEqual({ admin_card_address: "abcd", fraud_risk: 2, suspension_expires_at: 1900000000 });
+    expect(getDomainRegistration).toHaveBeenCalledWith("example.org");
+  });
+  it("returns null for an unregistered domain", async () => {
+    const provider = new EthersRpcProvider(mockContract({ getDomainRegistration: vi.fn().mockResolvedValue({ admin_card_address: "0x0", fraud_risk: 0, suspension_expires_at: 0, exists: false }) }));
+    expect(await provider.getDomainRegistration("example.org")).toBeNull();
+  });
+  it("throws when the contract adapter lacks the method", async () => {
+    await expect(new EthersRpcProvider(mockContract()).getDomainRegistration("example.org")).rejects.toThrow(/getDomainRegistration/);
+  });
+});

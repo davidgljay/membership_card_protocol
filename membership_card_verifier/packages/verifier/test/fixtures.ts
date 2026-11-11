@@ -73,7 +73,8 @@ export function makeSubCardDoc(
   holderSk: Uint8Array,
   appPubkey: Uint8Array,
   appSk: Uint8Array,
-  recipientPubkey: Uint8Array
+  recipientPubkey: Uint8Array,
+  overrides: Partial<Pick<SubCardDocument, "capabilities" | "attestation_level" | "valid_until">> = {}
 ): SubCardDocument {
   const holderAddress = keccak256(holderPubkey);
   const appAddress = keccak256(appPubkey);
@@ -87,7 +88,8 @@ export function makeSubCardDoc(
     recipient_pubkey: Buffer.from(recipientPubkey).toString("base64url"),
     issued_at: "2026-06-20T00:00:00Z",
     attestation_level: "T2" as const,
-  };
+    ...overrides,
+  } as Omit<SubCardDocument, "app_signature" | "holder_signature">;
 
   const appSig = sign(appSk, base);
   const holderSigInput = { ...base, app_signature: appSig };

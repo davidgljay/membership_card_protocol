@@ -157,7 +157,7 @@ describe("full pipeline integration", () => {
       }),
     };
 
-    const verifier = new CardVerifier({ rpc, ipfs, trustedRoots: [root.address], appCertificationRoot: appCertRoot.address });
+    const verifier = new CardVerifier({ rpc, ipfs, trustedRoots: [root.address], appCertificationRoot: appCertRoot.address, loginServiceCertificationRoot: '5e'.repeat(32) });
     const result = await verifier.verifyEnvelope(envelope);
 
     expect(result.envelope_id).toMatch(/^[0-9a-f]{64}$/);
@@ -260,7 +260,7 @@ describe("full pipeline integration", () => {
       }),
     };
 
-    const verifier = new CardVerifier({ rpc, ipfs, trustedRoots: [root.address], appCertificationRoot: appCertRoot.address });
+    const verifier = new CardVerifier({ rpc, ipfs, trustedRoots: [root.address], appCertificationRoot: appCertRoot.address, loginServiceCertificationRoot: '5e'.repeat(32) });
     const result = await verifier.verifyEnvelope(envelope);
     const sig0 = result.signatures[0]!;
 

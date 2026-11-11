@@ -191,6 +191,10 @@ const verifier = new CardVerifier({
   rpc,
   ipfs,
 
+  // Required when verifying sub-card signatures (card_verifier.md §5)
+  appCertificationRoot: "…",            // App-certification root address (bytes32 hex)
+  loginServiceCertificationRoot: "…",   // Login service branch node under that root
+
   // Optional — defaults shown
   trustedRoots: [],                      // Supplement the on-chain PolicyAuthorizerKeys table
   revocationFreshnessWindowSeconds: 300, // Flag revocation data older than this as stale
@@ -203,6 +207,8 @@ const verifier = new CardVerifier({
   conditions: undefined,                 // Policy matching conditions for policy_match field
 });
 ```
+
+A verifier that meets a sub-card signature without `appCertificationRoot` or `loginServiceCertificationRoot` rejects it (`APP_CERTIFICATION_ROOT_NOT_CONFIGURED`, `LOGIN_SERVICE_CERTIFICATION_ROOT_NOT_CONFIGURED`) rather than skipping the check. The login root lets Stage 2 recognize login service cards: one may certify only its own server cards (`LOGIN_SERVICE_SCOPE`), and only server cards may carry attestation level `S1`.
 
 `trustedRoots` is useful when you have a local copy of known governance roots and want to skip the on-chain lookup for them — for example when building a CLI that operates against a known deployment. It supplements the on-chain table; it does not replace it.
 
@@ -395,6 +401,29 @@ Stage 6 — EAS Annotations (opt-in)
   Walk each annotator's chain to check if it reaches a trusted root.
   → annotations
 ```
+
+---
+
+## Card login
+
+The verifier has two entry points for card login ([`process_specs/card_login.md`](../../../specs/process_specs/card_login.md)). Both need an `RpcProvider` with `getDomainRegistration` (the `EthersRpcProvider` in `@membership-card-protocol/verifier-rpc-provider` has it).
+
+```typescript
+// Wallet side: who is asking? (card_verifier.md §6.4)
+const server = await verifier.verifyServerCard(request.requester_pubkey, { origin: "https://forum.example.org" });
+if (!server.valid) throw new Error(server.code);   // e.g. LOGIN_ORIGIN_NOT_BOUND, LOGIN_SERVICE_REVOKED
+server.warnings;                                    // e.g. ["LOGIN_WARN_DOMAIN_MONITORED"]
+
+// Site side: check the wallet's answer (card_verifier.md §6.3)
+const login = await verifier.verifyLoginResponse({ response, request, expectedOrigin: "https://forum.example.org" });
+if (login.valid) login.presented_card;              // the card the user logged in as
+```
+
+`verifyServerCard` checks that the requester is a server card (`S1`, `auth_request` capability) under a certified, unrevoked login service card, and that the service card's domain binding is signed by the domain's current admin card and covers the origin. `verifyLoginResponse` checks state, nonce, statement, request hash, audience, recipients, freshness, the envelope signature and chain, and the DCQL policy match. Each failure returns a `code` from the error table in `card_login.md`.
+
+The lower-level helpers are exported too: `requestHash`, `signingBytes`, `domainCovers`, `checkDomainBinding`, `matchMcardQuery`, `effectivePreferredServices`, `readCardFields`, and `decryptCardHead`, plus the login object types (`AuthenticationRequest`, `DomainBindingAttestation`, …). `specs/login-conformance.json` holds shared test vectors.
+
+**Limits today:** a DCQL `predicate` never matches (`PREDICATE_NOT_SUPPORTED`); `include_children` walks a policy's issuance chain only where policies are cards (see the login integration report).
 
 ---
 
