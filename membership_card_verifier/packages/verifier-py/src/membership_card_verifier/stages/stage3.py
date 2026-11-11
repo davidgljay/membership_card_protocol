@@ -1,10 +1,10 @@
 import base64
-import json
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from membership_card_verifier.crypto import aes256gcm_decrypt, hkdf_sha3_256, keccak256
+from membership_card_verifier.crypto import hkdf_sha3_256, keccak256
 from membership_card_verifier.errors import CardProtocolError
+from membership_card_verifier.head import decrypt_card_head
 from membership_card_verifier.types import ChainLink, IpfsProvider, RpcProvider, VerificationError
 
 
@@ -47,6 +47,16 @@ async def verify_stage3(
 
     current_doc = start_card_doc
     current_address = start_card_address
+
+    # A card that is itself a trusted root reaches a trusted root, whatever its
+    # own ancestry says (a root minted by an issuer still has ancestry_pubkeys).
+    if start_card_address in trusted_roots or await rpc.is_policy_authorizer(start_card_address):
+        return Stage3Result(
+            chain_reaches_trusted_root=True,
+            chain_card_addresses=chain_addresses,
+            chain=chain,
+            errors=errors,
+        )
 
     for depth in range(max_depth):
         ancestry_pubkeys = current_doc.get("ancestry_pubkeys", [])
@@ -105,9 +115,7 @@ async def verify_stage3(
 
         content_key = hkdf_sha3_256(next_pubkey_bytes, "card-content-v1")
         try:
-            encrypted = await ipfs.fetch(card_entry.log_head_cid)
-            decrypted = aes256gcm_decrypt(content_key, encrypted)
-            ancestor_doc = json.loads(decrypted.decode("utf-8"))
+            ancestor_doc = await decrypt_card_head(card_entry.log_head_cid, content_key, ipfs)
         except CardProtocolError as e:
             errors.append(
                 VerificationError(

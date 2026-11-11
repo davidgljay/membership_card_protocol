@@ -50,6 +50,11 @@ class RpcProvider(Protocol):
     ) -> list[EasAttestation]:
         ...
 
+    # card_verifier.md §4.1 — DomainRegistrations[domain] (dns_resolution.md §4.1):
+    #   async def get_domain_registration(self, domain: str) -> Optional[DomainRegistration]
+    # Optional, so existing providers keep working; required by the card-login
+    # entry points, which raise MISSING_RPC_METHOD without it.
+
 
 class IpfsProvider(Protocol):
     async def fetch(self, cid: str) -> bytes:
@@ -101,6 +106,13 @@ class CardChainEvent:
 
 
 @dataclass
+class DomainRegistration:
+    admin_card_address: str
+    fraud_risk: int  # 0 | 1 | 2
+    suspension_expires_at: int  # Unix seconds; 0 if not suspended
+
+
+@dataclass
 class EasAttestation:
     uid: str
     attester: str
@@ -142,7 +154,7 @@ class SubCardDocument:
     capabilities: list[str]
     recipient_pubkey: str
     issued_at: str
-    attestation_level: Literal["T1", "T2"]
+    attestation_level: Literal["T1", "T2", "S1"]
     app_signature: str
     holder_signature: str
     limitations: Optional[list[SubCardLimitation]] = None
@@ -195,6 +207,12 @@ class VerifierConfig:
     # instance where this is not configured, Stage 2 hard-rejects with
     # APP_CERTIFICATION_ROOT_NOT_CONFIGURED rather than skipping the check.
     app_certification_root: Optional[str] = None
+    # On-chain address of the login service branch node under the
+    # app-certification root (card_verifier.md §5). Stage 2 step 16f uses it to
+    # recognize login service cards and enforce the login service scope rule.
+    # Required whenever a sub-card signature is verified; missing →
+    # LOGIN_SERVICE_CERTIFICATION_ROOT_NOT_CONFIGURED.
+    login_service_certification_root: Optional[str] = None
     trusted_roots: Optional[list[str]] = None
     revocation_freshness_window_seconds: Optional[int] = None
     reject_stale_revocation: Optional[bool] = None
@@ -301,6 +319,8 @@ class SignatureVerificationResult:
     policy_compliant: bool | Literal["skipped"] | None = None
     policy_match: Optional[PolicyMatchResult] = None
     chain: Optional[list[ChainLink]] = None
+    # card_verifier.md §8 — branch of the signing sub-card's app_card (Stage 2 step 16f).
+    app_card_branch: Optional[Literal["login_service", "other"]] = None
 
 
 @dataclass

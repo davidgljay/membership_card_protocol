@@ -147,6 +147,7 @@ async def test_verifies_a_sub_card_signed_envelope_end_to_end():
             ipfs=ipfs,
             trusted_roots=[root.address],
             app_certification_root=app_cert_root.address,
+            login_service_certification_root="5e" * 32,  # card login: branch node not on any test chain
         )
     )
     result = await verifier.verify_envelope(envelope)
@@ -271,6 +272,7 @@ async def test_rejects_sub_card_whose_app_card_does_not_chain_to_app_certificati
             ipfs=ipfs,
             trusted_roots=[root.address],
             app_certification_root=app_cert_root.address,
+            login_service_certification_root="5e" * 32,  # card login: branch node not on any test chain
         )
     )
     result = await verifier.verify_envelope(envelope)

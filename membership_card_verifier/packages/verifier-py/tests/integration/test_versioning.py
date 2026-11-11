@@ -21,6 +21,7 @@ def _make_verifier() -> CardVerifier:
             rpc=mock_rpc(),
             ipfs=_mock_ipfs_rejects_all(),
             app_certification_root=DUMMY_APP_CERT_ROOT,
+            login_service_certification_root="5e" * 32,  # card login: branch node not on any test chain
         )
     )
 

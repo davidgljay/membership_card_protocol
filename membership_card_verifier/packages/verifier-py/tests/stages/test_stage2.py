@@ -53,7 +53,7 @@ class TestStage2SubCardToMasterLink:
             sub.public_key,
             rpc,
             ipfs,
-            SimpleNamespace(app_certification_root=DUMMY_CERT_ROOT, max_chain_depth=None),
+            SimpleNamespace(app_certification_root=DUMMY_CERT_ROOT, login_service_certification_root="5e" * 32, max_chain_depth=None),
         )
         assert result.scope_clean is False
         assert result.errors[0].code == "CARD_NOT_FOUND"
@@ -77,7 +77,7 @@ class TestStage2SubCardToMasterLink:
             sub.public_key,
             rpc,
             ipfs,
-            SimpleNamespace(app_certification_root=DUMMY_CERT_ROOT, max_chain_depth=None),
+            SimpleNamespace(app_certification_root=DUMMY_CERT_ROOT, login_service_certification_root="5e" * 32, max_chain_depth=None),
         )
         assert result.scope_clean is False
         assert result.errors[0].code == "DECRYPTION_FAILED"
@@ -116,7 +116,7 @@ class TestStage2SubCardToMasterLink:
             sub.public_key,
             rpc,
             ipfs,
-            SimpleNamespace(app_certification_root=DUMMY_CERT_ROOT, max_chain_depth=None),
+            SimpleNamespace(app_certification_root=DUMMY_CERT_ROOT, login_service_certification_root="5e" * 32, max_chain_depth=None),
         )
         assert result.scope_clean is False
         assert result.errors[0].code == "ADDRESS_BINDING_MISMATCH"
@@ -189,7 +189,7 @@ class TestStage2SubCardToMasterLink:
             sub.public_key,
             rpc,
             ipfs,
-            SimpleNamespace(app_certification_root=DUMMY_CERT_ROOT, max_chain_depth=None),
+            SimpleNamespace(app_certification_root=DUMMY_CERT_ROOT, login_service_certification_root="5e" * 32, max_chain_depth=None),
         )
         assert result.scope_clean is False
         assert result.errors[0].code == "ADDRESS_BINDING_MISMATCH"
@@ -292,7 +292,7 @@ class TestStage2SubCardToMasterLink:
             sub.public_key,
             rpc,
             ipfs,
-            SimpleNamespace(app_certification_root=cert_root.address, max_chain_depth=None),
+            SimpleNamespace(app_certification_root=cert_root.address, login_service_certification_root="5e" * 32, max_chain_depth=None),
         )
         assert result.scope_clean is False
         assert result.app_card_chain_valid is False
@@ -366,7 +366,7 @@ class TestStage2SubCardToMasterLink:
             sub.public_key,
             rpc,
             ipfs,
-            SimpleNamespace(app_certification_root=DUMMY_CERT_ROOT, max_chain_depth=None),
+            SimpleNamespace(app_certification_root=DUMMY_CERT_ROOT, login_service_certification_root="5e" * 32, max_chain_depth=None),
         )
         assert result.scope_clean is False
         assert any(e.code == "SUB_CARD_INACTIVE" for e in result.errors)
@@ -462,7 +462,7 @@ class TestStage2SubCardToMasterLink:
             sub.public_key,
             rpc,
             ipfs,
-            SimpleNamespace(app_certification_root=cert_root.address, max_chain_depth=None),
+            SimpleNamespace(app_certification_root=cert_root.address, login_service_certification_root="5e" * 32, max_chain_depth=None),
         )
         assert result.scope_clean is True
         assert result.master_card_doc is not None
@@ -562,7 +562,7 @@ class TestStage2AppCardChainWalk:
             sub.public_key,
             rpc,
             ipfs,
-            SimpleNamespace(app_certification_root=cert_root.address, max_chain_depth=None),
+            SimpleNamespace(app_certification_root=cert_root.address, login_service_certification_root="5e" * 32, max_chain_depth=None),
         )
         assert result.scope_clean is True
         assert result.app_card_chain_valid is True
@@ -684,7 +684,7 @@ class TestStage2AppCardChainWalk:
             sub.public_key,
             rpc,
             ipfs,
-            SimpleNamespace(app_certification_root=cert_root.address, max_chain_depth=None),
+            SimpleNamespace(app_certification_root=cert_root.address, login_service_certification_root="5e" * 32, max_chain_depth=None),
         )
         assert result.scope_clean is True
         assert result.app_card_chain_valid is True
@@ -782,7 +782,7 @@ class TestStage2AppCardChainWalk:
             sub.public_key,
             rpc,
             ipfs,
-            SimpleNamespace(app_certification_root=cert_root.address, max_chain_depth=None),
+            SimpleNamespace(app_certification_root=cert_root.address, login_service_certification_root="5e" * 32, max_chain_depth=None),
         )
         assert result.scope_clean is False
         assert result.app_card_chain_valid is False
@@ -853,7 +853,7 @@ class TestStage2AppCardChainWalk:
             sub.public_key,
             rpc,
             ipfs,
-            SimpleNamespace(app_certification_root=DUMMY_CERT_ROOT, max_chain_depth=None),
+            SimpleNamespace(app_certification_root=DUMMY_CERT_ROOT, login_service_certification_root="5e" * 32, max_chain_depth=None),
         )
         assert result.scope_clean is False
         assert any(e.code == "SUB_CARD_NOT_IN_ACTIVE_DIRECTORY" for e in result.errors)

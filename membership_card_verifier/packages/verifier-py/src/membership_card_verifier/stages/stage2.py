@@ -11,6 +11,7 @@ from membership_card_verifier.crypto import (
     ml_dsa44_verify,
 )
 from membership_card_verifier.errors import CardProtocolError
+from membership_card_verifier.head import decrypt_card_head
 from membership_card_verifier.types import IpfsProvider, RpcProvider, VerificationError
 
 
@@ -27,6 +28,10 @@ class Stage2Result:
     errors: list[VerificationError] = field(default_factory=list)
     master_card_doc: Optional[dict[str, Any]] = None
     master_card_pubkey: Optional[bytes] = None
+    # Set once the app card chain walk completes (step 16f).
+    app_card_branch: Optional[Literal["login_service", "other"]] = None
+    # The decrypted SubCardDocument, when the signer is a sub-card.
+    sub_card_doc: Optional[dict[str, Any]] = None
 
 
 async def verify_stage2(
@@ -38,14 +43,21 @@ async def verify_stage2(
     errors: list[VerificationError] = []
     signer_card = keccak256(public_key_bytes)
 
-    # Step 2: fetch card entry
+    # Step 2: locate the sub-card document. The registry contract's
+    # RegisterSubCard records a SubCardEntry (sub_card_doc_cid) rather than a
+    # CardEntry, and the press pins the document as plain canonical JSON; a
+    # CardEntry whose head is the encrypted document is also accepted.
     card_entry = await rpc.get_card_entry(signer_card)
-    if not card_entry or not card_entry.exists:
+    doc_cid: Optional[str] = card_entry.log_head_cid if card_entry and card_entry.exists else None
+    if not doc_cid:
+        sub = await rpc.get_sub_card_entry(signer_card)
+        doc_cid = (sub.sub_card_doc_cid if sub else None) or None
+    if not doc_cid:
         errors.append(
             VerificationError(
                 stage=2,
                 code="CARD_NOT_FOUND",
-                message=f"No card entry for {signer_card}",
+                message=f"No card or sub-card entry for {signer_card}",
             )
         )
         return Stage2Result(
@@ -58,12 +70,15 @@ async def verify_stage2(
     # Step 3: derive leaf content key
     leaf_content_key = hkdf_sha3_256(public_key_bytes, "card-content-v1")
 
-    # Step 4: fetch and decrypt sub-card document from IPFS
+    # Step 4: fetch the sub-card document (encrypted under the leaf key, or plain)
     sub_card_doc: dict[str, Any]
     try:
-        encrypted = await ipfs.fetch(card_entry.log_head_cid)
-        decrypted = aes256gcm_decrypt(leaf_content_key, encrypted)
-        sub_card_doc = json.loads(decrypted.decode("utf-8"))
+        raw = await ipfs.fetch(doc_cid)
+        try:
+            text = aes256gcm_decrypt(leaf_content_key, raw).decode("utf-8")
+        except CardProtocolError:
+            text = raw.decode("utf-8")
+        sub_card_doc = json.loads(text)
     except CardProtocolError as e:
         errors.append(
             VerificationError(stage=2, code=e.code, message=str(e))
@@ -78,6 +93,22 @@ async def verify_stage2(
         errors.append(
             VerificationError(
                 stage=2, code="DECRYPTION_FAILED", message=str(e)
+            )
+        )
+        return Stage2Result(
+            scope_clean=False,
+            signer_card=signer_card,
+            app_card_chain_valid=False,
+            errors=errors,
+        )
+    # The document must be this signer's: its recipient_pubkey is the signing key.
+    recipient = sub_card_doc.get("recipient_pubkey")
+    if not isinstance(recipient, str) or keccak256(_b64url_decode(recipient)) != signer_card:
+        errors.append(
+            VerificationError(
+                stage=2,
+                code="ADDRESS_BINDING_MISMATCH",
+                message="sub-card document recipient_pubkey is not the signing key",
             )
         )
         return Stage2Result(
@@ -144,9 +175,7 @@ async def verify_stage2(
 
     master_card_doc: dict[str, Any]
     try:
-        encrypted = await ipfs.fetch(master_card_entry.log_head_cid)
-        decrypted = aes256gcm_decrypt(master_content_key, encrypted)
-        master_card_doc = json.loads(decrypted.decode("utf-8"))
+        master_card_doc = await decrypt_card_head(master_card_entry.log_head_cid, master_content_key, ipfs)
     except CardProtocolError as e:
         errors.append(
             VerificationError(stage=2, code=e.code, message=str(e))
@@ -336,9 +365,7 @@ async def verify_stage2(
 
     app_card_doc: dict[str, Any]
     try:
-        encrypted = await ipfs.fetch(app_card_entry.log_head_cid)
-        decrypted = aes256gcm_decrypt(app_card_content_key, encrypted)
-        app_card_doc = json.loads(decrypted.decode("utf-8"))
+        app_card_doc = await decrypt_card_head(app_card_entry.log_head_cid, app_card_content_key, ipfs)
     except CardProtocolError as e:
         errors.append(
             VerificationError(stage=2, code=e.code, message=str(e))
@@ -364,6 +391,8 @@ async def verify_stage2(
 
     current_doc = app_card_doc
     current_address = app_card_address
+    # Every address on the app card's chain below the root, for step 16f.
+    visited: list[str] = [app_card_address]
     chain_reached = current_address == app_cert_root
 
     for depth in range(max_depth):
@@ -384,6 +413,7 @@ async def verify_stage2(
         if next_address == app_cert_root:
             chain_reached = True
             break
+        visited.append(next_address)
 
         next_entry = await rpc.get_card_entry(next_address)
         if not next_entry or not next_entry.exists:
@@ -403,9 +433,7 @@ async def verify_stage2(
 
         next_content_key = hkdf_sha3_256(next_pubkey_bytes, "card-content-v1")
         try:
-            encrypted = await ipfs.fetch(next_entry.log_head_cid)
-            decrypted = aes256gcm_decrypt(next_content_key, encrypted)
-            current_doc = json.loads(decrypted.decode("utf-8"))
+            current_doc = await decrypt_card_head(next_entry.log_head_cid, next_content_key, ipfs)
             current_address = next_address
         except CardProtocolError as e:
             errors.append(
@@ -445,11 +473,71 @@ async def verify_stage2(
             errors=errors,
         )
 
+    # Step 16f (card_verifier.md §7.2): branch and login service scope rule.
+    # Recognizing the login service branch is mandatory once sub-cards are being
+    # verified: without it, a login service card could pose as an app or wallet card.
+    login_root = getattr(config, "login_service_certification_root", None)
+    if not login_root:
+        errors.append(
+            VerificationError(
+                stage=2,
+                code="LOGIN_SERVICE_CERTIFICATION_ROOT_NOT_CONFIGURED",
+                message=(
+                    "Sub-card signature encountered but VerifierConfig.login_service_certification_root "
+                    "is not configured on this verifier instance"
+                ),
+            )
+        )
+        return Stage2Result(
+            scope_clean=False,
+            signer_card=signer_card,
+            app_card_chain_valid=True,
+            errors=errors,
+        )
+    is_login_service = login_root in visited
+    app_card_branch: Literal["login_service", "other"] = "login_service" if is_login_service else "other"
+    self_scoped = app_card_address == holder_card_address
+    if is_login_service and not self_scoped:
+        errors.append(
+            VerificationError(
+                stage=2,
+                code="LOGIN_SERVICE_SCOPE",
+                message=(
+                    f"app_card {app_card_address} is a login service card but the sub-card's master is "
+                    f"{holder_card_address}; a login service card may only authorize its own server cards"
+                ),
+            )
+        )
+        return Stage2Result(
+            scope_clean=False,
+            signer_card=signer_card,
+            app_card_chain_valid=True,
+            app_card_branch=app_card_branch,
+            errors=errors,
+        )
+    if sub_card_doc.get("attestation_level") == "S1" and not (is_login_service and self_scoped):
+        errors.append(
+            VerificationError(
+                stage=2,
+                code="ATTESTATION_LEVEL_INSUFFICIENT",
+                message='attestation_level "S1" is accepted only on server cards (login service card as both app_card and holder)',
+            )
+        )
+        return Stage2Result(
+            scope_clean=False,
+            signer_card=signer_card,
+            app_card_chain_valid=True,
+            app_card_branch=app_card_branch,
+            errors=errors,
+        )
+
     return Stage2Result(
         scope_clean=True,
         signer_card=signer_card,
         master_card_doc=master_card_doc,
         master_card_pubkey=holder_pubkey_bytes,
         app_card_chain_valid=True,
+        app_card_branch=app_card_branch,
+        sub_card_doc=sub_card_doc,
         errors=errors,
     )
