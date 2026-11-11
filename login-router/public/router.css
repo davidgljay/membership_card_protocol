@@ -1,0 +1,16 @@
+:root { --bg: #ffffff; --fg: #1a1a1a; --muted: #5c5c5c; --accent: #2457d6; --border: #d6d6d6; }
+@media (prefers-color-scheme: dark) { :root { --bg: #141414; --fg: #f0f0f0; --muted: #a8a8a8; --accent: #7aa2ff; --border: #3a3a3a; } }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 28rem; margin: 0 auto; padding: 2rem 1rem; }
+h1 { font-size: 1.4rem; margin: 0 0 1rem; }
+h2 { font-size: 1rem; margin: 1.5rem 0 0.5rem; color: var(--muted); }
+button, input { font: inherit; }
+button.wallet { display: flex; align-items: center; gap: 0.75rem; width: 100%; padding: 0.75rem 1rem; margin: 0.5rem 0; border: 1px solid var(--border); border-radius: 0.5rem; background: transparent; color: inherit; cursor: pointer; text-align: left; }
+button.wallet.primary { border-color: var(--accent); }
+button.primary { padding: 0.6rem 1.2rem; border-radius: 0.5rem; background: var(--accent); color: var(--bg); border: none; cursor: pointer; }
+button.link { background: none; border: none; color: var(--accent); padding: 0.5rem 0; cursor: pointer; }
+input { width: 100%; padding: 0.6rem; margin: 0.25rem 0 0.5rem; border: 1px solid var(--border); border-radius: 0.4rem; background: transparent; color: inherit; }
+ul { list-style: none; padding: 0; }
+li { display: flex; gap: 0.5rem; align-items: center; padding: 0.5rem 0; border-bottom: 1px solid var(--border); }
+li span { flex: 1; }
