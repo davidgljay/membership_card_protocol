@@ -75,7 +75,8 @@ describe('matrix_room_membership.md + matrix_join_attestation_and_revocation.md 
 
   describe('§1 Room Creation (real, no chain-walk dependency)', () => {
     it('creates a real room on the live Synapse instance', () => {
-      expect(roomId).toMatch(new RegExp(`^!.+:${MATRIX_SERVER_NAME.replace(/\./g, '\\.')}$`));
+      // Room version 12 IDs are '!' + the create event's hash, with no ':server' suffix.
+      expect(roomId).toMatch(/^![A-Za-z0-9_-]+$/);
     });
 
     it('sets m.card.policy state to the given policy_id', async () => {

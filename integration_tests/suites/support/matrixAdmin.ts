@@ -93,7 +93,8 @@ export interface CreateCardGatedRoomResult {
 }
 
 const ROOM_KICK_POWER_LEVEL = 50;
-const ROOM_CREATOR_POWER_LEVEL = 100;
+/** Room version 12: the creator owns the room and must not be listed in power_levels users (see wallet-service/src/matrix/room-creation.ts). */
+const ROOM_VERSION = '12';
 
 /** Mirrors wallet-service/src/matrix/room-creation.ts's createMatrixRoomViaSynapse — see this file's header comment for why it's duplicated, not imported. */
 export async function createCardGatedRoom(params: CreateCardGatedRoomParams): Promise<CreateCardGatedRoomResult> {
@@ -106,14 +107,13 @@ export async function createCardGatedRoom(params: CreateCardGatedRoomParams): Pr
       state_key: '',
       content: {
         users: {
-          [params.creatorMatrixUserId]: ROOM_CREATOR_POWER_LEVEL,
           [MATRIX_ENFORCEMENT_USER_ID]: ROOM_KICK_POWER_LEVEL,
         },
       },
     },
   ];
 
-  const body: Record<string, unknown> = { preset: 'private_chat', initial_state: initialState };
+  const body: Record<string, unknown> = { preset: 'private_chat', room_version: ROOM_VERSION, initial_state: initialState };
   if (params.name !== undefined) body['name'] = params.name;
   if (params.topic !== undefined) body['topic'] = params.topic;
 

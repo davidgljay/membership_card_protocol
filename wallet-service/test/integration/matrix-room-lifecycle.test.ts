@@ -292,7 +292,8 @@ describe.runIf(hasLiveStack)('matrix room lifecycle (Step 20, live stack)', () =
     }, 20_000);
 
     it('POST /matrix/rooms creates a real room on the live Synapse instance', () => {
-      expect(roomId).toMatch(/^!.+:matrix\.internal$/);
+      // Room version 12 IDs are '!' + the create event's hash, with no ':server' suffix.
+      expect(roomId).toMatch(/^![A-Za-z0-9_-]+$/);
     });
 
     it('the room appears in GET /matrix/room-index with the correct policy_id', async () => {

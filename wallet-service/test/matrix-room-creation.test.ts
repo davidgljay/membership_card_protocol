@@ -4,6 +4,7 @@ import {
   assertCardHashBelongsToSession,
   RoomCreatorAuthorizationError,
   ROOM_KICK_POWER_LEVEL,
+  ROOM_VERSION,
 } from '../src/matrix/room-creation.js';
 
 // Mocks the Synapse HTTP call rather than hitting a real homeserver, same
@@ -47,12 +48,12 @@ describe('createMatrixRoomViaSynapse (Step 16)', () => {
       const powerLevels = body.initial_state.find((e: { type: string }) => e.type === 'm.room.power_levels');
       expect(powerLevels?.content?.users?.[ENFORCEMENT_USER_ID]).toBe(ROOM_KICK_POWER_LEVEL);
       expect(powerLevels?.content?.users?.[ENFORCEMENT_USER_ID]).toBeGreaterThanOrEqual(50);
-      // Creator keeps room-owner power — the enforcement account gets only
-      // the minimum (kick-level) it needs, not full admin.
-      expect(powerLevels?.content?.users?.[CREATOR_MATRIX_USER_ID]).toBe(100);
-      expect(powerLevels?.content?.users?.[ENFORCEMENT_USER_ID]).toBeLessThan(
-        powerLevels?.content?.users?.[CREATOR_MATRIX_USER_ID]
-      );
+      // Room version 12: the creator owns the room by virtue of creating it
+      // and must not be listed in users (Synapse rejects it). The
+      // enforcement account gets only the minimum (kick-level) it needs.
+      expect(body.room_version).toBe(ROOM_VERSION);
+      expect(powerLevels?.content?.users).not.toHaveProperty(CREATOR_MATRIX_USER_ID);
+      expect(powerLevels?.content?.users?.[ENFORCEMENT_USER_ID]).toBeLessThan(100);
 
       return new Response(JSON.stringify({ room_id: ROOM_ID }), { status: 200 });
     });

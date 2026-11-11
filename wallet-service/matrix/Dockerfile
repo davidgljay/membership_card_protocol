@@ -1,4 +1,7 @@
-FROM matrixdotorg/synapse:latest
+# Pinned (was :latest): v1.165.0 made room version 12 the default, which
+# changed power-level rules and broke room creation in CI on 2026-11-11.
+# Upgrade deliberately and rerun the Matrix integration suites.
+FROM matrixdotorg/synapse:v1.165.0
 
 # matrix_policy_module (the Synapse policy module, matrix_synapse_module.md)
 # and its dependency membership-card-verifier (still pending PyPI publish —
