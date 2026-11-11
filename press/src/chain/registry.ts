@@ -53,6 +53,8 @@ import { secp256r1Sign, secp256r1PublicKeyFromPrivate, keccak256, toBase64url } 
 // ---------------------------------------------------------------------------
 
 const LOGIC_ABI = parseAbi([
+  // Card login (dns_resolution.md §4.1): returns (admin_card_address, registered_at, fraud_risk, suspension_expires_at, exists).
+  'function getDomainRegistration(uint8[] domain) external view returns (bytes32, uint64, uint8, uint64, bool)',
   'function registerCard(bytes32 card_address, uint8[] initial_log_cid, bytes32 policy_address, bytes32 press_address, uint8[] press_sig_payload, uint8[] press_signature) external',
   'function updateCardHead(bytes32 card_address, uint8[] new_log_cid, uint8[] prev_log_cid, bytes32 press_address, uint8[] press_sig_payload, uint8[] press_signature) external',
   'function claimOpenOffer(bytes32 offer_id, uint64 max_acceptances, uint64 expires_at, bytes32 card_address, uint8[] initial_log_cid, bytes32 policy_address, bytes32 press_address, uint8[] press_sig_payload, uint8[] press_signature) external',
@@ -168,6 +170,8 @@ export interface RegistryClient {
   getSubCardEntry(subCardAddress: Hex): Promise<SubCardEntry>;
   /** Read the current protocol version string from the logic contract. */
   getProtocolVersion(): Promise<string>;
+  /** DomainRegistrations[domain] via the logic contract (card login, press.md §5.3 step 4a). */
+  getDomainRegistration(domain: string): Promise<{ admin_card_address: Hex; fraud_risk: number; suspension_expires_at: bigint; exists: boolean }>;
   /**
    * Ground-truth on-chain event replay for a card's log — every
    * `CardRegistered`/`CardHeadUpdated` event naming this card address, in
@@ -279,7 +283,9 @@ export function createRegistryClient(config: PressConfig): RegistryClient {
   // direct full-range eth_getLogs call). Only this narrow, low-volume
   // read path uses it — the write/confirmation traffic that motivated
   // moving ARBITRUM_RPC_URL to Alchemy in the first place stays there.
-  const logsClient: PublicClient = createPublicClient({ chain, transport: http() });
+  // ARBITRUM_LOGS_RPC_URL overrides it where the public RPC is the wrong
+  // network (the integration stack's local devnode).
+  const logsClient: PublicClient = createPublicClient({ chain, transport: http(config.ARBITRUM_LOGS_RPC_URL) });
 
   // walletClient uses the gas wallet for tx submission.
   const walletClient: WalletClient = createWalletClient({
@@ -469,6 +475,17 @@ export function createRegistryClient(config: PressConfig): RegistryClient {
       args: [address],
     });
     return result as unknown as boolean;
+  }
+
+  async function getDomainRegistration(domain: string): Promise<{ admin_card_address: Hex; fraud_risk: number; suspension_expires_at: bigint; exists: boolean }> {
+    const bytes = Array.from(new TextEncoder().encode(domain.toLowerCase().replace(/\.$/, '')));
+    const [admin, , fraudRisk, suspensionExpiresAt, exists] = (await publicClient.readContract({
+      address: logicAddress,
+      abi: LOGIC_ABI,
+      functionName: 'getDomainRegistration',
+      args: [bytes],
+    })) as unknown as [Hex, bigint, number, bigint, boolean];
+    return { admin_card_address: admin, fraud_risk: Number(fraudRisk), suspension_expires_at: suspensionExpiresAt, exists };
   }
 
   async function getProtocolVersion(): Promise<string> {
@@ -801,6 +818,7 @@ export function createRegistryClient(config: PressConfig): RegistryClient {
     getOpenOfferUseCount,
     getSubCardEntry,
     getProtocolVersion,
+    getDomainRegistration,
     getCardEventLog,
     isPolicyAuthorizer,
     registerCard,

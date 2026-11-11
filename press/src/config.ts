@@ -45,6 +45,27 @@ export interface PressConfig {
    * this amendment covers.
    */
   EXPECTED_CHAIN_ID: number;
+  /**
+   * Optional RPC for getCardEventLog's full-range eth_getLogs scans. Unset
+   * keeps the default: viem's public RPC for the chain (see
+   * chain/registry.ts). Set it where that is the wrong network, e.g. a
+   * local devnode.
+   */
+  ARBITRUM_LOGS_RPC_URL: string | undefined;
+  /**
+   * Card login (press.md §5.4, code plan F2). Address (bytes32 hex, no 0x) of
+   * the app-certification root. When set, a sub-card's app_card chain must
+   * pass through it (P-15). Unset keeps the legacy "any trusted root" check
+   * and logs a startup warning — set it in every deployment.
+   */
+  PRESS_APP_CERTIFICATION_ROOT: string | undefined;
+  /**
+   * Address of the login service branch node. Used to recognize login service
+   * cards for the scope rule (P-26) and S1 sub-cards (P-27), and to accept
+   * code-520 domain bindings (P-28). Unset → no card is treated as a login
+   * service card: S1 sub-cards and code 520 are rejected.
+   */
+  PRESS_LOGIN_SERVICE_CERTIFICATION_ROOT: string | undefined;
   /** Logic contract — upgradeable, all write operations. */
   REGISTRY_CONTRACT_ADDRESS: string;
   /**
@@ -184,6 +205,13 @@ export function loadConfig(): PressConfig {
 
   const ARBITRUM_RPC_URL = requireEnv('ARBITRUM_RPC_URL');
   const EXPECTED_CHAIN_ID = parseInt(optionalEnv('EXPECTED_CHAIN_ID', '42161'), 10);
+  const ARBITRUM_LOGS_RPC_URL = optionalEnv('ARBITRUM_LOGS_RPC_URL', '') || undefined;
+  const normRoot = (v: string) => (v ? v.toLowerCase().replace(/^0x/, '') : undefined);
+  const PRESS_APP_CERTIFICATION_ROOT = normRoot(optionalEnv('PRESS_APP_CERTIFICATION_ROOT', ''));
+  const PRESS_LOGIN_SERVICE_CERTIFICATION_ROOT = normRoot(optionalEnv('PRESS_LOGIN_SERVICE_CERTIFICATION_ROOT', ''));
+  if (!PRESS_APP_CERTIFICATION_ROOT) {
+    console.warn('[press] PRESS_APP_CERTIFICATION_ROOT is not set: sub-card app cards are checked against any trusted root (legacy behavior).');
+  }
   const REGISTRY_CONTRACT_ADDRESS = requireEnv('REGISTRY_CONTRACT_ADDRESS');
   const STORAGE_CONTRACT_ADDRESS = requireEnv('STORAGE_CONTRACT_ADDRESS');
 
@@ -224,6 +252,9 @@ export function loadConfig(): PressConfig {
     PRESS_OHTTP_PRIVATE_KEY,
     ARBITRUM_RPC_URL,
     EXPECTED_CHAIN_ID,
+    ARBITRUM_LOGS_RPC_URL,
+    PRESS_APP_CERTIFICATION_ROOT,
+    PRESS_LOGIN_SERVICE_CERTIFICATION_ROOT,
     REGISTRY_CONTRACT_ADDRESS,
     STORAGE_CONTRACT_ADDRESS,
     IPFS_PROVIDER,

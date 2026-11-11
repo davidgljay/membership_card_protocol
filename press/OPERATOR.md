@@ -61,6 +61,9 @@ All secrets are injected as environment variables. Key material is never written
 | `LOG_LEVEL` | `info` | One of `debug`, `info`, `warn`, `error`. |
 | `MAX_BATCH_SIZE` | `100` | Maximum cards per `BatchUpdateCardHeads` call. |
 | `STALENESS_WINDOW_SECONDS` | `300` | Maximum age of revocation data before press rejects issuance. |
+| `PRESS_APP_CERTIFICATION_ROOT` | unset | App-certification root address (bytes32 hex). When set, a sub-card's `app_card` chain must pass through it (P-15). Unset keeps the older "any trusted root" check and logs a startup warning; set it in every deployment. |
+| `PRESS_LOGIN_SERVICE_CERTIFICATION_ROOT` | unset | Login service branch node under that root. Lets the press recognize login service cards: the scope rule (P-26), `S1` server cards (P-27), and code-520 domain bindings (P-28). Unset means no card is treated as a login service card, so `S1` sub-cards and code 520 are rejected. |
+| `ARBITRUM_LOGS_RPC_URL` | viem's public RPC | RPC used for full-range event-log scans (`getCardEventLog`). Set it when the public RPC is the wrong network, e.g. a local devnode. |
 
 ---
 

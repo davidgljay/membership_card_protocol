@@ -13,7 +13,7 @@ import { handleOpenOfferClaim } from '../../src/handlers/open-offer.js';
 import { handleUpdate } from '../../src/handlers/update.js';
 import { handleSubCardRegister, handleSubCardDeregister } from '../../src/handlers/sub-card.js';
 import { createInMemoryKv } from '../../src/kv.js';
-import { toBase64url, keccak256, fromBase64url, deriveContentKey, aes256gcmDecrypt } from '../../src/functions/crypto.js';
+import { toBase64url, keccak256, fromBase64url, deriveContentKey, aes256gcmDecrypt, aes256gcmEncrypt } from '../../src/functions/crypto.js';
 import type { PressContext } from '../../src/context.js';
 import type {
   IssuanceRequest, FinalizeRequest, OpenOfferClaimSubmission,
@@ -405,17 +405,22 @@ describe('P-12', () => {
     const ctx = makeCtx({
       registry: {
         ...makeCtx().registry,
-        getCardEntry: vi.fn().mockResolvedValue({ exists: true, log_head_cid: new Uint8Array([1, 2, 3]), policy_address: '0x' + '00'.repeat(32), last_press_address: '0x', forward_to: '0x' }),
+        getCardEntry: vi.fn().mockResolvedValue({ exists: true, log_head_cid: new TextEncoder().encode('bafyhead'), policy_address: '0x' + '00'.repeat(32), last_press_address: '0x', forward_to: '0x' }),
         updateCardHead: vi.fn().mockRejectedValue(
           Object.assign(new Error('STALE_PREV_CID'), { pressCode: 'P-12' })
         ),
       } as never,
     });
     // P-12 is surfaced by appendLogEntry → updateCardHead when retry fails.
-    // The registry.updateCardHead mock throws P-12 directly.
+    // The registry.updateCardHead mock throws P-12 directly. appendLogEntry
+    // first reads the target's encrypted head, so serve one.
+    const holderKeccak = Buffer.from(keccak256(HOLDER_PK)).toString('hex');
+    (ctx.ipfs as unknown as { fetchFromIPFS: unknown }).fetchFromIPFS = vi.fn().mockImplementation(async () =>
+      aes256gcmEncrypt(deriveContentKey(HOLDER_PK), canonicalize({ policy_id: POLICY_CID, recipient_pubkey: toBase64url(HOLDER_PK) }))
+    );
     const intent = {
       updater_card_address: ISSUER_ADDR,
-      target_card_address: HOLDER_ADDR,
+      target_card_address: holderKeccak,
       code: 100,
       timestamp: new Date().toISOString(),
     };
@@ -424,6 +429,7 @@ describe('P-12', () => {
     const body: UpdateRequest = {
       update_intent: intent,
       intent_signature: { public_key: toBase64url(ISSUER_PK), signature: toBase64url(sig) },
+      target_card_pubkey: toBase64url(HOLDER_PK),
     };
     await expect(handleUpdate(ctx, body)).rejects.toMatchObject({ pressCode: 'P-12' });
   });

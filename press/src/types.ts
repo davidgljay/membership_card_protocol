@@ -167,6 +167,13 @@ export interface UpdateIntentPayload {
 export interface UpdateRequest {
   update_intent: UpdateIntentPayload;
   intent_signature: SignatureField;
+  /**
+   * base64url ML-DSA-44 public key of the target card — an unsigned hint the
+   * press binding-checks against target_card_address (keccak256). Needed to
+   * read and encrypt the card's log (ADR-006 content key). Optional for
+   * self-updates, where intent_signature.public_key is the target's key.
+   */
+  target_card_pubkey?: string;
 }
 
 export interface UpdateResponse {
@@ -187,7 +194,7 @@ export interface SubCardDocument {
   recipient_pubkey: string;
   issued_at: string;
   valid_until?: string;
-  attestation_level: 'T1' | 'T2';
+  attestation_level: 'T1' | 'T2' | 'S1';
   attestation_proof?: string;
   /** Base64url ML-DSA-44 signature — a plain string, matching app-sdk's `AppSignedSubCardDocument`/`SignedSubCardDocument` wire shape (`requestSubCard.ts`, `countersign.ts`), which every requester/holder canonicalizes and signs against. Not a `SignatureField` object — there is no separate public_key on the wire here since it's already present as `app_card_pubkey`/`holder_primary_card_pubkey`. */
   app_signature: string;
