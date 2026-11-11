@@ -1,0 +1,9 @@
+# Card Login — Phase 1 Summary (Scan existing specs)
+
+> **Renamed 2026-11-09:** "developer card" is now **login service card**, and the app-certification root has three branches (wallet, app, login service). This document is a historical record and keeps the old terms; see `plans/card-login-spec-changes.md` §Amendment 2026-11-09.
+
+Date: 2026-11-08 · Plan: [card-login-implementation-plan.md](../card-login-implementation-plan.md) · Output: [card-login-spec-impact.md](../card-login-spec-impact.md)
+
+Phase 1 read every spec the login design touches and recorded, per field and section, what to keep, change, remove, or add (impact doc §A–E), then cross-checked for contradictions and grepped `specs/` for references outside the scanned files (§F). No spec, governance, or code file was edited. Most of the design maps cleanly onto existing mechanisms: the auth request/response objects are revised rather than replaced, the developer card fits as a branch under the app-certification root, and domain binding can be done with an off-chain ML-DSA-44 co-signature from the DNS admin card, so no contract change (CP4) is needed. The scan found two things the strategic plan didn't anticipate: server cards can't meet the sub-card attestation requirement (device-only T1/T2 levels), and cross-device login via card messaging is open to QR relay phishing unless the one-time code is user-mediated. It also found that login responses must be addressed to the developer card rather than the server card, because messages route only to master cards. Six more specs outside the planned scan reference the auth objects and are added to Phase 2. `mcard` is not registered with IANA.
+
+**→ Checkpoint CP1.** Two items need David before Phase 2 (impact doc §F.3 items 1–2), plus confirmation of the assumed open-question resolutions (§0) and three design choices (§F.3 items 3–5). Items 6–12 proceed with the stated defaults unless David objects.
