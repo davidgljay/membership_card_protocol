@@ -236,6 +236,7 @@ describe('card_validation.md (live dev deployment, full CardVerifier)', () => {
       // would always be true for a card that's itself in trustedRoots).
       trustedRoots: [trustedRoot.address],
       appCertificationRoot: trustedRoot.address,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       fetchAnnotations: false,
       returnChain: true,
     });
