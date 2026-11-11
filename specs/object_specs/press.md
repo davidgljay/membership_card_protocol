@@ -38,6 +38,8 @@
 - `P-10` error description updated.
 - §9 open questions updated.
 
+
+**Changelog (2026-11-08, card login):** §5.3 `processUpdateIntent` handles code 520 (`domain_binding`) and validates `preferred_services`; §5.4 `processSubCardRegistration` enforces the login service scope rule and accepts `attestation_level: "S1"` only on server cards; `verifyAppCertificationChain` returns the app card's branch; new error codes `P-26`–`P-29`. See `process_specs/card_login.md`.
 ---
 
 ## Table of Contents
@@ -331,6 +333,7 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 4. Confirm the press's own `press_card_cid` appears in `policy.approved_presses`.
 5. Call `evaluatePredicates(policy, requester_card_address, recipient_card_address)`.
 6. Call `checkRateLimits('register_card', requester_card_address, policy_address)`.
+7. If the card being issued is itself a policy card carrying `preferred_services`, validate the field's shape as in §5.3 step 5a; reject with `P-29` if malformed. *(Added 2026-11-08.)*
 
 **Returns:** Validated policy snapshot and card verification results, or an error code.
 
@@ -529,6 +532,12 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 **Called by:** `/update` handler
 **Purpose:** Process a signed `UpdateIntentPayload` — field updates (1xx–7xx codes) or revocations (8xx–9xx codes).
 
+**Request** *(2026-11-09)*: `{ update_intent, intent_signature: { public_key, signature }, target_card_pubkey? }` (`card_updates.md` step 5). The press accepts the spec's intent field names (`target_card`, `updater_card`) and its historical `target_card_address`/`updater_card_address`; the signature covers the intent exactly as sent. `target_card_pubkey` must hash to the target address (`P-13`); without it, a non-self update is rejected (`P-01`).
+
+**Event logs** *(2026-11-10)*: `getCardEventLog` scans use viem's public RPC for the configured chain unless `ARBITRUM_LOGS_RPC_URL` is set; deployments whose chain has no usable public RPC (a local devnode) must set it.
+
+**Log entries** *(2026-11-09)*: `appendLogEntry` writes the full `protocol-objects.md §3` LogEntry — `version` (head + 1), `history`, `card_state` — and encrypts it under the target card's content key, like genesis documents. Before this, entries were pinned unencrypted without `card_state`/`history`, so updated cards could not be verified.
+
 **Steps:**
 
 1. Verify `intentSignature` over canonical RFC 8785 JSON of `updateIntent` using the updater's ML-DSA-44 public key. To resolve the updater's public key: call `verifier.verifyCard(updateIntent.updater_card_address)` and extract the public key from the resolved card chain. Reject with `P-09` on signature failure.
@@ -536,8 +545,10 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 2b. Confirm no `field_updates` entry targets a protocol-required immutable field (`process_specs/card_updates.md` step 7, `protocol-objects.md` §1/§1.1) outside its own dedicated update-code mechanism, if it has one (`active_subcards` via codes 510/511/512; `successor` via codes 100/101/102). Reject with `P-25`. Checked before any registry/IPFS lookup, since it needs nothing but the request body itself.
 3. Resolve the target card's policy from the on-chain `CardEntry` (via the press's RPC connection).
 4. **Codes 510/511/512 (`active_subcards` directory updates) are a hardcoded special case, evaluated before the generic `update_policy` step below and never subject to it:** reject with `P-23` unless `updater_card_address` equals `target_card_address` (only a card's own holder may touch its own `active_subcards`), and reject with `P-13` unless `keccak256(intentSignature.public_key)` equals `target_card_address` (the address-equality check above is meaningless without also confirming the signature was actually produced by that address's own key — implemented in `press/src/handlers/update.ts`). This is a hardcoded protocol invariant per `update_codes.md §5xx` and `process_specs/card_updates.md` — no policy's `update_policy` is consulted for these three codes, and `verifier.verifyCard` is not called for them.
+4a. **Code 520 (`domain_binding`, added 2026-11-08) is also a hardcoded special case** (`protocol-objects.md §1.1, §17`): reject with `P-23` unless `updater_card_address` equals `target_card_address`; reject with `P-28` unless all of: the target card's chain passes through `loginServiceCertificationRoot`; the card has no `domain_binding` yet; `field_updates` sets only `domain_binding`; the attestation's `login_service_card`/`login_service_card_pubkey` match the target card (binding check); `admin_card_pubkey` binds to `admin_card`; `admin_signature` verifies; `admin_card == DomainRegistrations[domain].admin_card_address` and the admin card is currently valid; and the domain is not suspended (`fraud_risk == 2` with an unexpired `suspension_expires_at`). Skip step 4b for code 520.
 4b. For all other codes: evaluate the relevant `update_policy` predicate for each field in `field_updates` (for 1xx–7xx codes). For revocation codes (8xx–9xx), evaluate `policy.revocation_permissions`. Use `verifier.verifyCard(updateIntent.updater_card_address)` for the chain data required by predicate evaluation.
 5. Confirm the updater card chain satisfies the predicate. Reject with `P-11` if not.
+5a. If the target is a policy card and `field_updates` sets `preferred_services`, validate its shape (`protocol-objects.md §2`): an array (possibly empty) of entries with an `https:` `origin` (scheme + host, default port, no path), a non-empty `name`, an optional `icon` CID and `description`; origins unique. Reject with `P-29` otherwise. The same check applies when a policy card is issued with the field (§5.1 `validateIssuanceRequest`).
 6. Multiple revocation entries on the same card are permitted; if present, the entry with the earliest `effective_date` governs (per `card_updates.md`). Field update codes (1xx–7xx) may be applied to a card that already has a revocation entry — revocation does not block further field updates.
 7. Call `checkRateLimits('update_card_head', updater_card_address, policy_address)` for 1xx codes.
 8. Call `appendLogEntry(target_card, updateIntent)` to build, sign, publish, and register the new `LogEntry`.
@@ -621,9 +632,10 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 2. Confirm `keccak256(subCardDoc.holder_primary_card_pubkey)` equals the `holder_primary_card` pointer address. Reject with `P-13` on mismatch.
 3. Confirm `keccak256(subCardDoc.app_card_pubkey)` equals the `app_card` pointer address. Reject with `P-13` on mismatch.
 4. Verify `holderSignature` over canonical RFC 8785 JSON of the document including `app_signature`, excluding `holder_signature`, using `subCardDoc.holder_primary_card_pubkey`. Reject with `P-14` on failure.
-5. Call `verifyAppCertificationChain(subCardDoc.app_card_address)`.
+5. Call `verifyAppCertificationChain(subCardDoc.app_card_address)` → `{ certified, branch }`.
+5b. **Login service scope rule (added 2026-11-08).** If `branch == "login_service"`, reject with `P-26` unless `subCardDoc.app_card == subCardDoc.holder_primary_card` (`subcards.md §Server Cards`) — a login service card may only authorize its own server cards.
 5a. **DNS admin card check (Fix #2).** Read `DnsAdminCardKeys[master_card_address]` via the press's registry contract RPC connection (`GetDnsAdminCardKey(master_card_address)`, `registry_contract.md §5`). If non-zero (the master card is a DNS admin card), confirm the request supplied `adminSecpPayload`/`adminSecpSignature`, that `adminSecpPayload` encodes `sub_card_address`/`sub_card_doc_cid` matching this registration, and pass both through unmodified to `registerSubCardOnChain` for on-chain RIP-7212 verification — the press does not verify the secp256r1 signature itself; the contract does. If the master card is not a DNS admin card, pass explicit zero-value/empty `admin_secp_payload`/`admin_secp_signature` to `registerSubCardOnChain`.
-6. Confirm `attestation_level` is `"T2"` unless the governing policy explicitly accepts `"T1"`. If `"T2"`, verify `attestation_proof` against `hash(recipient_pubkey)`.
+6. Confirm `attestation_level` is `"T2"` unless the governing policy explicitly accepts `"T1"`, or is `"S1"` on a server card (`branch == "login_service"` and step 5b passed). If `"T2"`, verify `attestation_proof` against `hash(recipient_pubkey)`. Reject `"S1"` on any other sub-card with `P-27`.
 7. Call `checkRateLimits('register_sub_card', holder_card_address, policy_address)`.
 8. Call `checkRateLimits('register_sub_card_app', app_card_address, policy_address)`.
 9. Post the completed `SubCardDocument` to IPFS via `pinToIPFS` → `sub_card_doc_cid`.
@@ -651,8 +663,9 @@ Implemented in `press/src/functions/notifications.ts` (`diffActiveSubcards` iden
 2. Confirm `result.chain_reaches_trusted_root === true` where the trusted root is the governance authority's app-certification policy root (registered in `PolicyAuthorizerKeys` on-chain and present in the press's `trustedRoots` configuration).
 3. Confirm the app card is not revoked (`result.is_currently_valid === true`).
 4. Reject with `P-15` if the chain does not reach the expected root or the app card is revoked.
+5. Report `branch: "login_service"` if `result.chain_card_addresses` includes the login service branch node (`loginServiceCertificationRoot` in the press's verifier configuration), else `branch: "wallet"`.
 
-**Returns:** `{ certified: true }` or an error.
+**Returns:** `{ certified: true, branch: "login_service" | "other" }` or an error.
 
 **Note:** The press configures the verifier with the app-certification policy root as a trusted root for this check. The verifier's `isPolicyAuthorizer` RPC call is authoritative; no additional chain-walking logic is required.
 
@@ -933,6 +946,10 @@ Press-side error codes (not on-chain reverts). Returned in the HTTP response bod
 | `P-23` | Code-510/511/512 `active_subcards` update where `updater_card_address` ≠ `target_card_address` (holder-only rule violated) |
 | `P-24` | Filebase upload failed; IPFS pin not confirmed |
 | `P-25` | `field_updates` targets a protocol-required immutable field outside its own dedicated update-code mechanism (if it has one) — see `process_specs/card_updates.md` step 7 and `protocol-objects.md` §1/§1.1 |
+| `P-26` | Login service scope rule violated: a login-service-branch `app_card` on a sub-card whose `holder_primary_card` is a different card (`subcards.md §Server Cards`). Added 2026-11-08. |
+| `P-27` | `attestation_level: "S1"` on a sub-card that is not a server card. Added 2026-11-08. |
+| `P-28` | Code-520 `domain_binding` intent invalid: target not under the login service branch, binding already set, attestation binding/signature failure, admin card not the domain's current admin, or domain suspended. Added 2026-11-08. |
+| `P-29` | `preferred_services` malformed on a policy card issuance or update. Added 2026-11-08. |
 
 **On-chain revert codes this spec surfaces (Fix #2).** These are contract-side reverts (`registry_contract.md §8`), not press-generated codes, but `registerSubCardOnChain` (§5.4) explicitly forwards them to the caller rather than retrying:
 

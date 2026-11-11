@@ -16,6 +16,8 @@
 
 **Changelog (spec-consistency Phase 3, 2026-07-16, Tier 1 items 6–7):** `chain_card_addresses` (§8) is now actually exposed on the public result — it was computed internally by Stage 3 but never threaded through to the four result-construction sites in either language port; fixed in both, with the field added to every code path (`verifyEnvelope`'s main path, `verifyCard`, the internal `#buildResult`/`_build_result` helper, and the skipped-result fallback). Also documented several already-implemented, previously-undocumented features: `VerifierConfig.returnChain` and the corresponding `chain`/`ChainLink` result fields (§5, §8), `VerifierConfig.conditions`/`PolicyMatchConditions` (§5) — resolving a real contradiction where §7.5 step 4 described an unimplemented call-site `requiredPredicate`/`requiredPolicy` shape instead of the actual, tested construction-time-config design — `CardVerificationResult.protocol_version` (§8), and `SignatureEntry.key_scheme` (§6.1). See `plans/spec-consistency/inconsistencies/phase-3-consolidated-fixes.md` Tier 1 items 6–7.
 
+**Changelog (2026-11-08, card login):** New `VerifierConfig.loginServiceCertificationRoot` (§5); `RpcProvider.getDomainRegistration` (§4.1); new entry points `verifyLoginResponse` (§6.3) and `verifyServerCard` (§6.4); Stage 2 step 14 accepts `"S1"` only on server cards and new step 16f enforces the login service scope rule (`LOGIN_SERVICE_SCOPE`); `app_card_branch` result field (§8); new error codes (§9). See `process_specs/card_login.md`.
+
 ---
 
 ## Table of Contents
@@ -30,6 +32,8 @@
 6. [Primary API](#6-primary-api)
    - 6.1 [verifyEnvelope](#61-verifyenvelope)
    - 6.2 [verifyCard](#62-verifycard)
+   - 6.3 [verifyLoginResponse](#63-verifyloginresponse)
+   - 6.4 [verifyServerCard](#64-verifyservercard)
 7. [Verification Pipeline](#7-verification-pipeline)
    - 7.1 [Stage 1 — Signature Validity](#71-stage-1--signature-validity)
    - 7.2 [Stage 2 — Sub-Card to Master Link](#72-stage-2--sub-card-to-master-link)
@@ -126,6 +130,20 @@ interface RpcProvider {
    * Returns the SubCardEntry for the given sub-card address, or null.
    */
   getSubCardEntry(subCardAddress: string): Promise<SubCardEntry | null>;
+
+  /**
+   * Added 2026-11-08 (card login). Reads DomainRegistrations[domain]
+   * (dns_resolution.md §4.1; domain lowercase, no trailing dot). Returns null
+   * when no entry exists. Used by verifyServerCard (§6.4) for the
+   * DomainBindingAttestation currency rule (protocol-objects.md §17).
+   */
+  // Optional on the interface so existing providers keep compiling; the
+  // login entry points (§6.3, §6.4) throw MISSING_RPC_METHOD without it.
+  getDomainRegistration?(domain: string): Promise<{
+    admin_card_address: string;    // bytes32 hex
+    fraud_risk: 0 | 1 | 2;
+    suspension_expires_at: number; // unix seconds; 0 if not suspended
+  } | null>;
 
   /**
    * Replays the on-chain event log for a card address and returns the ground-truth,
@@ -277,6 +295,20 @@ interface VerifierConfig {
   appCertificationRoot?: string;
 
   /**
+   * Added 2026-11-08 (card login). The on-chain address (bytes32 hex) of the
+   * login service branch node under the app-certification root
+   * (governance/AppCertificationBody/login_service_certification.md). Stage 2
+   * step 16f uses it to tell login service cards from wallet and app cards
+   * (verifiers treat those two alike) and to enforce the login service scope rule. Required whenever
+   * appCertificationRoot is set: once a login service branch exists on-chain, a
+   * verifier that cannot recognize it would let a login service card pose as an
+   * app or wallet card. A verifier that encounters a sub-card signature without it
+   * configured hard-rejects with LOGIN_SERVICE_CERTIFICATION_ROOT_NOT_CONFIGURED,
+   * the same pattern as appCertificationRoot.
+   */
+  loginServiceCertificationRoot?: string;
+
+  /**
    * Attestation levels this verifier accepts from sub-cards. Per
    * protocol-objects.md §16 step 11, a sub-card's attestation_level must be
    * "T2" unless the governing policy explicitly accepts "T1" — see §7.2
@@ -288,6 +320,8 @@ interface VerifierConfig {
    * Default: ["T2"].
    */
   acceptedAttestationLevels?: ("T1" | "T2")[];
+  // "S1" (server cards) is not configurable here: it is accepted exactly when
+  // the Stage 2 step 16f login service scope rule holds, and rejected otherwise.
 
   /**
    * This verifier's own card on-chain address (bytes32 hex). Used to
@@ -372,6 +406,8 @@ class CardVerifier {
   constructor(config: VerifierConfig);
   verifyEnvelope(envelope: SignedMessageEnvelope, options?: VerifyEnvelopeOptions): Promise<EnvelopeVerificationResult>;
   verifyCard(cardAddress: string, options?: VerifyCardOptions): Promise<CardVerificationResult>;
+  verifyLoginResponse(input: VerifyLoginResponseInput): Promise<LoginVerificationResult>;   // §6.3
+  verifyServerCard(serverCardPubkey: string, options?: VerifyServerCardOptions): Promise<ServerCardVerificationResult>; // §6.4
 }
 ```
 
@@ -448,6 +484,80 @@ interface VerifyCardOptions {
 
 ---
 
+### 6.3 verifyLoginResponse
+
+*(Added 2026-11-08 — `process_specs/card_login.md` step 24.)* The site's single call for checking a login response. Runs the cheap field checks first, then full envelope verification, then the DCQL match.
+
+```typescript
+verifyLoginResponse(input: VerifyLoginResponseInput): Promise<LoginVerificationResult>
+
+interface VerifyLoginResponseInput {
+  /** form_post: the AuthenticationResponse wrapper ({ state, signed_statement }).
+   *  mcard_message: the received SignedMessageEnvelope. */
+  response: AuthenticationResponse | SignedMessageEnvelope;
+  /** The AuthenticationRequest exactly as the site issued it (protocol-objects.md §8). */
+  request: AuthenticationRequest;
+  /** The site's own origin, e.g. "https://example.com". */
+  expectedOrigin: string;
+  now?: string;                    // ISO 8601; default: current time
+  maxResponseAgeSeconds?: number;  // default 300
+  clockSkewSeconds?: number;       // default 60
+}
+
+type LoginVerificationResult =
+  | { valid: true; presented_card: string; login_service_card: string;
+      matched_policy: string; verification: SignatureVerificationResult }
+  | { valid: false; code: string; reason: string;
+      verification?: SignatureVerificationResult };
+```
+
+**Steps** (first failure wins; codes are defined in `process_specs/card_login.md §Error Codes`):
+
+1. `payload.type == "auth_response"` → else `LOGIN_WRONG_TYPE`.
+2. `content.state == request.state`, and if the wrapper's unsigned `state` is present it equals both → else `LOGIN_STATE_MISMATCH`.
+3. `content.nonce == request.nonce` → `LOGIN_NONCE_MISMATCH`; `content.statement == request.statement` → `LOGIN_STATEMENT_MISMATCH`.
+4. Recompute `request_hash` from `request` (`protocol-objects.md §8`); equal to `content.request_hash` → else `LOGIN_REQUEST_HASH_MISMATCH`.
+5. `content.audience == expectedOrigin == origin(request.response_uri)` → else `LOGIN_AUDIENCE_MISMATCH`.
+6. Resolve the login service card as the `holder_primary_card` of `request.requester_card`'s `SubCardDocument`; `payload.recipients` is exactly `[login service card]` → else `LOGIN_RECIPIENT_MISMATCH`. `payload.senders` has exactly one entry → else `LOGIN_SENDER_MISMATCH`.
+7. `payload.timestamp` ≤ `request.expires_at` + skew, ≥ `request.expires_at` − 10 minutes − skew, and `now − timestamp` ≤ `maxResponseAgeSeconds` + skew → else `LOGIN_RESPONSE_STALE`.
+8. `verifyEnvelope(signed_statement)` (§6.1). Require for the signature: `signature_valid`, `scope_clean`, `chain_reaches_trusted_root`, and `is_currently_valid` all `true` → else `LOGIN_PRESENTED_CARD_INVALID` with the first `VerificationError` code in `reason`. The signing card — or, for a sub-card signature, its master card from Stage 2 — equals `senders[0]` → else `LOGIN_SENDER_MISMATCH`.
+9. DCQL match (`protocol-objects.md §8.1`) of `senders[0]` against `request.dcql_query` — the card's own policy is the `policy_address` recorded in its on-chain `CardEntry`; `include_children` walks the issuance chain — → else `LOGIN_CARD_NOT_ACCEPTED`. A query carrying `meta.predicate` does not match yet (`PREDICATE_NOT_SUPPORTED`): the predicate engine is not available to the verifier. `matched_policy` is the `policies[].id` that matched.
+
+This entry point does not use `VerifierConfig.conditions` (§5), which matches by CID; login matches by registry address so that policy updates don't break it.
+
+### 6.4 verifyServerCard
+
+*(Added 2026-11-08 — `process_specs/card_login.md` steps 13–16, and `.well-known` metadata checks.)* Used by wallets to check who is asking before showing a login request.
+
+```typescript
+verifyServerCard(serverCardPubkey: string, options?: VerifyServerCardOptions): Promise<ServerCardVerificationResult>
+
+interface VerifyServerCardOptions {
+  /** Origin to check against the login service card's domain binding (the request's response_uri origin). */
+  origin: string;
+  /** Capability the server card must hold. Default "auth_request". */
+  requiredCapability?: string;
+  now?: string;
+}
+
+type ServerCardVerificationResult =
+  | { valid: true; server_card: string; login_service_card: string;
+      domain: string; login_service: CardVerificationResult;
+      warnings: ("LOGIN_WARN_SERVICE_NEGATIVE" | "LOGIN_WARN_DOMAIN_MONITORED" | "LOGIN_WARN_SERVICE_ROTATED")[] }
+  | { valid: false; code: string; reason: string };
+```
+
+**Steps:**
+
+1. Run Stage 2 (§7.2) for `serverCardPubkey` as a sub-card, with the capability check against `requiredCapability`. It must pass with `app_card_branch == "login_service"` and `app_card == holder_primary_card` (step 16f) and `attestation_level == "S1"` → else `LOGIN_REQUESTER_NOT_SERVER_CARD` (or `LOGIN_SERVICE_NOT_CERTIFIED` if the app card chain did not pass through `loginServiceCertificationRoot`). A deregistered, expired, or revoked server card → `LOGIN_SERVICE_REVOKED`.
+2. `verifyCard(login service card)` (§6.2). Not currently valid (8xx/9xx anywhere on its chain) → `LOGIN_SERVICE_REVOKED`. `successor` set by code 101 → `LOGIN_SERVICE_KEY_COMPROMISED`.
+3. Read the login service card's `domain_binding` (`protocol-objects.md §1.1, §17`). Absent → `LOGIN_DOMAIN_BINDING_MISSING`. Binding checks or `admin_signature` fail → `LOGIN_DOMAIN_BINDING_INVALID`.
+4. Currency rule via `rpc.getDomainRegistration(domain)`: no entry, or `admin_card_address` ≠ `admin_card`, or the admin card is not currently valid → `LOGIN_DOMAIN_BINDING_STALE`; `fraud_risk == 2` and now < `suspension_expires_at` → `DOMAIN_SUSPENDED`.
+5. Coverage rule (`protocol-objects.md §17`) for `options.origin` → else `LOGIN_ORIGIN_NOT_BOUND`.
+6. Warnings: a current 6xx/7xx in the login service card's `log_updates` → `LOGIN_WARN_SERVICE_NEGATIVE`; `fraud_risk == 1` → `LOGIN_WARN_DOMAIN_MONITORED`; `successor` set by code 100 → `LOGIN_WARN_SERVICE_ROTATED`.
+
+---
+
 ## 7. Verification Pipeline
 
 Stages run in order. A hard rejection within a stage skips remaining steps in that stage and marks dependent downstream stages as `"skipped"`. Stages that do not depend on failed output still run.
@@ -471,9 +581,9 @@ A `signature_valid: false` result does not abort subsequent stages. The chain wa
 **Network:** Arbitrum One (`getCardEntry`, `getSubCardEntry`), IPFS (sub-card doc, master card doc).
 
 1. Derive the signer's on-chain address: `keccak256(public_key)` (bytes32 hex).
-2. Fetch `CardEntry` from the registry. If `entry.exists == false`, **hard reject** (`scope_clean: false`), skip Stage 2 remaining steps.
+2. Locate the sub-card document. `RegisterSubCard` records a `SubCardEntry` whose `sub_card_doc_cid` points at the document, and creates no `CardEntry` for the sub-card. Use `CardEntry.log_head_cid` if a `CardEntry` exists, otherwise `getSubCardEntry(address).sub_card_doc_cid`. If neither exists, **hard reject** with `CARD_NOT_FOUND` (`scope_clean: false`). *(Corrected 2026-11-10: this step previously required a `CardEntry`, which the contract never creates for sub-cards.)*
 3. Derive the leaf content key: `HKDF-SHA3-256(public_key, info="card-content-v1")`.
-4. Fetch and decrypt the sub-card document from IPFS using the leaf content key (AES-256-GCM). If decryption fails, **hard reject** (`scope_clean: false`).
+4. Fetch the sub-card document. It may be encrypted under the leaf content key (AES-256-GCM) or plain canonical JSON — the press pins it plain (`press.md §5.4` step 9); either is acceptable because both of its signatures are verified below. Confirm its `recipient_pubkey` is the signing key (`keccak256(recipient_pubkey)` equals the address from step 1) — **hard reject** with `ADDRESS_BINDING_MISMATCH` otherwise, so a document cannot be substituted for another sub-card's.
 5. Read `holder_primary_card_pubkey` and `app_card_pubkey` from the decrypted `SubCardDocument`.
 6. Binding checks (both are hard rejections on failure):
    - `keccak256(holder_primary_card_pubkey)` must equal the `holder_primary_card` pointer address in the sub-card document.
@@ -487,7 +597,7 @@ A `signature_valid: false` result does not abort subsequent stages. The chain wa
     When processing any code-510/511/512 `LogEntry` encountered on the master card's own log while resolving `active_subcards` (e.g., during an audit of how the directory reached its current state), confirm the entry's `intent_signature` was produced by the master card's own holder key — i.e., `keccak256` of the `intent_signature`'s public key must equal the master card's own on-chain address. This authorization is hardcoded per `protocol-objects.md §1.1` and is **not** subject to the governing policy's `update_policy`. **Hard reject that log entry** (do not apply it) if the check fails, regardless of any policy predicate — this is a MUST, matching `card_validation.md` step 9.
 12. Verify the master card holder's ML-DSA-44 signature on the sub-card registration using `holder_primary_card_pubkey`.
 13. Check on-chain: `SubCardRegistrations[sub_card_address].active == true`. If `false`, record `scope_clean: false`.
-14. **Attestation-level check** (`protocol-objects.md §16` step 11): confirm `attestation_level` is `"T2"`, unless it is `"T1"` and `"T1"` appears in `config.acceptedAttestationLevels` (default `["T2"]` — see §5). **Hard reject** with error code `ATTESTATION_LEVEL_INSUFFICIENT` and record `scope_clean: false` otherwise.
+14. **Attestation-level check** (`protocol-objects.md §16` step 11): confirm `attestation_level` is `"T2"`, unless it is `"T1"` and `"T1"` appears in `config.acceptedAttestationLevels` (default `["T2"]` — see §5), or it is `"S1"` (server card — provisionally accepted here, and confirmed or rejected at step 16f). **Hard reject** with error code `ATTESTATION_LEVEL_INSUFFICIENT` and record `scope_clean: false` otherwise.
 15. Verify `app_signature` using `app_card_pubkey`. **Hard reject** with error code `INVALID_APP_SIGNATURE` and record `scope_clean: false` if the signature does not verify — this is a MUST, matching the hard-reject pattern of every other check in this stage; verification must not fall through to step 16 or reach a `scope_clean: true` conclusion (step 17) when this check fails.
 16. **App-certification chain walk (runtime, independent of press registration-time check).** This is the point at which the pipeline has confirmed the signer is in fact a sub-card (steps 1–15 have all passed). **If `config.appCertificationRoot` is not configured on this verifier instance, hard reject** with error code `APP_CERTIFICATION_ROOT_NOT_CONFIGURED` and record `scope_clean: false` — do not silently skip this step or fall through to a `scope_clean: true` conclusion. `appCertificationRoot` is optional at construction (see §5) precisely so that verifier instances scoped to primary-card-only use are not forced to configure a governance root they will never use; the tradeoff is that any sub-card signature such an instance actually encounters must be rejected loudly, not waved through. Otherwise, regardless of whatever check a press already performed at sub-card registration time — the press's check is an early gate, not a substitute for this runtime check — independently walk the `app_card`'s `ancestry_pubkeys` chain to confirm it reaches `config.appCertificationRoot`:
     a. Derive the app card's content key: `HKDF-SHA3-256(app_card_pubkey, info="card-content-v1")`.
@@ -495,10 +605,13 @@ A `signature_valid: false` result does not abort subsequent stages. The chain wa
     c. Walk `ancestry_pubkeys` hop by hop: for each entry, derive the expected on-chain address via `keccak256(entry_pubkey)` and confirm it matches the on-chain address being resolved from the prior link (the same keccak256 binding check used in Stage 3's chain walk), fetching and decrypting each ancestor in turn.
     d. Continue until the chain reaches `config.appCertificationRoot`, or the walk exhausts `ancestry_pubkeys` without reaching it, or the walk exceeds `config.maxChainDepth` — whichever comes first.
     e. **Hard reject** with error code `APP_CARD_CHAIN_NOT_TRUSTED` and record `scope_clean: false` if the chain exhausts without reaching `config.appCertificationRoot` or exceeds `config.maxChainDepth`.
+    f. **Branch and login service scope rule** *(added 2026-11-08)*. If `config.loginServiceCertificationRoot` is not configured, **hard reject** with `LOGIN_SERVICE_CERTIFICATION_ROOT_NOT_CONFIGURED` and `scope_clean: false`. Otherwise set `app_card_branch` to `"login_service"` if the walk in (c)–(d) passed through `loginServiceCertificationRoot`, else `"wallet"`. If `"login_service"`: `app_card` MUST equal `holder_primary_card` → else **hard reject** with `LOGIN_SERVICE_SCOPE` and `scope_clean: false` (a login service card posing as a wallet app). If `attestation_level` is `"S1"` and the sub-card is not a login-service-branch card with `app_card == holder_primary_card` → **hard reject** with `ATTESTATION_LEVEL_INSUFFICIENT`.
     This stage runs on every signature from a sub-card, unconditionally — it is not skipped because a press accepted the sub-card at registration time.
 17. If all checks above — including the step 16 app-certification chain walk — pass, record `scope_clean: true`. This is recorded only after step 16 completes; a failure discovered during the step 16 chain walk overrides any provisional pass from steps 1–15 (see `§13 Decision 7`).
 
 ### 7.3 Stage 3 — Chain Walk
+
+*(2026-11-10)* A card that is itself a trusted root reaches a trusted root at once, whatever its own `ancestry_pubkeys` say (a root minted by an issuer still has ancestry). Card heads that are `LogEntry` objects are read as the genesis document overlaid with the entry's `card_state` (`protocol-objects.md §3`), here and in Stage 2.
 
 **Input:** Decrypted master card from Stage 2 (if successful); falls back to the signer's card if Stage 2 was skipped (e.g., in `verifyCard`).  
 **Network:** Arbitrum One (`getCardEntry`, `isPolicyAuthorizer`), IPFS (ancestor card docs).
@@ -654,6 +767,9 @@ interface SignatureVerificationResult {
 
   // Stage 2
   scope_clean: boolean | "skipped";
+  app_card_branch: "login_service" | "other" | "skipped"; // added 2026-11-08: which branch of the app-certification
+                                                // root the signing sub-card's app_card is under (Stage 2 step 16f);
+                                                // "skipped" when the signer is not a sub-card or Stage 2 did not reach step 16.
   app_card_chain_valid: boolean | "skipped";     // formalized 2026-07-16 (Tier 3 item (l)): whether
                                                   // the sub-card's app-certification chain walk
                                                   // (step 16, `APP_CARD_CHAIN_NOT_TRUSTED` on failure)
@@ -789,6 +905,8 @@ The package distinguishes three classes of error:
 | `INVALID_APP_SIGNATURE` | 2 | `app_signature` on the sub-card document does not verify against `app_card_pubkey` (Stage 2 step 15) — hard reject; verification must not proceed to the step 16 chain walk |
 | `APP_CERTIFICATION_ROOT_NOT_CONFIGURED` | 2 | Steps 1–15 confirmed the signer is a sub-card, but this verifier instance was constructed without `VerifierConfig.appCertificationRoot` (Stage 2 step 16) — hard reject rather than skipping the app-certification chain walk; does not apply to primary-card signatures, which never reach this check |
 | `APP_CARD_CHAIN_NOT_TRUSTED` | 2 | A sub-card signature's `app_card` ancestry chain does not reach `config.appCertificationRoot` within `config.maxChainDepth` (Stage 2 step 16) — this runtime re-walk runs independently of whatever check the press performed at sub-card registration time |
+| `LOGIN_SERVICE_CERTIFICATION_ROOT_NOT_CONFIGURED` | 2 | A sub-card signature was encountered but `config.loginServiceCertificationRoot` is not set (Stage 2 step 16f) — hard reject, `scope_clean: false`. Added 2026-11-08. |
+| `LOGIN_SERVICE_SCOPE` | 2 | The sub-card's `app_card` is a login-service-branch card but differs from `holder_primary_card` (Stage 2 step 16f) — a login service card posing as a wallet app. Hard reject, `scope_clean: false`. Added 2026-11-08. |
 | `CHAIN_DEPTH_EXCEEDED` | 2, 3 | Walk exceeded `config.maxChainDepth` |
 | `STALE_REVOCATION_DATA` | 4 | Revocation data exceeds `config.revocationFreshnessWindowSeconds` |
 | `HISTORY_MISMATCH` | 4 | A `LogEntry`'s self-reported `history` (+ own head CID) does not match, in count or order, the ground-truth CID sequence replayed from `getCardEventLog` — indicates a press misreporting or truncating provenance |
@@ -796,6 +914,8 @@ The package distinguishes three classes of error:
 | `POLICY_FETCH_FAILED` | 5 | Policy snapshot CID could not be fetched from IPFS |
 | `NO_PRESS_AUTHORIZATION` | 5 | No `PressAuthorizations` entry for `(policy_id, press_address)` |
 | `NON_COMPLIANCE_REPORT_FAILED` | 5 | POST to Press Registry Body endpoint failed (network error or non-2xx response) |
+
+**Login codes.** `verifyLoginResponse` (§6.3) and `verifyServerCard` (§6.4) return the `LOGIN_*` codes and `DOMAIN_SUSPENDED` defined in `process_specs/card_login.md §Error Codes`; they are not redefined here.
 
 ---
 

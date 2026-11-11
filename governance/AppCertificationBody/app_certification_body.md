@@ -2,15 +2,18 @@
 
 **Status:** Active  
 **Parent body:** Root Policy Body  
+**Amended 2026-11-08 (card login):** second mandate — certifying login services through a login service branch (`login_service_certification.md`); wallet operators publish login-router metadata.  
 **Context:** `specs/ARCHITECTURE.md` ADR-011 (governance framing), `specs/protocol-objects.md §16` (app_card / app_card_pubkey semantics)
 
 ---
 
 ## Role and Mandate
 
-The AppCertificationBody is the governance body responsible for certifying wallet applications in the Card Protocol. Certification means issuing an `app_card` — a card held by the wallet application operator — that can be referenced in sub-card documents created on behalf of cardholders. Only app cards whose chain reaches the governance authority's app-certification policy root are accepted by runtime verifiers.
+The AppCertificationBody is the governance body responsible for certifying applications in the Card Protocol. *(Revised 2026-11-09.)* It certifies three kinds of software, each through its own branch under the app-certification root: **wallets** (wallet cards), **apps** that act for users through delegated sub-cards (app cards), and **login services** (login service cards). Certification means issuing a card that can be referenced as `app_card` in sub-card documents. Only app cards whose chain reaches the governance authority's app-certification policy root are accepted by runtime verifiers.
 
-The body's core mandate is to ensure that certified wallet applications do not abuse or leak the sub-cards they create on behalf of holders. A wallet application that holds an `app_card` is trusted to co-sign sub-cards, which grant the app the ability to produce protocol-valid signatures on behalf of a cardholder within defined capability bounds. That trust must be earned, documented, and revocable.
+**Second mandate (2026-11-08): login services.** The body also certifies websites that offer card login, through a separate **login service branch** under the same root. That mandate, its trust chain, and its obligations are in `login_service_certification.md`. Everything below this paragraph concerns wallet cards and app cards.
+
+For wallets and apps, the body's core mandate is to ensure that certified applications do not abuse or leak the sub-cards they create on behalf of holders. A wallet application that holds an `app_card` is trusted to co-sign sub-cards, which grant the app the ability to produce protocol-valid signatures on behalf of a cardholder within defined capability bounds. That trust must be earned, documented, and revocable.
 
 ---
 
@@ -22,7 +25,9 @@ No new on-chain mechanism is required. The existing `PolicyAuthorizerKeys` regis
 
 2. **AppCertificationBody member cards.** The Root Policy Body issues cards to AppCertificationBody members from the app-certification policy root. Each member card's `ancestry_pubkeys` chain terminates at the app-cert policy root address.
 
-3. **App cards issued to wallet operators.** AppCertificationBody members issue `app_card`s to wallet application operators. These are ordinary cards in the on-chain registry whose `ancestry_pubkeys` chain eventually reaches the app-cert policy root — either directly (one hop: member → root) or through intermediate member cards.
+3. **Wallet and app branches.** The AppCertificationBody issues two branch-node cards from the root — the **wallet branch** and the **app branch** — and certifiers under each issue **wallet cards** to wallet operators and **app cards** to third-party application operators. These are ordinary cards in the on-chain registry whose `ancestry_pubkeys` chain eventually reaches the app-cert policy root — through their branch node and any intermediate certifier cards. Existing app cards issued directly under the root before the branches existed must be reissued under the right branch; the login router lists only wallet-branch cards.
+
+3a. **Login service branch.** A separate node under the root, configured by verifiers as `VerifierConfig.loginServiceCertificationRoot`, holds login service cards for login services (`login_service_certification.md`). A login-service-branch card can act as `app_card` only for its own server cards.
 
 4. **Runtime verification.** When a verifier encounters a sub-card signature, it performs Stage 2 verification: it walks the `app_card` chain from `app_card_pubkey` up through `ancestry_pubkeys` hop by hop until it reaches `VerifierConfig.appCertificationRoot`. If the chain is missing, broken, or terminates at a different address, the sub-card is rejected with `APP_CARD_CHAIN_NOT_TRUSTED` and `scope_clean: false`.
 
@@ -49,5 +54,7 @@ Certified wallet applications must:
 - **Honor holder revocation requests promptly.** When a holder requests revocation of a sub-card, the application must deregister the relevant sub-card on-chain (via the registry's deactivation mechanism) without unreasonable delay.
 
 - **Implement the full sub-card lifecycle.** The application must support creation, active use, and deactivation/rotation of sub-cards per the protocol spec (`specs/protocol-objects.md §16`). Abandoned or orphaned sub-cards that cannot be deactivated are a protocol violation.
+
+- **Publish login-router metadata** *(wallets only)*. Provide the name, icon, login handler URL, and app-store links the login router lists for certified wallets (`specs/object_specs/login_router.md §5`), and serve a signed `WalletRegistrationToken` at `/.well-known/membership-wallet` (`specs/protocol-objects.md §19`). Register with the router only through `/register`, never replacing a user's default wallet.
 
 - **Surface the app card address publicly.** The application must publish its `app_card` address (the keccak256 address of its `app_card_pubkey`) in its documentation or public metadata so that cardholders and independent auditors can verify certification status without relying solely on the application's own claims.

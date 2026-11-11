@@ -3,6 +3,7 @@
 **Version:** 0.1 (draft)  
 **Date:** 2026-05-25  
 **Status:** Draft  
+**Amended 2026-11-08 (card login):** `domain_binding` added to the step 7 immutable-field list (set only by code 520).
 
 > **Terminology note.** This spec now uses "card" as the canonical term per the Naming Convention.
 
@@ -84,7 +85,7 @@ Updates are classified by a three-digit code (1xx–9xx) that signals the semant
 
 ### Phase 2: Submission
 
-5. The updater sends the signed intent via HTTPS POST to any press listed in `approved_presses` for the card's policy. The press is neutral infrastructure — any listed press may process any update; the updater does not need to use the original issuing press.
+5. The updater sends the signed intent via HTTPS POST to any press listed in `approved_presses` for the card's policy. *(Request body, made explicit 2026-11-09:* `{ update_intent, intent_signature: { public_key, signature }, target_card_pubkey? }`. `public_key` is the updater card's ML-DSA-44 key. `target_card_pubkey` is the target card's public key — an unsigned hint the press binding-checks against `target_card` — required when the updater is not the target, because the press needs it to read and encrypt the card's log under its ADR-006 content key.) The press is neutral infrastructure — any listed press may process any update; the updater does not need to use the original issuing press.
 
 ### Phase 3: Press Validation
 
@@ -96,7 +97,7 @@ Updates are classified by a three-digit code (1xx–9xx) that signals the semant
    - **Authorization — field updates (codes 1xx–7xx):** For each field in `field_updates`, confirm the updater's card chain satisfies that field's `update_policy` predicate (from the policy's `field_definitions`). All predicates must be satisfied by the same updater.
    - **Authorization — sub-card directory updates (codes 510/511/512):** The press MUST confirm the intent is signed by the target card's own holder key (`{ "is_holder": true }`), regardless of what the governing policy's `update_policy` states for `active_subcards` or any other field. This authorization is hardcoded per `protocol-objects.md §1.1` and `update_codes.md §5xx` — a policy cannot grant this authority to an issuer or any other party, and the press MUST reject any 510/511/512 intent not signed by the holder even if the policy's `update_policy` would otherwise permit it.
    - **Authorization — revocations (codes 8xx–9xx):** Confirm the updater's card chain satisfies `revocation_permissions` for the given code range. If `revocation_permissions` is absent from the policy, the default applies: 8xx by holder or issuer, 9xx by issuer only.
-   - **Immutable fields:** Confirm no `field_updates` entry targets a protocol-required immutable field: `policy_id, issuer_card, press_card, recipient_pubkey, issued_at, issuer_signature, holder_signature, press_signature, ancestry_pubkeys, past_keys, protocol_version, active_subcards, successor, supersedes, supersession_note` (per `protocol-objects.md §1`/§1.1). Note: `active_subcards` (codes 510/511/512, per the dedicated authorization path below), `successor` (codes 100/101/102), `supersedes`, and `supersession_note` are protocol-reserved fields that may be set post-issuance via their defined update-code mechanisms and are listed here only to flag that they are otherwise off-limits to ordinary `field_updates` — a generic 1xx–7xx intent may not target them outside those specific mechanisms.
+   - **Immutable fields:** Confirm no `field_updates` entry targets a protocol-required immutable field: `policy_id, issuer_card, press_card, recipient_pubkey, issued_at, issuer_signature, holder_signature, press_signature, ancestry_pubkeys, past_keys, protocol_version, active_subcards, successor, supersedes, supersession_note, domain_binding` (per `protocol-objects.md §1`/§1.1). Note: `active_subcards` (codes 510/511/512, per the dedicated authorization path below), `domain_binding` (code 520, set once on login service cards — `press.md §5.3` step 4a), `successor` (codes 100/101/102), `supersedes`, and `supersession_note` are protocol-reserved fields that may be set post-issuance via their defined update-code mechanisms and are listed here only to flag that they are otherwise off-limits to ordinary `field_updates` — a generic 1xx–7xx intent may not target them outside those specific mechanisms.
    - **Code consistency:** 8xx–9xx entries must include `revocation` and no `field_updates`; 1xx–7xx entries must include `field_updates` and no `revocation`.
    - **Timestamp freshness:** Reject intents with timestamps outside the acceptable replay-prevention window.
 

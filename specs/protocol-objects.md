@@ -3,6 +3,7 @@
 **Version:** 0.2 (draft)  
 **Date:** 2026-06-14  
 **Status:** In Review  
+**Amended 2026-11-08 (card login):** §8–9 rewritten as v2 (server-card-signed request, DCQL `mcard` query, `form_post`/`mcard_message` response modes); new §17 `DomainBindingAttestation`, §18 `LoginServiceMetadata`, §19 `WalletRegistrationToken`; §1.1 gains `domain_binding`; §2 gains `preferred_services`; §16 gains attestation level `S1` and the login service scope rule. See `process_specs/card_login.md`.  
 **Amended 2026-10-23:** §11 `PressIssuanceRecord` gains `issuer_card`, `policy_id`, and `offer_id`, and is delivered to the issuer and the policy card's holder as well as to auditors; §10 SCIP no longer has an administrator courtesy copy.  
 **Amends:** v0.1 — §14 write authorization updated from ML-DSA-44/Stylus to secp256r1/RIP-7212 per ADR-012. Press dual-key model note added.
 
@@ -27,6 +28,10 @@ This document is the canonical reference for every structured object in the Card
 13. [AuditEpochCommitment](#13-auditepochcommitment)
 14. [CardEntry (on-chain)](#14-cardentry-on-chain)
 15. [SubCardRegistration](#15-subcardregistration)
+16. [SubCardDocument](#16-subcarddocument)
+17. [DomainBindingAttestation](#17-domainbindingattestation)
+18. [LoginServiceMetadata](#18-loginservicemetadata)
+19. [WalletRegistrationToken](#19-walletregistrationtoken)
 
 ---
 
@@ -136,6 +141,8 @@ These fields are NOT present at genesis. They are added to an existing card via 
 | `successor` | `card-pointer` | Codes 100, 101: `{ "is_holder": true }`. Code 102: `{ "is_issuer": true }` with 72-hour pending window. | 100, 101, 102 | Mutable pointer of the card that supersedes this one. May be set at most once; once effective, it is immutable. See `key_rotation.md §8`. |
 | `active_subcards` | `array of base64url` | Codes 510, 511, 512: `{ "is_holder": true }`, hardcoded — **not policy-configurable, not overridable by any policy's `field_definitions` or `update_policy`.** This is a hard protocol limit for this version of the protocol, not a default that policies may loosen or tighten. | 510, 511, 512 | Flat array of the holder's currently-active sub-card ML-DSA-44 public keys (1312 bytes each). Not present at genesis; added by the first code-510 entry. Entries are deleted outright from the array on removal (code 511) or rotation (code 512) — the array always reflects the live/current set; historical additions and removals are recorded permanently in the master card's append-only log, not in the field itself. See `subcards.md` and `update_codes.md §5xx`. |
 
+| `domain_binding` | `DomainBindingAttestation` (§17) | Code 520: `{ "is_holder": true }`, hardcoded, **plus** a valid attestation (§17) naming this card. Not policy-configurable. | 520 | Binds a **login service card** (a card under the login service branch, `subcards.md §Server Cards`) to a DNS domain for card login. Set at most once; immutable once set. To change domains, the site operator gets a new login service card. A press rejects code 520 on a card not under the login service branch. See `process_specs/card_login.md` Phase 0. |
+
 A code-102 `successor` entry carries a `pending_until` field and is not effective until that timestamp is reached without a holder-submitted code-103 cancellation. See `key_rotation.md §2.6`.
 
 **Codes 510/511/512 scope.** These three codes apply only to `LogEntry` records on the **master (primary) card's own log** — they record changes the holder makes to their own `active_subcards` directory. This is distinct from the general prohibition on 5xx updates targeting a **sub-card's** log, which remains prohibited per `process_specs/subcard_creation_policy.md §Update Card Content`. A code-510/511/512 entry is never posted to a sub-card's log; it is always posted to the master card's log by the master card's own holder key.
@@ -192,6 +199,9 @@ A policy card is a CardDocument whose content defines the rules for a class of c
     "9xx": { "<predicate expression>" }
   },
   "notes":               ["<text>"],
+  "preferred_services":  [
+    { "origin": "<https origin>", "name": "<text>", "icon": "<cid — optional>", "description": "<text — optional>" }
+  ],
   "policy_creation":     {
     "field_restrictions": [
       {
@@ -218,6 +228,7 @@ A policy card is a CardDocument whose content defines the rules for a class of c
 | `revocation_permissions` | object | No | Predicates controlling who may post 8xx and 9xx entries; defaults to holder-or-issuer for 8xx, issuer-only for 9xx |
 | `notes` | `append-only-array` of `text` | No | Append-only annotations |
 | `policy_creation` | object | No | Constraints on policies that holders of this policy's cards may create |
+| `preferred_services` | `service-array` | No | Services card holders can log in to (card login). **Absent** = inherit the nearest ancestor policy's list along the issuance chain (§8.1); **present, including `[]`** = this list replaces the inherited one. Entries: `origin` (`https:` origin, unique), `name`, optional `icon` (CID), optional `description`. Read from the live policy head. Updated with code 302. See `card_protocol_spec.md §1`. Added 2026-11-08. |
 
 ---
 
@@ -505,114 +516,135 @@ The object the wallet service POSTs to the press when a recipient accepts an ope
 
 ## 8. AuthenticationRequest
 
-**Hosted at:** Single-use HTTPS URL (requesting site's infrastructure)  
-**Signed by:** Requesting site (using its own card key)  
-**Serialized for signing:** Canonical RFC 8785 JSON of all fields except `request_signature` (i.e. `callbacks`, `expires_at`, `payload`, `purpose`, `required_policy`, `required_predicate`, `redirect_uri`, `requester_card`, `requester_pubkey`, `requesting_site`, `session_id`, `version` — in Unicode code-point key order)
+**Hosted at:** Single-use HTTPS URL on the requesting site (the `request_uri`)  
+**Signed by:** The requesting site's **server card** (a login-service-scoped sub-card — see §16 and `subcards.md §Server Cards`)  
+**Serialized for signing:** Canonical RFC 8785 JSON of all fields except `request_signature`
 
-The object a site creates when it wants a user to authenticate with a card. Hosted at a single-use URL and fetched by the wallet service via CHAPI.
+The object a site creates when it wants a user to log in with a card. The site hosts it at a single-use `request_uri` and hands that URL to the user's wallet through the login router (`object_specs/login_router.md`), a QR code, or a `mcard://auth?r=<request_uri>` deep link. The wallet fetches it, validates it, and answers with an `AuthenticationResponse` (§9). Parameter names follow OpenID for Verifiable Presentations 1.0 (`state`, `nonce`, `response_mode`, `response_uri`, `dcql_query`, `wallet_nonce`), but the object is protocol-native: RFC 8785 JSON signed with ML-DSA-44, not a JWT. See `process_specs/card_login.md` for the full flow.
+
+**Changed in v2 (2026-11-08):** replaces the v1 object. Removed: `session_id` (→ `state`), `requesting_site` (the wallet displays the verified `response_uri` origin instead), `payload` (→ top-level `statement`, `context`, `nonce`), `required_predicate` and `required_policy` (→ `dcql_query`), `callbacks` (→ `response_mode` + `response_uri`), and `redirect_uri` (the site redirects on `form_post`; the one-time code handles `mcard_message`). The CHAPI discovery path is removed. No implementation of v1 existed.
 
 ```json
 {
-  "session_id":       "<UUID — stable identifier for this auth session>",
-  "version":          "1",
-  "purpose":          "<human-readable description shown to user>",
-  "requesting_site":  "<origin of the requesting site, for display>",
-  "requester_card":  "<base64url — mutable pointer in registry of the requesting site's card>",
-  "requester_pubkey": "<base64url — ML-DSA-44 public key of the card referenced by requester_card, 1312 bytes raw>",
-  "payload": {
-    "content": "<the content the user is being asked to sign>",
-    "context": "<optional additional human-readable context>",
-    "nonce":   "<random value — replay prevention>"
+  "context":           { "<optional display-only key>": "<text>" },
+  "dcql_query": {
+    "credentials": [
+      {
+        "id":     "<text — query-local identifier, e.g. 'membership'>",
+        "format": "mcard",
+        "meta": {
+          "policies": [
+            { "id": "<base64url — registry address (card pointer) of a policy card>", "include_children": false }
+          ],
+          "predicate": { "<optional card predicate expression — card_protocol_spec.md §The Predicate System>" }
+        }
+      }
+    ]
   },
-  "required_predicate": { "<optional card predicate expression — same format as §1>" },
-  "required_policy":    "<base64url — CID of a required policy card — optional>",
-  "callbacks": {
-    "https": "<HTTPS URL to POST the signed response to — required>",
-    "ohttp": {
-      "relay":       "<OHTTP relay URL>",
-      "gateway_key": "<base64url — OHTTP gateway public key — optional>"
-    }
-  },
-  "redirect_uri":     "<URL to redirect user to after completion; must contain literal {code}>",
-  "expires_at":       "<ISO 8601 timestamp>",
-  "request_signature":"<base64url — ML-DSA-44 sig from the requester's card key over canonical RFC 8785 JSON of all above fields>"
+  "expires_at":        "<ISO 8601 — at most 10 minutes after creation>",
+  "nonce":             "<base64url — 32 random bytes>",
+  "purpose":           "<text — shown to the user in the wallet>",
+  "request_signature": "<base64url — ML-DSA-44 signature by the server card over all other fields>",
+  "requester_card":    "<base64url — card pointer of the site's server card>",
+  "requester_pubkey":  "<base64url — ML-DSA-44 public key of the server card, 1312 bytes raw>",
+  "response_mode":     "form_post | mcard_message",
+  "response_uri":      "<HTTPS URL on the site — where the browser posts or redeems>",
+  "state":             "<base64url — at least 16 random bytes; binds the response to one browser session>",
+  "statement":         "<text — the statement the user signs>",
+  "version":           "2",
+  "wallet_nonce":      "<base64url — optional; present only on wallet-initiated logins>"
 }
 ```
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `session_id` | `text` | Yes | UUID; ties the confirmation code to this session |
-| `version` | `text` | Yes | Always `"1"` in v1 |
-| `purpose` | `text` | Yes | Displayed to user in wallet UI |
-| `requesting_site` | `text` | Yes | Display-only origin |
-| `requester_card` | `card-pointer` | Yes | Wallet uses this for chain verification |
-| `requester_pubkey` | `base64url` | Yes | ML-DSA-44 public key (1312 bytes raw) of the card referenced by `requester_card`; set by the requesting site; **covered by `request_signature`** |
-| `payload.content` | `text` | Yes | The statement the user will countersign |
-| `payload.nonce` | `text` | Yes | Incorporated into signed statement; must be verified to prevent replay |
-| `required_predicate` | predicate | No | Chain predicate the user's card must satisfy |
-| `required_policy` | `cid` | No | Policy card CID the user's card must have been issued under |
-| `callbacks.https` | `text` | Yes | Required fallback |
-| `callbacks.ohttp` | object | No | For IP-private response |
-| `redirect_uri` | `text` | Yes | Must contain `{code}` placeholder |
-| `expires_at` | `timestamp` | Yes | Wallet rejects requests past this time |
-| `request_signature` | `base64url` | Yes | Wallet verifies before displaying; covers all fields except itself, including `requester_pubkey` |
+| `context` | object | No | Display-only key/value text shown with the statement. Not echoed into the response; covered by `request_hash`. |
+| `dcql_query` | object | Yes | Exactly one entry in `credentials` in v2 (multi-card requests are P2). `format` MUST be `"mcard"`. Matching rules: §8.1. |
+| `expires_at` | `timestamp` | Yes | Wallet rejects the request after this time. MUST be no more than 10 minutes after the site created the request. |
+| `nonce` | `base64url` | Yes | 32 random bytes; echoed in the signed response. |
+| `purpose` | `text` | Yes | Why the site is asking, shown in the wallet. |
+| `request_signature` | `base64url` | Yes | Covers every other field, including `requester_pubkey`. |
+| `requester_card` | `card-pointer` | Yes | The **server card**. Its `SubCardDocument` MUST name a login-service-branch card as both `holder_primary_card` and `app_card`, MUST carry `attestation_level: "S1"`, and its `capabilities` MUST include `auth_request`. |
+| `requester_pubkey` | `base64url` | Yes | Untrusted hint; binding check below. |
+| `response_mode` | `text` | Yes | `"form_post"` (same-device, through the browser) or `"mcard_message"` (card message to the login service card; required for cross-device). |
+| `response_uri` | `text` | Yes | Absolute `https:` URL, default port, no fragment, no userinfo. Its **origin** is what the wallet displays and checks against the login service card's `domain_binding` (§17). `form_post`: the wallet's browser POSTs the response here. `mcard_message`: the browser redeems the one-time code here (`response_uri` with query parameter `code`). |
+| `state` | `base64url` | Yes | At least 16 random bytes. The site also sets it in a cookie on the starting browser (`card_login.md` Phase 1). Echoed in the signed response. |
+| `statement` | `text` | Yes | Echoed verbatim in the signed response. Sites with nothing specific to say use `card_login.md`'s default login statement. |
+| `version` | `text` | Yes | `"2"`. Wallets reject other values. |
+| `wallet_nonce` | `base64url` | No | Copied from the `wallet_nonce` query parameter of the site's start URL on a wallet-initiated login (`card_login.md` Phase 6). The wallet skips its approval prompt only when this matches a pending login it created. |
 
-**Binding check (wallet):** `requester_pubkey` is an untrusted hint. The wallet MUST confirm `keccak256(requester_pubkey)` equals the `requester_card` pointer address before using it to verify `request_signature` or to derive the requester card's content key. A mismatch — or an AES-GCM authentication failure when decrypting the requester card — is a hard rejection.
+**Binding check (wallet):** `requester_pubkey` is an untrusted hint. The wallet MUST confirm `keccak256(requester_pubkey)` equals the `requester_card` pointer address before using it to verify `request_signature` or to derive the server card's content key. A mismatch — or an AES-GCM authentication failure when decrypting the server card's `SubCardDocument` — is a hard rejection.
 
-**Verifier usage:** verify `request_signature` with `requester_pubkey`, then derive the requester card's content key as `HKDF-SHA3-256(requester_pubkey, info="card-content-v1")`, decrypt the requester card, and walk the rest of the chain via that card's `ancestry_pubkeys`.
+**Requester validation (wallet):** after the binding check and signature check, the wallet resolves the server card's `SubCardDocument` and runs the chain, scope, domain-binding, and status checks in `card_login.md` Phase 3 before showing anything to the user. In summary: the server card is a login-service-scoped sub-card (§16 login service scope rule) whose master — the login service card — chains to `loginServiceCertificationRoot`; the login service card's `domain_binding` (§17) covers the `response_uri` origin and is still current; and no card on that chain is revoked. Every check failure is a rejection before display.
+
+**Request hash.** `request_hash = base64url(keccak256(canonical RFC 8785 JSON of the complete AuthenticationRequest, including request_signature))`. The wallet puts it in the signed response so a response cannot be replayed against any other request (OpenID4VP `transaction_data` semantics). keccak256 is the same function the protocol uses for message IDs (§5).
+
+### 8.1 `mcard` DCQL credential query
+
+A held card **matches** the query when all of the following hold:
+
+1. **Policy match.** For at least one entry `p` in `meta.policies`: resolve the card's `policy_id` (a snapshot CID) to its policy card's registry address `A`.
+   - `include_children: false` — `A` equals `p.id`.
+   - `include_children: true` — `A` equals `p.id`, **or** `p.id` is an ancestor of `A`. A policy's ancestors are found by walking its **issuance chain**: the policy card's `ancestry_pubkeys[0]` is its issuer (authorizer) card; that card's `policy_id` resolves to the parent policy; repeat until a trusted root or `maxChainDepth`. This is the same walk used for `preferred_services` inheritance (§2) and is deliberately not the holder-lineage walk used for `policy_creation` constraints (`card_protocol_spec.md §1`).
+   Policies are compared by registry address, never by CID, so a policy update (new CID) does not break matching. The card's own policy address is the `policy_address` in its on-chain `CardEntry` (authoritative); deriving it from the policy snapshot's `recipient_pubkey` is a fallback. *(2026-11-10: today's press records `keccak256(policy CID)` as a card's `policy_address` rather than a policy card's key-derived address — see `plans/card-login-code-plan.md` F13 — so in current deployments `include_children` can only match a card's own policy.)*
+2. **Predicate.** If `meta.predicate` is present, the card's chain satisfies it, evaluated by the existing predicate engine with the presented card as the subject.
+3. **Status.** The card is not revoked (no 8xx/9xx with `effective_date` ≤ now) and its chain reaches a trusted root.
+
+The site re-runs the same three checks on the presented card when verifying the response (`card_verifier.md §6.3`).
 
 ---
 
 ## 9. AuthenticationResponse
 
-**Transmitted via:** OHTTP (optional) / HTTPS  
-**Sent by:** Wallet service  
-**Contains:** A `SignedMessageEnvelope` (§5) assembled by the wallet at signing time
+**Transmitted via:** `form_post` (browser POST to `response_uri`) or `mcard_message` (routed card message to the login service card)  
+**Sent by:** The user's wallet  
+**Contains:** A `SignedMessageEnvelope` (§5) with `type: "auth_response"`
 
-The object the wallet posts after user approval. The `signed_statement` is a standard `SignedMessageEnvelope` (§5) with `type: "auth_response"`. The wallet constructs the envelope payload from the `AuthenticationRequest`'s content fields plus the standard envelope fields (`senders`, `recipients`, `timestamp`). This makes auth responses verifiable using the same path as any other envelope.
+**Changed in v2 (2026-11-08):** `session_id` → `state` (now a fixed signed field rather than inside `context`); `card_pointer` removed (redundant with `senders`); `request_hash` and `audience` added; `recipients` is the login service card, not `requester_card`; OHTTP and `callbacks.https` transports replaced by the two response modes.
 
 ```json
 {
-  "session_id":       "<matches the AuthenticationRequest — unsigned correlation field; NOT inside signed_statement>",
+  "state": "<unsigned copy of AuthenticationRequest.state — for routing/lookup only>",
   "signed_statement": {
     "payload": {
-      "type":      "auth_response",
+      "type":    "auth_response",
       "content": {
-        "statement": "<copied from AuthenticationRequest.payload.content — the text the user signed>",
-        "context":   { "session_id": "<echoed from AuthenticationRequest.session_id — binds response to session>", "<other contextual fields>": "..." },
-        "nonce":     "<copied from AuthenticationRequest.payload.nonce — replay prevention>"
+        "audience":     "<origin of AuthenticationRequest.response_uri, e.g. 'https://example.com'>",
+        "nonce":        "<copied from AuthenticationRequest.nonce>",
+        "request_hash": "<base64url — §8 request hash>",
+        "state":        "<copied from AuthenticationRequest.state>",
+        "statement":    "<copied verbatim from AuthenticationRequest.statement>"
       },
-      "senders":    ["<base64url — holder's master card mutable pointer>"],
-      "recipients": ["<base64url — requester_card mutable pointer>"],
-      "timestamp":  "<ISO 8601 — set by wallet at signing time>"
+      "protocol_version": "<current protocol version>",
+      "recipients": ["<base64url — the login service card: holder_primary_card of the server card>"],
+      "senders":    ["<base64url — card pointer of the presented card>"],
+      "timestamp":  "<ISO 8601 — set by the wallet at signing time>"
     },
     "signatures": [
-      {
-        "public_key":   "<base64url>",
-        "signature":    "<base64url — sig over canonical RFC 8785 JSON of payload>"
-      }
+      { "public_key": "<base64url>", "signature": "<base64url>" }
     ]
-  },
-  "card_pointer":    "<base64url — mutable pointer in registry of the card used to sign>"
+  }
 }
 ```
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `session_id` | `text` | Yes | Top-level unsigned correlation field; must match `AuthenticationRequest.session_id`. Also echoed inside `content.context.session_id` (signed) — see note below |
-| `signed_statement` | SignedMessageEnvelope | Yes | Requester verifies this per §7; `type` must be `"auth_response"` |
-| `signed_statement.payload.content` | object | Yes | Canonical schema: `{ statement, context, nonce }`. `context` is an **object** (not a plain string); `session_id` lives inside `context` as a signed correlation field |
-| `signed_statement.payload.content.statement` | `text` | Yes | Copied verbatim from `AuthenticationRequest.payload.content` |
-| `signed_statement.payload.content.context.session_id` | `text` | Yes | Echoed from `AuthenticationRequest.session_id`; **signed** inside `content`; requester verifies this matches the issued session before accepting the response |
-| `signed_statement.payload.content.nonce` | `text` | Yes | Must match `AuthenticationRequest.payload.nonce`; replay prevention |
-| `signed_statement.payload.timestamp` | `timestamp` | Yes | Set by wallet at signing time; requester checks freshness |
-| `card_pointer` | `card-pointer` | Yes | The card the user chose; used for chain walk and predicate evaluation |
+| `state` | `base64url` | Yes | Unsigned convenience copy for server-side lookup. The verifier MUST also check the signed `content.state`. |
+| `signed_statement` | SignedMessageEnvelope | Yes | `type` MUST be `"auth_response"`. Signed by one of the presented card's active device sub-cards, whose `capabilities` include `auth_response` (messaging_protocol.md §14; the verifier accepts sub-card signatures only, `card_verifier.md §7.2`). |
+| `content.audience` | `text` | Yes | Origin (scheme + host, plus port if non-default) of `response_uri`. The site rejects a response whose `audience` is not its own origin. |
+| `content.nonce` | `base64url` | Yes | Must equal the issued `nonce`. |
+| `content.request_hash` | `base64url` | Yes | Must equal the hash of the request the site issued for this `state`. |
+| `content.state` | `base64url` | Yes | Signed copy; must equal the issued `state`. |
+| `content.statement` | `text` | Yes | Must equal the issued `statement`. |
+| `payload.senders` | `card-pointer-array` | Yes | Exactly one entry: the **presented card** — the card that satisfies `dcql_query`. This is the identifier the site binds the account to. |
+| `payload.recipients` | `card-pointer-array` | Yes | Exactly one entry: the login service card (master of `requester_card`). Messages route only to master cards (`process_specs/message_routing.md`), so this is also the `mcard_message` delivery address. |
+| `payload.timestamp` | `timestamp` | Yes | Must fall between the request's creation and `expires_at`, and within the site's freshness window (default 5 minutes). |
 
-**`session_id`: signed vs unsigned.** There are two occurrences of `session_id` in an `AuthenticationResponse`:
-1. **Top-level `session_id`** (outside `signed_statement`) — unsigned convenience field for HTTP routing and server-side session lookup. The requester's server uses this to find the pending session without parsing the signed payload.
-2. **`signed_statement.payload.content.context.session_id`** — the same value, inside the signed envelope. Because `content` is signed byte-for-byte, this copy is cryptographically bound to the holder's signature. The requester MUST verify this value matches the issued `session_id` to prevent session-fixation attacks.
+**On the wire.**
+- `form_post`: the browser POSTs `application/x-www-form-urlencoded` to `response_uri` with fields `state` and `auth_response`, where `auth_response` is base64url(canonical RFC 8785 JSON of `signed_statement`). A declined request posts `state` and `error=access_denied` instead.
+- `mcard_message`: the wallet sends `signed_statement` as an ordinary routed message to the login service card (`messaging_protocol.md §14`). The `state` wrapper field is not sent; the site reads `content.state`. A declined request sends an `error` message (`messaging_protocol.md §22`) to the login service card with `content.code: "access_denied"` and `content.state` set; `content.in_reply_to` is omitted because the request was fetched, not received as a message.
 
-The requesting site verifies `signed_statement` per §7 (chain walk, revocation check, predicate evaluation) and additionally confirms `content.context.session_id` matches the issued `session_id` and `content.nonce` matches the issued request nonce before issuing a confirmation code.
+**Verification (site).** `card_verifier.md §6.3` `verifyLoginResponse`: envelope signature and sub-card link, presented card chain and revocation, `type`, `state`, `nonce`, `request_hash`, `audience`, `recipients`, `timestamp` freshness, then the §8.1 DCQL match. Only after every check passes does the site establish a session (`form_post`) or issue a one-time code (`mcard_message`).
 
 ---
 
@@ -824,8 +856,8 @@ The genesis document for a sub-card — a device-bound, app-specific credential 
   "dns_path_scope":             "<regex string — optional; present only when holder_primary_card is a DNS admin card>",
   "issued_at":                  "<ISO 8601 timestamp>",
   "valid_until":                "<ISO 8601 timestamp — optional; absent means no expiry>",
-  "attestation_level":          "T2 | T1",
-  "attestation_proof":          "<base64url — App Attest / Play Integrity assertion scoped to recipient_pubkey hash; omitted if attestation_level is T1>",
+  "attestation_level":          "T2 | T1 | S1",
+  "attestation_proof":          "<base64url — App Attest / Play Integrity assertion scoped to recipient_pubkey hash; omitted if attestation_level is T1 or S1>",
   "app_signature":              "<base64url — app card key ML-DSA-44 signature over canonical RFC 8785 JSON of document without both signature fields>",
   "holder_signature":           "<base64url — holder primary card key ML-DSA-44 signature over canonical RFC 8785 JSON of document including app_signature, without holder_signature>"
 }
@@ -835,15 +867,15 @@ The genesis document for a sub-card — a device-bound, app-specific credential 
 |---|---|---|---|
 | `holder_primary_card` | `card-pointer` | Yes | Mutable pointer of the card this sub-card delegates from; establishes the chain-of-trust link on verification |
 | `holder_primary_card_pubkey` | `base64url` | Yes | ML-DSA-44 public key (1312 bytes raw) of the card referenced by `holder_primary_card`. **Untrusted hint**: the verifier MUST confirm `keccak256(holder_primary_card_pubkey)` equals the `holder_primary_card` pointer address before using it to derive a content key or verify a signature. A mismatch, or an AES-GCM authentication failure when decrypting the referenced card, is a hard rejection. Set at sub-card issuance; covered by both `app_signature` and `holder_signature`. |
-| `app_card` | `card-pointer` | Yes | Mutable pointer of the requesting app's card; must chain to the governance authority's app-certification policy |
+| `app_card` | `card-pointer` | Yes | Mutable pointer of the requesting app's card; must chain to the governance authority's app-certification policy. **Login service scope rule (2026-11-08):** if the chain passes through `loginServiceCertificationRoot` (the login service branch), `app_card` MUST equal `holder_primary_card` — a login service card may only authorize its own server cards (`subcards.md §Server Cards`). |
 | `app_card_pubkey` | `base64url` | Yes | ML-DSA-44 public key (1312 bytes raw) of the card referenced by `app_card`. **Untrusted hint**: the verifier MUST confirm `keccak256(app_card_pubkey)` equals the `app_card` pointer address before using it to derive a content key or verify a signature. A mismatch, or an AES-GCM authentication failure when decrypting the referenced card, is a hard rejection. Set at sub-card issuance; covered by both `app_signature` and `holder_signature`. |
 | `capabilities` | `array of text` | Yes | Whitelist of message type strings this sub-card may sign (e.g. `["auth_response", "exchange_offer"]`). An empty array is valid but non-functional. |
 | `limitations` | `array of objects` | No | Additional constraints on statements this sub-card may sign, beyond the `capabilities` whitelist, expressed using the protocol's existing predicate/`field_requirements` grammar (`card_protocol_spec.md` §The Field Type System, §The Predicate System) rather than a new vocabulary. Absent means no additional limitations. Each entry has an optional `applies_to` (array of message type strings this entry constrains; absent means it applies to all message types in `capabilities`) and `field_requirements` (array of `{ "field": "<dot-path into the signed message payload>", "regex": "<pattern>" }` pairs — the same shape used elsewhere for `card-pointer`/`cid` field validation, here evaluated against the payload of the statement being signed rather than a referenced card's fields). Combinators (`any_of`/`all_of`/`none_of`) may wrap multiple `limitations` entries the same way they wrap predicate leaves elsewhere. Covered by both `app_signature` and `holder_signature`, like `capabilities`. See `subcards.md §Limitations` for worked examples and the stateless-evaluation caveat (count-based rate limits are out of scope for this mechanism — see that section). |
 | `recipient_pubkey` | `base64url` | Yes | ML-DSA-44 public key generated in device hardware-backed secure storage; 1312 bytes raw |
 | `issued_at` | `timestamp` | Yes | Set by the app at document assembly time |
 | `valid_until` | `timestamp` | No | Optional expiry; verifiers must reject signatures from expired sub-cards |
-| `attestation_level` | `text` | Yes | `"T2"` (full app attestation; default and required) or `"T1"` (hardware-backed key storage only; permitted only if the governing policy explicitly accepts it). See `subcards.md §Attestation Tiers`. |
-| `attestation_proof` | `base64url` | Conditional | Present when `attestation_level` is `"T2"`: the platform attestation assertion (iOS App Attest certificate / Android Play Integrity token) scoped to the hash of `recipient_pubkey`. Omitted when `attestation_level` is `"T1"`. |
+| `attestation_level` | `text` | Yes | `"T2"` (full app attestation; default and required), `"T1"` (hardware-backed key storage only; permitted only if the governing policy explicitly accepts it), or `"S1"` (server key; permitted **only** for server cards — login-service-branch `app_card` equal to `holder_primary_card`). See `subcards.md §Attestation Tiers`. |
+| `attestation_proof` | `base64url` | Conditional | Present when `attestation_level` is `"T2"`: the platform attestation assertion (iOS App Attest certificate / Android Play Integrity token) scoped to the hash of `recipient_pubkey`. Omitted when `attestation_level` is `"T1"` or `"S1"`. |
 | `app_signature` | `base64url` | Yes | App's card key signature over canonical RFC 8785 JSON of the document without `app_signature` or `holder_signature`. Covers `holder_primary_card_pubkey` and `app_card_pubkey`. |
 | `holder_signature` | `base64url` | Yes | Holder's primary card key signature over canonical RFC 8785 JSON of the document including `app_signature`, without `holder_signature`. Covers `holder_primary_card_pubkey` and `app_card_pubkey`. |
 
@@ -863,9 +895,130 @@ The genesis document for a sub-card — a device-bound, app-specific credential 
 9. Completed SubCardDocument is posted to IPFS.
 10. Sub-card is registered on Arbitrum One via `RegisterSubCard` (see §15).
 
-**Verifier chain walk (runtime).** A verifier encountering a signature from a sub-card must: (1) confirm the message type appears in the sub-card's `capabilities`; (2) confirm `valid_until` has not passed; (3) verify `app_signature` is valid; (4) verify `holder_signature` is valid; (5) read `holder_primary_card_pubkey` from the decrypted sub-card document; (6) confirm `keccak256(holder_primary_card_pubkey)` equals the `holder_primary_card` pointer address — if the addresses do not match, reject; (7) derive the master card's content key as `HKDF-SHA3-256(holder_primary_card_pubkey, info="card-content-v1")` and decrypt the master card from IPFS — if AES-GCM authentication fails, reject; (8) read `active_subcards` from the now-decrypted master card (§1.1) and, for each entry, derive `keccak256(entry_pubkey)`; confirm one of these matches the sub-card's own registry address (`keccak256` of the `SignatureEntry`'s `public_key`) — **hard-reject if absent, independent of the on-chain `SubCardRegistrations[sub_card_address].active` flag checked in step 10** (the on-chain flag and the IPFS directory are two independent sources that could in principle desync; absence from `active_subcards` is a hard rejection on its own regardless of the on-chain flag's value); if `active_subcards` is absent from the master card entirely, treat it as an empty directory and reject; (9) walk the holder's master card chain to a trusted root using the master card's `ancestry_pubkeys` (Stage 3 of `card_validation.md`); (10) confirm the sub-card is not revoked in the on-chain registry (check `SubCardRegistrations[sub_card_address].active`); (11) confirm `attestation_level` is `"T2"` unless the governing policy explicitly accepts `"T1"`; (12) walk the `app_card` chain: derive `app_card` content key via `HKDF-SHA3-256(app_card_pubkey_bytes, "card-content-v1")`; fetch and decrypt the app card document from IPFS; walk `ancestry_pubkeys` hop by hop until the chain reaches `VerifierConfig.appCertificationRoot`. Hard-reject with `APP_CARD_CHAIN_NOT_TRUSTED` and `scope_clean: false` if the chain exhausts without reaching the configured root or exceeds `maxChainDepth`.
+**Verifier chain walk (runtime).** A verifier encountering a signature from a sub-card must: (1) confirm the message type appears in the sub-card's `capabilities`; (2) confirm `valid_until` has not passed; (3) verify `app_signature` is valid; (4) verify `holder_signature` is valid; (5) read `holder_primary_card_pubkey` from the decrypted sub-card document; (6) confirm `keccak256(holder_primary_card_pubkey)` equals the `holder_primary_card` pointer address — if the addresses do not match, reject; (7) derive the master card's content key as `HKDF-SHA3-256(holder_primary_card_pubkey, info="card-content-v1")` and decrypt the master card from IPFS — if AES-GCM authentication fails, reject; (8) read `active_subcards` from the now-decrypted master card (§1.1) and, for each entry, derive `keccak256(entry_pubkey)`; confirm one of these matches the sub-card's own registry address (`keccak256` of the `SignatureEntry`'s `public_key`) — **hard-reject if absent, independent of the on-chain `SubCardRegistrations[sub_card_address].active` flag checked in step 10** (the on-chain flag and the IPFS directory are two independent sources that could in principle desync; absence from `active_subcards` is a hard rejection on its own regardless of the on-chain flag's value); if `active_subcards` is absent from the master card entirely, treat it as an empty directory and reject; (9) walk the holder's master card chain to a trusted root using the master card's `ancestry_pubkeys` (Stage 3 of `card_validation.md`); (10) confirm the sub-card is not revoked in the on-chain registry (check `SubCardRegistrations[sub_card_address].active`); (11) confirm `attestation_level` is `"T2"` unless the governing policy explicitly accepts `"T1"`, or is `"S1"` on a server card (step 13); (12) walk the `app_card` chain: derive `app_card` content key via `HKDF-SHA3-256(app_card_pubkey_bytes, "card-content-v1")`; fetch and decrypt the app card document from IPFS; walk `ancestry_pubkeys` hop by hop until the chain reaches `VerifierConfig.appCertificationRoot`. Hard-reject with `APP_CARD_CHAIN_NOT_TRUSTED` and `scope_clean: false` if the chain exhausts without reaching the configured root or exceeds `maxChainDepth`. (13) **Login service scope rule:** if the step-12 walk passed through `loginServiceCertificationRoot`, confirm `app_card` equals `holder_primary_card`; otherwise hard-reject with `LOGIN_SERVICE_SCOPE` and `scope_clean: false`. A sub-card with `attestation_level: "S1"` that does not satisfy this rule is rejected with `ATTESTATION_LEVEL_INSUFFICIENT`.
+
+**Server cards (2026-11-08).** A server card is a sub-card with `holder_primary_card == app_card ==` a login-service-branch card and `attestation_level: "S1"`. Its signing sequence collapses: the site operator's wallet signs steps 4 and 8 with the same login service card key, and step 7 (user consent) is skipped. See `subcards.md §Server Cards`.
 
 **App-certification chain: verifier-enforced.** Runtime verifiers independently walk the `app_card` chain from `app_card_pubkey` up to the governance authority's app-certification policy root configured as `appCertificationRoot` in `VerifierConfig`. A sub-card whose `app_card` does not reach that root is rejected at Stage 2 (`APP_CARD_CHAIN_NOT_TRUSTED`) regardless of whether a press accepted it at registration time. The press also performs this check as an early gate before submitting `RegisterSubCard` (see §5.4 of press.md), but the verifier's check is the binding enforcement layer. Per-link on-chain addresses remain authoritative; `holder_primary_card_pubkey` and `app_card_pubkey` are untrusted hints whose validity is established by the binding check before use.
+
+---
+
+## 17. DomainBindingAttestation
+
+**Stored in:** the login service card's `domain_binding` protocol-reserved field (§1.1), set once by a code-520 `LogEntry`  
+**Signed by:** The domain's **full-domain DNS admin card** (ML-DSA-44 holder key — the same key that signs `SetPolicyAddressIntent`s, `dns_resolution.md §6.2`)  
+**Serialized for signing:** Canonical RFC 8785 JSON of all fields except `admin_signature`
+
+Binds a login service card to a DNS domain, so that a wallet can check that the site asking for a login controls the domain it claims. Added 2026-11-08 for card login (`process_specs/card_login.md`).
+
+```json
+{
+  "admin_card":            "<base64url — card pointer of the full-domain DNS admin card>",
+  "admin_card_pubkey":     "<base64url — ML-DSA-44 public key of admin_card, 1312 bytes raw>",
+  "admin_signature":       "<base64url — ML-DSA-44 signature by admin_card over all other fields>",
+  "login_service_card":        "<base64url — card pointer of the login service card being bound>",
+  "login_service_card_pubkey": "<base64url — ML-DSA-44 public key of login_service_card, 1312 bytes raw>",
+  "domain":                "<lowercase DNS name, no trailing dot — e.g. 'example.com'>",
+  "issued_at":             "<ISO 8601>"
+}
+```
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `admin_card` | `card-pointer` | Yes | MUST be `DomainRegistrations[domain].admin_card_address` (`dns_resolution.md §4.1`) when the binding is set **and** whenever it is used. Sub-path-scoped admin sub-cards (`dns_resolution.md §5.2`) cannot sign a binding. |
+| `admin_card_pubkey` | `base64url` | Yes | Untrusted hint; `keccak256(admin_card_pubkey)` MUST equal `admin_card`. |
+| `admin_signature` | `base64url` | Yes | |
+| `login_service_card` | `card-pointer` | Yes | The card whose log carries this attestation. |
+| `login_service_card_pubkey` | `base64url` | Yes | `keccak256(login_service_card_pubkey)` MUST equal `login_service_card`. |
+| `domain` | `text` | Yes | RFC 1123 name, lowercase, no trailing dot. Must be a registered domain (`DomainRegistrations[domain].exists`). |
+| `issued_at` | `timestamp` | Yes | |
+
+**Coverage rule.** A binding to `domain` covers an origin when the origin's scheme is `https`, its port is the default (443), and its host equals `domain` or ends with `"." + domain`. Nothing else is covered (no `http`, no non-default ports, no IP literals).
+
+**Currency rule (checked at every use, not just when set).** The binding is usable only while: `admin_card` is still `DomainRegistrations[domain].admin_card_address` (so a domain handoff, `dns_resolution.md §8`, silently retires every binding the old owner signed); the admin card is not revoked; and the domain is not suspended (`fraud_risk == 2` with `block.timestamp < suspension_expires_at` → `DOMAIN_SUSPENDED`).
+
+**Verifier usage:** binding checks on both pubkeys; verify `admin_signature` with `admin_card_pubkey`; read `DomainRegistrations[domain]` and apply the currency rule; apply the coverage rule to the origin being checked.
+
+---
+
+## 18. LoginServiceMetadata
+
+**Served at:** `https://<origin>/.well-known/membership-login` (`Content-Type: application/json`)  
+**Signed by:** The site's server card  
+**Serialized for signing:** Canonical RFC 8785 JSON of `metadata`
+
+Lets a wallet confirm that a site listed in a card's `preferred_services` (§2) accepts that card, and tells the wallet where to start a wallet-initiated login. Added 2026-11-08.
+
+```json
+{
+  "metadata": {
+    "accepts":            [ { "id": "<base64url — policy card pointer>", "include_children": true } ],
+    "name":               "<text — the site's own name; informational only>",
+    "origin":             "<origin this document is served from>",
+    "response_modes":     ["form_post", "mcard_message"],
+    "server_card":        "<base64url — card pointer of the server card>",
+    "server_card_pubkey": "<base64url — ML-DSA-44 public key, 1312 bytes raw>",
+    "start_url":          "<https URL on origin — wallet-initiated login entry point>",
+    "updated_at":         "<ISO 8601>",
+    "version":            "1"
+  },
+  "signature": "<base64url — ML-DSA-44 signature by server_card over canonical metadata>"
+}
+```
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `metadata.accepts` | array | Yes | Same shape and matching rules as `dcql_query…meta.policies` (§8.1 step 1). |
+| `metadata.name` | `text` | Yes | Not used for display when the service came from a policy's `preferred_services`; the policy's `name` is shown instead. |
+| `metadata.origin` | `text` | Yes | MUST equal the origin the document was fetched from. |
+| `metadata.response_modes` | `array of text` | Yes | Modes the site supports. |
+| `metadata.server_card`, `server_card_pubkey` | | Yes | Binding check as §8. The server card MUST pass the same requester validation as a login request for `origin` (`card_login.md` Phase 3). |
+| `metadata.start_url` | `text` | Yes | `https:` URL with the same origin. The wallet appends `wallet_nonce` and `wallet_hint` query parameters. |
+| `metadata.updated_at` | `timestamp` | Yes | |
+| `metadata.version` | `text` | Yes | `"1"`. |
+| `signature` | `base64url` | Yes | |
+
+Wallets may cache a validated document for up to 24 hours.
+
+---
+
+## 19. WalletRegistrationToken
+
+**Presented to:** the login router's `/register` route; also served by the wallet operator at `https://<wallet domain>/.well-known/membership-wallet` for the router's address lookup (`object_specs/login_router.md §4, §6`)  
+**Signed by:** a **wallet card** — a card under the wallet branch of the app-certification root (`subcards.md §App Cards and the Trust Chain`)  
+**Serialized for signing:** Canonical RFC 8785 JSON of `token`
+
+Proves to the login router that a wallet asking to be registered is a certified wallet application. One token per wallet deployment, not per user: it carries nothing about the user, so registering reveals nothing about them to the router. Added 2026-11-08.
+
+```json
+{
+  "token": {
+    "app_card":        "<base64url — the wallet's app card pointer>",
+    "app_card_pubkey": "<base64url — ML-DSA-44 public key, 1312 bytes raw>",
+    "expires_at":      "<ISO 8601 — at most 1 year after issued_at>",
+    "handler_url":     "<https URL — the wallet's login handler; the router navigates to handler_url#request_uri=…>",
+    "icon":            "<data: URI, image/png or image/svg+xml, at most 16 KB — optional>",
+    "issued_at":       "<ISO 8601>",
+    "name":            "<text — wallet name shown in the router's picker>",
+    "router_origin":   "<origin of the login router this token is for>",
+    "version":         "1"
+  },
+  "signature": "<base64url — ML-DSA-44 signature by app_card over canonical token>"
+}
+```
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `token.app_card` | `card-pointer` | Yes | Must be a wallet card (wallet branch). The router checks this against its build-time list of certified wallets (`login_router.md §5`). |
+| `token.app_card_pubkey` | `base64url` | Yes | Binding check as §8. |
+| `token.expires_at` | `timestamp` | Yes | Router rejects expired tokens. |
+| `token.handler_url` | `text` | Yes | `https:` URL. For a native wallet, a universal/app link. |
+| `token.icon` | `text` | No | Inline only, so displaying it makes no network request. |
+| `token.issued_at` | `timestamp` | Yes | |
+| `token.name` | `text` | Yes | |
+| `token.router_origin` | `text` | Yes | MUST equal the router's own origin, so a token can't be replayed against a different router. |
+| `token.version` | `text` | Yes | `"1"`. |
+| `signature` | `base64url` | Yes | |
 
 ---
 
@@ -873,6 +1026,7 @@ The genesis document for a sub-card — a device-bound, app-specific credential 
 
 ```
 PolicyCardDocument (IPFS)
+  └── preferred_services → [{ origin, name, ... }] → LoginServiceMetadata (HTTPS /.well-known/membership-login)
   └── approved_presses → [CardDocument (press sub-card)] (IPFS)
   └── auditors → [CardDocument (auditor card)] (IPFS)
   └── issuance records → [PressIssuanceRecord] (E2E message to auditors, issuer_card, and policy card holder; kept locally by each)
@@ -890,7 +1044,7 @@ SubCardDocument (IPFS)
   └── holder_primary_card → CardDocument (holder's primary card) (IPFS + Arbitrum One)
   └── app_card → CardDocument (app's card) (IPFS + Arbitrum One)
        └── policy_id → app-certification PolicyCardDocument (governance root) (IPFS)
-       └── app-certification chain walk: performed by PRESS at registration; not by runtime verifiers
+       └── app-certification chain walk: performed by the PRESS at registration and again by every runtime verifier (card_verifier.md §7.2 step 16)
   └── on-chain registration → SubCardEntry (Arbitrum One)
        └── master_card_address → holder's master card (Arbitrum One)
        └── sub_card_doc_cid → SubCardDocument (IPFS) [this document — the CID pointer back to here]
@@ -925,10 +1079,13 @@ Objects marked **RFC 8785-signed** use canonical RFC 8785 JSON per Appendix A of
 | SignedMessageEnvelope | In-transit | RFC 8785-signed (payload only) |
 | OpenCardOffer | HTTPS / IPFS | RFC 8785-signed (all except `issuer_signature`) |
 | OpenOfferClaimSubmission | In-transit (HTTPS POST to press) | `recipient_signature` covers canonical RFC 8785 JSON of `claim_payload`; `claim_payload.offer.issuer_signature` separately verified by press |
-| AuthenticationRequest | HTTPS | RFC 8785-signed (all except `request_signature`) |
-| AuthenticationResponse | In-transit | Not signed as a whole; contains a SignedMessageEnvelope |
+| AuthenticationRequest | HTTPS (`request_uri`) | RFC 8785-signed by the server card (all except `request_signature`) |
+| AuthenticationResponse | `form_post` / `mcard_message` | Not signed as a whole; contains a SignedMessageEnvelope |
 | SCIP | In-transit / IPFS | RFC 8785-signed (all except `press_signature`) |
 | PressIssuanceRecord | Delivered by message to auditor card addresses | Not signed separately; delivered E2E encrypted via normal message routing layer |
 | CardEntry | Arbitrum One | On-chain; write authorized by secp256r1 sig verified via RIP-7212 precompile against `PressAuthorizations` table |
 | SubCardRegistration | Arbitrum One | On-chain; stores `master_card_address`, `registration_log_head`, `sub_card_doc_cid` (CID of IPFS SubCardDocument). Write authorized by press secp256r1 sig (§6.1 write gate); master card holder ML-DSA-44 sig verified off-chain by press; app-certification chain walk also performed off-chain by press before submission. |
 | SubCardDocument | IPFS | RFC 8785-signed (`app_signature` over all fields except both signature fields; `holder_signature` over all fields including `app_signature`); `holder_primary_card_pubkey` and `app_card_pubkey` are present and covered by both signatures |
+| DomainBindingAttestation | IPFS (in login service card's `domain_binding`) | RFC 8785-signed by the full-domain DNS admin card (all except `admin_signature`) |
+| LoginServiceMetadata | HTTPS (`/.well-known/membership-login`) | RFC 8785-signed by the server card (`metadata` only) |
+| WalletRegistrationToken | Login router fragment | RFC 8785-signed by a wallet card (`token` only) |

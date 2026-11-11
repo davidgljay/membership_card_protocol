@@ -35,6 +35,7 @@
    - 7.3 [New-Wallet Open-Offer Acceptance](#73-new-wallet-open-offer-acceptance)
    - 7.4 [Existing-Wallet Open-Offer Acceptance](#74-existing-wallet-open-offer-acceptance)
    - 7.5 [Targeted Offer Acceptance](#75-targeted-offer-acceptance)
+7a. [Login (Wallet-Side)](#7a-login-wallet-side-not-implemented)
 8. [Messaging Helpers (Active Sub-Card Resolution)](#8-messaging-helpers-active-sub-card-resolution)
    - 8.1 [Resolving Active Sub-Cards from On-Chain Registry](#81-resolving-active-sub-cards-from-on-chain-registry-implemented)
 9. [Cross-Platform Hardening and Documentation (Mostly Complete)](#9-cross-platform-hardening-and-documentation-mostly-complete)
@@ -223,6 +224,8 @@ Per `subcards.md §Sub-Card Request Flow Step 2`: verify `app_signature`; apply 
 
 No annotation-board check and no attestation-proof verification are in scope.
 
+**Login service scope rule (added 2026-11-08).** If the app card is a login-service-branch card — `appCardVerification.chain_card_addresses` includes the verifier's `loginServiceCertificationRoot`, the same test the press uses (`press.md §5.4` `verifyAppCertificationChain`) — the request is rejected with `LOGIN_SERVICE_SCOPE` unless `app_card == holder_primary_card` — a login service card may only authorize its own server cards, and those go through §7a.6, never through this third-party path. A request with `attestation_level: "S1"` is rejected here for the same reason.
+
 ### 6.2 Consent Assembly (Implemented)
 
 `subcards/consent.ts`:
@@ -343,6 +346,128 @@ function acceptTargetedOffer(options): Promise<TargetedOfferAcceptanceResult>;
 
 Review (via this package's own `reviewTargetedOffer`, §7.1) + countersign (via this package's own `offers/countersign.ts`, §7.2). Returns the countersigned card for out-of-band delivery back to the offerer. The offerer then calls App SDK's `forwardCountersignedTargetedOffer` (app_sdk.md §8.2) to finalize with the press.
 
+**Login router registration (all three acceptance paths, added 2026-11-08).** Each acceptance result gains an optional `routerRegistrationUrl` (§7a.7): when the wallet has not yet registered with the login router on this device, the host should send the browser through it instead of directly to the offer's `redirect_url` (open offers), or open it at the next browser hand-off (targeted offers). See `process_specs/card_login.md §Router Registration`.
+
+---
+
+## 7a. Login (Wallet-Side) (Not implemented)
+
+*(Added 2026-11-08. Module: `login/`. Process: `process_specs/card_login.md` Phases 2–5 and 7; router: `object_specs/login_router.md`.)*
+
+The wallet-side half of card login. Every gated function returns the §11 discriminated union; error codes are those in `card_login.md §Error Codes`. All trust decisions go through the shared `CardVerifier` (`verifyServerCard`, `verifyCard`), never re-implemented here.
+
+**Card updates** *(2026-11-10)*: every update this SDK posts — directory updates (§6.6), sub-card revocation (§6.4), domain binding (§7a.6) — goes through one helper, `postCardUpdate`, to `POST /api/update` with `{ update_intent, intent_signature: { public_key, signature }, target_card_pubkey? }` (`card_updates.md` step 5). Earlier versions posted to `/update` with a bare signature, which the press could not route or verify.
+
+### 7a.1 Receiving a request
+
+```ts
+type LoginHandoff = { requestUri: string; via: "router" | "deeplink" | "qr" };
+function parseLoginHandoff(input: { url: string; scanned?: boolean }): LoginHandoff | { error: "LOGIN_REQUEST_MALFORMED" };
+```
+
+Accepts a handler URL fragment (`#request_uri=…`, from the router), an `mcard://auth?r=…` link, or a scanned QR payload. `via` drives how the one-time code is handed over (§7a.5).
+
+### 7a.2 Validating a request
+
+```ts
+function fetchAndValidateLoginRequest(options: {
+  handoff: LoginHandoff; verifier: CardVerifier; fetch: typeof globalThis.fetch; now?: string;
+}): Promise<
+  | { valid: true; request: AuthenticationRequest; requestHash: string;
+      origin: string; serverCard: ServerCardVerificationResult & { valid: true };
+      warnings: string[] }
+  | { valid: false; code: string; reason: string }>;
+```
+
+`card_login.md` steps 10–16: fetch without credentials, shape and expiry checks, binding and signature checks, then `verifier.verifyServerCard(requester_pubkey, { origin })` for the server card, login service card, domain binding, status, and warnings. Nothing from a request is shown to the user unless this returns `valid: true`.
+
+### 7a.3 Matching cards and the wallet-initiated shortcut
+
+```ts
+function matchLoginCredentials(options: {
+  request: AuthenticationRequest; heldCards: string[]; verifier: CardVerifier;
+}): Promise<{ matches: { card: string; matchedPolicy: string }[] }>;
+
+interface PendingWalletLoginStore {
+  create(entry: { origin: string; walletNonce: string; expiresAt: string; card?: string }): Promise<void>;
+  consumeIfMatch(walletNonce: string, origin: string, now: string): Promise<{ card?: string } | null>; // atomic
+}
+function startWalletInitiatedLogin(options: {
+  service: EffectiveService; store: PendingWalletLoginStore; walletAppCard: string; card?: string;
+}): Promise<{ openUrl: string }>;  // start_url?wallet_nonce=…&wallet_hint=…
+function shouldSkipPrompt(options: {
+  request: AuthenticationRequest; origin: string; warnings: string[];
+  matches: { card: string }[]; store: PendingWalletLoginStore; now?: string;
+}): Promise<{ skip: true; card: string } | { skip: false }>;
+```
+
+`matchLoginCredentials` applies `protocol-objects.md §8.1` to each held card. `shouldSkipPrompt` implements step 18: it consumes the pending entry only when everything matches, there are no warnings, and exactly one card applies (or the entry named the card).
+
+### 7a.4 Building and delivering the response
+
+```ts
+function buildLoginResponse(options: {
+  request: AuthenticationRequest; requestHash: string; origin: string;
+  presentedCard: string; loginServiceCard: string; signer: EnvelopeSigner;
+}): Promise<AuthenticationResponse>;
+
+function formPostFields(response: AuthenticationResponse): { action: string; fields: { state: string; auth_response: string } };
+function formRelayUrl(relayPageUrl: string, response: AuthenticationResponse): string; // native wallets: fields in the fragment
+function sendLoginMessage(options: {
+  response: AuthenticationResponse; loginServiceCardDocument: CardDocument;
+  sendRoutingEnvelopes: (envelopes: RoutingEnvelope[]) => Promise<void>;
+}): Promise<{ messageId: string }>;
+function buildDecline(request: AuthenticationRequest, mode: "form_post" | "mcard_message"):
+  { action: string; fields: { state: string; error: "access_denied" } } | { envelopePayload: MessagePayload<"error"> };
+```
+
+`sendLoginMessage` fans out to the login service card's active sub-cards using `resolveActiveSubCardTargets` (§8.1) and App SDK's `fanOutMessageToSubCards`.
+
+### 7a.5 Handling the confirmation
+
+```ts
+function handleAuthConfirmation(options: {
+  envelope: CardMessageEnvelope<"auth_confirmation">; sentResponseId: string;
+  request: AuthenticationRequest; requestHash: string; via: LoginHandoff["via"];
+}): { ok: true; action: "open"; url: string } | { ok: true; action: "show"; code: string; origin: string; expiresAt: string }
+ | { ok: false; code: "LOGIN_CONFIRMATION_INVALID"; reason: string };
+```
+
+Checks the confirmation (step 25), then returns `open` (`response_uri?code=…`) for `via: "router" | "deeplink"`, or `show` for `via: "qr"`. The host shows the code with the wording in `card_login.md` step 25.
+
+### 7a.6 Authorizing a server card (site operator's wallet)
+
+```ts
+function authorizeServerCard(options: {
+  unsignedDocument: UnsignedSubCardDocument; loginServiceCardSecretKey: Uint8Array;
+  verifier: CardVerifier; registerSubCard: RegisterSubCardFn; postActiveSubcardAddition: (pubkey: string) => Promise<void>;
+}): Promise<{ registered: true; document: SignedSubCardDocument } | { registered: false; code: string; reason: string }>;
+```
+
+Checks the shape required by `subcards.md §Server Cards` (`holder_primary_card == app_card ==` a login-service-branch card this wallet holds; `attestation_level: "S1"`; capabilities), signs `app_signature` then `holder_signature` with the login service card key, registers through the injected App SDK registrar, and posts the code-510 entry (§6.6). No consent step.
+
+### 7a.7 Router registration
+
+```ts
+function routerRegistrationUrl(options: { routerOrigin: string; token: SignedWalletRegistrationToken; next?: string }): string;
+function signWalletRegistrationToken(options: { token: WalletRegistrationTokenBody; appCardKeyId: string; keyProvider: SecureKeyProvider }):
+  Promise<SignedWalletRegistrationToken>; // operator tooling — one token per wallet deployment
+```
+
+The wallet operator signs one token per deployment (`protocol-objects.md §19`) and ships it with the wallet; the wallet never signs per user. `routerRegistrationUrl` builds `https://<router>/register#token=…&next=…` (`login_router.md §4`).
+
+### 7a.8 Services
+
+```ts
+type EffectiveService = { origin: string; name: string; icon?: string; description?: string;
+                          metadata: LoginServiceMetadata };
+function resolveEffectiveServices(options: {
+  card: string; verifier: CardVerifier; fetch: typeof globalThis.fetch; now?: string;
+}): Promise<EffectiveService[]>;
+```
+
+Computes the card's effective `preferred_services` (`card_login.md §Service Discovery`), fetches and validates each service's `/.well-known/membership-login` (`protocol-objects.md §18`, server card checked with `verifyServerCard` for that origin), and keeps only services whose `accepts` matches the card. Display fields come from the policy entry.
+
 ---
 
 ## 8. Messaging Helpers (Active Sub-Card Resolution)
@@ -401,6 +526,7 @@ Functions that gate on a verification step return a discriminated union (`{ appr
 |---|---|---|
 | 1 | 1.1–1.7 (workspace, providers, crypto, verifier, transport, platform defaults, CI) | **Implemented** |
 | 2 | 2.1 Wallet setup | **Implemented** |
+| — | §7a Login (wallet-side) and §6.1 login service scope rule | **Not started** — specified 2026-11-08 (`process_specs/card_login.md`) |
 | 2 | 2.2 Device sub-card (collapsed, thin wrapper over App SDK's `requestSubCard`) | **Implemented** |
 | 2 | 2.3 Backup registration | **Implemented** |
 | 2 | 2.4 Recovery and re-registration | **Implemented** |
@@ -486,6 +612,8 @@ Carried forward from `plans/sdk-split-strategic-plan.md`'s resolved decisions an
 ---
 
 ## Changelog
+
+- Added §7a (Login, wallet-side), the §6.1 login service scope rule, and router registration on offer acceptance (§7.5 note) (2026-11-08, card login).
 
 - Added `card_migration.md` as a Related Spec (§15) and an unimplemented-gap row in Implementation Status (§12), naming this package as client-side migration-initiation's natural owner pending a firmer decision (`plans/spec-consistency/inconsistencies/phase-1-consolidated-fixes.md` fix #14).
 - §4: removed the `SecureKeyProvider` and `RealtimeTransportProvider` bullets from "Key providers for wallet-specific flows," which contradicted §10/§12 of this same file; added a "Not used by this package" note explaining why (fix #30).

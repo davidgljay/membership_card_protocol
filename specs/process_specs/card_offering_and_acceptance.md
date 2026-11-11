@@ -3,6 +3,7 @@
 **Version:** 0.2 (draft)  
 **Date:** 2026-05-25  
 **Status:** Draft  
+**Amended 2026-11-08 (card login):** step 15a — best-effort login router registration.
 
 **Amended 2026-07-16 (spec-consistency Phase 2, Fix #11):** dropped the stale audit-epoch/AEK precondition and rewrote steps 19–21 (issuance-notification assembly and delivery), step 24 (administrator courtesy copy), the Actors table, and the Postconditions bullet on audit recording — all to match the direct E2E-encrypted `PressIssuanceRecord`-to-`policy.auditors` model in `press.md §5.5` and `protocol-objects.md §11`. See `plans/spec-consistency/inconsistencies/phase-2-consolidated-fixes.md` Fix #11.
 
@@ -101,6 +102,8 @@ Card offering and acceptance is the process by which a press issues a targeted c
     - The recipient's public key is added to the card JSON as `recipient_pubkey`.
     - The client canonically serializes the offer including `recipient_pubkey` (excluding `holder_signature` and `press_signature`).
     - The client signs with the new private key → `holder_signature`, and returns the countersigned card to the offerer.
+
+15a. **Login router registration** *(added 2026-11-08; best effort)*. Targeted offers have no browser redirect to piggyback on. If the recipient's wallet has not yet registered with the login router, it does so the next time it opens a browser for the user (`object_specs/wallet_sdk.md §7a.7`, `object_specs/login_router.md §4`). Registration is add-only.
 
 ### Phase 6: Validation and Registration
 

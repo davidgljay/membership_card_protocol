@@ -3,6 +3,7 @@
 **Version:** 0.2 (draft)  
 **Date:** 2026-07-04  
 **Status:** Draft  
+**Amended 2026-11-08 (card login):** step 22a registers the wallet with the login router on the way to `redirect_url`.
 **Changes from v0.1:** Corrected wallet creation (Step 7) and the keyring error path to describe the wallet service's keyring storage and federation replication, replacing an earlier IPFS-based description.
 
 > **Terminology note.** This spec now uses "card" as the canonical term per the Naming Convention.
@@ -142,7 +143,9 @@ For recipients who already have a wallet, see `open_offer_acceptance_existing_wa
 
 22. The wallet service displays the `redirect_url` to the recipient before navigating, and warns against known phishing domains.
 
-23. The wallet service redirects the recipient to `redirect_url`.
+22a. **Login router registration** *(added 2026-11-08)*. This is the wallet's first card, so the wallet routes the redirect in step 23 through the login router: it navigates to `https://<router>/register#token=<wallet registration token>&next=<redirect_url>` (`object_specs/login_router.md §4`). The router stores the wallet (add-only) and forwards to `redirect_url` with no visible page and no consent screen. If registration fails, the router still forwards.
+
+23. The wallet service redirects the recipient to `redirect_url` (through the router, per step 22a).
 
 ---
 
@@ -150,6 +153,7 @@ For recipients who already have a wallet, see `open_offer_acceptance_existing_wa
 
 - The recipient holds a complete wallet: master keypair in the encrypted keyring, device sub-card for routine signing.
 - The recipient holds the private key for the new card in their keyring.
+- The wallet is registered with the login router in this browser, unless storage was unavailable (`process_specs/card_login.md §Router Registration`).
 - The card is pinned on IPFS and registered on Arbitrum One.
 - The on-chain acceptance counter for the offer has been atomically incremented.
 - A `PressIssuanceRecord` for the issuance has been delivered to the policy's auditors, the issuer, and the policy card's holder.

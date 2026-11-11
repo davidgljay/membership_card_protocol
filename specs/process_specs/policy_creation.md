@@ -3,6 +3,7 @@
 **Version:** 0.2 (draft)  
 **Date:** 2026-05-25  
 **Status:** Draft  
+**Amended 2026-11-08 (card login):** drafters may set `preferred_services` (Phase 1).
 
 **Amended 2026-07-16 (spec-consistency Phase 2, Fix #11 and Decision (c)):** the `log_auditing.md` cross-reference below now describes the direct auditor-notification flow (the audit-epoch/AEK model it previously described was removed in favor of direct E2E-encrypted `PressIssuanceRecord` messaging). Step 8's policy-genesis-registration language no longer permits self-issuance by the authorizer — every policy card, including the root policy, is issued through a press — and a new subsection describes the one-time governance bootstrap (`RegisterPolicy`) that must precede a press ever issuing a card under a brand-new policy. See `plans/spec-consistency/inconsistencies/phase-2-consolidated-fixes.md` Fix #11 and Decision (c).
 
@@ -64,10 +65,12 @@ This is a separate, one-time governance/deployment operation, distinct from the 
    - `allow_open_offers` — set `true` to permit open-offer issuance under this policy (default `false`)
    - `revocation_permissions` — who may post 8xx and 9xx entries (optional; defaults apply if absent)
    - `policy_creation` — constraints on policies that holders of this policy's cards may create (optional)
+   - `preferred_services` — services this policy's card holders can log in to (optional). Leave it out to inherit the parent policy's list; set `[]` to list none. See `card_protocol_spec.md §1`, *The `preferred_services` Field*.
 
 2. The drafter validates the policy JSON against the protocol schema (CLI tool recommended). Confirm:
    - `field_definitions` is present and non-empty.
    - All `update_policy` predicates use valid predicate syntax.
+   - If `preferred_services` is present, each entry has an `https:` `origin` (no path, default port), a non-empty `name`, and origins are unique (the press enforces this with `P-29`).
    - No field name collides with protocol-required fields (`policy_id`, `issuer_card`, `press_card`, `recipient_pubkey`, `issued_at`, `issuer_signature`, `holder_signature`, `press_signature`).
 
 3. The drafter delivers the proposed policy JSON to the authorizer out of band (e.g., via email, secure file transfer, or in-person review).

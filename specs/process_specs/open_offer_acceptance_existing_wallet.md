@@ -3,6 +3,7 @@
 **Version:** 0.2 (draft)  
 **Date:** 2026-07-04  
 **Status:** Draft  
+**Amended 2026-11-08 (card login):** step 17a registers the wallet with the login router (add-only).
 **Changes from v0.1:** Corrected the keyring update step (Step 6) to describe the wallet service's keyring storage and federation replication, replacing an earlier IPFS-based description.
 
 > **Terminology note.** This spec now uses "card" as the canonical term per the Naming Convention.
@@ -124,6 +125,8 @@ For first-time recipients who need to create a wallet, see `open_offer_acceptanc
     - Card details (policy, field values, issuer).
     - Option to view the card.
 
+17a. **Login router registration** *(added 2026-11-08)*. If the wallet has not yet registered with the login router in this browser, the redirect in step 18 goes through `https://<router>/register#token=<wallet registration token>&next=<redirect_url>` (`object_specs/login_router.md §4`). Registration is add-only: it never replaces a different wallet the user already set as default.
+
 18. The wallet service displays the `redirect_url` to the recipient before navigating, warns against known phishing domains, and redirects.
 
 ---
@@ -134,6 +137,7 @@ For first-time recipients who need to create a wallet, see `open_offer_acceptanc
 - The new card is pinned on IPFS and registered on Arbitrum One.
 - The on-chain acceptance counter for the offer has been atomically incremented.
 - A `PressIssuanceRecord` for the issuance has been delivered to the policy's auditors, the issuer, and the policy card's holder.
+- The wallet is registered with the login router in this browser (add-only), unless it already was or storage was unavailable.
 - The recipient did not need to set up a new passkey or re-derive the keyring decryption key (the existing credential was used).
 
 ---
