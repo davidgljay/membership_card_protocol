@@ -112,6 +112,18 @@ David asked whether notaries could issue cards from validated HTTPS responses, a
 
 **Not a CP6 or CP7 trigger.** No contract change: members sign off-chain with their existing keys, and readers use the existing `GetGovernanceKeyset` view. The list cards are new, so there are no existing objects to break.
 
+## Added during CP4 review (2026-11-12): runtime upgrades and key exposure
+
+These changes came from David's question about how enclave updates work. They close three gaps.
+
+| Gap | Fix | Files |
+|---|---|---|
+| Replicas on different runtimes could disagree at close | `close_compat` on accepted-runtime entries. Check P4 requires it to match. Incompatible upgrades move jobs by a `runtime_migration` epoch, or let them finish on the old image. | `protocol-objects.md` §28, §29, §34; `notary_replication_and_recovery.md` §3, §7, error paths; `notary_certification.md` (assigning `close_compat`) |
+| Emergency retirement was the only fast path, and it destroys keys | Three retirement paths: supersede, **expedited supersede** (72 hours; approved by David 2026-11-12) and emergency | `notary_certification.md` Retirement; `mandate.md`; `card_protocol_spec.md §9` (P0 and an open question); `notary-code-plan.md` §7.5 corrected |
+| Keys from a vulnerable runtime stayed trusted | Key lineage in the runtime; new check P5 (exposed keys are never handed on); **algorithm E** (lifecycle A.6), run by W step 10a, N step 4a and verifier Stage 5 step 3a, using chain time only; `key_exposure` epochs; template `dup_tag` re-seed with generations; limit L11; governance follow-up | `notary_lifecycle.md`; `notary_runtime.md` §4, §12; `derived_card_revocation_propagation.md` §1; `card_verifier.md` (step 3a, codes, `RpcProvider.getNotaryLogAnchors`); `notary_certification.md` |
+
+New codes: `HANDOFF_COMPAT_MISMATCH`, `HANDOFF_KEY_EXPOSED`, `JOB_NOTARY_KEY_EXPOSED`, `NOT_NOTARY_KEY_EXPOSED`, `NOTARY_KEY_EXPOSED`, `NOTARY_LINEAGE_INCOMPLETE`. New warning: `notary_key_exposed_later`.
+
 ## Decisions for David at CP3
 
 1. **Approve the spec text** (CP3).

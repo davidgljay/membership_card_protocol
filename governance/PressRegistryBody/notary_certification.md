@@ -57,8 +57,24 @@ Before adding a PCR0 to the accepted-runtime list, the body confirms:
   - the governance-list floors built into the image.
 - **Pinned keys and floors.** The image's built-in list-signing keys are the current ones. Its version floors are at least the current list versions.
 - **Platform.** The image targets a platform with an attestation verifier module, `aws-nitro-enclaves` in v1.
+- **`close_compat`.** The body assigns the entry's `close_compat` (`protocol-objects.md §34`). The new runtime keeps its predecessor's value **only if** the audit confirms that all of these are unchanged:
+  - the ABI;
+  - the card-check vector set;
+  - input checks B1–B11;
+  - the output transforms;
+  - the close computation.
 
-**Retirement.** A runtime is **superseded** when a newer accepted runtime replaces it. The body sets `retired_at` with enough lead time for operators to move running jobs by handoff, normally 30 days.
+  Otherwise it gets a new value. An unchanged value lets jobs move by rolling handoff. A new value means jobs either finish on the old runtime or move by a `runtime_migration` epoch.
+
+**Retirement.** There are three paths (`notary_replication_and_recovery.md` §3, Runtime upgrades):
+
+| Path | When | Approval | `retired_at` | Effect on keys |
+|---|---|---|---|---|
+| **Supersede** | A newer runtime replaces it | Standard (quorum, 14-day deliberation) | Normally 30 days after the decision; longer if the new runtime has a different `close_compat` and long votes are running | Handed on to the new runtime |
+| **Expedited supersede** *(adopted 2026-11-12)* | A flaw that **didn't** expose keys or inputs, but needs fixing quickly, for example an eligibility-check bug | Quorum, with a **72-hour** minimum deliberation | At least 72 hours after the list update | Handed on to the new runtime |
+| **Emergency retirement** (below) | A flaw that **could** expose keys or inputs | Any 2 of 5, ratified within 7 days | Immediate | Never handed on. Treated as exposed (algorithm E). |
+
+The distinction matters because emergency retirement makes every key that lived in the runtime unusable. Notary cards then need new genesis, jobs re-key, and template chains re-seed. Use it only when keys or inputs may really have been exposed.
 
 ---
 
@@ -112,6 +128,11 @@ The body's fastest current path is a 7-day emergency deliberation (`mandate.md`,
 2. **Ratification.** The full body deliberates within 7 days, then either ratifies the retirement or reverses it, by an ordinary update with a new `retired_at`. Either way, a public decision record is produced.
 3. **Limits.** An emergency retirement can only **remove** acceptance. Adding a runtime or program always takes the standard 14-day process.
 4. **Recovery.** A retired runtime is replaced by publishing a new image with a higher version floor. Wallets and peer enclaves refuse the retired runtime immediately (`notary_runtime.md §12`).
+5. **Follow-up on affected cards** *(added 2026-11-12)*. Every key that lived in the retired runtime is exposed (`notary_lifecycle.md` Appendix A.6). Verifiers and wallets already reject anything those keys sign from `retired_at` on. The body also:
+   - calls `RevokePress(template, notary card)` for each affected derived-card operator;
+   - asks policy holders to remove affected notary cards from `approved_notaries`;
+   - confirms that each template's `dup_tag` chain has been re-seeded;
+   - publishes the list of affected notary cards with the decision record.
 
 **Enforcement.** The thresholds are enforced cryptographically, not only by process. Every list version carries a `list_approval` signed by members with their governance keys (`protocol-objects.md §34`). Runtimes, wallets and verifiers check it with algorithm L (`specs/process_specs/notary_lifecycle.md` Appendix A.5):
 - An `"emergency_retirement"` approval needs 2 member signatures. It is accepted only if the change is removal-only (rule E).

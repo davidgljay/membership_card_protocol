@@ -72,6 +72,12 @@ k_T,p           = HKDF-SHA256(k_T,p-1, info = "card-notary-dup-tag-ratchet" || p
 How the key behaves:
 - **One key per template.** `k_T,p` is shared by every enclave serving template `T`, across operators (template-scope handoff, `notary_replication_and_recovery.md` §3). Two cards derived from the same source card for the same period therefore carry the same tag, whichever notary issued them.
 - **Old keys are erased.** A period key is erased once the period plus `renewal_window` has passed. The ratchet is one-way, so a key taken later can't reproduce earlier tags.
+- **Re-seeding after exposure** *(added 2026-11-12)*. The ratchet runs forward, so an exposed `k_T,p` exposes every later period's key too. When an enclave finds `k_T,p` exposed (`notary_runtime.md` §4), the chain is re-seeded:
+  - **New seed.** A clean enclave serving `T` generates a fresh random key for the current period as **generation** `g + 1`. Template handoffs carry the generation (`protocol-objects.md §29`, `key_generation`), and enclaves accept only a higher generation, and only from a peer whose own lineage is clean (P5).
+  - **Conflicts.** If two clean enclaves each create generation `g + 1`, the seed whose `SHA-256` is lower wins. The other enclave switches over at its next template handoff.
+  - **Issuing.** Enclaves issue new tags only under the newest generation.
+  - **Keeping the exposed key.** The exposed key is kept until the period ends, **only** to run D3 against tags already issued in that period. It is never used to issue.
+  - **Limit.** Until every operator serving `T` holds the new generation, two operators can issue the same source card a card each in that period without D3 catching it (`notary_lifecycle.md` L11). From the next period on, tags agree again.
 - **Why it's keyed.** Every card under a source policy is listed on-chain. An unkeyed hash of a source card's identity could be reversed by hashing each one.
 
 **Duplicates.**

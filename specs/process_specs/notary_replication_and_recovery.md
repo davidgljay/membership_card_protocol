@@ -68,7 +68,7 @@ It covers:
 1. **Host → originator enclave.** `create_job` with the job and the program. The originator runs the job checks and program admission, then generates `K_job,0` and attests with purpose `0x02` (`notary_lifecycle.md` steps 16–17).
    - *Threat note:* the host can refuse to start or send `create_job`, which only delays the job. It cannot make a key exist for a program that wasn't admitted, because admission comes first.
 2. **Originator → each other instance in `replica_set`.** The originator runs a **job-scope handoff** (§3). For another operator's instances, the message goes through that operator's host. Each receiver attests with purpose `0x02` for the same key hash.
-   - *Threat note:* hosts can drop handoff traffic, so the job never reaches q. They cannot get the key to a non-enclave, to a non-accepted runtime, or to a notary card outside `replica_set` (§3, P1–P4).
+   - *Threat note:* hosts can drop handoff traffic, so the job never reaches q. They cannot get the key to a non-enclave, to a non-accepted runtime, or to a notary card outside `replica_set` (§3, P1–P5).
 3. **Job leader**, once q instances hold the key. Writes the `opened` job-log record listing each instance's `0x02` attestation, and waits for its EAS anchor.
    - *Threat note:* the host can withhold the anchor, which delays opening. It cannot open the job with fewer than q replicas.
 4. **Job leader → host.** Signs and publishes the epoch-0 `JobAnnouncement`. No input can exist before this point, because no wallet has the key.
@@ -108,9 +108,23 @@ A **sender** S transfers keys and state to a **receiver** R. All messages travel
 | P1 | The peer's purpose-`0x03` attestation passes algorithm V (`notary_lifecycle.md` Appendix A.1) with `inst_key_hash = SHA-256(peer K_inst)`, `nonce` = this side's challenge, `t_eval = now` and `max_age` = 5 min | `ATT_*` |
 | P2 | The peer's PCR0 is accepted according to this runtime's own verified list copy. Two different PCR0s are allowed only if both are accepted (a runtime upgrade). | `HANDOFF_RUNTIME_NOT_ACCEPTED` |
 | P3 | **Job scope:** the peer's notary card is in `replica_set`, and the peer proves it holds that card's `K_id` by signing the challenge. **Identity scope:** the peer's notary card is this enclave's own. **Template scope:** the peer's notary card has `issuer_card == T` and is in `T.approved_notaries`. | `HANDOFF_SCOPE_DENIED` |
-| P4 | **Job scope:** the receiver's purpose-`0x04` attestation shows the same `program_hash`, `job_hash`, `epoch` and `isolation`, and both sides report the same ABI version (`notary_v1`), so their fuel accounting matches | `HANDOFF_PROGRAM_MISMATCH` |
+| P4 | **Job scope:** the receiver's purpose-`0x04` attestation shows the same `program_hash`, `job_hash`, `epoch` and `isolation`, and both sides report the same ABI version (`notary_v1`), so their fuel accounting matches → `HANDOFF_PROGRAM_MISMATCH`. Both PCR0s' accepted-runtime entries have the same `close_compat` (`protocol-objects.md §34`), so replicas validate and compute identically at close → `HANDOFF_COMPAT_MISMATCH`. | `HANDOFF_PROGRAM_MISMATCH`, `HANDOFF_COMPAT_MISMATCH` |
+| P5 | **Every scope:** no key being transferred has a lineage containing a PCR0 retired as `"vulnerable"` (`notary_runtime.md` §4). An exposed key is never handed on. | `HANDOFF_KEY_EXPOSED` |
 
-**Runtime upgrades.** A handoff between different accepted PCR0s is how a running job moves to a new runtime. If governance retires a PCR0 as `"vulnerable"`, peers on accepted runtimes stop accepting handoffs from it, so jobs must move before the retirement takes effect, or restart in a new epoch (§7).
+**Runtime upgrades.** Governance retires an old runtime in one of three ways (`governance/PressRegistryBody/notary_certification.md`):
+- **`superseded`:** normally 30 days' notice;
+- **expedited supersede:** at least 72 hours' notice, for fixes that didn't expose keys or inputs;
+- **`vulnerable`:** emergency, immediate.
+
+What an operator does depends on how the old and new runtimes compare:
+
+| Old and new runtime | Identity and template keys | Running jobs |
+|---|---|---|
+| Same `close_compat`, superseded | Handoff to new-image enclaves (P2 allows two accepted PCR0s) | **Rolling handoff**, one replica at a time. Live replicas never drop below `min_live`. Usually one old instance stops before a new one starts, because of `HANDOFF_OVER_CAPACITY`. Wallets see only a re-issued announcement. |
+| Different `close_compat`, superseded | Handoff, as above | Aggregate jobs that close before `retired_at` **finish on the old image**. Longer aggregate jobs move by a **`runtime_migration` epoch** (§7). Per-input jobs move at their next `key_period` rotation, whose epoch may be keyed on new-image replicas. |
+| Retired `vulnerable` | **Never handed on** (P5). The notary card is dead; the operator redoes genesis on a new image, and policy holders reissue. Template key chains are re-seeded (`derived_card_revocation_propagation.md` §1). | Every job with a key that lived in the image moves by a **`key_exposure` epoch** (§7), with fresh keys on clean replicas |
+
+**When old enclaves stop.** An old enclave is stopped once it holds no job that still needs it and every identity and template key it held has been handed on, or is exposed. Stopping it destroys its copies, because keys exist only in enclave memory.
 
 ---
 
@@ -168,19 +182,28 @@ A **sender** S transfers keys and state to a **receiver** R. All messages travel
 
 ## §7 Epochs, total loss and resubmission
 
-**Epoch changes** happen in two ways:
+**Epoch changes** happen in four ways:
 - **`key_period`** (per-input jobs): a scheduled rotation (`notary_lifecycle.md` step 40).
 - **`total_loss`**: no live replica holds `K_job,e`.
+- **`runtime_migration`** *(added 2026-11-12)*: the operator moves a job to replicas running a runtime with a different `close_compat` (§3, Runtime upgrades).
+- **`key_exposure`** *(added 2026-11-12)*: a key of the job's current epoch has a lineage containing a runtime retired as `"vulnerable"`. The enclave that detects it alerts the operator. The job must move to fresh keys on clean replicas.
 
-The steps below cover total loss.
+The steps below cover all three unscheduled kinds. For `runtime_migration` and `key_exposure`, old-epoch replicas may still be live:
+- The new epoch's leader writes `epoch_started` with that reason.
+- Old-epoch replicas stop issuing receipts as soon as they see that record anchored, and erase `K_job,e`.
+- N13 rejects any notarization from the old epoch closed after that anchor.
 
-25. **Operator's host → an enclave.** Sends `create_job` with `restart: { prev_epoch: e, last_log: <cid of the last job-log record it has> }`. The enclave checks that chain time is still before `closes_at`. It runs §2 for epoch `e + 1` with a fresh replica set and a fresh `K_job,e+1`.
+25. **Operator's host → an enclave.** Sends `create_job` with `restart: { prev_epoch: e, last_log: <cid of the last job-log record it has>, reason }`, where `reason` is `total_loss`, `runtime_migration` or `key_exposure`. For `key_exposure` the enclave confirms the exposure from its own verified list. For `runtime_migration` it confirms that its own `close_compat` differs from the previous epoch's. The enclave checks that chain time is still before `closes_at`. It runs §2 for epoch `e + 1` with a fresh replica set and a fresh `K_job,e+1`.
+    - *Threat note:* a `runtime_migration` costs offline contributors their inputs, just as total loss does. It is accepted only when the runtimes really differ in `close_compat`, so a host can't invoke it at will. Governance should give incompatible upgrades enough notice for most aggregate jobs to finish on the old image.
     - *Threat note:* a host can **force** total loss by killing all of its own enclaves. That can't be prevented, so it is made visible (step 26), and votes should use replicas from several operators so that no single host holds a quorum (L1, L2).
-26. **New job leader.** Writes `epoch_started` with `epoch_reason: "total_loss"` and `prev` = `last_log`. It **does not publish the announcement until that record is anchored.**
+26. **New job leader.** Writes `epoch_started` with `epoch_reason` = `restart.reason` and `prev` = `last_log`. It **does not publish the announcement until that record is anchored.**
     - *Threat note:* the host can point `last_log` at an older record, forking the job log (`JOB_LOG_FORK`). It cannot hide the reset, because the record is anchored and wallets report it.
 27. **Wallets that have submitted to the job.** Check the announcement every 6 hours, and immediately when a receipt is missing. On finding a higher epoch, the wallet:
     1. runs algorithm W on the new announcement;
-    2. if the reason is `total_loss`, tells the user their input was resent;
+    2. tells the user, by reason:
+       - `total_loss`: their input was resent;
+       - `runtime_migration`: nothing (the job moved to an updated runtime, and the input was resent);
+       - `key_exposure`: their input was resent, and an earlier copy may have been readable because the runtime holding the job key was found vulnerable (`notary_lifecycle.md` L11);
     3. re-encrypts its **stored signed `NotaryInput`**, the latest `revision`, unchanged and without re-signing or a new prompt, to `K_job,e+1`;
     4. submits it as in `notary_lifecycle.md` Phase 5.
 
@@ -243,6 +266,8 @@ Even colluding, they **cannot** read inputs or keys, forge or alter a result, or
 | `HANDOFF_RUNTIME_NOT_ACCEPTED` | P2 | Refuse the handoff; the operator must run an accepted runtime |
 | `HANDOFF_SCOPE_DENIED` | P3 | Refuse the handoff |
 | `HANDOFF_PROGRAM_MISMATCH` | P4 | Refuse the handoff; the receiver must admit the same program under the same ABI |
+| `HANDOFF_COMPAT_MISMATCH` | P4 | Refuse the handoff; move the job by a `runtime_migration` epoch instead |
+| `HANDOFF_KEY_EXPOSED` | P5 | Refuse the handoff; the key is never used again (§3, Runtime upgrades) |
 | `HANDOFF_OVER_CAPACITY` | Sender, step 7 | Refuse; the operator already runs its allowed instance count |
 | State version regression | Receiver, step 9; holders, step 31 | Refuse the state; raise an alert |
 | Fewer than q acknowledgments | Receiver, step 13 | No receipt; the wallet retries |

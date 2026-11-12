@@ -105,6 +105,13 @@ Code lives in `notary/runtime/` (Rust, std, a separate workspace from `contracts
 | `K_job,e` (X-Wing draft-06) | After program admission, per (job, epoch) | Broker | Only by job handoff |
 | Ephemeral handoff key (X-Wing) | Per handoff | Broker | Never; erased after the handoff |
 
+**Key lineage** *(added 2026-11-12)*. Every key in the keyring carries its **lineage**: the set of PCR0s it has lived in. A key created here starts with this runtime's PCR0. A handoff payload carries each key's lineage, and the receiver adds its own PCR0. When the broker verifies a list version (§12) that retires a PCR0 as `"vulnerable"`, it checks every key against it. For each key whose lineage contains that PCR0, it raises `alert key_exposed` and acts as follows:
+- **`K_id`, `K_chain` and the state key:** never sign or decrypt with them again. The notary card is dead and the operator must redo genesis (`notary_lifecycle.md` Appendix A.6).
+- **`K_job,e`:** stop issuing receipts for that job, and keep the key only until a `key_exposure` epoch is anchored (`notary_replication_and_recovery.md` §7).
+- **`k_T,p`:** re-seed the template chain (`derived_card_revocation_propagation.md` §1).
+
+An exposed key is never handed on (P5).
+
 **Invariants** (tested):
 - **I1.** No key is exported except by the handoff protocol (`notary_replication_and_recovery.md` §3).
 - **I2.** No key is imported except by that protocol. In particular, a host-supplied identity key is never accepted.
@@ -327,7 +334,8 @@ The runtime needs the accepted-runtime list (for handoff check P2) and the progr
 
    All of these are covered by PCR0.
 2. **Signatures checked.** The host supplies each list card's genesis document and log entries. The broker checks every `intent_signature` and `press_signature` against the pinned keys, checks the `prev_log_root` chain, and runs algorithm L (`notary_lifecycle.md` Appendix A.5) against the pinned member keyset. It uses the `card_state` of the highest version that passes both.
-3. **Never goes backwards.** The broker refuses any version below the floor or below the highest it has seen. The highest version seen travels in heartbeats (`list_versions`) and handoffs, so restarted replicas inherit it.
+3. **Reacts to retirements.** On each newly verified accepted-runtime list, the broker runs the key-lineage check (§4).
+4. **Never goes backwards.** The broker refuses any version below the floor or below the highest it has seen. The highest version seen travels in heartbeats (`list_versions`) and handoffs, so restarted replicas inherit it.
 
 **Member key rotation.** After `RotateGovernanceKeys`, new approvals name a keyset version the image doesn't have, so the runtime stops accepting list updates. It keeps its last verified version. The body therefore publishes a new runtime image with the new keyset whenever it rotates, and retires older images as superseded. A removed member's key stays valid in images built before the rotation until they are retired, so a removal for compromise is paired with an emergency retirement of those images.
 

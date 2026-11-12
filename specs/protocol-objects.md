@@ -1612,7 +1612,7 @@ The public, hash-chained history of a job. An enclave refuses to sign record `se
 
 **Bodies:**
 - `opened`: `{ "attestations": [cid] }`
-- `epoch_started`: `{ "epoch", "epoch_reason" }`
+- `epoch_started`: `{ "epoch", "epoch_reason" }`. `epoch_reason` is one of `"key_period"`, `"total_loss"`, `"runtime_migration"` or `"key_exposure"` (`notary_replication_and_recovery.md` §7).
 - `handoff`: a HandoffRecord (§29)
 - `replica_lost`: `{ "instance" }`
 - `replicated`: `{ "instance", "attestation": cid }`
@@ -1651,7 +1651,8 @@ The public, hash-chained history of a job. An enclave refuses to sign record `se
 | `from_instance`, `to_instance` | `base64url` | Yes | `SHA-256(K_inst)` of each side |
 | `from_attestation`, `to_attestation` | `cid` | Yes | Each side's purpose-`0x03` attestation for this handoff |
 | `to_notary_card` | `card-pointer` | Yes | |
-| `pcr0_from`, `pcr0_to` | `base64url` | Yes | They may differ only if both are on the accepted-runtime list (a runtime upgrade) |
+| `pcr0_from`, `pcr0_to` | `base64url` | Yes | They may differ only if both are on the accepted-runtime list (a runtime upgrade). For `job` scope, both must also have the same `close_compat` (§34). For `identity` scope, `pcr0_to` is part of the notary card's public key lineage (algorithm E, `notary_lifecycle.md` Appendix A.6). |
+| `key_generation` | `integer` | If `template` | The generation of the template's `dup_tag` key chain. Starts at 0 and increases when the chain is re-seeded after a key exposure (`derived_card_revocation_propagation.md` §1). |
 | `state_version`, `state_hash` | | Yes | The receiver refuses a version lower than any it has seen |
 | `at` | `timestamp` | Yes | |
 | `receiver_signature` | SignatureEntry | Yes | |
@@ -1769,6 +1770,7 @@ The **accepted-runtime list** card has field `accepted_runtimes`:
   {
     "accepted_from":    "<ISO 8601>",
     "build_recipe_cid": "<cid>",
+    "close_compat":     "<text>",
     "pcr0":             "<base64url — 48 bytes>",
     "platform":         "aws-nitro-enclaves",
     "retire_reason":    "<superseded | vulnerable — optional>",
@@ -1820,6 +1822,8 @@ Each list card also has a field **`list_approval`**, replaced on every update. I
 - **Rule E (removal only).** Compared with the previous list, an emergency update has the same entries in the same order. Entries are matched by `pcr0` or `program_cid`. Every changed entry differs only by `retire_reason` becoming `"vulnerable"` and `retired_at` being added or moved earlier, and at least one entry changes. Anything else, including reversing an emergency retirement, needs `"standard"`.
 - **Verification.** Algorithm L (`notary_lifecycle.md` Appendix A.5) verifies the approval of a list's head version. If the head is an emergency update, it also verifies the earlier versions back to the most recent standard one, so two members can't use an emergency update to approve a list that never reached the quorum.
 - **Key rotation.** An approval is valid only under the keyset version it names, and verifiers accept only the **current** version. After `RotateGovernanceKeys`, the body re-approves the unchanged head with a `"standard"` update under the new keyset. Members can sign it in advance, because they know the next version number. Until it is published, verifiers fail closed.
+
+**`close_compat`** *(added 2026-11-12)*. Two runtimes with the same value validate inputs, apply transforms and compute close identically, so their replicas can share a job (handoff check P4, `notary_replication_and_recovery.md` §3). Governance assigns it at acceptance. A new runtime keeps its predecessor's value only if its ABI, card-check vector set (`plans/notary-code-plan.md` §7.5), input checks B1–B11, output transforms and close computation are all unchanged (`governance/PressRegistryBody/notary_certification.md`). Otherwise it gets a new value, and jobs move to it through a migration epoch rather than a handoff.
 
 **Acceptance rule.** An entry is accepted at time `t` iff `accepted_from ≤ t` and (`retired_at` is absent or `t < retired_at`). Entries are retired, never deleted.
 

@@ -192,7 +192,7 @@ Goal: notaries fully specified, consistent with existing specs, and approved bef
 
 ## Phase 4: Code plan — *Opus*
 
-- [ ] **4.1 Lay out `notary/` and the cross-repo changes**
+- [x] **4.1 Lay out `notary/` and the cross-repo changes**: `notary-code-plan.md`, **approved by David at CP4, 2026-11-12**
   - **What**: Write `plans/notary-code-plan.md`. Proposed layout, to be confirmed:
     - `notary/runtime/` — Rust: broker, worker, attestation backends (AWS Nitro Enclaves NSM and simulator), HPKE, admission checks, privacy transforms, wasmi execution
     - `notary/lint/` — `notary-lint` CLI, sharing the admission crate
@@ -237,6 +237,12 @@ Goal: one end-to-end path running in the simulator: a job is announced with an a
   - **Context needed**: `notary_runtime.md`; `notary-design-decisions.md §2.3–2.4`
   - **Done when**: unit tests cover every admission reject reason, key isolation between jobs, and the privacy transforms, including a deliberately leaky test program.
 
+- [ ] **5.3a Card checks in Rust (`notary-cards`)** *(Opus; added at CP4)*
+  - **What**: Port the verifier logic that B1–B11 need into `notary-cards` (`notary-code-plan.md` §7.5). Build the TypeScript vector generator, the CI regeneration check and the coverage map.
+  - **Who**: Claude
+  - **Context needed**: `card_verifier.md` Stages 2–5; `card_validation.md`; `notary_lifecycle.md` Appendix B; `notary-code-plan.md` §7.5
+  - **Done when**: `notary-cards` agrees with every TypeScript-generated vector, the coverage map is complete, and CI fails on a deliberately stale vector set.
+
 - [ ] **5.4 Wallet SDK and verifier support**
   - **What**: Add to `wallet-sdk`:
     - the attestation verifier (one module per platform: simulator and AWS Nitro Enclaves)
@@ -278,10 +284,10 @@ Goal: one end-to-end path running in the simulator: a job is announced with an a
   - **Done when**: every question has an answer recorded.
 
 - [ ] **6.1 Aggregation template**
-  - **What**: Build the `aggregate` template and policy, the one-shot job mode, the input commitment, and receipt inclusion checks.
+  - **What**: Build the `aggregate` template and policy, the one-shot job mode, the input commitment, and receipt inclusion checks. Build `notary-messaging` (ADR-007 encryption in Rust) for private `statement` outputs *(added at CP4)*.
   - **Who**: Claude
   - **Context needed**: `notary_lifecycle.md` (aggregation); `notary_runtime.md`
-  - **Done when**: tests cover the k-suppression path and an independently verified notarization.
+  - **Done when**: tests cover the k-suppression path, an independently verified notarization, and a private output readable only by its listed recipients.
 
 - [ ] **6.2 Voting template and long-running jobs**
   - **What**: Build the `vote` template and policy: stored ciphertexts recomputed at close, enclave validation receipts, latest valid ballot counts (keyed per card), chain-anchored close, epochs and wallet resubmission.
@@ -290,13 +296,26 @@ Goal: one end-to-end path running in the simulator: a job is announced with an a
   - **Done when**: tests cover ballot replacement, close before and after `closes_at`, and an epoch restart with resubmission.
 
 - [ ] **6.3 Replication** *(Opus)*
-  - **What**: Implement the mutual-attestation handoff, handoff records, heartbeats and re-replication, with replicas across separate simulated hosts.
+  - **What**: Implement the mutual-attestation handoff (P1–P5), handoff records, heartbeats and re-replication, with replicas across separate simulated hosts. Also implement runtime upgrades (rolling handoff, `close_compat`, `runtime_migration` epochs) and key exposure (lineage, algorithm E, `key_exposure` epochs) *(added during CP4 review)*.
   - **Who**: Claude
   - **Context needed**: `notary_replication_and_recovery.md`; `notary-design-decisions.md §2.5`
-  - **Done when**: tests cover killing one replica mid-vote with no ballots lost, re-replication back to `min_live`, a refused handoff for each mismatch case, and every handoff appearing in the log.
+  - **Done when**: tests cover:
+    - killing one replica mid-vote with no ballots lost;
+    - re-replication back to `min_live`;
+    - a refused handoff for each mismatch case;
+    - every handoff appearing in the log;
+    - a rolling upgrade of a live vote with no ballots lost;
+    - an incompatible upgrade by migration epoch;
+    - an emergency retirement that makes the notary card unusable and re-keys its jobs.
+
+- [ ] **6.4a Registry write-gate calldata binding** *(added at CP4; requires CP7)*
+  - **What**: Implement `registry_contract.md §6.1` step 8 (every signed field must equal the calldata, error E-49) in the logic contract and verifier module, with Rust unit tests and a devnode test. Write no code until David approves at CP7. Deploying anywhere other than the local devnode is a separate CP7 approval.
+  - **Who**: Claude, after David approves
+  - **Context needed**: `registry_contract.md §6.1`; `contracts/` conventions; memory note on Stylus ABI conventions
+  - **Done when**: the E-49 tests pass, existing contract tests still pass, and the devnode stack uses the new contract.
 
 - [ ] **6.4 Derived-card template**
-  - **What**: Build the `derive` template and policy: per-input mode with key rotation each period, the nullifier, the anonymity-set check, batched issuance through the notary acting as press, and short `valid_until` with renewal.
+  - **What**: Build the `derive` template and policy: per-input mode with key rotation each period, `dup_tag` (including re-seeding by generation), the anonymity-set check, batched issuance through the notary acting as press, `expires_at` with renewal, and the `source_kind` refusal. Depends on 5.3a and 6.4a.
   - **Who**: Claude
   - **Context needed**: `notary_lifecycle.md` (derived cards); `notary-design-decisions.md §2.6`; `press.md` (issuance)
   - **Done when**: derived cards pass standard verification, and tests show duplicate refusal and the anonymity-set refusal.
@@ -324,7 +343,7 @@ Goal: one end-to-end path running in the simulator: a job is announced with an a
   - **Done when**: every question has an answer recorded.
 
 - [ ] **7.1 Spec-derived integration suite**
-  - **What**: Add `integration_tests/suites/notary/` against the docker-compose stack, with one test per acceptance criterion in the `card_protocol_spec.md` Notaries section, following `integration-testing-strategic-plan.md`.
+  - **What**: Add `integration_tests/suites/notary/` against the docker-compose stack, with one test per acceptance criterion in the `card_protocol_spec.md` Notaries section, following `integration-testing-strategic-plan.md`. Add the governance and EAS scripts (`notary-code-plan.md` §3.6) and run them against the devnode only. Deploy EAS into the stack, with a test-only mock anchor if EAS won't deploy *(added at CP4)*.
   - **Who**: Claude
   - **Context needed**: `card_protocol_spec.md` (Notaries); `integration_tests/` conventions
   - **Done when**: every acceptance criterion has a passing test.

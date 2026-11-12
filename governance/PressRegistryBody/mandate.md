@@ -5,7 +5,7 @@
 **Status:** Active  
 **Last reviewed:** 2026-06-25  
 **Amended 2026-11-11 (notaries):** second mandate, covering notary runtimes, programs and operators (`notary_certification.md`).
-**Amended 2026-11-12:** emergency retirement of notary runtimes and programs (`notary_certification.md`, Emergency Retirement).
+**Amended 2026-11-12:** emergency retirement and expedited supersede of notary runtimes and programs (`notary_certification.md`, Emergency Retirement).
 
 ---
 
@@ -103,6 +103,7 @@ All substantive decisions follow the off-chain process defined in [`research/off
 
 Key commitments:
 - **Minimum deliberation periods:** 14 days for press authorization/revocation decisions (7 days for emergency revocation), 14 days for rule changes, 21 days for membership changes.
+- **Exception: expedited supersede of notary runtimes** *(adopted 2026-11-12)*. A flaw that didn't expose keys or inputs may be fixed by a standard-quorum list update after a 72-hour minimum deliberation, with `retired_at` at least 72 hours later (`notary_certification.md`, Retirement).
 - **Exception: emergency retirement of notary runtimes and programs.** Any 2 of the 5 members may retire an exploitable runtime or program at once, with `retire_reason: "vulnerable"`. The full body must ratify or reverse it within 7 days, with a public decision record. This exception can only remove acceptance. Runtimes, wallets and verifiers enforce both this threshold and the 4-of-5 quorum for every other list change, through members' signatures on each list version (`notary_certification.md`, Emergency Retirement).
 - **Blocking objections** must be addressed before consensus is called.
 - **Decision records** are produced for every governance action and maintained permanently.

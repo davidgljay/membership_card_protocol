@@ -18,7 +18,7 @@
 
 **Changelog (2026-11-11, notaries, ADR-013):** new `VerifierConfig.notary` (§5); new entry point `verifyNotarization` (§6.5); Stage 4 enforces the optional `expires_at` card field (step 5a); Stage 5 adds notary-issued (derived) card checks (step 3a); new error codes `NOTARY_GENESIS_INVALID`, `NOTARY_DERIVED_SHAPE`, `NOTARY_CONFIG_MISSING`.
 
-**Changelog (2026-11-12, notaries, CP3):** `RpcProvider.getGovernanceKeyset` (§4.1). The notary list cards are checked with algorithm L (member `list_approval`, `notary_lifecycle.md` Appendix A.5) before use.
+**Changelog (2026-11-12, notaries, CP3):** Stage 5 step 3a runs algorithm E, with new codes `NOTARY_KEY_EXPOSED` and `NOTARY_LINEAGE_INCOMPLETE`. `RpcProvider.getGovernanceKeyset` and `getNotaryLogAnchors` (§4.1). The notary list cards are checked with algorithm L (member `list_approval`, `notary_lifecycle.md` Appendix A.5) before use.
 
 **Changelog (2026-11-08, card login):** New `VerifierConfig.loginServiceCertificationRoot` (§5); `RpcProvider.getDomainRegistration` (§4.1); new entry points `verifyLoginResponse` (§6.3) and `verifyServerCard` (§6.4); Stage 2 step 14 accepts `"S1"` only on server cards and new step 16f enforces the login service scope rule (`LOGIN_SERVICE_SCOPE`); `app_card_branch` result field (§8); new error codes (§9). See `process_specs/card_login.md`.
 
@@ -143,6 +143,15 @@ interface RpcProvider {
    * Added 2026-11-12.
    */
   getGovernanceKeyset(bodyId: "PressRegistryBody"): Promise<GovernanceKeyset>;
+
+  /**
+   * Returns the EAS anchors under the notary job-log schema for one scope: a
+   * job_hash for a job log, or a notary card address for an identity log.
+   * Each anchor is { seq, record_cid, timestamp }, in chain order. Used by
+   * algorithm N step 11 and algorithm E (notary_lifecycle.md Appendix A).
+   * Added 2026-11-12.
+   */
+  getNotaryLogAnchors(scopeId: string): Promise<{ seq: number; record_cid: string; timestamp: number }[]>;
 
   /**
    * Added 2026-11-08 (card login). Reads DomainRegistrations[domain]
@@ -727,6 +736,7 @@ The head content tells us *what* the current state is (revoked or not, which fie
 3a. **Notary-issued cards (added 2026-11-11).** If the card's `press_card` is a notary card (its `policy_id` is `config.notary.notaryCardPolicy`), the card is a derived card under a template policy (`protocol-objects.md §2.2`). In addition to step 3:
    - Run algorithm G (`notary_lifecycle.md` Appendix A.3) on the notary card's `genesis_attestation`, with `t_eval` = the notary card's `issued_at`. Failure → `policy_compliant: false`, code `NOTARY_GENESIS_INVALID`. A `"vulnerable"` runtime retirement → warning `runtime_retired_vulnerable`.
    - Confirm `issuer_card == press_card`, and that `ancestry_pubkeys` matches `[notary card key, template key]`. Failure → `NOTARY_DERIVED_SHAPE`.
+   - Run algorithm E (`notary_lifecycle.md` Appendix A.6) on the issuing notary card, with `t` = the derived card's `CardRegistered` timestamp. An exposure at or before `t` → `policy_compliant: false`, code `NOTARY_KEY_EXPOSED`. An exposure after `t` → warning `notary_key_exposed_later`. A broken identity log → `NOTARY_LINEAGE_INCOMPLETE` (added 2026-11-12).
    - Confirm the template's `notary.derived_card.source_kind` is absent or `"card"`. Any other value, including the reserved `"web_evidence"`, isn't supported by this version → `policy_compliant: false`, code `NOTARY_DERIVED_SHAPE` (added 2026-11-12).
    - `dup_tag` is returned in the result (`derived: { source_policy, projected, dup_tag, expires_at }`), so callers that need one card per person per period can compare tags. It is not checked here.
 4. **Corrected 2026-07-16 (Tier 1 item 7):** if `VerifierConfig.conditions` (§5) is configured — construction-time config, not a call-site option; an earlier draft of this section described a call-site `requiredPredicate`/`requiredPolicy` shape that was never implemented and is not the correct API — evaluate it against the signer's resolved chain. Predicate failure sets `policy_match: false` but does not affect `policy_compliant`. If no `conditions` is configured, `policy_match` is `null` (not evaluated), regardless of the signer's actual compliance.
@@ -973,6 +983,8 @@ The package distinguishes three classes of error:
 | `NO_PRESS_AUTHORIZATION` | 5 | No `PressAuthorizations` entry for `(policy_id, press_address)` |
 | `NON_COMPLIANCE_REPORT_FAILED` | 5 | POST to Press Registry Body endpoint failed (network error or non-2xx response) |
 | `NOTARY_GENESIS_INVALID` | 5 | A derived card's notary card fails the genesis attestation check (added 2026-11-11) |
+| `NOTARY_KEY_EXPOSED` | 5 | The notary card that issued a derived card had its key in a runtime retired as `"vulnerable"` before the card was registered (added 2026-11-12) |
+| `NOTARY_LINEAGE_INCOMPLETE` | 5 | The issuing notary card's identity log has a gap or fork (added 2026-11-12) |
 | `NOTARY_DERIVED_SHAPE` | 5 | A notary-issued card's issuer, press or ancestry don't match the derived-card shape (added 2026-11-11) |
 | `NOTARY_CONFIG_MISSING` | 5, §6.5 | A notary check was needed but `config.notary` is not set (added 2026-11-11) |
 

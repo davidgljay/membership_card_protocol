@@ -2,7 +2,7 @@
 
 Implementation plan: [notary-implementation-plan.md](notary-implementation-plan.md) · Strategic plan: [notary-strategic-plan.md](notary-strategic-plan.md) · Phase 1 scan: [notary-spec-impact.md](notary-spec-impact.md)
 
-**Status:** **Approved by David at CP2, 2026-11-11.** Every section is written. Decisions D1–D12 were made by David on 2026-11-11, and D13–D15 at CP3 on 2026-11-12. All are listed in §0.3. Nothing here is spec text; Phase 3 turns the approved decisions into specs, using this document as its source of truth.
+**Status:** **Approved by David at CP2, 2026-11-11.** Every section is written. Decisions D1–D12 were made by David on 2026-11-11, D13–D15 at CP3 on 2026-11-12, and D16–D17 during the CP4 review. All are listed in §0.3. Nothing here is spec text; Phase 3 turns the approved decisions into specs, using this document as its source of truth.
 
 **Terminology.** "AWS Nitro Enclaves" or "the enclave" means the TEE. "nitropack" means the web framework. "Enclave attestation" (or "AWS Nitro Enclaves attestation document") means the signed document the AWS Nitro Enclaves security module (the NSM) returns; it is never the App Attest / Play Integrity "attestation" of `subcards.md` or the `DomainBindingAttestation` of `protocol-objects.md §17`. "Notary card" is what the plans call the "notary sub-card". It is an ordinary `CardDocument`, not a §16 `SubCardDocument`.
 
@@ -54,6 +54,8 @@ Each has options and a recommendation in the section named. Items marked *deviat
 | D13 | Cards from verified HTTPS responses (zkTLS / Reclaim-style) | — | **Decided 2026-11-12 (CP3):** reserve `derived_card.source_kind: "web_evidence"` now, refused in v1; the feature is a P2 follow-on, with attestor trust an open security question. |
 | D14 | Emergency retirement of runtimes and programs | §2.2.2 | **Decided 2026-11-12 (CP3):** adopted. 2 of 5 members, immediate, removal-only, ratified or reversed by the full body within 7 days. |
 | D15 | Enforcing governance list thresholds | — | **Decided 2026-11-12 (CP3):** every list version carries PressRegistryBody member signatures (`list_approval`, algorithm L). Quorum for standard changes, 2 for removal-only emergency retirements. The list-holder key alone can no longer change acceptance. |
+| D16 | Card checks inside the enclave | — | **Decided 2026-11-12 (CP4 review):** card checks are ported to Rust (`notary-cards`) and kept in step by TypeScript-generated vectors, CI regeneration, a coverage map and differential fuzzing (`notary-code-plan.md` §7.5). |
+| D17 | Runtime upgrades and key exposure | — | **Decided 2026-11-12 (CP4 review):** work moves while running, by rolling handoff (same `close_compat`) or a `runtime_migration` epoch. Keys that lived in a runtime retired `"vulnerable"` are exposed (algorithm E) and never handed on. Retirement gains an expedited supersede path (quorum, 72-hour minimum deliberation and notice), approved by David. |
 | D9 | Who may open a derived-card job for a given source policy | §2.1.1 | **Decided 2026-11-11:** anyone. (Recommendation was the source policy's holder.) Consequence for §2.6: nullifiers can't be scoped per job, or a holder could collect one derived card per job. |
 
 ### 0.4 Question map (`notary-spec-impact.md §F.2`)

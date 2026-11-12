@@ -1419,7 +1419,11 @@ Today, any service that computes over members' signed data sees all of it. Membe
 - key handoff uses mutual attestation and is logged before the new replica acts;
 - a result needs a cosigning majority quorum;
 - close needs both chain time and enclave hardware time to pass `closes_at`;
-- a total loss starts a new, publicly logged epoch, and wallets resubmit their latest signed input automatically.
+- a total loss starts a new, publicly logged epoch, and wallets resubmit their latest signed input automatically;
+- runtime upgrades move work while it runs:
+  - by rolling handoff between runtimes with the same `close_compat`;
+  - by a logged `runtime_migration` epoch between runtimes whose validation or computation differs.
+- after an emergency (`"vulnerable"`) retirement, every key that lived in that runtime is treated as exposed (algorithm E). Notary cards are rejected for anything dated after the retirement, jobs re-key, and `dup_tag` chains are re-seeded.
 
 **Derived cards** (`derived_card_revocation_propagation.md`, `protocol-objects.md §2.2`):
 - issued only under governance template policies;
