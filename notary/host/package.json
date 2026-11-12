@@ -1,0 +1,32 @@
+{
+  "name": "@membership-card-protocol/notary-host",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Notary host service (notary_host.md): the operator's nitropack service between the world and its enclaves. Untrusted for confidentiality; responsible for availability and accountability.",
+  "scripts": {
+    "dev": "nitro dev",
+    "build": "nitro build",
+    "start": "node .output/server/index.mjs",
+    "typecheck": "tsc --noEmit",
+    "typecheck:server": "nitro prepare && tsc --noEmit -p tsconfig.server.json",
+    "test": "NODE_OPTIONS=--experimental-global-webcrypto vitest run"
+  },
+  "dependencies": {
+    "@membership-card-protocol/verifier": "file:../../membership_card_verifier/packages/verifier",
+    "@membership-card-protocol/wallet-sdk": "file:../../wallet-sdk/packages/wallet-sdk",
+    "@noble/ciphers": "^1.0.0",
+    "@noble/curves": "^1.9.0",
+    "@noble/hashes": "^1.7.2",
+    "@noble/post-quantum": "^0.5.4",
+    "hpke-js": "^1.8.0",
+    "nitropack": "^2.11.0",
+    "viem": "^2.30.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  },
+  "engines": { "node": ">=22", "pnpm": ">=9" }
+}

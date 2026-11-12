@@ -40,6 +40,7 @@ export type {
   SubCardEntry,
   CardChainEvent,
   EasAttestation,
+  GovernanceKeysetRead,
   CardDocument,
   SubCardDocument,
   PastKey,

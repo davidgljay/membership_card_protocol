@@ -207,4 +207,56 @@ describe("stage4 — revocation check", () => {
     const result = await verifyStage4(chain, SIGNING_TIME, rpc, BASE_CONFIG);
     expect(result.errors.find((e) => e.code === "HISTORY_MISMATCH")).toBeUndefined();
   });
+
+  describe("step 5a — expires_at (card_verifier.md §7.4, protocol-objects.md §1)", () => {
+    const rpcFor = () => mockRpc({ "0xcard1": [] }, { "0xcard1": "QmGenesis" });
+
+    it("a card past its expires_at: not currently valid, but valid for things signed before it; reason is expired", async () => {
+      const chain = [chainLink("0xcard1", { policy_id: "QmP", expires_at: "2026-07-01T00:00:00Z" })];
+      const r = await verifyStage4(chain, SIGNING_TIME, rpcFor(), BASE_CONFIG);
+      expect(r.revocation).toMatchObject({ status: "revoked", code: null, reason: "expired", effective_date: "2026-07-01T00:00:00.000Z" });
+      expect(r.was_valid_at_signing_time).toBe(true); // signed 2026-06-01, before the lapse
+      expect(r.is_currently_valid).toBe(false);        // the verifier's clock is past 2026-07-01
+    });
+
+    it("things signed on or after expires_at are not trusted", async () => {
+      const chain = [chainLink("0xcard1", { policy_id: "QmP", expires_at: "2026-05-01T00:00:00Z" })];
+      const r = await verifyStage4(chain, SIGNING_TIME, rpcFor(), BASE_CONFIG);
+      expect(r.was_valid_at_signing_time).toBe(false);
+    });
+
+    it("an expiry in the future leaves the card valid and not revoked", async () => {
+      const chain = [chainLink("0xcard1", { policy_id: "QmP", expires_at: "2999-01-01T00:00:00Z" })];
+      const r = await verifyStage4(chain, SIGNING_TIME, rpcFor(), BASE_CONFIG);
+      expect(r.revocation.status).toBe("not_revoked");
+      expect(r.revocation.reason).toBeUndefined();
+      expect(r.is_currently_valid).toBe(true);
+    });
+
+    it("an ancestor's expiry governs the whole chain", async () => {
+      const chain = [chainLink("0xcard1", { policy_id: "QmP" }), chainLink("0xparent", { policy_id: "QmQ", expires_at: "2026-07-01T00:00:00Z" })];
+      const rpc = mockRpc({ "0xcard1": [], "0xparent": [] }, { "0xcard1": "A", "0xparent": "B" });
+      const r = await verifyStage4(chain, SIGNING_TIME, rpc, BASE_CONFIG);
+      expect(r.revocation.reason).toBe("expired");
+      expect(r.is_currently_valid).toBe(false);
+    });
+
+    it("when an 8xx revocation is also present, the earlier date governs", async () => {
+      const events = { "0xcard1": [{ cid: "QmGenesis", timestamp: "2026-01-01T00:00:00Z" }, { cid: "QmRev", timestamp: "2026-06-15T00:00:00Z" }] };
+      const chain = [chainLink("0xcard1", { entry_type: "revocation", code: 800, history: ["QmGenesis"], revocation: { effective_date: "2026-06-15T00:00:00Z" }, expires_at: "2026-09-01T00:00:00Z" })];
+      const r = await verifyStage4(chain, SIGNING_TIME, mockRpc(events), BASE_CONFIG);
+      expect(r.revocation).toMatchObject({ status: "revoked", code: 800 });
+      expect(r.revocation.reason).toBeUndefined();
+      // and the other way round: expiry earlier than the revocation
+      const chain2 = [chainLink("0xcard1", { entry_type: "revocation", code: 800, history: ["QmGenesis"], revocation: { effective_date: "2026-06-15T00:00:00Z" }, expires_at: "2026-06-10T00:00:00Z" })];
+      const r2 = await verifyStage4(chain2, SIGNING_TIME, mockRpc(events), BASE_CONFIG);
+      expect(r2.revocation).toMatchObject({ status: "revoked", reason: "expired", effective_date: "2026-06-10T00:00:00.000Z" });
+    });
+
+    it("an unparsable expires_at is ignored, not fatal", async () => {
+      const chain = [chainLink("0xcard1", { policy_id: "QmP", expires_at: "tomorrow" })];
+      const r = await verifyStage4(chain, SIGNING_TIME, rpcFor(), BASE_CONFIG);
+      expect(r.revocation.status).toBe("not_revoked");
+    });
+  });
 });

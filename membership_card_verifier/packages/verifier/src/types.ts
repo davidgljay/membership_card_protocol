@@ -1,3 +1,5 @@
+import type { AttestationVerifier } from "./notary/types.js";
+
 // ─── Provider Interfaces ────────────────────────────────────────────────────
 
 export interface RpcProvider {
@@ -32,6 +34,28 @@ export interface RpcProvider {
    * by the card-login entry points, which throw MISSING_RPC_METHOD without it.
    */
   getDomainRegistration?(domain: string): Promise<DomainRegistration | null>;
+  /**
+   * card_verifier.md §4.1 (added 2026-11-12). The active GovernanceKeyset of a body
+   * (registry_contract.md §5, GetGovernanceKeyset). Used only by the notary checks, to verify governance
+   * list approvals with algorithm L. Optional so existing providers keep compiling; the notary checks
+   * return NOTARY_CONFIG_MISSING without it.
+   */
+  getGovernanceKeyset?(bodyId: "PressRegistryBody"): Promise<GovernanceKeysetRead>;
+  /**
+   * card_verifier.md §4.1 (added 2026-11-12). EAS anchors under the notary job-log schema for one scope: a
+   * job_hash (job log) or a notary card address (identity log), in chain order. `timestamp` is the block
+   * timestamp in milliseconds. Used by algorithm N step 11 and algorithm E.
+   */
+  getNotaryLogAnchors?(scopeId: string): Promise<{ seq: number; record_cid: string; timestamp: number }[]>;
+}
+
+/** A governance body's keyset as read from the registry (registry_contract.md §3.6). */
+export interface GovernanceKeysetRead {
+  /** scheme 0: 64-byte x‖y secp256r1 keys; scheme 1: ML-DSA-44 keys. */
+  keys: Uint8Array[];
+  quorum: number;
+  version: number;
+  key_scheme: 0 | 1;
 }
 
 export interface DomainRegistration {
@@ -175,6 +199,23 @@ export interface VerifierConfig {
   additionalAnnotators?: string[];
   returnChain?: boolean;
   conditions?: PolicyMatchConditions;
+  /**
+   * Added 2026-11-11 (notaries, ADR-013). Needed by verifyNotarization (§6.5) and by the notary-issued-card
+   * checks in Stage 5 (§7.5). Absent: those checks return NOTARY_CONFIG_MISSING. Ordinary card verification
+   * is unaffected. The modules come from `@membership-card-protocol/notary-attestation`; the core entry point
+   * never imports the notary code (only this type).
+   */
+  notary?: {
+    attestation: AttestationVerifier[];
+    attestationRoots: Record<string, Uint8Array>;
+    /** `false` in production. */
+    allowSimulator: boolean;
+    /** protocol-objects.md §34; both lists are checked with algorithm L before use. */
+    acceptedRuntimesCard: string;
+    programAllowlistCard: string;
+    /** NotaryCardPolicy CID. */
+    notaryCardPolicy: string;
+  };
 }
 
 // ─── Chain Data & Policy Matching ─────────────────────────────────────────────
@@ -264,6 +305,8 @@ export interface CardVerificationResult
 export interface RevocationStatus {
   status: "not_revoked" | "revoked" | "loud_revocation" | "unknown";
   code: number | null;
+  /** `"expired"` when the card lapsed at its `expires_at` (card_verifier.md §7.4 step 5a). */
+  reason?: "expired";
   effective_date: string | null;
   data_freshness_seconds: number;
 }
@@ -304,7 +347,14 @@ export interface NonComplianceReport {
 }
 
 export interface FailedCheck {
-  check: "FIELD_POLICY_VIOLATION" | "NO_PRESS_AUTHORIZATION";
+  check:
+    | "FIELD_POLICY_VIOLATION"
+    | "NO_PRESS_AUTHORIZATION"
+    | "NOTARY_GENESIS_INVALID"
+    | "NOTARY_KEY_EXPOSED"
+    | "NOTARY_LINEAGE_INCOMPLETE"
+    | "NOTARY_DERIVED_SHAPE"
+    | "NOTARY_CONFIG_MISSING";
   field?: string;
   detail: string;
 }

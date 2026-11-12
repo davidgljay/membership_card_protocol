@@ -1,0 +1,26 @@
+# Local and CI shape: the host, Redis, and the enclave simulator in place of the vsock proxy and a real enclave
+# (code-plan §2.2, §4 step 5.5). The enclave service is `notary-runtime` run by the simulator launcher.
+#
+# STATUS (2026-11-12, step 5.5): the host half is complete and tested against a mock enclave. The enclave service
+# below needs the runtime from step 5.3 (`notary-runtime --mode broker`), which is not built yet, so this file has
+# NOT been run end to end. The 5.5 "Done when" (an end-to-end run against the simulator) waits for 5.3.
+services:
+  host:
+    build: { context: ../.., dockerfile: notary/deploy/Dockerfile.host }
+    environment:
+      IPFS_PROVIDER: mock
+      EXTERNAL_KV_URL: redis://redis:6379
+      ENCLAVE_CIDS: sim-1
+      ENCLAVE_ENDPOINTS: "sim-1=enclave-sim:7001"
+      NOTARY_RELAY_TARGET_ID: notary-sim
+      NOTARY_PUBLIC_BASE_URL: http://host:3000
+    env_file: .env.sim
+    ports: ["3000:3000"]
+    depends_on: [redis, enclave-sim]
+  redis:
+    image: redis:7-alpine
+  enclave-sim:
+    # The simulated enclave: notary-runtime in broker mode, attesting through the fake enclave service in notary/sim.
+    # Requires step 5.3. Placeholder image name; the Dockerfile arrives with the runtime.
+    image: notary-runtime-sim:dev
+    command: ["notary-runtime", "--mode", "broker", "--listen", "0.0.0.0:7001", "--attestation", "simulator"]

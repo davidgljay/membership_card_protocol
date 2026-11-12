@@ -117,4 +117,41 @@ describe("stage5 — policy compliance", () => {
     expect(result.non_compliance_reported).toBe(false);
     expect(result.errors.some((e) => e.code === "NON_COMPLIANCE_REPORT_FAILED")).toBe(true);
   });
+
+  describe("step 3a hook (notary-issued cards)", () => {
+    const setup = () => ({
+      rpc: mockRpc({ getPressAuthorization: vi.fn().mockResolvedValue(ACTIVE_PRESS) }),
+      ipfs: mockIpfs({ QmPolicy: new TextEncoder().encode(JSON.stringify({ field_definitions: {} })) }),
+    });
+
+    it("a card that is not notary-issued (hook returns null) is unaffected", async () => {
+      const { rpc, ipfs } = setup();
+      const r = await verifyStage5(BASE_CARD_DOC, BASE_CARD_ENTRY, CARD_ADDRESS, CARD_CID, RAW_BYTES, rpc, ipfs, {}, async () => null);
+      expect(r.policy_compliant).toBe(true);
+      expect(r.notary).toBeUndefined();
+    });
+
+    it("a passing notary check returns warnings and the derived fields, and stays compliant", async () => {
+      const { rpc, ipfs } = setup();
+      const r = await verifyStage5(BASE_CARD_DOC, BASE_CARD_ENTRY, CARD_ADDRESS, CARD_CID, RAW_BYTES, rpc, ipfs, {},
+        async () => ({ ok: true, warnings: ["notary_key_exposed_later"], derived: { dup_tag: "TAG", expires_at: "2026-11-19T00:00:00Z" } }));
+      expect(r.policy_compliant).toBe(true);
+      expect(r.notary).toEqual({ warnings: ["notary_key_exposed_later"], derived: { dup_tag: "TAG", expires_at: "2026-11-19T00:00:00Z" } });
+    });
+
+    it("a failing notary check makes the card non-compliant with the notary code", async () => {
+      const { rpc, ipfs } = setup();
+      const r = await verifyStage5(BASE_CARD_DOC, BASE_CARD_ENTRY, CARD_ADDRESS, CARD_CID, RAW_BYTES, rpc, ipfs, {},
+        async () => ({ ok: false, code: "NOTARY_KEY_EXPOSED", detail: "exposed" }));
+      expect(r.policy_compliant).toBe(false);
+      expect(r.notary).toBeUndefined();
+    });
+
+    it("the existing press-authorization check still applies on top of the notary check", async () => {
+      const rpc = mockRpc({ getPressAuthorization: vi.fn().mockResolvedValue(null) });
+      const ipfs = mockIpfs({ QmPolicy: new TextEncoder().encode(JSON.stringify({ field_definitions: {} })) });
+      const r = await verifyStage5(BASE_CARD_DOC, BASE_CARD_ENTRY, CARD_ADDRESS, CARD_CID, RAW_BYTES, rpc, ipfs, {}, async () => ({ ok: true, warnings: [], derived: {} }));
+      expect(r.policy_compliant).toBe(false);
+    });
+  });
 });

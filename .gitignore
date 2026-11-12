@@ -41,3 +41,10 @@ contracts/tests/lib/
 contracts/node_modules/
 contracts/yarn.lock
 /package-lock.json
+
+# notary (Digital Notaries)
+notary/target/
+notary/**/node_modules/
+notary/**/dist/
+notary/host/.output/
+notary/host/.nitro/

@@ -1,0 +1,213 @@
+{
+  "base64url": {
+    "valid": [
+      {
+        "hex": "",
+        "b64u": ""
+      },
+      {
+        "hex": "3e",
+        "b64u": "Pg"
+      },
+      {
+        "hex": "5d64",
+        "b64u": "XWQ"
+      },
+      {
+        "hex": "7c838a",
+        "b64u": "fIOK"
+      },
+      {
+        "hex": "ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8",
+        "b64u": "_wYNFBsiKTA3PkVMU1phaG92fYSLkpmgp661vMPK0dg"
+      }
+    ],
+    "invalid": [
+      {
+        "id": "padded",
+        "value": "AA==",
+        "expected": "BASE64URL_INVALID"
+      },
+      {
+        "id": "trailing-bits",
+        "value": "AB",
+        "expected": "BASE64URL_INVALID"
+      },
+      {
+        "id": "bad-length",
+        "value": "A",
+        "expected": "BASE64URL_INVALID"
+      },
+      {
+        "id": "std-alphabet",
+        "value": "A+AA",
+        "expected": "BASE64URL_INVALID"
+      }
+    ]
+  },
+  "timestamp": {
+    "valid": [
+      {
+        "value": "2026-11-12T10:00:00Z",
+        "ms": 1794477600000
+      },
+      {
+        "value": "2026-11-12T10:00:00.5Z",
+        "ms": 1794477600500
+      },
+      {
+        "value": "2024-02-29T23:59:59.999Z",
+        "ms": 1709251199999
+      },
+      {
+        "value": "1970-01-01T00:00:00Z",
+        "ms": 0
+      }
+    ],
+    "invalid": [
+      {
+        "value": "2026-11-12T10:00:00+00:00",
+        "expected": "TIMESTAMP_INVALID"
+      },
+      {
+        "value": "2026-02-30T00:00:00Z",
+        "expected": "TIMESTAMP_INVALID"
+      },
+      {
+        "value": "2026-11-12 10:00:00Z",
+        "expected": "TIMESTAMP_INVALID"
+      },
+      {
+        "value": "2026-11-12T24:00:00Z",
+        "expected": "TIMESTAMP_INVALID"
+      },
+      {
+        "value": "2026-11-12T10:00Z",
+        "expected": "TIMESTAMP_INVALID"
+      },
+      {
+        "value": "2026-11-12T10:00:00.1234Z",
+        "expected": "TIMESTAMP_INVALID"
+      },
+      {
+        "value": "2025-02-29T00:00:00Z",
+        "expected": "TIMESTAMP_INVALID"
+      }
+    ]
+  },
+  "duration": {
+    "valid": [
+      {
+        "value": "P7D",
+        "ms": 604800000
+      },
+      {
+        "value": "P2D",
+        "ms": 172800000
+      },
+      {
+        "value": "PT6H",
+        "ms": 21600000
+      },
+      {
+        "value": "PT24H",
+        "ms": 86400000
+      },
+      {
+        "value": "P1W",
+        "ms": 604800000
+      },
+      {
+        "value": "P1DT2H3M4S",
+        "ms": 93784000
+      },
+      {
+        "value": "PT90S",
+        "ms": 90000
+      }
+    ],
+    "invalid": [
+      {
+        "value": "P1Y",
+        "expected": "DURATION_INVALID"
+      },
+      {
+        "value": "P1M",
+        "expected": "DURATION_INVALID"
+      },
+      {
+        "value": "P",
+        "expected": "DURATION_INVALID"
+      },
+      {
+        "value": "PT",
+        "expected": "DURATION_INVALID"
+      },
+      {
+        "value": "7D",
+        "expected": "DURATION_INVALID"
+      },
+      {
+        "value": "P1DT",
+        "expected": "DURATION_INVALID"
+      },
+      {
+        "value": "PT1H1D",
+        "expected": "DURATION_INVALID"
+      },
+      {
+        "value": "P1D1W",
+        "expected": "DURATION_INVALID"
+      },
+      {
+        "value": "PT1.5H",
+        "expected": "DURATION_INVALID"
+      }
+    ]
+  },
+  "cid": {
+    "valid": [
+      {
+        "digest_hex": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+        "cid": "bafkreigks6arfsq3xxfpvqrrwonchxcnu6do76auprhhfomao6c273sixm"
+      },
+      {
+        "digest_hex": "3e23e8160039594a33894f6564e1b1348bbd7a0088d42c4acb73eeaed59c009d",
+        "cid": "bafkreib6epubmabzlffdhckpmvsodmjuro6xuaei2qwevs3t52xnlhaatu"
+      },
+      {
+        "digest_hex": "2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6",
+        "cid": "bafkreibopuwahkkqplrgl3hvwu2wrbnfgoj2eau5eqjzjglsmwq2ewxpyy"
+      }
+    ],
+    "invalid": [
+      {
+        "value": "zafkreigks6arfsq3xxfpvqrrwonchxcnu6do76auprhhfomao6c273sixm",
+        "expected": "CID_INVALID"
+      },
+      {
+        "value": "bafkreigks6arfsq3xxfpvqrrwonchxcnu6do76auprhhfomao6c273six",
+        "expected": "CID_INVALID"
+      },
+      {
+        "value": "BAFKREIGKS6ARFSQ3XXFPVQRRWONCHXCNU6DO76AUPRHHFOMAO6C273SIXM",
+        "expected": "CID_INVALID"
+      },
+      {
+        "value": "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
+        "expected": "CID_INVALID"
+      }
+    ]
+  },
+  "card_pointer": {
+    "valid": {
+      "public_key_b64u": "0_GHJOnbn1ef2sM6icx_Cjou_uLEIJibuB6-595vgDX4w9diMVw5mKfN3Q5Oj8rrKJoMR9Yaz662_7Deu0AemjLBLAf3JTaeQpVDna_tvUWSB1mVMn9_5vN0AHFqjsOk5IW2ki9OYOrVIu7CJAd_bkuCMWQlLwFNb70LLB_w0YymhxT8KK0SLhi8EBU9_E6doLPysfSiYBPwbyo5YuMbDb-VKTLogk4NhSj7pkoCZsiha2jjUDIiwO1vG3C5AgooohaIA-9czbTvT7ZBCSKTxdMz7p5t2KARlmpwS-7wkaSTDlNyvOHqdC0wN9Bq6ojurpMxF2DfJiddWnLN-hxuHsek6XSPDFBD_O-a0mpVdqSMsTxwGTr4Iuk1HP2nAoPXiJ2QXrH9b70E1mSq36aMtqRCTCDj2hH_PYvWPFfrPIeDP9Vkt3VPn0u5cBaX3SXS3eAExSufBj2zcPScg9Qldfh2hFYHvhBc9IKmN2ECp_g1I1iTPZJjZ8-l6DKgfufIs2kqotjAOscutKj-mjm140CnCzZUQZcrldnkLKjOyZXWJFI9TqGnPIXwLR96BbhKpx3V6p0xtWqnJ0AVYOf0aRx8U-vxolsHypMgx8G-B5xsGAyrW-Mur46pOmJo-reaH-hOL0yCmf01EgQb4gTM-Oq317y1IR9g-Jo9kzKNgedSWCf-PeBtJN3YYra0HpM6XXV8yLjkq_bbzLd-hg6MuN8zuCAYhANKFQMKKFiU2H_mvRWNnqRE7-r7V5K0-GzU2I1J5iP94BSpHVl_o45Sbz7Im_ADIaBWcHfUxNfeA6vW0NVB9RgBYLwd_Cp4vDPPORjOU4p8S0HHZzWRrYHj9B050vx-kwewwTdHYFRCfh5b3nvZ5dO4ZToKB24GL4OrAgXpx8kVkENKCqcci37qAQa8u1Ta18JkKGTYZ_Hc9OQqI_wbqDnrfyBO1YgLrnTr9TLqpywyyMVXlTe7mWoh-6ObgBOA8aJ0TDpSESFm-L8WYxWE96EKu3YyHb47w-bWQKDTjCxxIhHRQtUeGd2QXsa1LMbYtlugcGpupu8eTocn7Fah2pcV9cC-wXJIPpWvqCfGMIGbIyOgGMYT9HSlVOZP2YrYhYCi94rV1arwgQaL93ieSFvkR7W4IOCCF8-rKIisp1qs3csp3eW5dmx4pvi6QF7eB86yJx5OHTqhRmjRgo8jsC02X0p1ORiGaPHHTV8BJnKr69dUv5KYh5wJYVAzjj-Nwll2bAzNz78N3PfBvLSYKL7bu4DcPOe2mIj_JrGGAUD7xO5rFa2Ma4ZL-fYYZKjYjY1XV7Hg3r7T9qXCw4Hm0ObJR9JMEqzhL2lpdz0rSyL2TLpC7bS60VNQogJY8tqoG4PZdyb6cce6XcxR5p5SMSvPH5SfpfXqIjRlZEFFwF9v1Y4JRccYRoZLttWy606SHL8IJ8gPjpX_Ky1mP4r5sGHFh1DW5jrDfktSmTjHgBF5sIxr6gZl09mCVdtaukMKcshsT2jKNewNxtRiTmeTJYNWGX-Iyh9NZgf3sGwSL3wqU1Odc9fbVtoo-NtKtnki2qmtFxpDbuSrnOaAfBqqH27OJJPO1zO-lMNsHTOKyV9LpsheZFU6TDkNmVVVz2Y9xKTStd9M08AjMH4NwC9rooTvs2m63pffnz85WMkdXD_-s9OnO2U7tGAbzIKNWs394lgj9p3RG5XglEuR7AYoLWH5M64husJqPy1XaGby4iS8KGBrSNhEfw2W7A",
+      "card_pointer": "b895e08ac30797c822afbbdcec6eccbf6245a1c353bdf4e277be2d606ad73477"
+    },
+    "invalid": [
+      "0xb895e08ac30797c822afbbdcec6eccbf6245a1c353bdf4e277be2d606ad73477",
+      "B895E08AC30797C822AFBBDCEC6ECCBF6245A1C353BDF4E277BE2D606AD73477",
+      "95e08ac30797c822afbbdcec6eccbf6245a1c353bdf4e277be2d606ad73477"
+    ]
+  }
+}

@@ -1,0 +1,30 @@
+# Production shape (notary_host.md §3): the host, a Redis KV store, and a vsock proxy on the enclave-capable EC2
+# parent instance. The enclave itself is started from the EIF (deploy/eif) by the host's enclave manager, not by
+# Compose. NOT RUN in step 5.5: no AWS resources exist (CP8).
+#
+# Environment: see notary/host/src/config.ts (all variables are validated at startup).
+services:
+  host:
+    build: { context: ../.., dockerfile: notary/deploy/Dockerfile.host }
+    env_file: .env
+    environment:
+      EXTERNAL_KV_URL: redis://redis:6379
+      # the vsock proxy exposes each enclave CID as a TCP port inside this network
+      ENCLAVE_ENDPOINTS: "16=vsock-proxy:7001"
+    ports: ["3000:3000"]
+    depends_on: [redis, vsock-proxy]
+    restart: unless-stopped
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: ["redis-data:/data"]
+    restart: unless-stopped
+  vsock-proxy:
+    # TCP <-> vsock bridge: Node has no native vsock, so the host speaks the framed protocol to this proxy.
+    image: alpine/socat
+    command: ["TCP-LISTEN:7001,fork,reuseaddr", "VSOCK-CONNECT:16:5000"]
+    # needs /dev/vsock on the parent instance
+    devices: ["/dev/vsock:/dev/vsock"]
+    restart: unless-stopped
+volumes:
+  redis-data: {}

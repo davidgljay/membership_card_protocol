@@ -10,6 +10,8 @@ export interface Stage4Result {
   revocation: {
     status: "not_revoked" | "revoked" | "loud_revocation" | "unknown";
     code: number | null;
+    /** `"expired"` when the governing date is the card's `expires_at` (step 5a). */
+    reason?: "expired";
     effective_date: string | null;
     data_freshness_seconds: number;
   };
@@ -64,7 +66,7 @@ export async function verifyStage4(
     })
   );
 
-  let earliestRevocation: { code: number; effective_date: string } | null = null;
+  let earliestRevocation: { code: number | null; effective_date: string; expired?: true } | null = null;
   let anyContentAvailable = false;
   let anyContentUnavailable = false;
 
@@ -136,6 +138,20 @@ export async function verifyStage4(
       });
     }
     // Else: genesis CardDocument, never updated — not revoked, no field updates.
+
+    // Step 5a (added 2026-11-11, protocol-objects.md §1): `expires_at` is a quiet lapse. It is immutable and
+    // `decryptCardHead` overlays the genesis fields, so it is readable from the head content. The earliest date
+    // among 8xx/9xx revocations and expiries governs. (Compared with the verifier's clock; a chain-time source
+    // is a later refinement.)
+    const expiresAt = content!["expires_at"];
+    if (typeof expiresAt === "string" && !Number.isNaN(Date.parse(expiresAt))) {
+      const effective = new Date(Date.parse(expiresAt)).toISOString();
+      // Recorded under `revocation` once the lapse date has passed. An expiry still in the future is not a
+      // revocation (every derived card carries one); it changes nothing in steps 6–7 until it passes (erratum E15).
+      if (effective <= new Date().toISOString() && (!earliestRevocation || effective < earliestRevocation.effective_date)) {
+        earliestRevocation = { code: null, effective_date: effective, expired: true };
+      }
+    }
   }
 
   const dataFreshness = Math.floor((Date.now() - fetchedAt) / 1000);
@@ -185,7 +201,8 @@ export async function verifyStage4(
   }
 
   const { code, effective_date } = earliestRevocation;
-  const is8xx = code >= 800 && code <= 899;
+  const expired = earliestRevocation.expired === true;
+  const is8xx = expired || (code !== null && code >= 800 && code <= 899);
   const status = is8xx ? "revoked" : "loud_revocation";
 
   const wasValidAtSigning = signingTimestamp < effective_date;
@@ -198,6 +215,7 @@ export async function verifyStage4(
     revocation: {
       status,
       code,
+      ...(expired ? { reason: "expired" as const } : {}),
       effective_date,
       data_freshness_seconds: dataFreshness,
     },

@@ -1,0 +1,24 @@
+{
+  "name": "@membership-card-protocol/notary-attestation",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Enclave attestation platform modules (AWS Nitro Enclaves, simulator) for the AttestationVerifier interface (notary_runtime.md §5). The only TypeScript package that parses the AWS attestation document (G5).",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "files": ["dist"],
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "test": "NODE_OPTIONS=--experimental-global-webcrypto vitest run"
+  },
+  "dependencies": {
+    "@membership-card-protocol/verifier": "file:../../membership_card_verifier/packages/verifier",
+    "@noble/curves": "^1.9.0",
+    "@noble/hashes": "^1.7.2",
+    "@peculiar/asn1-schema": "^2.3.0",
+    "@peculiar/asn1-x509": "^2.3.0"
+  },
+  "devDependencies": { "@types/node": "^22.0.0", "typescript": "^5.8.3", "vitest": "^3.2.4" }
+}

@@ -6,7 +6,10 @@ import type {
   CardChainEvent,
   EasAttestation,
   DomainRegistration,
+  GovernanceKeysetRead,
 } from "@membership-card-protocol/verifier";
+import { collectNotaryLogAnchors } from "./notaryAnchors.js";
+import type { EasReader, NotaryAnchorOptions } from "./notaryAnchors.js";
 
 /**
  * ethers.js v6 implementation of RpcProvider.
@@ -70,13 +73,53 @@ export interface RegistryContract {
     suspension_expires_at: number | bigint;
     exists: boolean;
   }>;
+  /**
+   * `getGovernanceKeyset(uint8 body_id)` view (registry_contract.md §5): `keys` is the flat byte array of
+   * `key_count` keys, 64 bytes each for scheme 0 and 1312 for scheme 1.
+   */
+  getGovernanceKeyset?(bodyId: number): Promise<{
+    keys: ArrayLike<number | bigint> | string;
+    key_count: number | bigint;
+    quorum: number | bigint;
+    version: number | bigint;
+    key_scheme: number | bigint;
+  }>;
+}
+
+/** GovernanceBodyId enum order (registry_contract.md §3.6). */
+const GOVERNANCE_BODY_ID = { RootPolicyBody: 0, PressRegistryBody: 1, DnsGovernanceBody: 2 } as const;
+
+export interface EthersRpcProviderOptions {
+  /** Reads EAS anchors for `getNotaryLogAnchors`. */
+  eas?: EasReader;
+  notaryAnchors?: NotaryAnchorOptions;
 }
 
 export class EthersRpcProvider implements RpcProvider {
   readonly #contract: RegistryContract;
+  readonly #opts: EthersRpcProviderOptions;
 
-  constructor(contract: RegistryContract) {
+  constructor(contract: RegistryContract, opts: EthersRpcProviderOptions = {}) {
     this.#contract = contract;
+    this.#opts = opts;
+  }
+
+  async getGovernanceKeyset(bodyId: "PressRegistryBody"): Promise<GovernanceKeysetRead> {
+    if (!this.#contract.getGovernanceKeyset) throw new Error("RegistryContract.getGovernanceKeyset is not available; the notary checks need it");
+    const r = await this.#contract.getGovernanceKeyset(GOVERNANCE_BODY_ID[bodyId]);
+    const scheme = Number(r.key_scheme);
+    if (scheme !== 0 && scheme !== 1) throw new Error(`unknown governance key_scheme ${scheme}`);
+    const flat = typeof r.keys === "string" ? Uint8Array.from(Buffer.from(r.keys.replace(/^0x/, ""), "hex")) : Uint8Array.from(Array.from(r.keys as ArrayLike<number | bigint>, Number));
+    const keyLen = scheme === 0 ? 64 : 1312;
+    const count = Number(r.key_count);
+    if (flat.length !== count * keyLen) throw new Error(`governance keyset: ${flat.length} key bytes for ${count} keys of ${keyLen}`);
+    const keys = Array.from({ length: count }, (_, i) => flat.slice(i * keyLen, (i + 1) * keyLen));
+    return { keys, quorum: Number(r.quorum), version: Number(r.version), key_scheme: scheme };
+  }
+
+  async getNotaryLogAnchors(scopeId: string): Promise<{ seq: number; record_cid: string; timestamp: number }[]> {
+    if (!this.#opts.eas || !this.#opts.notaryAnchors) throw new Error("EthersRpcProvider needs `eas` and `notaryAnchors` options for getNotaryLogAnchors");
+    return collectNotaryLogAnchors(this.#opts.eas, scopeId, this.#opts.notaryAnchors);
   }
 
   async getCardEntry(address: string): Promise<CardEntry | null> {
@@ -129,6 +172,8 @@ export class EthersRpcProvider implements RpcProvider {
   }
 }
 
+export { collectNotaryLogAnchors, scopeToBytes32, EthersEasReader } from "./notaryAnchors.js";
+export type { EasReader, NotaryAnchorOptions } from "./notaryAnchors.js";
 export { getNetworkConfig } from "./networkConfig.js";
 export type { NetworkConfig, NetworkEnv } from "./networkConfig.js";
 export { getCardEventLogChunked } from "./chunkedEventLog.js";

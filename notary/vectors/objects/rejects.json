@@ -1,0 +1,100 @@
+{
+  "json": [
+    {
+      "id": "R-null",
+      "description": "null is never allowed",
+      "text": "{\"a\":null}",
+      "expected": "JSON_NULL"
+    },
+    {
+      "id": "R-float",
+      "description": "non-integer number",
+      "text": "{\"a\":1.5}",
+      "expected": "JSON_NON_INTEGER"
+    },
+    {
+      "id": "R-float-int",
+      "description": "exponent form (a float token; JS reads it as integer 100 and finds it non-canonical, Rust reads a float)",
+      "text": "{\"a\":1e2}",
+      "expected": "JSON_NOT_CANONICAL",
+      "expected_any": [
+        "JSON_NOT_CANONICAL",
+        "JSON_NON_INTEGER"
+      ]
+    },
+    {
+      "id": "R-unsafe-int",
+      "description": "integer beyond 2^53-1",
+      "text": "{\"a\":9007199254740992}",
+      "expected": "JSON_INTEGER_RANGE"
+    },
+    {
+      "id": "R-unsorted",
+      "description": "keys not sorted",
+      "text": "{\"b\":1,\"a\":2}",
+      "expected": "JSON_NOT_CANONICAL"
+    },
+    {
+      "id": "R-whitespace",
+      "description": "whitespace",
+      "text": "{\"a\": 1}",
+      "expected": "JSON_NOT_CANONICAL"
+    },
+    {
+      "id": "R-duplicate-key",
+      "description": "duplicate keys collapse, so bytes are not canonical",
+      "text": "{\"a\":1,\"a\":1}",
+      "expected": "JSON_NOT_CANONICAL"
+    },
+    {
+      "id": "R-escape",
+      "description": "needless escape of a printable character",
+      "text": "{\"a\":\"\\u0041\"}",
+      "expected": "JSON_NOT_CANONICAL"
+    }
+  ],
+  "objects": [
+    {
+      "id": "R-unknown-field",
+      "description": "extra top-level field on a versioned object",
+      "object": {
+        "ct": "fIOKkZifpq20u8LJ0Nfe5ezz-gEIDxYdJCsyOUBHTlVcY2pxeH-GjZSboqmwt77FzNPa4ejv9v0ECxIZICcuNTxDSlFYX2ZtdHuCiZCXnqWss7rByM_W3eTr8vkABw4VHCMqMTg_Rk1UW2JpcHd-hYyTmqGor7a9xMvS2eDn7vX8AwoRGB8mLTQ7QklQV15lbHN6gYiPlp2kq7K5wMfO1dzj6vH4_wYNFBsiKTA3PkVMU1phaG92fYSLkpmgp661vMPK0djf5u30-wIJEBceJSwzOkFIT1ZdZGtyeYCHjpWco6qxuL_GzdTb4unw9_4FDBMaISgvNj1ES1JZYGdudXyDipGYn6attLvCydDX3uXs8_oBCA8WHSQrMjlAR05VXGNqcXh_ho2Um6Kp",
+        "enc": "-P8GDRQbIikwNz5FTFNaYWhvdn2Ei5KZoKeutbzDytHY3-bt9PsCCRAXHiUsMzpBSE9WXWRrcnmAh46VnKOqsbi_xs3U2-Lp8Pf-BQwTGiEoLzY9REtSWWBnbnV8g4qRmJ-mrbS7wsnQ197l7PP6AQgPFh0kKzI5QEdOVVxjanF4f4aNlJuiqbC3vsXM09rh6O_2_QQLEhkgJy41PENKUVhfZm10e4KJkJeepayzusHIz9bd5Ovy-QAHDhUcIyoxOD9GTVRbYmlwd36FjJOaoaivtr3Ey9LZ4Ofu9fwDChEYHyYtNDtCSVBXXmVsc3qBiI-WnaSrsrnAx87V3OPq8fj_Bg0UGyIpMDc-RUxTWmFob3Z9hIuSmaCnrrW8w8rR2N_m7fT7AgkQFx4lLDM6QUhPVl1ka3J5gIeOlZyjqrG4v8bN1Nvi6fD3_gUMExohKC82PURLUllgZ251fIOKkZifpq20u8LJ0Nfe5ezz-gEIDxYdJCsyOUBHTlVcY2pxeH-GjZSboqmwt77FzNPa4ejv9v0ECxIZICcuNTxDSlFYX2ZtdHuCiZCXnqWss7rByM_W3eTr8vkABw4VHCMqMTg_Rk1UW2JpcHd-hYyTmqGor7a9xMvS2eDn7vX8AwoRGB8mLTQ7QklQV15lbHN6gYiPlp2kq7K5wMfO1dzj6vH4_wYNFBsiKTA3PkVMU1phaG92fYSLkpmgp661vMPK0djf5u30-wIJEBceJSwzOkFIT1ZdZGtyeYCHjpWco6qxuL_GzdTb4unw9_4FDBMaISgvNj1ES1JZYGdudXyDipGYn6attLvCydDX3uXs8_oBCA8WHSQrMjlAR05VXGNqcXh_ho2Um6KpsLe-xczT2uHo7_b9BAsSGSAnLjU8Q0pRWF9mbXR7gomQl56lrLO6wcjP1t3k6_L5AAcOFRwjKjE4P0ZNVFtiaXB3foWMk5qhqK-2vcTL0tng5-71_AMKERgfJi00O0JJUFdeZWxzeoGIj5adpKuyucDHztXc4-rx-P8GDRQbIikwNz5FTFNaYWhvdn2Ei5KZoKeutbzDytHY3-bt9PsCCRAXHiUsMzpBSE9WXWRrcnmAh46VnKOqsbi_xs3U2-Lp8Pf-BQwTGiEoLzY9REtSWWBnbnV8g4qRmJ-mrbS7wsnQ197l7PP6AQgPFh0kKzI5QEdOVVxjanF4f4aNlJuiqbC3vsXM09rh6O_2_QQLEhkgJy41PENKUVhfZm10e4KJkJeepayzusHIz9bd5Ovy-QAHDhUcIyoxOD9GTVRbYmlwd36FjJOaoaivtr3Ey9LZ4Ofu9fwDChEYHyYtNDtCSVBXXmVsc3qBiI-WnaSrsrnAx87V3OPq8fj_Bg0UGyIpMDc-RUxTWmFob3Z9hIuSmaCnrrW8w8rR2N_m7fT7AgkQFx4lLDM6QUhPVl1ka3J5gIeOlZyjqrG4v8bN1Nvi6fD3_gUMExohKC82PURLUllgZ251fIOKkQ",
+        "epoch": 0,
+        "job_hash": "kxF3HBvdW7UxaZIBIXFfhZQ4h9fhpr12K_o7gKoVSkw",
+        "kem": "x-wing-draft-06",
+        "type": "notary.sealed_input.v1",
+        "extra": 1
+      },
+      "expected_type": "notary.sealed_input.v1",
+      "expected": "UNKNOWN_FIELD"
+    },
+    {
+      "id": "R-missing-field",
+      "description": "required field absent",
+      "object": {
+        "ct": "fIOKkZifpq20u8LJ0Nfe5ezz-gEIDxYdJCsyOUBHTlVcY2pxeH-GjZSboqmwt77FzNPa4ejv9v0ECxIZICcuNTxDSlFYX2ZtdHuCiZCXnqWss7rByM_W3eTr8vkABw4VHCMqMTg_Rk1UW2JpcHd-hYyTmqGor7a9xMvS2eDn7vX8AwoRGB8mLTQ7QklQV15lbHN6gYiPlp2kq7K5wMfO1dzj6vH4_wYNFBsiKTA3PkVMU1phaG92fYSLkpmgp661vMPK0djf5u30-wIJEBceJSwzOkFIT1ZdZGtyeYCHjpWco6qxuL_GzdTb4unw9_4FDBMaISgvNj1ES1JZYGdudXyDipGYn6attLvCydDX3uXs8_oBCA8WHSQrMjlAR05VXGNqcXh_ho2Um6Kp",
+        "epoch": 0,
+        "job_hash": "kxF3HBvdW7UxaZIBIXFfhZQ4h9fhpr12K_o7gKoVSkw",
+        "kem": "x-wing-draft-06",
+        "type": "notary.sealed_input.v1"
+      },
+      "expected_type": "notary.sealed_input.v1",
+      "expected": "MISSING_FIELD"
+    },
+    {
+      "id": "R-wrong-type",
+      "description": "type is another object's",
+      "object": {
+        "ct": "fIOKkZifpq20u8LJ0Nfe5ezz-gEIDxYdJCsyOUBHTlVcY2pxeH-GjZSboqmwt77FzNPa4ejv9v0ECxIZICcuNTxDSlFYX2ZtdHuCiZCXnqWss7rByM_W3eTr8vkABw4VHCMqMTg_Rk1UW2JpcHd-hYyTmqGor7a9xMvS2eDn7vX8AwoRGB8mLTQ7QklQV15lbHN6gYiPlp2kq7K5wMfO1dzj6vH4_wYNFBsiKTA3PkVMU1phaG92fYSLkpmgp661vMPK0djf5u30-wIJEBceJSwzOkFIT1ZdZGtyeYCHjpWco6qxuL_GzdTb4unw9_4FDBMaISgvNj1ES1JZYGdudXyDipGYn6attLvCydDX3uXs8_oBCA8WHSQrMjlAR05VXGNqcXh_ho2Um6Kp",
+        "enc": "-P8GDRQbIikwNz5FTFNaYWhvdn2Ei5KZoKeutbzDytHY3-bt9PsCCRAXHiUsMzpBSE9WXWRrcnmAh46VnKOqsbi_xs3U2-Lp8Pf-BQwTGiEoLzY9REtSWWBnbnV8g4qRmJ-mrbS7wsnQ197l7PP6AQgPFh0kKzI5QEdOVVxjanF4f4aNlJuiqbC3vsXM09rh6O_2_QQLEhkgJy41PENKUVhfZm10e4KJkJeepayzusHIz9bd5Ovy-QAHDhUcIyoxOD9GTVRbYmlwd36FjJOaoaivtr3Ey9LZ4Ofu9fwDChEYHyYtNDtCSVBXXmVsc3qBiI-WnaSrsrnAx87V3OPq8fj_Bg0UGyIpMDc-RUxTWmFob3Z9hIuSmaCnrrW8w8rR2N_m7fT7AgkQFx4lLDM6QUhPVl1ka3J5gIeOlZyjqrG4v8bN1Nvi6fD3_gUMExohKC82PURLUllgZ251fIOKkZifpq20u8LJ0Nfe5ezz-gEIDxYdJCsyOUBHTlVcY2pxeH-GjZSboqmwt77FzNPa4ejv9v0ECxIZICcuNTxDSlFYX2ZtdHuCiZCXnqWss7rByM_W3eTr8vkABw4VHCMqMTg_Rk1UW2JpcHd-hYyTmqGor7a9xMvS2eDn7vX8AwoRGB8mLTQ7QklQV15lbHN6gYiPlp2kq7K5wMfO1dzj6vH4_wYNFBsiKTA3PkVMU1phaG92fYSLkpmgp661vMPK0djf5u30-wIJEBceJSwzOkFIT1ZdZGtyeYCHjpWco6qxuL_GzdTb4unw9_4FDBMaISgvNj1ES1JZYGdudXyDipGYn6attLvCydDX3uXs8_oBCA8WHSQrMjlAR05VXGNqcXh_ho2Um6KpsLe-xczT2uHo7_b9BAsSGSAnLjU8Q0pRWF9mbXR7gomQl56lrLO6wcjP1t3k6_L5AAcOFRwjKjE4P0ZNVFtiaXB3foWMk5qhqK-2vcTL0tng5-71_AMKERgfJi00O0JJUFdeZWxzeoGIj5adpKuyucDHztXc4-rx-P8GDRQbIikwNz5FTFNaYWhvdn2Ei5KZoKeutbzDytHY3-bt9PsCCRAXHiUsMzpBSE9WXWRrcnmAh46VnKOqsbi_xs3U2-Lp8Pf-BQwTGiEoLzY9REtSWWBnbnV8g4qRmJ-mrbS7wsnQ197l7PP6AQgPFh0kKzI5QEdOVVxjanF4f4aNlJuiqbC3vsXM09rh6O_2_QQLEhkgJy41PENKUVhfZm10e4KJkJeepayzusHIz9bd5Ovy-QAHDhUcIyoxOD9GTVRbYmlwd36FjJOaoaivtr3Ey9LZ4Ofu9fwDChEYHyYtNDtCSVBXXmVsc3qBiI-WnaSrsrnAx87V3OPq8fj_Bg0UGyIpMDc-RUxTWmFob3Z9hIuSmaCnrrW8w8rR2N_m7fT7AgkQFx4lLDM6QUhPVl1ka3J5gIeOlZyjqrG4v8bN1Nvi6fD3_gUMExohKC82PURLUllgZ251fIOKkQ",
+        "epoch": 0,
+        "job_hash": "kxF3HBvdW7UxaZIBIXFfhZQ4h9fhpr12K_o7gKoVSkw",
+        "kem": "x-wing-draft-06",
+        "type": "notary.sealed_input.v1"
+      },
+      "expected_type": "notary.job.v1",
+      "expected": "TYPE_MISMATCH"
+    }
+  ]
+}

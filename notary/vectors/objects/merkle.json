@@ -1,0 +1,123 @@
+{
+  "cases": [
+    {
+      "id": "M-0",
+      "description": "empty list: SHA-256 of the empty string (erratum E1)",
+      "input_hashes_b64u": [],
+      "root_b64u": "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU"
+    },
+    {
+      "id": "M-1",
+      "description": "1 input hash(es)",
+      "input_hashes_b64u": [
+        "AAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      ],
+      "root_b64u": "0AfJXgyqriWM9PnWmB5CVeIiHB1wQiDHfqO1k4gebwc"
+    },
+    {
+      "id": "M-2",
+      "description": "2 input hash(es)",
+      "input_hashes_b64u": [
+        "AAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE"
+      ],
+      "root_b64u": "Iw9hoxEhpiZZkDEud4pi3Wlx-twSKSmmlg6Iiy3nqp0"
+    },
+    {
+      "id": "M-3",
+      "description": "3 input hash(es)",
+      "input_hashes_b64u": [
+        "AAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE",
+        "AAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAI"
+      ],
+      "root_b64u": "DX5mK8phKU38ktY6P3ds9oPTLt-creCs-dEhcyA00mQ"
+    },
+    {
+      "id": "M-4",
+      "description": "4 input hash(es)",
+      "input_hashes_b64u": [
+        "AAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE",
+        "AAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAI",
+        "AAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAM"
+      ],
+      "root_b64u": "C_OnXDi8MclgkLsHe0ooGBJGdFLQ09GPLTKeC7ePfnc"
+    },
+    {
+      "id": "M-5",
+      "description": "5 input hash(es)",
+      "input_hashes_b64u": [
+        "AAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE",
+        "AAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAI",
+        "AAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAM",
+        "AAUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQ"
+      ],
+      "root_b64u": "_kJ0VCDgVy_Znz28jJc4lnYoiC2zVmWOozxgm7Khyv0"
+    },
+    {
+      "id": "M-7",
+      "description": "7 input hash(es)",
+      "input_hashes_b64u": [
+        "AAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE",
+        "AAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAI",
+        "AAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAM",
+        "AAUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQ",
+        "AAYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAU",
+        "AAcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY"
+      ],
+      "root_b64u": "V-Pr4-wRl7ZiBHKhh4wCd6rIFejcIn-ORlohBCVWqq0"
+    },
+    {
+      "id": "M-8",
+      "description": "8 input hash(es)",
+      "input_hashes_b64u": [
+        "AAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE",
+        "AAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAI",
+        "AAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAM",
+        "AAUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQ",
+        "AAYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAU",
+        "AAcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY",
+        "AAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAc"
+      ],
+      "root_b64u": "CfOGzQC7Cm-xV_ieLwFOJy3CeLXVKXtPnqYMS5TN8tU"
+    },
+    {
+      "id": "M-9",
+      "description": "9 input hash(es)",
+      "input_hashes_b64u": [
+        "AAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE",
+        "AAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAI",
+        "AAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAM",
+        "AAUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQ",
+        "AAYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAU",
+        "AAcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY",
+        "AAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAc",
+        "AAkAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAg"
+      ],
+      "root_b64u": "BK6xmiJN9GQbKMoCMF0AWPe3cYeR1X_dafXBmlnbYKk"
+    }
+  ],
+  "invalid": [
+    {
+      "id": "M-unsorted",
+      "input_hashes_b64u": [
+        "AAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE",
+        "AAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      ],
+      "expected": "MERKLE_UNSORTED"
+    },
+    {
+      "id": "M-duplicate",
+      "input_hashes_b64u": [
+        "AAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      ],
+      "expected": "MERKLE_UNSORTED"
+    }
+  ]
+}

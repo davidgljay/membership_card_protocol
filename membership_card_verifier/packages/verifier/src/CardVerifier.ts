@@ -47,12 +47,13 @@ export class CardVerifier {
   /** The config as supplied, for constructing the chain-returning variant used by card login. */
   readonly #rawConfig: VerifierConfig;
   private readonly config: Required<
-    Omit<VerifierConfig, "registryEndpoint" | "conditions" | "appCertificationRoot" | "loginServiceCertificationRoot">
+    Omit<VerifierConfig, "registryEndpoint" | "conditions" | "appCertificationRoot" | "loginServiceCertificationRoot" | "notary">
   > & {
     registryEndpoint: string | undefined;
     conditions: VerifierConfig["conditions"];
     appCertificationRoot: string | undefined;
     loginServiceCertificationRoot: string | undefined;
+    notary: VerifierConfig["notary"];
   };
 
   constructor(config: VerifierConfig) {
@@ -82,6 +83,7 @@ export class CardVerifier {
       additionalAnnotators: config.additionalAnnotators ?? DEFAULTS.additionalAnnotators,
       returnChain: config.returnChain ?? DEFAULTS.returnChain,
       conditions: config.conditions,
+      notary: config.notary,
     };
   }
 

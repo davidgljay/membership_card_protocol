@@ -11,7 +11,11 @@ import type {
   VerifierConfig,
 } from "../types.js";
 
+import type { NotaryIssuedResult } from "../notary/derived.js";
+
 export interface Stage5Result {
+  /** Step 3a: set for notary-issued (derived) cards: warnings and the derived fields (`dup_tag` is returned, not checked). */
+  notary?: { warnings: string[]; derived: Record<string, string | undefined> };
   policy_compliant: boolean | null | "skipped";
   policy_match: boolean | null;
   press_subsequently_revoked: boolean;
@@ -32,7 +36,12 @@ export async function verifyStage5(
   rawCardBytes: Uint8Array,
   rpc: RpcProvider,
   ipfs: IpfsProvider,
-  config: { registryEndpoint?: string | undefined }
+  config: { registryEndpoint?: string | undefined },
+  /**
+   * Step 3a hook (card_verifier.md §7.5). Resolves `null` when the card is not notary-issued. The `CardVerifier`-backed
+   * implementation (notary card lookup, algorithms G and E) is wired in Phase 7; see `verifyNotaryIssuedCard`.
+   */
+  notaryCheck?: () => Promise<NotaryIssuedResult | null>
 ): Promise<Stage5Result> {
   const errors: VerificationError[] = [];
   const failedChecks: FailedCheck[] = [];
@@ -83,6 +92,14 @@ export async function verifyStage5(
     pressSubsequentlyRevoked = true;
   }
 
+  // Step 3a: notary-issued (derived) cards
+  let notaryInfo: Stage5Result["notary"];
+  if (notaryCheck) {
+    const n = await notaryCheck();
+    if (n && !n.ok) failedChecks.push({ check: n.code as FailedCheck["check"], detail: n.detail });
+    else if (n) notaryInfo = { warnings: n.warnings, derived: n.derived };
+  }
+
   const policyCompliant = failedChecks.length === 0;
 
   // Step 5: non-compliance reporting
@@ -122,6 +139,7 @@ export async function verifyStage5(
   }
 
   return {
+    ...(notaryInfo ? { notary: notaryInfo } : {}),
     policy_compliant: policyCompliant,
     policy_match: null, // per-call predicate not supported in VerifierConfig; null = not supplied
     press_subsequently_revoked: pressSubsequentlyRevoked,

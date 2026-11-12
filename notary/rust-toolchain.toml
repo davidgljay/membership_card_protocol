@@ -1,0 +1,7 @@
+# Own pin for the notary workspace (not shared with contracts/). 1.96.0 satisfies the MSRVs of
+# hpke 0.15 (1.87), x-wing 0.1 (1.85), ml-dsa 0.1 (1.87) and aws-nitro-enclaves-nsm-api 0.5 (1.92).
+# The wasm32-unknown-unknown target is added in step 5.3/6.x when templates are built.
+[toolchain]
+channel = "1.96.0"
+profile = "minimal"
+components = ["clippy", "rustfmt"]

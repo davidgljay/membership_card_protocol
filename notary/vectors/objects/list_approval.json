@@ -1,0 +1,34 @@
+{
+  "object": "notary_list_approval",
+  "cases": [
+    {
+      "id": "list_approval",
+      "description": "notary_list_approval — valid instance",
+      "type": "notary_list_approval",
+      "input": {
+        "governance_version": 3,
+        "kind": "standard",
+        "list": "accepted_runtimes",
+        "list_card": "1ad2f1548ac0603832ec9d15f2208c014fa336735a9c33492bbb552a8a7d30aa",
+        "list_hash": "kJeepayzusHIz9bd5Ovy-QAHDhUcIyoxOD9GTVRbYmk",
+        "list_version": 2,
+        "prev_list_hash": "KzI5QEdOVVxjanF4f4aNlJuiqbC3vsXM09rh6O_2_QQ",
+        "type": "notary_list_approval",
+        "signatures": [
+          {
+            "key_index": 0,
+            "signature": "HyYtNDtCSVBXXmVsc3qBiI-WnaSrsrnAx87V3OPq8fj_Bg0UGyIpMDc-RUxTWmFob3Z9hIuSmaCnrrW8w8rR2A"
+          },
+          {
+            "key_index": 2,
+            "signature": "PkVMU1phaG92fYSLkpmgp661vMPK0djf5u30-wIJEBceJSwzOkFIT1ZdZGtyeYCHjpWco6qxuL_GzdTb4unw9w"
+          }
+        ]
+      },
+      "canonical_utf8": "{\"governance_version\":3,\"kind\":\"standard\",\"list\":\"accepted_runtimes\",\"list_card\":\"1ad2f1548ac0603832ec9d15f2208c014fa336735a9c33492bbb552a8a7d30aa\",\"list_hash\":\"kJeepayzusHIz9bd5Ovy-QAHDhUcIyoxOD9GTVRbYmk\",\"list_version\":2,\"prev_list_hash\":\"KzI5QEdOVVxjanF4f4aNlJuiqbC3vsXM09rh6O_2_QQ\",\"signatures\":[{\"key_index\":0,\"signature\":\"HyYtNDtCSVBXXmVsc3qBiI-WnaSrsrnAx87V3OPq8fj_Bg0UGyIpMDc-RUxTWmFob3Z9hIuSmaCnrrW8w8rR2A\"},{\"key_index\":2,\"signature\":\"PkVMU1phaG92fYSLkpmgp661vMPK0djf5u30-wIJEBceJSwzOkFIT1ZdZGtyeYCHjpWco6qxuL_GzdTb4unw9w\"}],\"type\":\"notary_list_approval\"}",
+      "canonical_b64u": "eyJnb3Zlcm5hbmNlX3ZlcnNpb24iOjMsImtpbmQiOiJzdGFuZGFyZCIsImxpc3QiOiJhY2NlcHRlZF9ydW50aW1lcyIsImxpc3RfY2FyZCI6IjFhZDJmMTU0OGFjMDYwMzgzMmVjOWQxNWYyMjA4YzAxNGZhMzM2NzM1YTljMzM0OTJiYmI1NTJhOGE3ZDMwYWEiLCJsaXN0X2hhc2giOiJrSmVlcGF5enVzSEl6OWJkNU92eS1RQUhEaFVjSXlveE9EOUdUVlJiWW1rIiwibGlzdF92ZXJzaW9uIjoyLCJwcmV2X2xpc3RfaGFzaCI6Ikt6STVRRWRPVlZ4amFuRjRmNGFObEp1aXFiQzN2c1hNMDlyaDZPXzJfUVEiLCJzaWduYXR1cmVzIjpbeyJrZXlfaW5kZXgiOjAsInNpZ25hdHVyZSI6Ikh5WXRORHRDU1ZCWFhtVnNjM3FCaUktV25hU3Jzcm5BeDg3VjNPUHE4ZmpfQmcwVUd5SXBNRGMtUlV4VFdtRm9iM1o5aEl1U21hQ25yclc4dzhyUjJBIn0seyJrZXlfaW5kZXgiOjIsInNpZ25hdHVyZSI6IlBrVk1VMXBoYUc5MmZZU0xrcG1ncDY2MXZNUEswZGpmNXUzMC13SUpFQmNlSlN3ek9rRklUMVpkWkd0eWVZQ0hqcFdjbzZxeHVMX0d6ZFRiNHVudzl3In1dLCJ0eXBlIjoibm90YXJ5X2xpc3RfYXBwcm92YWwifQ",
+      "h": "AQhgwWcGe7_C8vD-QczIpmuKr1rdjmNw67sg7F3eMd0",
+      "cid": "bafkreiabbbqmczygpo74f4xq7za4zsfgnofk6ww5rzrxb253edwf3xrr3u"
+    }
+  ]
+}

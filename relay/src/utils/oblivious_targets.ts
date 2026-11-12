@@ -1,8 +1,19 @@
 import fs from "node:fs";
 
+/**
+ * The destination kinds the relay forwards to (oblivious_transport.md). The relay treats them identically: it maps an
+ * opaque target_id to a gateway URL and forwards the still-encrypted blob. `notary_host` was added with the notaries
+ * (notary_host.md §6, §Notary Host Destination): its gateway dispatches only to the oblivious routes
+ * (`GET /jobs/{hash}/announcement`, `POST /jobs/{hash}/inputs`). `kind` is optional and informational, so existing
+ * registries keep working.
+ */
+export const OBLIVIOUS_TARGET_KINDS = ["wallet_service", "press", "notary_host"] as const;
+export type ObliviousTargetKind = (typeof OBLIVIOUS_TARGET_KINDS)[number];
+
 export interface ObliviousTargetConfig {
   target_id: string;
   ohttp_gateway_url: string;
+  kind?: ObliviousTargetKind;
 }
 
 interface ObliviousTargetsFile {
@@ -69,6 +80,9 @@ export function loadObliviousTargets(path: string | undefined): void {
       fatal(`Duplicate target_id: ${target.target_id}`, target);
     }
     seen.add(target.target_id);
+    if (target.kind !== undefined && !(OBLIVIOUS_TARGET_KINDS as readonly string[]).includes(target.kind)) {
+      fatal(`kind must be one of ${OBLIVIOUS_TARGET_KINDS.join(", ")} for target_id ${target.target_id}`, target);
+    }
     if (!target.ohttp_gateway_url || !target.ohttp_gateway_url.startsWith("https://")) {
       fatal(`ohttp_gateway_url must be a valid https:// URL for target_id ${target.target_id}`, target);
     }
