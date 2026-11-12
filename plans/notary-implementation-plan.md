@@ -213,19 +213,19 @@ Goal: notaries fully specified, consistent with existing specs, and approved bef
 
 Goal: one end-to-end path running in the simulator: a job is announced with an attestation, a wallet verifies it and submits an encrypted input, the enclave processes it, and a notarization is published.
 
-- [ ] **5.0 Phase 5 questions**
+- [x] **5.0 Phase 5 questions**
   - **What**: Read the Phase 5 parts of `notary-code-plan.md` and list every implementation question (library choices, interface details, ambiguities in the specs) in `plans/notary-questions-phase-5.md`. Ask David, and **wait for answers before writing code** (**CP5**).
   - **Who**: Claude, then David
   - **Context needed**: `notary-code-plan.md`; the relevant specs
   - **Done when**: every question has an answer recorded in the file.
 
-- [ ] **5.1 Shared object types and serialization**
+- [x] **5.1 Shared object types and serialization**
   - **What**: Implement the new objects from `protocol-objects.md` as TypeScript types and Rust structs, with RFC 8785 canonicalization and test vectors, following `serialization-conformance.json`.
   - **Who**: Claude
   - **Context needed**: `protocol-objects.md` (new sections); `specs/serialization-conformance.json`
   - **Done when**: the TS and Rust implementations produce identical bytes for all test vectors.
 
-- [ ] **5.2 Simulator and attestation backends**
+- [x] **5.2 Simulator and attestation backends**
   - **What**: Build `notary/sim` (test root CA, attestation documents in the AWS Nitro Enclaves format, configurable PCRs and debug flag) and the runtime's attestation abstraction with simulator and NSM backends. The NSM backend is written now but tested only in Phase 8.
   - **Who**: Claude
   - **Context needed**: `notary_runtime.md` (attestation); `notary-design-decisions.md §2.3`
@@ -243,7 +243,7 @@ Goal: one end-to-end path running in the simulator: a job is announced with an a
   - **Context needed**: `card_verifier.md` Stages 2–5; `card_validation.md`; `notary_lifecycle.md` Appendix B; `notary-code-plan.md` §7.5
   - **Done when**: `notary-cards` agrees with every TypeScript-generated vector, the coverage map is complete, and CI fails on a deliberately stale vector set.
 
-- [ ] **5.4 Wallet SDK and verifier support**
+- [x] **5.4 Wallet SDK and verifier support**
   - **What**: Add to `wallet-sdk`:
     - the attestation verifier (one module per platform: simulator and AWS Nitro Enclaves)
     - the policy checks and consent-screen model, built from the policy only

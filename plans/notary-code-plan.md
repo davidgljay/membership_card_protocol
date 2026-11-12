@@ -184,7 +184,7 @@ All three are checked against the same `notary/vectors/`, so there is still one 
 
 ### 3.3 `relay/`
 
-Register the notary host as a third destination kind in the oblivious target registry (`oblivious-targets.ts`), and add tests. *(oblivious_transport §Notary Host Destination)*
+Register the notary host as a third destination kind in the oblivious target registry (`relay/src/utils/oblivious_targets.ts`; the path was corrected from `oblivious-targets.ts`, erratum E4), and add tests. *(oblivious_transport §Notary Host Destination)*
 
 ### 3.4 `contracts/` — **CP7**
 
@@ -423,6 +423,48 @@ Not ported: EAS annotations, non-compliance reporting, login and DNS.
 | G5 specs reviewed first | done (CP3) |
 | G5 integration tests pass (sim; AWS later) | the suite itself; Phase 8 for AWS |
 | G5 AWS format isolation | CI check (§7.4) |
+
+### 8.3 Landed modules and tests (kept current as code lands)
+
+| Step | Spec | Module | Tests (command, result at landing) |
+|---|---|---|---|
+| 5.1 | Conventions, §20–§34 object shapes, JCS, `H`, CIDs | `notary/runtime/crates/notary-types/src/{jcs,objects,formats,b64u}.rs`; `membership_card_verifier/packages/verifier/src/notary/{canonical,types}.ts` | `cargo test -p notary-types` (6 vector tests); `pnpm test` in `notary/vectors-tools` (20 tests); verifier `test/notary/canonical.test.ts` |
+| 5.1 | §27 `input_commitment` (incl. empty list, E1) | `notary-types/src/merkle.rs`; `canonical.ts: inputCommitment` | `vectors/objects/merkle.json`, both sides |
+| 5.1 | §33 `user_data` layout | `notary-types/src/user_data.rs`; `canonical.ts: encodeUserData/decodeUserData` | `vectors/user_data/layouts.json`, both sides |
+| 5.1 | §21–§26 wallet objects | `wallet-sdk/packages/wallet-sdk/src/notary/{types,notary-types}.ts` | wallet `test/notary/types.test.ts` (incl. subpath import-graph check) |
+| 5.1 | §29–§32 host/enclave objects | `notary/host/src/types.ts` | `pnpm test` in `notary/host` |
+| 5.1 | X-Wing draft-06 interop (runtime §17.1) | `notary/vectors-tools/src/hpke.ts`; `notary-crypto/tests/xwing_interop.rs` | `cargo test -p notary-crypto --test xwing_interop`; vectors-tools `test/xwing.test.ts` |
+| 5.1 | ML-DSA-44 interop | `notary-crypto/tests/mldsa_interop.rs` | `cargo test -p notary-crypto --test mldsa_interop`; vectors-tools `test/vectors.test.ts` |
+| 5.2 | Algorithm V1–V5, AWS format (Rust) | `notary/runtime/crates/notary-attest/src/aws.rs` (verifier, test PKI builder, `NsmBackend` behind feature `nsm`, untested until Phase 8) | `cargo test -p notary-attest` (`tests/att_codes.rs`: 49 cases, all 13 `ATT_*` codes; `aws::root_tests`) |
+| 5.2 | Algorithm V6–V12, platform gate (Rust) | `notary-attest/src/verify.rs` | same 49 cases |
+| 5.2 | V1–V5, AWS format (TypeScript) | `notary/attestation-ts/src/{aws-nitro-enclaves,simulator,cbor}.ts` | `pnpm test` in `notary/attestation-ts` (52 tests: the same 49 Rust-built documents judged identically; root fingerprint; strict CBOR) |
+| 5.2 | V6–V12, platform gate (TypeScript) | `membership_card_verifier/packages/verifier/src/notary/attest.ts` | exercised by the same 49 cases |
+| 5.2 | Simulator: test root CA, fake enclave service, `SimulatorBackend`, controllable attested clock | `notary/sim/src/lib.rs`; `notary-attest/src/sim.rs` | `cargo test -p notary-sim` (3 tests) |
+| 5.2 | AWS root certificate (pinned) | `notary/deploy/aws/AWS_NitroEnclaves_Root-G1.der` + README | fingerprint tests in Rust and TypeScript |
+| 5.2 | G5 isolation + terminology check | `notary/scripts/check-aws-isolation.sh` | run it; a planted `cabundle` probe fails it |
+| 5.4 | Algorithm W (W1–W15), wallet | `wallet-sdk/packages/wallet-sdk/src/notary/{verifyJob,parameters,config}.ts` | wallet `test/notary/verifyJob.test.ts`: 32 tests with real simulator attestations; the six G2 rejections, every W step |
+| 5.4 | Consent model (§7b.3), built from policy and job only | `wallet-sdk/.../src/notary/consent.ts` | `verifyJob.test.ts` "consent model" (requester text labelled; custom-program label; participation and derived-card disclosures) |
+| 5.4 | Inclusion check and Merkle paths (§7b.6) | `wallet-sdk/.../src/notary/inclusion.ts` | wallet `test/notary/inclusion.test.ts` (5 tests) |
+| 5.4 | Stage 5 step 3a: notary-issued (derived) cards (G for later verifiers via `genesis_request`, shape, E, `source_kind`) | `verifier/src/notary/derived.ts`; Stage 5 hook in `verifier/src/stages/stage5.ts` | `notary/attestation-ts/test/derived.test.ts` (10 tests, real genesis attestations); verifier `test/stages/stage5.test.ts` (4 hook tests). Wiring into `CardVerifier` is Phase 7 |
+| 5.5 (partial) | Host service on nitropack: config, KV and storage keys/retention, host receipts, job intake, announcement/status, input ingress with receipts, enclave protocol (framing, socket transport, session), enclave-request dispatcher (publish/pin exact bytes, anchor, chain submit unchanged, deliver, peer relay, need_replica, alerts, fetch), never-filtered snapshots, monitoring, operator routes, peer relay, OHTTP gateway and router | `notary/host/src/**`, `notary/host/server/**` | `pnpm test` in `notary/host` (69 tests against a **mock enclave**: `src/enclave/mock.ts`); `pnpm run typecheck:server` (route files); the built server answers over real HTTP (direct routes 403 `NH_DIRECT_FORBIDDEN`) |
+| 5.5 | Relay registration of the notary host as a third destination kind | `relay/src/utils/oblivious_targets.ts` (`kind`) | `relay/tests/unit/oblivious-targets.test.ts` (3 tests) |
+| 5.5 | Deploy files (not run) | `notary/deploy/{docker-compose.yml,docker-compose.sim.yml,Dockerfile.host,eif/,README.md}` | none: need the runtime (5.3) and AWS (CP8) |
+| 5.4 | Algorithm E, key exposure | `verifier/src/notary/exposure.ts` | verifier `test/notary/exposure.test.ts` (14 tests: gap, fork, prev link, signatures, wrong card, malformed `pcr0_to`, earliest vulnerable retirement, boundary at `t_x`) |
+| 5.4 | Stage 4 step 5a (`expires_at`); `RevocationStatus.reason` | `verifier/src/stages/stage4.ts`, `types.ts` | verifier `test/stages/stage4.test.ts` (6 new tests; erratum E15 for the future-expiry reading) |
+| 5.4 | `VerifierConfig.notary`; optional `RpcProvider.getGovernanceKeyset` / `getNotaryLogAnchors`; `NOTARY_CODES` | `verifier/src/types.ts`, `CardVerifier.ts`, `notary/types.ts` | compile-checked; exercised by the RPC provider tests |
+| 5.4 | `getGovernanceKeyset`, `getNotaryLogAnchors` (EAS client-side filtering) | `verifier-rpc-provider/src/{index,notaryAnchors}.ts` | `verifier-rpc-provider/test/notary.test.ts` (8 tests with mock contract and mock EAS reader; real chain in Phase 7) |
+| 5.4 | Core entry point never imports `./notary` | `verifier/package.json` `exports["./notary"]` | verifier `test/notary/isolation.test.ts` (3 tests; a planted import makes it fail) |
+| 5.4 | Share links, job requesting, watching and resubmission | `wallet-sdk/.../src/notary/{link,job,watch}.ts` | wallet `test/notary/linkJobWatch.test.ts` (15 tests) |
+| 5.4 | Algorithm L, governance list approval, rule E | `membership_card_verifier/packages/verifier/src/notary/lists.ts` | verifier `test/notary/lists.test.ts` (11 tests: every `LIST_APPROVAL_*` code, rule E cases, ECDSA and ML-DSA keysets, keyset-rotation fail-closed). Rust broker side (`lists`) is step 5.3 |
+| 5.4 | Sealing, `receipt_sealed`, receipt checks, `submitNotaryInput` (persist before send) | `wallet-sdk/.../src/notary/submit.ts` | wallet `test/notary/submit.test.ts` (12 tests; info/aad equal the X-Wing interop vectors) |
+| 5.4 | Algorithm N, `verifyNotarization`, output validation | `membership_card_verifier/packages/verifier/src/notary/notarization.ts` | `notary/attestation-ts/test/notarization.test.ts` (20 tests with real simulator attestations: every `NOT_*` code, ATT codes at N6, key-exposure and anchor-time handling, log-gap/fork/total-loss warnings; E6 cosignature form) |
+| 5.4 | Algorithm G, genesis attestation | `verifier/src/notary/genesis.ts` | `notary/attestation-ts/test/genesis.test.ts` (9 tests) |
+| 5.4 | Notarization and genesis attestation fixtures | `notary/sim/tests/{notarization,genesis}_fixtures.rs` | used by the two test files above |
+| 5.4 | Job attestation fixtures | `notary/sim/tests/job_fixtures.rs` → `notary/vectors/attestation/job_attestations.json` | used by `verifyJob.test.ts` |
+
+Attestation vectors: `NOTARY_WRITE_VECTORS=1 cargo test -p notary-attest --test att_codes` writes `notary/vectors/attestation/cases.json`.
+
+Regenerate and check vectors: `pnpm run gen` / `pnpm run check` in `notary/vectors-tools`; Rust-produced vectors: `NOTARY_WRITE_VECTORS=1 cargo test -p notary-crypto`.
 
 ---
 
