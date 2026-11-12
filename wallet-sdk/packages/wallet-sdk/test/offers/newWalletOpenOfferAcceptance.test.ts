@@ -153,6 +153,7 @@ function makeAlwaysTrustingCardVerifier(): CardVerifier {
     rpc,
     ipfs: fakeIpfs,
     appCertificationRoot: GOVERNANCE_APP_CERT_ROOT,
+    loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
     trustedRoots: [GOVERNANCE_APP_CERT_ROOT],
     fetchAnnotations: false,
   });
@@ -265,7 +266,7 @@ describe('acceptOpenOfferForNewWallet', () => {
     });
 
     const rpc = makeHappyPathRpc(issuerAddress);
-    const cardVerifierForReview = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
+    const cardVerifierForReview = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, loginServiceCertificationRoot: '5e'.repeat(32), trustedRoots: [issuerAddress] });
 
     const { transport, state } = makeCombinedTransport();
     const attestationObject = new TextEncoder().encode('device-attestation');
@@ -351,7 +352,7 @@ describe('acceptOpenOfferForNewWallet', () => {
     });
 
     const rpc = makeHappyPathRpc(issuerAddress);
-    const cardVerifierForReview = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
+    const cardVerifierForReview = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, loginServiceCertificationRoot: '5e'.repeat(32), trustedRoots: [issuerAddress] });
     const { transport, state } = makeCombinedTransport();
 
     const result = await acceptOpenOfferForNewWallet({

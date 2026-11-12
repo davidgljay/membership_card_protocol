@@ -84,17 +84,46 @@ export async function handleSubCardRegister(
     );
   }
 
-  // 5. Verify app certification chain.
-  const appResult = await ctx.verifier.verifyCard(doc.app_card);
+  // 5. Verify app certification chain (press.md §5.4 verifyAppCertificationChain).
+  // The pubkey lets the verifier actually walk the chain rather than only
+  // checking whether the app card is itself a trusted root.
+  const appResult = await ctx.verifier.verifyCard(doc.app_card, { pubkey: doc.app_card_pubkey });
   if (appResult.chain_reaches_trusted_root !== true || appResult.is_currently_valid === false) {
     throw Object.assign(
       new Error('P-15: App card chain does not reach governance app-certification policy root'),
       { pressCode: 'P-15' }
     );
   }
+  const norm = (a: string) => a.toLowerCase().replace(/^0x/, '');
+  const appChain = (appResult.chain_card_addresses ?? []).map(norm);
+  const appCertRoot = ctx.config.PRESS_APP_CERTIFICATION_ROOT;
+  if (appCertRoot && !appChain.includes(appCertRoot)) {
+    throw Object.assign(
+      new Error('P-15: App card chain does not pass through the app-certification root'),
+      { pressCode: 'P-15' }
+    );
+  }
+  const loginRoot = ctx.config.PRESS_LOGIN_SERVICE_CERTIFICATION_ROOT;
+  const isLoginService = !!loginRoot && appChain.includes(loginRoot);
+  const selfScoped = norm(doc.app_card) === norm(doc.holder_primary_card);
 
-  // 6. Attestation level check.
-  if (doc.attestation_level !== 'T2') {
+  // 5b. Login service scope rule (subcards.md §Server Cards).
+  if (isLoginService && !selfScoped) {
+    throw Object.assign(
+      new Error('P-26: A login service card may only authorize its own server cards'),
+      { pressCode: 'P-26' }
+    );
+  }
+
+  // 6. Attestation level check. S1 is accepted only on server cards.
+  if (doc.attestation_level === 'S1') {
+    if (!(isLoginService && selfScoped)) {
+      throw Object.assign(
+        new Error('P-27: attestation_level "S1" is accepted only on server cards'),
+        { pressCode: 'P-27' }
+      );
+    }
+  } else if (doc.attestation_level !== 'T2') {
     // Check policy: Phase 3 passes T1 as well (operator configures this in policy).
     console.warn('[press] Sub-card has T1 attestation — policy check deferred to Phase 4');
   }

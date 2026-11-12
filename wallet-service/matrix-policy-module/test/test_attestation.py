@@ -38,6 +38,8 @@ from matrix_policy_module.attestation import (  # noqa: E402
 )
 
 SERVER_NAME = "matrix.internal"
+# Not in any test chain: the app cards here are on the "other" branch.
+LOGIN_SERVICE_ROOT = "0x" + "11" * 32
 
 
 def _b64url_bytes(raw: bytes) -> str:
@@ -165,6 +167,7 @@ def _build_attestation_fixture(
             rpc=rpc,
             ipfs=ipfs,
             app_certification_root=app_cert_root.address,
+            login_service_certification_root=LOGIN_SERVICE_ROOT,
             trusted_roots=[root.address],
             return_chain=True,
         )

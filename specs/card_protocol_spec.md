@@ -5,6 +5,8 @@
 **Status:** In Review
 **Changes from v0.3:** Corrected §3's keyring structure description and YubiKey recovery flow to describe wallet-service keyring storage and federation replication, replacing an earlier IPFS-based description (approved via CP-SPEC-2, `plans/wallet-service/spec-discrepancies.md` D-8; second passage found during the Phase 5 consistency pass).
 
+**Amended 2026-11-08 (card login):** §8 rewritten — login router replaces CHAPI; server-card-signed requests bound to a login service card and domain; `form_post` and `mcard_message` response modes; `preferred_services`. Steps in `process_specs/card_login.md`.
+
 **Amended 2026-10-23:** issuance records go to the issuer and the policy card's holder as well as to auditors, so both build up a list of the cards issued through them and can message those cards (§2 Issuance Records, `protocol-objects.md §11`).
 
 **Changelog (spec-consistency Phase 2, Fix #11):** rewrote the Audit Log Entries section and related passages to describe the direct E2E-encrypted `PressIssuanceRecord`-to-`policy.auditors` model (`press.md §5.5`, `protocol-objects.md §11`), replacing the retired audit-epoch/AEK/ML-KEM key-wrapping narrative — this file was missed by Phase 1's review and had fallen out of sync. See `plans/spec-consistency/inconsistencies/phase-2-consolidated-fixes.md`.
@@ -104,6 +106,7 @@ All card fields — whether in policy cards or in issued cards — use a common 
 | `card-pointer-array` | `min_count`, `max_count`, `required_template` (optional), `field_requirements` (optional) |
 | `append-only-array` | `item_type` (any of the above), plus that item type's validation options |
 | `policy-creation-constraint` | Structured object — see §1, *The `policy_creation` Field* |
+| `service-array` | Array of service entries `{ origin, name, icon?, description? }` — see §1, *The `preferred_services` Field* (added 2026-11-08) |
 
 **Notes on types:**
 
@@ -313,6 +316,7 @@ A card authorizer needs to define the rules governing what cards may be issued u
 | `revocation_permissions` | structured object | No | `{ "is_issuer": true }` |
 | `notes` | `append-only-array` of `text` | No | `{ "is_holder": true }` |
 | `policy_creation` | `policy-creation-constraint` | No | `{ "is_issuer": true }` |
+| `preferred_services` | `service-array` | No | `{ "is_holder": true }` |
 
 These are the standardized fields all verifiers know to look for. Their update policies above are defaults; the authorizer may override them at issuance. For example, requiring both holder and issuer to co-sign auditor changes: `{ "all_of": [{ "is_holder": true }, { "is_issuer": true }] }`.
 
@@ -435,6 +439,19 @@ Example — an NYT employee policy whose holders may only create policies that i
   ]
 }
 ```
+
+**The `preferred_services` field** *(added 2026-11-08 for card login — `process_specs/card_login.md §Service Discovery`)*. A policy may list the online services its card holders can log in to. Wallets show these services on the card and offer one-tap login to them.
+
+```json
+"preferred_services": [
+  { "origin": "https://forum.example.org", "name": "Member Forum", "icon": "<CID — optional>", "description": "<text — optional>" }
+]
+```
+
+- `origin`: `https:` scheme and host, default port, no path; unique within the list. `name` is what wallets display (the service's own name is not used). `icon` is an IPFS CID so that showing it never contacts the service.
+- **Inheritance with replace.** If a policy omits the field, its cards use the nearest ancestor policy's list, walking the **issuance chain** (the policy card's issuer card → that card's policy → …, `protocol-objects.md §8.1`) — not the holder-lineage walk below. If a policy sets the field — including to `[]`, meaning "no services" — that list replaces whatever it would inherit. No merging.
+- Wallets read the **live** policy head for this field, not the `policy_id` snapshot: services are discovery data, not compliance data, so the snapshot rule in §Background Concepts does not apply.
+- Updated with code 302 (`update_codes.md`). A listed service appears in a wallet only if its signed `/.well-known/membership-login` (`protocol-objects.md §18`) confirms it accepts the card.
 
 **The policy creation chain walk.** When evaluating whether a holder is permitted to create a given policy, walkers traverse an alternating chain of cards and policies:
 
@@ -1198,146 +1215,88 @@ A recipient or service needs to determine: whether each signature is cryptograph
 
 ## 8. Authenticating with a Card
 
+**Revised 2026-11-08 (card login).** This section was rewritten to the decisions in `plans/card-login-strategic-plan.md`. CHAPI wallet discovery, the required `callbacks.https` back-channel, OHTTP response callbacks, and the `{code}` `redirect_uri` were removed; nothing implemented them. The step-by-step flow now lives in `process_specs/card_login.md`; objects are in `protocol-objects.md §8–9, §17–19`.
+
 ### Problem Statement
 
-A service needs to verify that a user holds a card satisfying some predicate, or to receive a signed statement from a user's card, without knowing in advance which wallet service the user has registered with. The requesting site must be able to route the request to the correct wallet, receive a signed response, and confirm the user's browser session is associated with that response — all without requiring the wallet service to expose its identity to the requesting site, and without routing the full request payload through any intermediary.
+A website wants to let people log in with a membership card — "log in as a verified member of X" — without knowing in advance which wallet the person uses, and in a way that works in every major browser, including all of iOS. The site needs a statement it can verify itself, bound to the right browser session. The person needs to know who is really asking before their card signs anything, because a login prompt is the most phishable surface a wallet has.
 
 ### Goals
 
-- Allow a requesting site to initiate a card authentication or signing request without knowing the user's wallet service in advance.
-- Route the request to the user's wallet via a thin intermediary (CHAPI or future browser-native API) that sees only metadata, not payload content.
-- Support the wallet fetching and responding to the request via a direct channel, with optional IP-level privacy via OHTTP.
-- Provide a confirmation code mechanism that ties the browser session to the signed response received out-of-band.
-- Make the resulting signed statement independently verifiable by any party, using the standard verification flow in §7.
+- Any site with a server can offer "Log in with a membership card," and it works in every major browser.
+- The wallet shows — and enforces — who is asking before a card signs anything: the requester is tied to a certified login service and to the domain the response goes to.
+- The site receives a statement it can verify end-to-end with the standard verifier, bound to the browser session that started the login, on the same device or across devices.
+- Cards lead people to the services that accept them, and logging in from the wallet takes one tap.
 
 ### Non-Goals
 
-- **Not:** A centralized authentication service. The protocol defines request and response formats; the requesting site does its own verification.
-- **Not:** Session management beyond the confirmation code handoff. Cookie and session lifecycle is the requesting site's responsibility.
-- **Not:** Requiring the user to hold a specific named card — the request specifies predicates, not identities.
+- **Not:** A central authentication service. The protocol defines objects and checks; each site verifies responses itself.
+- **Not:** Login for static sites. Every login site runs a server that holds a server card.
+- **Not:** Session management after login. Cookies and session lifetime are the site's responsibility.
+- **Not:** Full OpenID4VP conformance. Parameter names and DCQL are borrowed; encoding stays RFC 8785 + ML-DSA-44.
 
 ### User Stories
 
-**As a site operator,** I want to request that a visitor sign a statement using any card that satisfies a given predicate, so that I can confirm their trust lineage without managing an allowlist of specific public keys.
+**As a site operator,** I want to add a login button, issue a signed request, and verify the response with a small amount of code, so that I can admit members of a community without managing an allowlist.
 
-**As a user,** I want my wallet to receive a signing request, show me clearly what I am being asked to sign and why, and let me approve or decline, so that I am never surprised by what my card has signed.
+**As a user,** I want my wallet to show me which site is asking — verified against the domain the answer will go to — and what I'm signing, so that I am never tricked into logging a phishing site in as me.
 
-**As a user,** I want to see the requesting site's card and verify their trust lineage before signing anything, so that I can assess whether the requester is trustworthy before committing my credential to their request.
+**As a user on a laptop,** I want to scan a QR code with my phone's wallet to log in, and have the login go to my browser, not someone else's.
 
-**As a privacy-conscious user,** I want the wallet service's identity to remain hidden from the requesting site where possible, so that the requesting site cannot learn which wallet service I use.
+**As a user,** I want my card to show me the services my community uses and log me into them with one tap.
 
-**As a wallet service,** I want to respond to signing requests over HTTPS, with the option to use OHTTP for additional IP privacy where the requester supports it.
+**As a community administrator,** I want to list the services our members can use on our policy, so new members find them immediately.
 
 ### Requirements
 
 #### Must-Have (P0)
 
-**Authentication request object.** The requesting site creates a JSON authentication request and hosts it at a single-use URL. The request object:
+**Login request** (`protocol-objects.md §8`). The site creates an `AuthenticationRequest` signed by its **server card** and hosts it at a single-use `request_uri`. It names the cards it accepts with a DCQL query in the `mcard` format (a list of policy pointers, each with `include_children`, plus an optional predicate), a `nonce`, a `state` bound to the starting browser, a `response_mode`, and a `response_uri`.
 
-```json
-{
-  "session_id": "<UUID — stable identifier for this auth session>",
-  "version": "1",
-  "purpose": "<human-readable description shown to user in wallet UI>",
-  "requesting_site": "<origin of the requesting site, for display>",
-  "requester_card": "<mutable pointer of the requesting site's own card>",
-  "requester_pubkey": "<base64url — ML-DSA-44 public key of the card referenced by requester_card, 1312 bytes raw>",
-  "payload": {
-    "content": "<the content the user is being asked to sign>",
-    "context": "<optional: additional human-readable context>",
-    "nonce": "<random value — replay prevention>"
-  },
-  "required_predicate": <optional card predicate expression — same format as §1>,
-  "required_policy": "<optional CID of a required policy card>",
-  "callbacks": {
-    "https": "<HTTPS URL to POST the signed response to — required>",
-    "ohttp": {
-      "relay": "<OHTTP relay URL>",
-      "gateway_key": "<OHTTP gateway public key, base64url — optional>"
-    }
-  },
-  "redirect_uri": "<URL to redirect user to after completion — must contain the literal string {code}>",
-  "expires_at": "<ISO 8601 timestamp>",
-  "request_signature": "<ML-DSA-44 signature from the requester's card key over the canonical serialization of all above fields including requester_pubkey>"
-}
-```
+**Requester identity** (`subcards.md §Server Cards`, `protocol-objects.md §17`). A server card is a sub-card of a **login service card**. Login service cards are issued under the login service branch of the app-certification root (`governance/AppCertificationBody/login_service_certification.md`) and bound to a DNS domain by an attestation from that domain's DNS admin card. The wallet rejects any request whose server card isn't login-service-scoped, whose login service card doesn't chain to the login service branch, or whose domain binding doesn't cover the `response_uri` origin.
 
-`requester_card`, `requester_pubkey`, and `request_signature` are required. A request without any of these must be rejected by the wallet before being shown to the user. The requester's card gives the user a verifiable trust chain for the requesting site. `callbacks.https` is required; `callbacks.ohttp` is optional for deployments that want IP-level privacy on the response leg.
+**Wallet discovery: the login router** (`object_specs/login_router.md`). The site sends the browser to a static login router with the `request_uri` in the URL fragment. The router opens the wallet registered in its own first-party storage. Wallets register silently when the user accepts their first card; registration only adds, never replaces a default. With no wallet registered, the router shows recovery options rather than a dead end. Cross-device logins use a QR code or a `mcard://auth?r=<request_uri>` link instead of the router.
 
-The request URL is single-use and expires at `expires_at`. Requests must not be reused across sessions. The `nonce` in the payload is incorporated into the signed statement and must be verified by the requesting site to prevent replay.
+**Response modes** (`protocol-objects.md §9`).
+- `form_post` (same device): the wallet's browser POSTs the signed response to `response_uri`; the `state` cookie binds it to the session.
+- `mcard_message` (cross-device, native wallets): the wallet sends the signed response as a card message to the login service card; the site answers with an `auth_confirmation` carrying a one-time code. The browser must present both the `state` cookie and the code. On the same device the wallet opens the code link automatically; only QR-started cross-device logins ask the user to type the code. The site records wallet-send → server-receive latency for every `mcard_message` login.
 
-**Wallet discovery via CHAPI.** The requesting site includes the CHAPI polyfill and calls `navigator.credentials.get()` with a Web Credential request containing the authentication request URL (not the full request object). CHAPI routes this to the user's registered wallet service by opening the wallet's credential handler page in a controlled popup. The requesting site's code observes only a call to the CHAPI polyfill — it does not receive the wallet service's URL or identity from this call.
+**Warnings and blocks.** A revoked (8xx/9xx) server card, login service card, or login-service-branch ancestor, a suspended domain, or a stale domain binding blocks the login. Negative-context (6xx) and negative-update (7xx) codes on the login service card, and a monitored domain, show a warning the user can proceed past.
 
-If no wallet is registered in CHAPI, the wallet's credential handler page is not opened. The requesting site should handle this case by presenting a prompt directing the user to register a wallet service.
+**Wallet-initiated login.** The wallet opens the service's start URL with a fresh `wallet_nonce`; the site creates a request echoing it. The wallet signs without a prompt only when the request matches a pending, single-use, short-lived login it started and nothing triggers a warning.
 
-**Direct fetch flow.**
+**Service discovery** (`protocol-objects.md §2`, `§18`). A policy may list `preferred_services`. Child policies inherit the nearest ancestor's list unless they set their own (an empty list means none). The wallet shows a service only if the service's signed `/.well-known/membership-login` confirms it accepts the card.
 
-1. The wallet service's credential handler page, once opened by CHAPI, receives the authentication request URL.
-2. The wallet fetches the request object from that URL via HTTPS.
-3. The wallet validates the request: confirms `expires_at` has not passed; confirms `requester_card`, `requester_pubkey`, and `request_signature` are present; confirms `keccak256(requester_pubkey)` equals the `requester_card` pointer address (a mismatch is a hard rejection — do not display); and verifies `request_signature` against the canonical RFC 8785 JSON of the request object (all fields except `request_signature`) using `requester_pubkey`.
-4. The wallet derives the requester card's content key as `HKDF-SHA3-256(requester_pubkey, info="card-content-v1")`, decrypts the requester card (an AES-GCM failure is a hard rejection), and walks the requester's card chain to a trusted root via that card's `ancestry_pubkeys`, checking for revocation exactly as in §7. If the chain fails verification or any link is revoked, the request is rejected before display.
-5. The wallet confirms the `required_predicate` against the user's available cards. If no qualifying card exists, the wallet shows a clear explanation rather than a generic error.
-6. The wallet presents the signing request to the user: the `purpose`, the requester's verified card identity and chain summary, `payload.content`, and a summary of the `required_predicate` if set. The wallet must clearly show what will be signed and who is asking — including the requester's trust lineage, not just their domain name.
-7. If the user approves: the wallet selects a qualifying card (or presents a chooser if multiple qualify), assembles a signed message envelope per §6 with `type: "auth_response"`, `content: { statement, context: { session_id, ... }, nonce }` (`statement` and `nonce` copied from the request's `payload`; `context` is an **object** whose `session_id` field is echoed from `AuthenticationRequest.session_id`), `senders` (the holder's master card pointer), `recipients` (`requester_card`), and `timestamp` (current time). The wallet signs the canonical RFC 8785 JSON of the payload with the selected sub-card key and assembles the authentication response.
-8. The wallet sends the authentication response to the requester via the preferred transport (see below). On success, the requester returns a `confirmation_code` — a short-lived, single-use opaque token — in the response body.
-9. The wallet redirects the user's browser to `redirect_uri` with `{code}` replaced by the `confirmation_code`. The requesting site's page picks up the code, looks up the associated signed response, and considers the session authenticated.
+**Verification** (`object_specs/card_verifier.md §6.3`). The site verifies a response with the verifier's `verifyLoginResponse`: signature and sub-card link, chain and revocation, `state`, `nonce`, request hash, audience origin, freshness, and the DCQL match. The session or one-time code is issued only after every check passes.
 
-**Authentication response object** (posted by wallet to requester):
+**Acceptance criteria** (detailed criteria: `process_specs/card_login.md §Acceptance Criteria`, `object_specs/login_router.md §Acceptance Criteria`):
 
-```json
-{
-  "session_id": "<matches the request>",
-  "signed_statement": <signed message envelope per §6>,
-  "card_pointer": "<mutable pointer of the card used to sign>"
-}
-```
-
-**Transport options.** The wallet selects the most private transport available, in preference order: OHTTP > HTTPS. Because badges are associated with wallet addresses on-chain, the wallet service's identity is not considered sensitive, and HTTPS is acceptable as the primary transport.
-
-- **OHTTP (Oblivious HTTP, RFC 9458)** — If the requester advertises an OHTTP gateway in `callbacks.ohttp`, the wallet may use it for IP-level privacy. The relay knows the wallet's IP but not the content; the requester's gateway sees the content but not the wallet's IP. No single party observes both. Latency is near-HTTPS (single relay hop).
-
-- **HTTPS** — The wallet posts the response to `callbacks.https`. The requester can observe the wallet service's server IP. This is the standard transport and is required for all conforming implementations.
-
-**Verification.** On receiving an authentication response, the requesting site verifies the signed statement per §7: signature validity, chain walk to a trusted root, revocation check, predicate evaluation, `content.context.session_id` match (against the issued `session_id`), and `content.nonce` match. The confirmation code is only issued after successful verification.
-
-**Acceptance criteria:**
-
-- [ ] The requesting site's JavaScript code does not receive the wallet service's URL or identity from the CHAPI call.
-- [ ] A request missing `requester_card`, `requester_pubkey`, or `request_signature` is rejected by the wallet before display.
-- [ ] A request where `keccak256(requester_pubkey)` does not equal the `requester_card` pointer address is rejected before display.
-- [ ] A request whose `request_signature` does not verify against `requester_pubkey` is rejected before display.
-- [ ] A request whose requester's card cannot be decrypted with `HKDF-SHA3-256(requester_pubkey, info="card-content-v1")` is rejected before display.
-- [ ] A request whose requester's card chain cannot be walked to a trusted root is rejected before display.
-- [ ] The authentication request URL is single-use: a second fetch of the same URL after the response has been posted returns an error.
-- [ ] The `nonce` from the auth request appears in `signed_statement.payload.content.nonce`; a response with a mismatched or absent nonce is rejected.
-- [ ] The `session_id` from the auth request appears in `signed_statement.payload.content.context.session_id`; a response with a mismatched or absent `session_id` in `content.context` is rejected.
-- [ ] The `expires_at` on the request is enforced: a wallet that fetches an expired request must reject it and notify the user.
-- [ ] A confirmation code is only issued after the signed statement passes full §7 verification.
-- [ ] The confirmation code is single-use: presenting the same code twice is rejected.
-- [ ] A user who declines the signing request in the wallet UI is redirected to `redirect_uri?error=declined`.
-- [ ] The wallet sends the authentication response via HTTPS to `callbacks.https`; OHTTP is used instead if `callbacks.ohttp` is present and the wallet supports it.
-- [ ] The wallet presents the requester's verified card chain summary to the user before they approve or decline.
+- [ ] A test site completes same-device login through the router in Chromium, Firefox, and WebKit.
+- [ ] The wallet rejects, before display, every request that fails the server card, login service card, domain binding, or status checks — including a correctly signed request from a valid login service card whose `response_uri` is on a different domain.
+- [ ] A response delivered to a browser other than the one that started the login does not establish a session there.
+- [ ] `form_post` and `mcard_message` both complete end-to-end; every `mcard_message` login records its delivery latency.
+- [ ] Wallet-initiated login completes with no prompt only when it matches a pending login.
+- [ ] A card's effective services list can be computed from its policy chain, and the wallet shows only services whose metadata accepts the card.
 
 #### Nice-to-Have (P1)
 
-- **Wallet chooser UI.** When multiple cards in the user's wallet satisfy `required_predicate`, the wallet presents a chooser showing each qualifying card's policy and issuer, so the user can select which credential to present.
-- **CHAPI-free fallback.** A requesting site that does not use CHAPI can instead display a QR code or deep link (`mcard://auth?r=<request-url>`) that the user opens in their wallet app directly. Enables authentication flows on devices without CHAPI support.
-- **OHTTP relay selection.** A protocol-level registry or well-known discovery endpoint for OHTTP relays trusted by the Card ecosystem, so requesting sites can advertise a relay without requiring wallet services to configure relay trust ad hoc.
+- **Wallet chooser.** When several held cards match the query, the wallet shows each card's policy and issuer so the user can choose.
+- **Login service card annotations.** EAS annotations on login service cards feed the warn/block rules, as they do for app cards.
 
 #### Future Considerations (P2)
 
-- **Digital Credentials API.** When the W3C Digital Credentials API reaches broad browser support, CHAPI can be replaced with a browser-native call (`navigator.identity.get({ digital: ... })`). The request object format and direct fetch flow remain unchanged; only the wallet discovery step changes. The browser-native path provides stronger privacy guarantees (routing is browser-enforced, not polyfill-enforced) and eliminates the CHAPI mediator's metadata visibility entirely.
-- **Requester anonymity.** Currently the user's browser navigates to the requesting site before any credential exchange, so the requester always learns the browser's IP from the page load. Future work could explore flows where the credential exchange precedes site navigation.
-- **Multi-card statements.** A single authentication request that requires signatures from multiple cards simultaneously (e.g., "sign with both your community membership and your identity card").
+- **Digital Credentials API.** On Android, a browser-native path alongside the router, with proximity-based cross-device binding.
+- **URL-bound policy patterns** (e.g. `nytimes.com/staff/*`) in the DCQL query.
+- **Per-service identifiers.** In v2 the site sees the presented card's pointer, so one card has the same identifier at every site.
+- **Multi-card statements.** One request requiring several cards at once.
+- **Requester anonymity.** The browser loads the site before any credential exchange, so the site always learns the browser's IP.
 
 ### Open Questions
 
-- **[Design]** Should `required_predicate` be evaluated by the wallet before showing the request to the user (hiding requests the user can't fulfill), or shown regardless with a clear explanation of why no qualifying card is available?
-- **[Engineering]** How does the requesting site manage confirmation code expiry and cleanup for sessions where the user never completes the redirect?
-- **[Design]** Should the wallet service advertise its supported transports in a well-known manifest (e.g., `/.well-known/card-wallet.json`) so requesting sites can know whether to populate `callbacks.ohttp` before constructing the request?
+- **[Engineering]** Whether `mcard_message` delivery latency is low enough to make it the only response mode. Answered by the latency metric above.
+- **[Design]** Cleanup of unredeemed one-time codes and abandoned `state` values: `card_login.md` sets expiries; storage strategy is left to the site.
 
 ---
-
 
 
 ### Leading Indicators (weeks 1–4 post-launch)
@@ -1352,7 +1311,7 @@ If no wallet is registered in CHAPI, the wallet's credential handler page is not
 
 - **Recovery success rate:** % of recovery attempts that complete without incident
 - **Revocation propagation time:** time between revocation entry publication and verification clients picking up the change
-- **Developer SDK adoption:** number of services integrating the `CardAuth` npm package
+- **Developer SDK adoption:** number of services integrating the `app-sdk` login module (`object_specs/app_sdk.md §Login`)
 - **Card reuse rate across sessions:** % of authenticated sessions that reuse a previously-established card vs. new issuance
 
 ---

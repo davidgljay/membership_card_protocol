@@ -110,7 +110,7 @@ describe('targeted offer acceptance and press finalization', () => {
     );
     const storageProvider = makeFakeStorageProvider(initialBlob);
     const rpc = makeHappyPathRpc(issuerAddress);
-    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
+    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, loginServiceCertificationRoot: '5e'.repeat(32), trustedRoots: [issuerAddress] });
 
     const acceptResult = await acceptTargetedOffer({
       offer,
@@ -244,7 +244,7 @@ describe('targeted offer acceptance and press finalization', () => {
 
     const issuerAddress = keccak256(issuer.publicKey);
     const rpc = makeHappyPathRpc(issuerAddress);
-    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
+    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, loginServiceCertificationRoot: '5e'.repeat(32), trustedRoots: [issuerAddress] });
     const master = mlDsa44GenerateKeypair();
     const initialBlob = encryptKeyring(
       [{ cardAddress: RECIPIENT_MASTER_CARD_ADDRESS, privateKey: master.secretKey }],

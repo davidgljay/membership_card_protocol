@@ -205,6 +205,10 @@ run_unit_tests() {
 
   step "wallet-sdk: pnpm -r test" \
     bash -c "cd '$ROOT/wallet-sdk' && pnpm install --frozen-lockfile && pnpm run build && pnpm run typecheck && pnpm run test"
+
+  # Unit tests only; the router's browser tests (test:e2e) run on their own.
+  step "login-router: npm test" \
+    bash -c "cd '$ROOT/login-router' && npm ci && npm run typecheck && npm test"
 }
 
 run_integration() {
@@ -260,7 +264,9 @@ run_integration() {
     # local browser cache (~/.cache/ms-playwright), missing on a genuinely
     # clean checkout (confirmed live in CI: "Executable doesn't exist at
     # .../chromium_headless_shell...").
-    step "harness: web (playwright)" bash -c "npm ci && npx playwright install --with-deps chromium && npm test"
+    # login.spec.ts builds login-router (esbuild) from source, so its
+    # dependencies must be installed even under --integration-only.
+    step "harness: web (playwright)" bash -c "(cd '$ROOT/login-router' && npm ci) && npm ci && npx playwright install --with-deps chromium && npm test"
 
     cd "$INTEGRATION_DIR/harnesses/rn"
     step "harness: rn (jest)" bash -c "npm ci && npm test"

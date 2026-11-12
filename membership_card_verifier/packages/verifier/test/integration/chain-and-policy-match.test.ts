@@ -140,7 +140,7 @@ function buildScenario(
 describe("returnChain", () => {
   it("omits `chain` entirely when returnChain is not set", async () => {
     const { rpc, ipfs, envelope, root, appCertRoot } = buildScenario();
-    const verifier = new CardVerifier({ rpc, ipfs, trustedRoots: [root.address], appCertificationRoot: appCertRoot.address });
+    const verifier = new CardVerifier({ rpc, ipfs, trustedRoots: [root.address], appCertificationRoot: appCertRoot.address, loginServiceCertificationRoot: '5e'.repeat(32) });
     const result = await verifier.verifyEnvelope(envelope);
     const sig0 = result.signatures[0]!;
     expect("chain" in sig0).toBe(false);
@@ -153,6 +153,7 @@ describe("returnChain", () => {
       ipfs,
       trustedRoots: [root.address],
       appCertificationRoot: appCertRoot.address,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       returnChain: true,
     });
     const result = await verifier.verifyEnvelope(envelope);
@@ -176,6 +177,7 @@ describe("returnChain", () => {
       ipfs,
       trustedRoots: [root.address],
       appCertificationRoot: appCertRoot.address,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       returnChain: true,
     });
     const result = await verifier.verifyEnvelope(envelope);
@@ -228,6 +230,7 @@ describe("returnChain", () => {
       ipfs: failingIpfs,
       trustedRoots: [root.address],
       appCertificationRoot: appCertRoot.address,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       returnChain: true,
     });
 
@@ -246,7 +249,7 @@ describe("returnChain", () => {
 describe("policy_match", () => {
   it("is null when conditions is not supplied", async () => {
     const { rpc, ipfs, envelope, root, appCertRoot } = buildScenario();
-    const verifier = new CardVerifier({ rpc, ipfs, trustedRoots: [root.address], appCertificationRoot: appCertRoot.address });
+    const verifier = new CardVerifier({ rpc, ipfs, trustedRoots: [root.address], appCertificationRoot: appCertRoot.address, loginServiceCertificationRoot: '5e'.repeat(32) });
     const result = await verifier.verifyEnvelope(envelope);
     expect(result.signatures[0]!.policy_match).toBeNull();
     expect(result.policy_match).toBeNull();
@@ -259,6 +262,7 @@ describe("policy_match", () => {
       ipfs,
       trustedRoots: [root.address],
       appCertificationRoot: appCertRoot.address,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       conditions: { policy_id: POLICY_CID },
     });
     const result = await verifier.verifyEnvelope(envelope);
@@ -273,6 +277,7 @@ describe("policy_match", () => {
       ipfs,
       trustedRoots: [root.address],
       appCertificationRoot: appCertRoot.address,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       conditions: { policy_id: "QmSomeOtherPolicy" },
     });
     const result = await verifier.verifyEnvelope(envelope);
@@ -287,6 +292,7 @@ describe("policy_match", () => {
       ipfs,
       trustedRoots: [root.address],
       appCertificationRoot: appCertRoot.address,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       conditions: { policy_id: POLICY_CID, field_match: { user_type: "admin" } },
     });
     const result = await verifier.verifyEnvelope(envelope);
@@ -300,6 +306,7 @@ describe("policy_match", () => {
       ipfs,
       trustedRoots: [root.address],
       appCertificationRoot: appCertRoot.address,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       conditions: { policy_id: POLICY_CID, field_match: { user_type: "admin" } },
     });
     const result = await verifier.verifyEnvelope(envelope);
@@ -313,6 +320,7 @@ describe("policy_match", () => {
       ipfs,
       trustedRoots: [root.address],
       appCertificationRoot: appCertRoot.address,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       conditions: { policy_id: POLICY_CID, field_match: { user_type: { regex: "^(admin|super-admin)$" } } },
     });
     const result = await verifier.verifyEnvelope(envelope);
@@ -329,6 +337,7 @@ describe("policy_match", () => {
       ipfs,
       trustedRoots: [root.address],
       appCertificationRoot: appCertRoot.address,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       conditions: {
         policy_id: POLICY_CID,
         field_match: { user_type: "admin", department: "engineering" },
@@ -348,6 +357,7 @@ describe("policy_match", () => {
       ipfs,
       trustedRoots: [root.address],
       appCertificationRoot: appCertRoot.address,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       conditions: {
         policy_id: POLICY_CID,
         field_match: { user_type: "admin", department: "engineering" },
@@ -366,6 +376,7 @@ describe("policy_match", () => {
       ipfs,
       trustedRoots: [root.address],
       appCertificationRoot: appCertRoot.address,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       returnChain: true,
       conditions: { policy_id: POLICY_CID, field_match: { user_type: "admin" } },
     });
@@ -388,6 +399,7 @@ describe("policy_match", () => {
       ipfs,
       trustedRoots: [root.address],
       appCertificationRoot: appCertRoot.address,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       returnChain: true,
       // no conditions supplied
     });
@@ -524,6 +536,7 @@ describe("policy_match", () => {
       ipfs,
       trustedRoots: [root.address],
       appCertificationRoot: appCertRoot.address,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       returnChain: true,
       conditions: { policy_id: POLICY_CID, field_match: { user_type: "admin" } },
     });
@@ -588,6 +601,7 @@ describe("policy_match", () => {
       ipfs,
       trustedRoots: [scenarioA.root.address, scenarioB.root.address],
       appCertificationRoot: scenarioA.appCertRoot.address, // both scenarios' app card chains are independent per-signer via appCertificationRoot; scenarioB uses its own appCertRoot so this test only asserts scenarioA's signer fails app-chain trust and is excluded from the OR via its own false chain check — see below.
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       conditions: { policy_id: scenarioB.POLICY_CID, field_match: { user_type: "admin" } },
     });
 
@@ -610,6 +624,7 @@ describe("verifyCard with pubkey", () => {
       ipfs,
       trustedRoots: [root.address],
       appCertificationRoot: appCertRoot.address,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       returnChain: true,
     });
 
@@ -649,6 +664,7 @@ describe("verifyCard with pubkey", () => {
       ipfs,
       trustedRoots: [root.address],
       appCertificationRoot: appCertRoot.address,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       returnChain: true,
     });
 
@@ -675,6 +691,7 @@ describe("verifyCard with pubkey", () => {
       ipfs,
       trustedRoots: [root.address],
       appCertificationRoot: appCertRoot.address,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       returnChain: true,
     });
 

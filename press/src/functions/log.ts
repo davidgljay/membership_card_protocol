@@ -16,6 +16,9 @@ import {
   mlDsa44Sign,
   mlDsa44PublicKeyFromPrivate,
   toBase64url,
+  deriveContentKey,
+  aes256gcmEncrypt,
+  aes256gcmDecrypt,
 } from './crypto.js';
 import type { UpdateIntentPayload } from '../types.js';
 import type { Hex } from 'viem';
@@ -64,6 +67,49 @@ export interface LogEntryResult {
   new_log_head_cid: string;
 }
 
+const SIGNATURE_FIELDS = ['issuer_signature', 'holder_signature', 'press_signature'];
+
+export interface CurrentHead {
+  /** The card's complete current field state (protocol-objects.md §3 `card_state`). */
+  state: Record<string, unknown>;
+  /** CIDs of every object before the head, oldest first (the head's own `history`). */
+  history: string[];
+  /** The head's `version` — 0 for a genesis CardDocument. */
+  version: number;
+}
+
+/**
+ * Reads and decrypts a card's current head with its content key. A genesis
+ * CardDocument's state is the document minus its three signatures; a
+ * LogEntry's state is its `card_state`.
+ */
+export async function readCurrentHead(
+  ipfs: IpfsPinningProvider,
+  headCid: string,
+  contentKey: Uint8Array
+): Promise<CurrentHead> {
+  const head = JSON.parse(
+    new TextDecoder().decode(await aes256gcmDecrypt(contentKey, await ipfs.fetchFromIPFS(headCid)))
+  ) as Record<string, unknown>;
+  const isLogEntry = head['entry_type'] === 'field_update' || head['entry_type'] === 'revocation';
+  if (isLogEntry) {
+    return {
+      state: { ...((head['card_state'] as Record<string, unknown>) ?? {}) },
+      history: Array.isArray(head['history']) ? (head['history'] as string[]) : [],
+      version: typeof head['version'] === 'number' ? head['version'] : 0,
+    };
+  }
+  const state = { ...head };
+  for (const f of SIGNATURE_FIELDS) delete state[f];
+  return { state, history: [], version: 0 };
+}
+
+/**
+ * press.md §5.3 appendLogEntry / card_updates.md step 9: builds the complete
+ * LogEntry (version, history, card_state), signs it, encrypts it under the
+ * target card's content key (ADR-006, the same scheme as genesis documents),
+ * pins it, and moves the on-chain head.
+ */
 export async function appendLogEntry(
   config: PressConfig,
   kv: KvStore,
@@ -71,24 +117,31 @@ export async function appendLogEntry(
   ipfs: IpfsPinningProvider,
   targetCardAddress: Hex,
   updateIntent: UpdateIntentPayload,
-  intentSignature: { public_key: string; signature: string }
+  intentSignature: { public_key: string; signature: string },
+  targetPubkey: Uint8Array
 ): Promise<LogEntryResult> {
-  // 1. Fetch current log head.
+  // 1. Read the current head.
   const cardEntry = await registry.getCardEntry(targetCardAddress);
   const prevLogCid = new TextDecoder().decode(cardEntry.log_head_cid);
-  const version = 1; // Increment logic requires full chain walk; placeholder for Phase 3.
+  const contentKey = deriveContentKey(targetPubkey);
+  const current = await readCurrentHead(ipfs, prevLogCid, contentKey);
 
-  // 2. Assemble LogEntry.
+  // 2. Assemble the LogEntry.
   const entryType = updateIntent.code >= 800 ? 'revocation' : 'field_update';
+  const cardState = { ...current.state };
+  if (entryType === 'field_update') {
+    for (const u of updateIntent.field_updates ?? []) cardState[u.field] = u.value;
+  }
   const logEntry: Record<string, unknown> = {
-    version,
+    version: current.version + 1,
     code: updateIntent.code,
     entry_type: entryType,
     prev_log_root: prevLogCid,
+    history: [...current.history, prevLogCid],
+    card_state: cardState,
     notify_holder: updateIntent.notify_holder ?? false,
     intent_signature: intentSignature,
   };
-
   if (entryType === 'field_update' && updateIntent.field_updates) {
     logEntry['field_updates'] = updateIntent.field_updates;
   }
@@ -103,7 +156,6 @@ export async function appendLogEntry(
   const toSign = canonicalizeExcluding(logEntry, ['press_signature']);
   const sig = mlDsa44Sign(config.PRESS_MLDSA44_PRIVATE_KEY, toSign);
   const pubKey = mlDsa44PublicKeyFromPrivate(config.PRESS_MLDSA44_PRIVATE_KEY);
-
   const signedEntry = {
     ...logEntry,
     press_signature: {
@@ -112,9 +164,9 @@ export async function appendLogEntry(
     },
   };
 
-  // 4. Pin to IPFS.
-  const logBytes = canonicalize(signedEntry);
-  const logEntryCid = await ipfs.pinToIPFS(logBytes);
+  // 4. Encrypt and pin.
+  const ciphertext = await aes256gcmEncrypt(contentKey, canonicalize(signedEntry));
+  const logEntryCid = await ipfs.pinToIPFS(ciphertext);
 
   // 5. Update on-chain head.
   await registry.updateCardHead({

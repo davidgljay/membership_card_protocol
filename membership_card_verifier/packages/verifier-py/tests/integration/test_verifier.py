@@ -16,14 +16,14 @@ DUMMY_APP_CERT_ROOT = "0x" + "e" * 64
 def test_constructor_rejects_missing_rpc():
     with pytest.raises(CardProtocolError):
         CardVerifier(
-            VerifierConfig(rpc=None, ipfs=mock_ipfs(), app_certification_root=DUMMY_APP_CERT_ROOT)
+            VerifierConfig(rpc=None, ipfs=mock_ipfs(), app_certification_root=DUMMY_APP_CERT_ROOT, login_service_certification_root="5e" * 32)
         )
 
 
 def test_constructor_rejects_missing_ipfs():
     with pytest.raises(CardProtocolError):
         CardVerifier(
-            VerifierConfig(rpc=mock_rpc(), ipfs=None, app_certification_root=DUMMY_APP_CERT_ROOT)
+            VerifierConfig(rpc=mock_rpc(), ipfs=None, app_certification_root=DUMMY_APP_CERT_ROOT, login_service_certification_root="5e" * 32)
         )
 
 
@@ -37,7 +37,7 @@ async def test_verify_envelope_returns_deterministic_envelope_id():
 
     rpc = mock_rpc(get_card_entry=AsyncMock(return_value=None))
     verifier = CardVerifier(
-        VerifierConfig(rpc=rpc, ipfs=mock_ipfs(), app_certification_root=DUMMY_APP_CERT_ROOT)
+        VerifierConfig(rpc=rpc, ipfs=mock_ipfs(), app_certification_root=DUMMY_APP_CERT_ROOT, login_service_certification_root="5e" * 32)
     )
 
     r1 = await verifier.verify_envelope(envelope)
@@ -65,7 +65,7 @@ async def test_verify_envelope_returns_one_result_per_signature_entry():
 
     rpc = mock_rpc(get_card_entry=AsyncMock(return_value=None))
     verifier = CardVerifier(
-        VerifierConfig(rpc=rpc, ipfs=mock_ipfs(), app_certification_root=DUMMY_APP_CERT_ROOT)
+        VerifierConfig(rpc=rpc, ipfs=mock_ipfs(), app_certification_root=DUMMY_APP_CERT_ROOT, login_service_certification_root="5e" * 32)
     )
     result = await verifier.verify_envelope(envelope)
     assert len(result.signatures) == 2
@@ -89,7 +89,7 @@ async def test_verify_card_with_known_trusted_root_returns_chain_reaches_trusted
         get_card_event_log=AsyncMock(return_value=[]),
     )
     verifier = CardVerifier(
-        VerifierConfig(rpc=rpc, ipfs=mock_ipfs(), app_certification_root=DUMMY_APP_CERT_ROOT)
+        VerifierConfig(rpc=rpc, ipfs=mock_ipfs(), app_certification_root=DUMMY_APP_CERT_ROOT, login_service_certification_root="5e" * 32)
     )
     result = await verifier.verify_card(card.address)
     assert result.signature_valid is None
@@ -192,7 +192,7 @@ async def test_stage2_hard_rejection_propagates_skipped_to_stages_3_5():
 
     rpc = mock_rpc(get_card_entry=AsyncMock(return_value=None))
     verifier = CardVerifier(
-        VerifierConfig(rpc=rpc, ipfs=mock_ipfs(), app_certification_root=DUMMY_APP_CERT_ROOT)
+        VerifierConfig(rpc=rpc, ipfs=mock_ipfs(), app_certification_root=DUMMY_APP_CERT_ROOT, login_service_certification_root="5e" * 32)
     )
     result = await verifier.verify_envelope(envelope)
     sig = result.signatures[0]
@@ -276,7 +276,9 @@ async def test_verify_card_with_correct_pubkey_populates_real_chain():
 
     rpc = mock_rpc(
         get_card_entry=AsyncMock(side_effect=get_card_entry),
-        is_policy_authorizer=AsyncMock(return_value=True),  # root is the policy authorizer
+        # Only the root is a policy authorizer: a start card that is itself a
+        # root ends the walk immediately (stage 3 start-root check).
+        is_policy_authorizer=AsyncMock(side_effect=lambda addr: addr == root.address),
     )
     ipfs = mock_ipfs({SUB_CID: enc_sub_doc, MASTER_CID: enc_master_doc, PARENT_CID: enc_parent_doc, APP_CID: enc_app_doc, POLICY_CID: policy_bytes})
 

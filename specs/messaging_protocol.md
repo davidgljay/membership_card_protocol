@@ -2,7 +2,8 @@
 
 **Version:** 0.1 (draft)  
 **Date:** 2026-05-28  
-**Status:** Draft
+**Status:** Draft  
+**Amended 2026-11-08 (card login):** §13 `auth_request` is now a reference to a signed `AuthenticationRequest`; §14 `auth_response` content revised; new §23 `auth_confirmation`; MSG-OQ-8 and MSG-OQ-9 resolved; Summary Table numbering corrected.
 
 > **Terminology note.** This spec uses the canonical "card" terminology per the Naming Convention. The issuance service is the "press".
 
@@ -285,49 +286,43 @@ The press notifies a subcard that a sibling's key has been rotated on the same m
 
 ### 13. `auth_request`
 
-A service requests authentication from a card holder — "Sign in with your card."
+A site pushes a login prompt to a card it already knows — "Log in to example.com?" — instead of sending the user through the login router. **Revised 2026-11-08:** the message carries only a reference; the signed `AuthenticationRequest` (`protocol-objects.md §8`) at `request_uri` is the single source of truth for every field.
 
 ```json
 {
   "type": "auth_request",
   "content": {
-    "requester_card": "<mutable pointer of the requesting service's card>",
-    "policy_cid":     "<IPFS CID of the required policy>",
-    "nonce":          "<32-byte random value, base64url — replay prevention>",
-    "purpose":        "<human-readable string — shown to user>",
-    "session_id":     "<opaque string>",
-    "callback":       "<https:<url>>",
-    "expires":        "<ISO 8601>"
+    "request_uri": "<https URL of an AuthenticationRequest>"
   }
 }
 ```
 
-**Notes.** The `senders` list contains the requesting service's card pointer. The `signatures` array contains the service's signature over the request — the keyring verifies this before showing anything to the user, defending against forged auth prompts. The `callback` field is an HTTPS URL; the auth response is POSTed there directly.
+**Notes.** Sent from the login service card (signed by a server card whose `capabilities` include `auth_request`) to the user's card. The wallet fetches `request_uri` and runs `process_specs/card_login.md` from Phase 3, exactly as if it had arrived through the router. The message envelope's own signature is not a substitute for `request_signature`; the wallet validates the fetched request in full. The request should use `response_mode: "mcard_message"`, since the wallet may not be on the device where the user's browser is.
 
-Also deliverable as a deep link: `mcard://auth?r=<base64(envelope)>` or QR code for desktop-to-mobile handoff.
+Also deliverable as a deep link or QR code: `mcard://auth?r=<percent-encoded request_uri>`. The link carries only the URL, never the request itself.
 
 ---
 
 ### 14. `auth_response`
 
-The holder responds to an `auth_request`.
+The user's wallet answers a login request (`process_specs/card_login.md` Phase 5). Used directly as the message on `response_mode: "mcard_message"`, and carried as the `auth_response` form field on `form_post` (`protocol-objects.md §9`).
 
 ```json
 {
   "type": "auth_response",
   "content": {
-    "statement": "<copied from AuthenticationRequest.payload.content — the text the user is signing>",
-    "context":   { "session_id": "<echoed from AuthenticationRequest.session_id — correlation>", "<other contextual fields>": "..." },
-    "nonce":     "<echoed from AuthenticationRequest.payload.nonce — replay prevention>"
+    "audience":     "<origin of AuthenticationRequest.response_uri>",
+    "nonce":        "<copied from AuthenticationRequest.nonce>",
+    "request_hash": "<base64url — keccak256 of the canonical AuthenticationRequest>",
+    "state":        "<copied from AuthenticationRequest.state>",
+    "statement":    "<copied verbatim from AuthenticationRequest.statement>"
   }
 }
 ```
 
-**Notes.** Signed by the holder's current device sub-card (not the master key). `senders` contains the holder's master card pointer (the stable account identifier the service binds the session to); `recipients` contains the requester's card pointer — both are at the envelope level and need not be repeated in `content`.
+**Notes.** `senders` contains the presented card — the card that satisfies the request's DCQL query and the identifier the site binds the account to. `recipients` contains the **login service card** (the server card's `holder_primary_card`), because messages route only to master cards; the login service card's wallet service delivers a copy to each of its active sub-cards, which include the site's server cards. Signed by one of the presented card's device sub-cards (`capabilities` include `auth_response`); verifiers accept sub-card signatures only.
 
-`content` follows the canonical `auth_response` schema defined in `protocol-objects.md §9` and `card_protocol_spec.md §8`: `{ statement, context, nonce }`. `context` is an **object** (not a plain string) that carries `session_id` and any other correlation metadata — `session_id` lives here so that it is part of the signed payload and the requester can verify the response is bound to the session it initiated. `statement` and `nonce` are copied verbatim from the corresponding fields of the `AuthenticationRequest`.
-
-The service verifies: `content.nonce` matches the issued challenge, `content.context.session_id` matches the issued `session_id`, `timestamp` freshness, signature validity, sub-card to master link, master card chain walk, and policy predicate match — in that order.
+The site verifies with `card_verifier.md §6.3` (`verifyLoginResponse`): signature and sub-card link, chain and revocation, `type`, `state`, `nonce`, `statement`, `request_hash`, `audience`, `recipients`, `timestamp` freshness, then the DCQL match. Error codes: `process_specs/card_login.md §Error Codes`.
 
 ---
 
@@ -594,11 +589,33 @@ A structured error response to any message type that requires a reply.
 
 **Notes.** Used for `card_offer` rejections, `auth_request` failures, `api.invoke` errors that warrant a signed response, and similar. The `code` string space is per-domain (offer errors, auth errors, API errors); a registry of error codes is a follow-on artifact.
 
+**Login.** A user declining a `mcard_message` login sends `error` to the login service card with `code: "access_denied"` and an extra `state` field (the request's `state`); `in_reply_to` is omitted because the request was fetched, not messaged. A site rejecting a response does **not** send `error` to the wallet — the wallet learns of failure by timeout (`card_login.md` step 21). Login error codes: `process_specs/card_login.md §Error Codes`.
+
+---
+
+### 23. `auth_confirmation`
+
+A site tells the wallet that a `mcard_message` login response was accepted, and hands over the one-time code that binds the login to the user's browser. Added 2026-11-08 (`process_specs/card_login.md` steps 24–26).
+
+```json
+{
+  "type": "auth_confirmation",
+  "in_reply_to": "<message ID of the auth_response>",
+  "content": {
+    "code":         "<8 characters, Crockford base32>",
+    "expires_at":   "<ISO 8601 — 5 minutes after issue>",
+    "request_hash": "<base64url — same value as in the auth_response>"
+  }
+}
+```
+
+**Notes.** Sent from the login service card (signed by a server card whose `capabilities` include `auth_confirmation`) to the presented card. The wallet accepts it only if the signing server card is the request's `requester_card`, `in_reply_to` is its own `auth_response`, and `request_hash` matches; otherwise it reports `LOGIN_CONFIRMATION_INVALID` and does not show the code. On a login reached on the same device, the wallet opens `response_uri?code=<code>`; on a QR-started login, it shows the code for the user to type into their browser. The code works only together with the `state` cookie in the browser that started the login.
+
 ---
 
 ## Summary Table
 
-| # | Type | Sender | Recipient | Signed | Notes |
+| § | Type | Sender | Recipient | Signed | Notes |
 |---|---|---|---|---|---|
 | 1 | `text` | Any card | Any card(s) | Yes | Core human messaging primitive |
 | 2 | `reaction` | Any card | Message recipients | Yes | References target by payload hash |
@@ -608,22 +625,27 @@ A structured error response to any message type that requires a reply.
 | 6 | `card_offer_accepted` | Holder | Press (+ admin) | Yes | Triggers on-chain registration |
 | 7 | `card_offer_declined` | Holder | Press | Yes | Audit record of refusal |
 | 8 | `card_update_notification` | Press | Holder | Yes | Covers all 1xx–9xx update codes |
-| 9 | `auth_request` | Service card | User card | Yes | Challenge-response initiation |
-| 10 | `auth_response` | User card | Service | Yes | Signed by device sub-card |
-| 11 | `api.advertise` | API card | Any card(s) | Yes | Schema + auth policy |
-| 11 | `api.invoke` | Caller card | API card | Yes | Includes idempotency key |
-| 11 | `api.response` | API card | Caller card | Yes | Correlates via idempotency key |
-| 12 | `mcp.tool_call` | Agent card | Tool card | Yes | `delegated_by` human card |
-| 12 | `mcp.tool_result` | Tool card | Agent card | Yes | Correlates via call_id |
-| 12 | `mcp.prompt` | Any card | Model card | Yes | |
-| 12 | `mcp.resource` | Model card | Any card | Yes | Content pinned to IPFS |
-| 13 | `introduction` | Any card | Both parties | Yes | `vouch` flag |
-| 14 | `announcement` | Any card | Many cards | Yes | Broadcast |
-| 15 | `read_receipt` | Any card | Original sender | Yes | Opt-in only |
-| 16 | `delete` | Recipient card | Sender / all | Yes | Not honored if flagged |
-| 17 | `flag` | Any card | Press of flagged card | Yes | Entry to 6xx/9xx pipeline; not anonymous |
-| 18 | `error` | Any card | Request sender | Yes | Structured error response |
+| 9 | `subcard_sibling_added` | Press | Holder's other sub-cards | Yes | |
+| 10 | `subcard_sibling_removed` | Press | Holder's remaining sub-cards | Yes | |
+| 11 | `subcard_sibling_rotated` | Press | Holder's remaining sub-cards | Yes | |
+| 13 | `auth_request` | Login service card (server card signs) | User card | Yes | Reference only: `{ request_uri }` |
+| 14 | `auth_response` | Presented card | Login service card | Yes | Signed by device sub-card |
+| 15 | `api.advertise` | API card | Any card(s) | Yes | Schema + auth policy |
+| 15 | `api.invoke` | Caller card | API card | Yes | Includes idempotency key |
+| 15 | `api.response` | API card | Caller card | Yes | Correlates via idempotency key |
+| 16 | `mcp.tool_call` | Agent card | Tool card | Yes | `delegated_by` human card |
+| 16 | `mcp.tool_result` | Tool card | Agent card | Yes | Correlates via call_id |
+| 16 | `mcp.prompt` | Any card | Model card | Yes | |
+| 16 | `mcp.resource` | Model card | Any card | Yes | Content pinned to IPFS |
+| 17 | `introduction` | Any card | Both parties | Yes | `vouch` flag |
+| 18 | `announcement` | Any card | Many cards | Yes | Broadcast |
+| 19 | `read_receipt` | Any card | Original sender | Yes | Opt-in only |
+| 20 | `delete` | Recipient card | Sender / all | Yes | Not honored if flagged |
+| 21 | `flag` | Any card | Press of flagged card | Yes | Entry to 6xx/9xx pipeline; not anonymous |
+| 22 | `error` | Any card | Request sender | Yes | Structured error response |
+| 23 | `auth_confirmation` | Login service card (server card signs) | Presented card | Yes | One-time code for browser binding |
 
+Section 12 is unused; the number is retained so existing cross-references stay valid. The `§` column was previously a running count that did not match the section headings (corrected 2026-11-08).
 ---
 
 ## Open Questions
@@ -652,9 +674,9 @@ A structured error response to any message type that requires a reply.
 
 ### Auth flow
 
-**MSG-OQ-8: OHTTP for `auth_request` callback.** The `callback` field is HTTPS. Should an OHTTP variant of the callback be included in the `auth_request` message type to give wallet services the option of IP privacy on the response leg?
+**MSG-OQ-8: ~~OHTTP for `auth_request` callback.~~ Resolved 2026-11-08.** Superseded: the HTTPS callback is gone. Same-device responses go through the browser (`form_post`); cross-device responses are card messages (`mcard_message`), which already have transport-privacy options (ADR-007). See `process_specs/card_login.md`.
 
-**MSG-OQ-9: Multi-predicate auth.** Can a single `auth_request` require the holder to present multiple cards simultaneously (e.g., "prove you hold both a student card AND a staff card")? If so, `policy_cid` becomes a list and the response needs to present multiple cards in one signed payload.
+**MSG-OQ-9: ~~Multi-predicate auth.~~ Resolved 2026-11-08.** Out of scope for v2: a request names exactly one DCQL credential. Multi-card statements are a P2 item in `card_protocol_spec.md §8`.
 
 ### API and MCP types
 
@@ -691,5 +713,5 @@ A structured error response to any message type that requires a reply.
 - `protocol-objects.md §5` — `SignedMessageEnvelope` object reference
 - `process_specs/card_offering_and_acceptance.md` — `card_offer` flow
 - `process_specs/card_updates.md` — `card_update_notification` source
-- `raw_notes/Card Auth.md` — `auth_request` / `auth_response` detailed flow
+- `process_specs/card_login.md` — card login: `auth_request`, `auth_response`, `auth_confirmation` (replaces `raw_notes/Card Auth.md`)
 - `raw_notes/Message composition and verification.md` — envelope design rationale, edit/retraction semantics

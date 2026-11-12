@@ -38,6 +38,7 @@
     - 9.5 [Realtime Delivery](#95-realtime-delivery-implemented)
     - 9.6 [UUID Pool Deregistration](#96-uuid-pool-deregistration-implemented)
     - 9.7 [Room Discovery (Card-Gated Matrix Rooms)](#97-room-discovery-card-gated-matrix-rooms-not-implemented)
+9a. [Login (Site-Side)](#9a-login-site-side-not-implemented)
 10. [Cross-Platform Hardening and Documentation (Mostly Complete)](#10-cross-platform-hardening-and-documentation-mostly-complete)
 11. [Security Invariants](#11-security-invariants)
 12. [Result and Error Conventions](#12-result-and-error-conventions)
@@ -98,6 +99,7 @@ verification/ CardVerifier factory (§6).
 offers/       Offer construction and offerer-side finalization (§8). Does NOT include offer review or countersigning — see wallet_sdk.md §7.1 and §7.2.
 subcards/     General (non-wallet-self-signing) sub-card request flow (§7).
 messaging/    Envelope construction, verification, fan-out, relay lifecycle (§9).
+login/        Card login, site side: server cards, requests, response handling, one-time codes, metadata (§9a). Not implemented.
 util/         base64url encode/decode.
 testing/      Shared provider-contract test suite and cross-platform scenario harness.
 ```
@@ -317,7 +319,7 @@ function signMessageEnvelope<T extends MessageType>(payload: MessagePayload<T>, 
 function messageId(payload: MessagePayload): string;
 ```
 
-`MessageType` is a literal union of exactly this SDK's in-scope taxonomy (`messaging_protocol.md`): `text`, `reply`, `edit`, `reaction`, `read_receipt`, `card_offer`/`card_offer_accepted`/`card_offer_declined`, `card_update_notification`, `auth_request`/`auth_response`. Every other taxonomy entry is out of scope — the literal union makes constructing an out-of-scope-typed envelope a compile error.
+`MessageType` is a literal union of exactly this SDK's in-scope taxonomy (`messaging_protocol.md`): `text`, `reply`, `edit`, `reaction`, `read_receipt`, `card_offer`/`card_offer_accepted`/`card_offer_declined`, `card_update_notification`, `auth_request`/`auth_response`/`auth_confirmation` (`auth_confirmation` added 2026-11-08 for card login, §9a). Every other taxonomy entry is out of scope — the literal union makes constructing an out-of-scope-typed envelope a compile error.
 
 `buildMessagePayload` enforces structural constraints at construction time: `edit_of`/`retracts`/`forwards` are mutually exclusive, `edit` requires `edit_of`, `type: edit` with `retracts` set is rejected, and `reply` requires `in_reply_to`. Optional fields are omitted entirely when absent (never `null`).
 
@@ -422,6 +424,118 @@ Falls back to the wallet-service's server-hosted path (`POST /matrix/discover-ro
 
 ---
 
+## 9a. Login (Site-Side) (Not implemented)
+
+*(Added 2026-11-08. Module: `login/`. Process: `process_specs/card_login.md`; objects: `protocol-objects.md §8, §9, §18`.)*
+
+The site-side half of card login. A site's server links this module to create a server card, issue signed login requests, verify responses, and bind them to browser sessions. Every gated function returns the §12 discriminated union; error codes are those in `card_login.md §Error Codes`.
+
+**Key custody.** The server card key is generated and used only through an injected `SecureKeyProvider` (§4.2), consistent with §1: this module never sees raw key material. Production sites supply a KMS/HSM-backed provider; `testing/` ships a file-backed provider for development only. A Node provider package is a Phase 3 decision (`plans/card-login-code-plan.md`).
+
+**Pending-login storage.** Sites inject a `LoginStore`; the module holds no state of its own. `consume*` operations must be atomic so that `state` and codes are single-use across server instances.
+
+```ts
+interface LoginStore {
+  putPending(record: PendingLogin): Promise<void>;                      // keyed by state
+  getPending(state: string): Promise<PendingLogin | null>;
+  transition(state: string, from: PendingLoginStatus, to: PendingLoginStatus,
+             patch?: Partial<PendingLogin>): Promise<boolean>;          // atomic compare-and-set
+  getByRequestId(requestId: string): Promise<PendingLogin | null>;
+}
+type PendingLoginStatus = "issued" | "responded" | "complete" | "failed";
+interface PendingLogin {
+  state: string; requestId: string; request: AuthenticationRequest; requestHash: string;
+  status: PendingLoginStatus; createdAt: string;
+  presentedCard?: string; code?: string; codeExpiresAt?: string; codeAttempts?: number;
+}
+```
+
+### 9a.1 Server card setup
+
+```ts
+function createServerCardRequest(options: {
+  loginServiceCard: string; loginServiceCardPubkey: string;
+  keyProvider: SecureKeyProvider; validUntil?: string;
+}): Promise<{ unsignedDocument: UnsignedSubCardDocument; keyId: string }>;
+```
+
+Generates the server key and builds the `SubCardDocument` with `holder_primary_card = app_card = loginServiceCard`, `attestation_level: "S1"`, and `capabilities: ["auth_request", "auth_confirmation", "error"]` (`subcards.md §Server Cards`). The site operator's wallet signs it (`wallet_sdk.md §7a.6`); registration then uses §7.3 unchanged.
+
+### 9a.2 Starting a login
+
+```ts
+function createLoginRequest(options: {
+  serverCard: { pointer: string; pubkey: string; keyId: string };
+  keyProvider: SecureKeyProvider;
+  store: LoginStore;
+  policies: { id: string; include_children: boolean }[];
+  predicate?: CardPredicate;
+  responseMode: "form_post" | "mcard_message";
+  responseUri: string;
+  purpose: string;
+  statement?: string;              // default: "Log in to <origin of responseUri>"
+  context?: Record<string, string>;
+  walletNonce?: string;            // from parseWalletStart, wallet-initiated logins only
+  ttlSeconds?: number;             // default 300, max 600
+}): Promise<{ request: AuthenticationRequest; requestId: string; state: string; requestHash: string }>;
+
+function serveLoginRequest(store: LoginStore, requestId: string, now?: string):
+  Promise<{ status: 200; body: AuthenticationRequest } | { status: 410 }>;
+
+function stateCookie(state: string, expiresAt: string, path: string, name?: string): string; // Set-Cookie value
+function routerLoginUrl(options: { routerOrigin: string; requestUri: string;
+  walletHint?: string; fallbackUri?: string }): string;   // fragment-only parameters
+function crossDeviceLink(requestUri: string): string;      // mcard://auth?r=…
+function parseWalletStart(url: string): { walletNonce?: string; walletHint?: string };
+```
+
+`createLoginRequest` generates `state` and `nonce`, signs with the server card, stores the pending login, and returns it; the site hosts it at a URL containing `requestId` (≥ 128 bits) and serves it with `serveLoginRequest`, which returns `410` once the login has left `issued` or expired.
+
+### 9a.3 Receiving a response
+
+```ts
+function handleFormPost(options: {
+  body: { state?: string; auth_response?: string; error?: string };
+  cookieState: string | undefined;
+  store: LoginStore; verifier: CardVerifier; expectedOrigin: string;
+}): Promise<{ ok: true; presentedCard: string; verification: LoginVerificationResult }
+          | { ok: false; code: string; reason: string }>;
+
+function handleLoginMessage(options: {
+  envelope: CardMessageEnvelope<"auth_response" | "error">;
+  messageId: string; receivedAt: string;
+  store: LoginStore; verifier: CardVerifier; expectedOrigin: string;
+  sendConfirmation: (to: string, envelope: CardMessageEnvelope<"auth_confirmation">) => Promise<void>;
+  serverCard: { pointer: string; keyId: string }; keyProvider: SecureKeyProvider;
+  onLatency?: (sample: { sentAt: string; receivedAt: string; latencyMs: number }) => void;
+}): Promise<{ ok: true; state: string } | { ok: false; code: string; reason: string }>;
+
+function redeemLoginCode(options: {
+  code: string; cookieState: string | undefined; store: LoginStore; now?: string;
+}): Promise<{ ok: true; presentedCard: string } | { ok: false; code: string; reason: string }>;
+```
+
+- `handleFormPost` implements `card_login.md` steps 23–24 (`form_post`): look up `state`, require the cookie to match (`LOGIN_SESSION_MISMATCH`), call `verifier.verifyLoginResponse` (`card_verifier.md §6.3`), and on success transition `issued → complete`. A posted `error=access_denied` transitions to `failed`.
+- `handleLoginMessage` implements steps 23–24 (`mcard_message`): verify, transition `issued → responded`, report latency through `onLatency`, create the one-time code (8 Crockford base32 characters, 5-minute expiry), and send `auth_confirmation` to the presented card through §9.1's fan-out (`messaging_protocol.md §23`). Inbound messages arrive through §9.2 as for any other type.
+- `redeemLoginCode` implements step 26: requires a cookie whose pending login is `responded`, a matching unexpired code, and fewer than 5 failed attempts; on success `responded → complete`.
+
+None of these functions set cookies or sessions themselves; the site does that with the returned `presentedCard`.
+
+### 9a.4 Service metadata and button
+
+```ts
+function buildLoginServiceMetadata(options: {
+  origin: string; name: string; startUrl: string;
+  accepts: { id: string; include_children: boolean }[];
+  responseModes: ("form_post" | "mcard_message")[];
+  serverCard: { pointer: string; pubkey: string; keyId: string }; keyProvider: SecureKeyProvider;
+}): Promise<LoginServiceMetadata>;   // serve at /.well-known/membership-login
+```
+
+`login/browser.ts` exports `mountLoginButton(element, { startPath })`, a dependency-free helper that renders the button and navigates to the site's own start endpoint; everything else happens server-side.
+
+---
+
 ## 10. Cross-Platform Hardening and Documentation (Mostly Complete)
 
 *(SDK-split implementation plan Step 3.1, substeps a–e. Scope narrowed from the original Phase 6 description — see `plans/sdk-split-implementation-plan.md`'s Phase 3 scope-correction note: validation against real *platform providers* is in scope; validation against real, deployed backend *infrastructure* is not — that belongs to the follow-on integration plan.)*
@@ -470,6 +584,7 @@ Functions that gate on a verification step return a discriminated union (`{ appr
 | 6 | 6.3 Integrator documentation | **Implemented** — `app-sdk/README.md` |
 | 6 | CP-2 pre-production security review | **Not applicable to this package** — see §10; scoped to `wallet-sdk` instead, which covers this package's `SecureKeyProvider` usage as part of reviewing the real platform providers |
 | 4 | 4.2 Signing arbitrary data with a sub-card | **Implemented** |
+| — | §9a Login (site-side) | **Not started** — specified 2026-11-08; build order in `plans/card-login-implementation-plan.md` Phase 4 |
 
 As of this writing: 162 tests pass in `app-sdk` alone, against the original unified `client-sdk`'s 243 total (spanning what's now split across four packages — see `plans/sdk-split/milestones/phase-2-summary.md` for the full cross-package reconciliation: combined total across all four packages is 326, above the original 243).
 
@@ -532,5 +647,7 @@ Carried forward from `plans/sdk-split-strategic-plan.md`'s resolved decisions an
 ---
 
 ## Changelog
+
+- Added §9a (Login, site-side) and `login/` to §3; `auth_confirmation` added to §9.1's `MessageType` union (2026-11-08, card login — `process_specs/card_login.md`).
 
 - Added §9.7 (Room Discovery), a `discoverRooms` API surface implementing `room_discovery.md §2`'s client-side algorithm with fallback to the wallet-service's `POST /matrix/discover-rooms` (`wallet.md §7.10`) per `room_discovery.md §3` — this SDK previously defined no such function despite `room_discovery.md` repeatedly assigning the responsibility to "client SDKs." Not yet implemented; tracked in §13. See `plans/spec-consistency/inconsistencies/phase-2-consolidated-fixes.md` fix #49.

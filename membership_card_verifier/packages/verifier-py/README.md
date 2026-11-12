@@ -175,6 +175,7 @@ config = VerifierConfig(
     rpc=rpc,
     ipfs=ipfs,
     app_certification_root=APP_CERT_ROOT,
+    login_service_certification_root=LOGIN_SERVICE_ROOT,  # login service branch node (needed for sub-cards)
 
     # Optional — defaults shown
     trusted_roots=[],                            # Supplement the on-chain PolicyAuthorizerKeys table
@@ -367,6 +368,27 @@ Stage 6 — EAS Annotations (opt-in)
   Walk each annotator's chain to check if it reaches a trusted root.
   -> annotations
 ```
+
+---
+
+## Card login
+
+`CardVerifier` has the two card-login entry points ([`process_specs/card_login.md`](../../../specs/process_specs/card_login.md)), with the same checks and error codes as the JS package. Both need an `RpcProvider` that also implements `async get_domain_registration(domain) -> DomainRegistration | None`.
+
+```python
+# Wallet side: who is asking? (card_verifier.md §6.4)
+server = await verifier.verify_server_card(request["requester_pubkey"], "https://forum.example.org")
+if not server.valid:
+    raise ValueError(server.code)        # e.g. LOGIN_ORIGIN_NOT_BOUND
+server.warnings                          # e.g. ["LOGIN_WARN_DOMAIN_MONITORED"]
+
+# Site side: check the wallet's answer (card_verifier.md §6.3)
+login = await verifier.verify_login_response(response, request, "https://forum.example.org")
+if login.valid:
+    login.presented_card                 # the card the user logged in as
+```
+
+Helpers are exported as well: `request_hash`, `signing_bytes`, `domain_covers`, `check_domain_binding`, `match_mcard_query`, `effective_preferred_services`, `read_card_fields`, and `decrypt_card_head`. The tests run `specs/login-conformance.json`, the same vectors as the JS package. A DCQL `predicate` never matches (`PREDICATE_NOT_SUPPORTED`).
 
 ---
 

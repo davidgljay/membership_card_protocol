@@ -8,9 +8,10 @@ import { canonicalize } from '../serialization.js';
 import { fromBase64url, keccak256, deriveContentKey, aes256gcmDecrypt } from '../functions/crypto.js';
 import { mlDsa44Verify } from '@membership-card-protocol/verifier';
 import type { CardDocument } from '@membership-card-protocol/verifier';
-import { appendLogEntry } from '../functions/log.js';
+import { appendLogEntry, readCurrentHead } from '../functions/log.js';
 import { checkRateLimits, recordWrite } from '../functions/predicates.js';
 import { fetchPolicyCard } from '../functions/issuance.js';
+import { assertDomainBindingIntent, assertPreferredServices } from '../functions/login.js';
 import {
   diffActiveSubcards,
   notifySubcardSiblings,
@@ -18,7 +19,7 @@ import {
   buildSubcardSiblingRemovedContent,
   buildSubcardSiblingRotatedContent,
 } from '../functions/notifications.js';
-import type { UpdateRequest, UpdateResponse } from '../types.js';
+import type { UpdateRequest, UpdateResponse, UpdateIntentPayload } from '../types.js';
 import type { Hex } from 'viem';
 
 /**
@@ -39,6 +40,9 @@ const ACTIVE_SUBCARDS_DIRECTORY_CODES = new Set([510, 511, 512]);
  * `successor` is itself immutable (may be set at most once).
  */
 const SUCCESSOR_CODES = new Set([100, 101, 102]);
+
+/** Code 520 sets a login service card's domain_binding, once (press.md §5.3 step 4a). */
+const DOMAIN_BINDING_CODE = 520;
 
 /**
  * Protocol-required immutable fields (protocol-objects.md §1/§1.1,
@@ -66,11 +70,13 @@ const IMMUTABLE_FIELDS = new Set([
   'successor',
   'supersedes',
   'supersession_note',
+  'domain_binding',
 ]);
 
 function isImmutableFieldUpdateAllowed(field: string, code: number): boolean {
   if (field === 'active_subcards') return ACTIVE_SUBCARDS_DIRECTORY_CODES.has(code);
   if (field === 'successor') return SUCCESSOR_CODES.has(code);
+  if (field === 'domain_binding') return code === DOMAIN_BINDING_CODE;
   return false;
 }
 
@@ -78,12 +84,13 @@ export async function handleUpdate(
   ctx: PressContext,
   body: UpdateRequest
 ): Promise<UpdateResponse> {
-  const { update_intent, intent_signature } = body;
+  const { update_intent: rawIntent, intent_signature } = body;
 
   // 1. Verify intent signature using the updater's ML-DSA-44 public key.
   //    Resolve the updater's public key via verifyCard (extracts from chain result).
   //    For Phase 3: we use the key provided directly in intent_signature.
-  const toVerify = canonicalize(update_intent as unknown as Record<string, unknown>);
+  //    The signature covers the intent exactly as the client sent it.
+  const toVerify = canonicalize(rawIntent as unknown as Record<string, unknown>);
   const updaterPubkey = fromBase64url(intent_signature.public_key);
   const sigValid = mlDsa44Verify(
     updaterPubkey,
@@ -95,6 +102,18 @@ export async function handleUpdate(
       new Error('P-09: Invalid intent_signature on UpdateIntentPayload'),
       { pressCode: 'P-09' }
     );
+  }
+
+  // Accept the spec's field names (protocol-objects.md §4: target_card,
+  // updater_card) as well as this press's historical *_address names.
+  const named = rawIntent as UpdateIntentPayload & { target_card?: string; updater_card?: string };
+  const update_intent: UpdateIntentPayload = {
+    ...named,
+    target_card_address: named.target_card_address ?? named.target_card ?? '',
+    updater_card_address: named.updater_card_address ?? named.updater_card ?? '',
+  };
+  if (!update_intent.target_card_address || !update_intent.updater_card_address) {
+    throw Object.assign(new Error('P-01: update intent needs target_card and updater_card'), { pressCode: 'P-01' });
   }
 
   // 2. Stale timestamp check.
@@ -120,6 +139,9 @@ export async function handleUpdate(
     }
   }
 
+  // 2c. preferred_services shape (press.md §5.3 step 5a, P-29).
+  assertPreferredServices(update_intent.field_updates);
+
   // 3. Resolve target card's policy.
   const targetAddress = update_intent.target_card_address as Hex;
   const cardEntry = await ctx.registry.getCardEntry(targetAddress);
@@ -139,7 +161,7 @@ export async function handleUpdate(
   }
 
   // 4. Evaluate update_policy predicate (P-11) for field updates (1xx–7xx codes).
-  if (ACTIVE_SUBCARDS_DIRECTORY_CODES.has(update_intent.code)) {
+  if (ACTIVE_SUBCARDS_DIRECTORY_CODES.has(update_intent.code) || update_intent.code === DOMAIN_BINDING_CODE) {
     // Codes 510/511/512: hardcoded holder-only authorization, never policy-configurable.
     // The updater must be the target card itself (only a card's own holder key may touch
     // its own active_subcards), and the intent_signature's public key must actually bind
@@ -148,7 +170,7 @@ export async function handleUpdate(
     if (update_intent.updater_card_address !== update_intent.target_card_address) {
       throw Object.assign(
         new Error(
-          'P-23: Codes 510/511/512 (active_subcards directory updates) must be self-updates — updater_card_address must equal target_card_address'
+          'P-23: Codes 510/511/512/520 (holder-only updates) must be self-updates — updater_card_address must equal target_card_address'
         ),
         { pressCode: 'P-23' }
       );
@@ -162,6 +184,11 @@ export async function handleUpdate(
         new Error('P-13: intent_signature public_key does not bind to target_card_address'),
         { pressCode: 'P-13' }
       );
+    }
+
+    // 4a. Code 520: validate the domain binding (P-28).
+    if (update_intent.code === DOMAIN_BINDING_CODE) {
+      await assertDomainBindingIntent(ctx, update_intent.field_updates, update_intent.target_card_address, intent_signature.public_key);
     }
   } else if (update_intent.code < 800) {
     // Verify the updater's chain reaches a trusted root (satisfies the default update predicate).
@@ -187,14 +214,26 @@ export async function handleUpdate(
   // Per ADR-006, content is decryptable by anyone holding the card's own public
   // key — the press already confirmed intent_signature.public_key is that key
   // in step 4, so no additional authorization is implied by reading it here.
+  // The target card's public key: the press needs it to read the current head
+  // and to encrypt the new log entry under the card's content key (ADR-006).
+  const isSelfUpdate = update_intent.updater_card_address.toLowerCase().replace(/^0x/, '') === targetAddress.toLowerCase().replace(/^0x/, '');
+  let targetPubkey: Uint8Array;
+  if (body.target_card_pubkey) {
+    targetPubkey = fromBase64url(body.target_card_pubkey);
+  } else if (isSelfUpdate) {
+    targetPubkey = updaterPubkey;
+  } else {
+    throw Object.assign(new Error('P-01: target_card_pubkey is required when the updater is not the target card'), { pressCode: 'P-01' });
+  }
+  if (Buffer.from(keccak256(targetPubkey)).toString('hex') !== targetAddress.toLowerCase().replace(/^0x/, '')) {
+    throw Object.assign(new Error('P-13: target_card_pubkey does not bind to target_card_address'), { pressCode: 'P-13' });
+  }
+
   let preUpdateActiveSubcards: string[] = [];
   if (ACTIVE_SUBCARDS_DIRECTORY_CODES.has(update_intent.code)) {
     try {
-      const contentKey = deriveContentKey(updaterPubkey);
-      const encrypted = await ctx.ipfs.fetchFromIPFS(new TextDecoder().decode(cardEntry.log_head_cid));
-      const decrypted = await aes256gcmDecrypt(contentKey, encrypted);
-      const doc = JSON.parse(new TextDecoder().decode(decrypted)) as CardDocument;
-      preUpdateActiveSubcards = doc.active_subcards ?? [];
+      const head = await readCurrentHead(ctx.ipfs, new TextDecoder().decode(cardEntry.log_head_cid), deriveContentKey(targetPubkey));
+      preUpdateActiveSubcards = (head.state['active_subcards'] as string[] | undefined) ?? [];
     } catch (err) {
       // Never block the update itself on a notification pre-check failure —
       // notification is a best-effort side channel, not part of the protocol
@@ -211,7 +250,8 @@ export async function handleUpdate(
     ctx.ipfs,
     targetAddress,
     update_intent,
-    intent_signature
+    intent_signature,
+    targetPubkey
   );
 
   // 6. Record write for rate limiting (field updates only).

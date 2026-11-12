@@ -56,7 +56,7 @@ describe('reviewTargetedOffer', () => {
     const issuerAddress = keccak256(issuer.publicKey);
     const secureKeyProvider = makeFakeSecureKeyProvider('issuer-key', issuer);
     const rpc = makeHappyPathRpc(issuerAddress);
-    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
+    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, loginServiceCertificationRoot: '5e'.repeat(32), trustedRoots: [issuerAddress] });
 
     const offer = await assembleAndSignTargetedOffer({
       secureKeyProvider,
@@ -83,7 +83,7 @@ describe('reviewTargetedOffer', () => {
     const issuerAddress = keccak256(issuer.publicKey);
     const secureKeyProvider = makeFakeSecureKeyProvider('issuer-key', issuer);
     const rpc = makeHappyPathRpc(issuerAddress);
-    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress });
+    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, loginServiceCertificationRoot: '5e'.repeat(32) });
 
     const offer = await assembleAndSignTargetedOffer({
       secureKeyProvider,
@@ -107,7 +107,7 @@ describe('reviewTargetedOffer', () => {
     const issuerAddress = keccak256(issuer.publicKey);
     const secureKeyProvider = makeFakeSecureKeyProvider('issuer-key', issuer);
     const rpc = makeHappyPathRpc(issuerAddress);
-    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress });
+    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, loginServiceCertificationRoot: '5e'.repeat(32) });
 
     const offer = await assembleAndSignTargetedOffer({
       secureKeyProvider,
@@ -130,7 +130,7 @@ describe('reviewTargetedOffer', () => {
     const issuerAddress = keccak256(issuer.publicKey);
     const secureKeyProvider = makeFakeSecureKeyProvider('issuer-key', issuer);
     const rpc = makeHappyPathRpc(issuerAddress);
-    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress });
+    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, loginServiceCertificationRoot: '5e'.repeat(32) });
 
     const offer = await assembleAndSignTargetedOffer({
       secureKeyProvider,
@@ -165,7 +165,7 @@ describe('reviewTargetedOffer', () => {
       getCardEventLog: async () => [],
       getEasAnnotations: async () => [],
     };
-    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, trustedRoots: [] });
+    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, loginServiceCertificationRoot: '5e'.repeat(32), trustedRoots: [] });
 
     const offer = await assembleAndSignTargetedOffer({
       secureKeyProvider,
@@ -198,7 +198,7 @@ describe('reviewTargetedOffer', () => {
       getCardEventLog: async () => [],
       getEasAnnotations: async () => [],
     };
-    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
+    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, loginServiceCertificationRoot: '5e'.repeat(32), trustedRoots: [issuerAddress] });
 
     const offer = await assembleAndSignTargetedOffer({
       secureKeyProvider,
@@ -221,7 +221,7 @@ describe('reviewTargetedOffer', () => {
     const issuerAddress = keccak256(issuer.publicKey);
     const secureKeyProvider = makeFakeSecureKeyProvider('issuer-key', issuer);
     const rpc = makeHappyPathRpc(issuerAddress);
-    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
+    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, loginServiceCertificationRoot: '5e'.repeat(32), trustedRoots: [issuerAddress] });
     vi.spyOn(cardVerifier, 'verifyCard').mockRejectedValue(new Error('AES-GCM authentication failed'));
 
     const offer = await assembleAndSignTargetedOffer({
@@ -246,7 +246,7 @@ describe('reviewTargetedOffer', () => {
     const issuerAddress = keccak256(issuer.publicKey);
     const secureKeyProvider = makeFakeSecureKeyProvider('issuer-key', issuer);
     const rpc = makeHappyPathRpc(issuerAddress);
-    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
+    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, loginServiceCertificationRoot: '5e'.repeat(32), trustedRoots: [issuerAddress] });
 
     const offer = await assembleAndSignTargetedOffer({
       secureKeyProvider,
@@ -277,7 +277,7 @@ describe('reviewOpenOffer', () => {
     const issuerAddress = keccak256(issuer.publicKey);
     const secureKeyProvider = makeFakeSecureKeyProvider('issuer-key', issuer);
     const rpc = makeHappyPathRpc(issuerAddress);
-    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
+    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, loginServiceCertificationRoot: '5e'.repeat(32), trustedRoots: [issuerAddress] });
 
     const { offer } = await assembleAndSignOpenOffer({
       secureKeyProvider,
@@ -299,7 +299,7 @@ describe('reviewOpenOffer', () => {
     const issuerAddress = keccak256(issuer.publicKey);
     const secureKeyProvider = makeFakeSecureKeyProvider('issuer-key', issuer);
     const rpc = makeHappyPathRpc(issuerAddress);
-    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
+    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, loginServiceCertificationRoot: '5e'.repeat(32), trustedRoots: [issuerAddress] });
 
     const { offer } = await assembleAndSignOpenOffer({
       secureKeyProvider,
@@ -323,7 +323,7 @@ describe('reviewOpenOffer', () => {
     const issuerAddress = keccak256(issuer.publicKey);
     const secureKeyProvider = makeFakeSecureKeyProvider('issuer-key', issuer);
     const rpc = makeHappyPathRpc(issuerAddress);
-    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
+    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, loginServiceCertificationRoot: '5e'.repeat(32), trustedRoots: [issuerAddress] });
 
     const { offer } = await assembleAndSignOpenOffer({
       secureKeyProvider,
@@ -358,7 +358,7 @@ describe('reviewOpenOffer', () => {
       getCardEventLog: async () => [],
       getEasAnnotations: async () => [],
     };
-    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, trustedRoots: [issuerAddress] });
+    const cardVerifier = createCardVerifier({ rpc, ipfs: fakeIpfs, appCertificationRoot: issuerAddress, loginServiceCertificationRoot: '5e'.repeat(32), trustedRoots: [issuerAddress] });
 
     const { offer } = await assembleAndSignOpenOffer({
       secureKeyProvider,

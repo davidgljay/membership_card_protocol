@@ -152,6 +152,7 @@ async def test_policy_match_and_chain_match_ts_output(case: dict) -> None:
             rpc=rpc,
             ipfs=ipfs,
             app_certification_root=config["app_certification_root"],
+            login_service_certification_root="5e" * 32,  # card login: branch node not on any test chain
             trusted_roots=config["trusted_roots"],
             return_chain=config["return_chain"],
             conditions=_conditions_from_json(config["conditions"]),
@@ -179,6 +180,7 @@ async def test_policy_match_envelope_level_or_matches_ts_output() -> None:
             rpc=rpc,
             ipfs=ipfs,
             app_certification_root=config["app_certification_root"],
+            login_service_certification_root="5e" * 32,  # card login: branch node not on any test chain
             trusted_roots=config["trusted_roots"],
             return_chain=config["return_chain"],
             conditions=_conditions_from_json(config["conditions"]),

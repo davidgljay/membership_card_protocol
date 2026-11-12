@@ -98,6 +98,7 @@ def make_sub_card_doc(
     app_pubkey: bytes,
     app_sk: mldsa.MLDSA44PrivateKey,
     recipient_pubkey: bytes,
+    extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     holder_address = keccak256(holder_pubkey)
     app_address = keccak256(app_pubkey)
@@ -111,6 +112,7 @@ def make_sub_card_doc(
         "recipient_pubkey": _b64url_encode(recipient_pubkey),
         "issued_at": "2026-06-20T00:00:00Z",
         "attestation_level": "T2",
+        **(extra or {}),
     }
 
     app_sig = sign(app_sk, base)

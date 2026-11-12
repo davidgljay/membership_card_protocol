@@ -1,0 +1,9 @@
+# Card Login — Phase 2 Summary (Draft and update specs)
+
+> **Renamed 2026-11-09:** "developer card" is now **login service card**, and the app-certification root has three branches (wallet, app, login service). This document is a historical record and keeps the old terms; see `plans/card-login-spec-changes.md` §Amendment 2026-11-09.
+
+Date: 2026-11-08 · Plan: [card-login-implementation-plan.md](../card-login-implementation-plan.md) · Review document: [card-login-spec-changes.md](../card-login-spec-changes.md)
+
+Card login is now fully specified. Two new specs define the end-to-end flow (`specs/process_specs/card_login.md`) and the static login router (`specs/object_specs/login_router.md`); a new governance doc defines the developer branch (`governance/AppCertificationBody/developer_certification.md`); and 20 existing specs were revised so that objects, messaging, verifier, press, DNS, policy, update-code, SDK, and offer-acceptance specs all describe the same design, with CHAPI, `callbacks.https`, OHTTP callbacks, and `confirmation_code` removed. The CP1 decisions are applied: server cards use the new `S1` attestation level, and cross-device logins bind the browser with a one-time code that the user types only for QR-started logins. No contract changes are needed. A consistency pass found and fixed one field-name error. The change summary lists 21 decisions made while drafting — most importantly, domain binding is added to the developer card after issuance (code 520) rather than co-signed at issuance — and two changes that will break existing code when implemented (app-sdk auth message types; a new required verifier config value). It also lists three pre-existing spec inconsistencies outside login scope.
+
+**→ Checkpoint CP2 (required).** David reviews and approves `plans/card-login-spec-changes.md` before Phase 3 (code planning) starts.

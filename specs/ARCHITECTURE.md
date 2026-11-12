@@ -636,60 +636,46 @@ Verifiers
   → verify authorization against policy's field_definitions / revocation_permissions
 ```
 
-### 4. Card Authentication (Site Requesting a Signed Statement)
+### 4. Card Login (Site Requesting a Signed Statement)
+
+*Rewritten 2026-11-08 — full flow in `process_specs/card_login.md`. Replaces the earlier CHAPI / `callbacks.https` / `confirmation_code` design, which was never implemented.*
 
 ```
-Requesting site
-  → creates authentication request object:
-      session_id, purpose, requester_card (mutable pointer),
-      requester_pubkey (ML-DSA-44 public key of the card referenced by requester_card),
-      payload (content + nonce), required_predicate, callbacks.https,
-      optional callbacks.ohttp
-  → signs request with requester's card key (request_signature covers all fields
-      including requester_pubkey)
-  → hosts request object at a single-use HTTPS URL
-  → calls CHAPI with the request URL (not the payload)
+Setup (once per domain)
+  login service card (login service branch of the app-certification root)
+    + DomainBindingAttestation from the domain's DNS admin card (code 520)
+  server card = sub-card of the login service card (app_card = holder = login service card, attestation S1)
 
-CHAPI mediator
-  → receives request URL (does not see payload content)
-  → opens user's registered wallet service credential handler
-  → wallet service URL not exposed to requesting site
+Site
+  → creates AuthenticationRequest: state, nonce, statement, dcql_query (mcard: policies + include_children),
+      response_mode (form_post | mcard_message), response_uri, expires_at ≤ 10 min
+  → signs with the server card; stores the pending login; sets a state cookie on the browser
+  → hosts the request at an unguessable single-use request_uri
+  → same device: browser → https://<router>/login#request_uri=…
+    cross-device: QR / mcard://auth?r=<request_uri>
 
-Wallet service
-  → fetches request object via HTTPS from single-use URL
-  → binding check: confirms keccak256(requester_pubkey) == requester_card address;
-      a mismatch is a hard rejection before display
-  → verifies request_signature against requester_pubkey
-  → derives requester card content key: HKDF-SHA3-256(requester_pubkey, info="card-content-v1"),
-      decrypts requester card; AES-GCM failure is a hard rejection before display
-  → walks requester's card chain to trusted root via ancestry_pubkeys, checks revocation (per §7)
-  → evaluates required_predicate against user's available cards
-  → presents to user: requester's verified chain identity, purpose,
-      payload content, required predicate summary
-  → [user approves or declines]
+Login router (static site, first-party storage only)
+  → reads the fragment; forwards to the registered wallet's handler_url#request_uri=…
+  → never fetches or sees the request; recovery screen if no wallet is registered
 
-On approval:
-  → wallet selects qualifying card (or user chooses from chooser)
-  → generates signed message envelope (§6) with type "auth_response",
-      content: { statement, context: { session_id, ... }, nonce }
-      (statement + nonce from request payload; session_id echoed from request into content.context)
-  → sends authentication response to requester:
-      preferred: OHTTP → callbacks.ohttp (IP privacy, lower latency)
-      fallback:  HTTPS → callbacks.https (always available)
+Wallet
+  → fetches request_uri; shape, expiry, keccak256(requester_pubkey) binding, request_signature
+  → verifyServerCard: server card is login-service-scoped (S1, app_card == holder), login service card chains to
+      loginServiceCertificationRoot, not revoked; domain binding current, not suspended, covers response_uri origin
+      → reject/block before display, or collect warnings (6xx/7xx, monitored domain)
+  → matches held cards against dcql_query; prompts the user (origin, login service card, statement, warnings)
+      — no prompt only for a matching wallet-initiated login (wallet_nonce)
+  → signs auth_response: { audience, nonce, request_hash, state, statement }, senders = presented card,
+      recipients = login service card
+  → form_post: browser POSTs { state, auth_response } to response_uri
+    mcard_message: routed card message to the login service card (fan-out to its server cards)
 
-Requesting site
-  → receives authentication response via OHTTP / HTTPS
-  → runs full §7 verification: chain walk, revocation, predicate,
-      content.context.session_id match, content.nonce match
-  → on success: generates single-use confirmation_code, returns it in response
-
-Wallet service
-  → receives confirmation_code
-  → redirects user's browser to redirect_uri?code={confirmation_code}
-
-Requesting site page
-  → receives code from URL, looks up associated verified signed statement
-  → session is now authenticated
+Site
+  → verifyLoginResponse: type, state, nonce, statement, request_hash, audience, recipients, freshness,
+      envelope signature + chain + revocation, DCQL match
+  → form_post: state cookie must match → session
+    mcard_message: record latency → auth_confirmation { one-time code } to the presented card
+      → wallet opens response_uri?code=… (same device) or shows the code (QR) → browser redeems with cookie + code → session
 ```
 
 ---
@@ -712,7 +698,7 @@ These are engineering and design questions from the spec that have not yet been 
 | OQ-10 | Design | Recovery UX when the holder has both a lost primary service and a lost YubiKey. Out of scope for v1? | Medium |
 | OQ-11 | Design | What is the UX when a recipient declines an offer? Should a decline notification be sent to the press? | Low |
 | OQ-12 | Engineering | Is a transparency log of approved press implementations operated by the protocol foundation needed? Relevant if TEE attestation is added in P2. | Low (P2 dependency) |
-| OQ-13 | Design | Should wallet services publish a `/.well-known/card-wallet.json` manifest advertising their supported transports (HTTPS, OHTTP gateway)? If yes, requesting sites can construct the correct `callbacks` block without trial-and-error; if no, sites advertise all transports they support and wallets pick. | Medium |
+| OQ-13 | Design | ~~Should wallet services publish a `/.well-known/card-wallet.json` transport manifest?~~ **Resolved 2026-11-08:** superseded — sites no longer construct callbacks for wallets; the login router and response modes replace them (`process_specs/card_login.md`). | — |
 | OQ-14 | Governance | **Coercion resistance / governance key holder identity.** Should governance body key holders be pseudonymous (organizations or anonymous participants, harder to coerce) or identifiable (named individuals/organizations with public accountability, easier to hold accountable but more coercible)? Deferred pending governance charter design. See also red-team Finding 1.4-B (press legal compulsion). | Medium |
 | OQ-15 | Governance | **Chain amendment authority for harmful content.** A malicious press could attach a link to harmful content (e.g., NCII) to a widely-held badge, then let their reputation absorb the cost while leaving the badge holder exposed. Mitigation: allow a co-signed amendment to the CID chain — mark holder + governance body both sign — that re-routes the linked-CID-chain to skip the offending entry and updates the on-chain head. Normal protocol traversal would see a clean history; the amendment itself (not the removed content) is visible in Arbitrum One transaction history. The on-chain record would effectively read "SEALED at this point" — transparent about the redaction without preserving the harm. Note: this does not apply to EAS annotations, which are on-chain state and cannot be amended this way. Requires defining amendment authority, quorum, and appeal process. Defer to post-v1 governance design. | Medium |
 

@@ -16,7 +16,7 @@ async def test_stage2_card_not_found_skips_stages_3_5():
     sub = generate_keypair()
     rpc = mock_rpc(get_card_entry=AsyncMock(return_value=None))
     verifier = CardVerifier(
-        VerifierConfig(rpc=rpc, ipfs=mock_ipfs(), app_certification_root=DUMMY_APP_CERT_ROOT)
+        VerifierConfig(rpc=rpc, ipfs=mock_ipfs(), app_certification_root=DUMMY_APP_CERT_ROOT, login_service_certification_root="5e" * 32)
     )
     result = await verifier.verify_envelope(make_envelope(sub.public_key, sub.secret_key))
     r = result.signatures[0]
@@ -43,7 +43,7 @@ async def test_stage2_decryption_failure_skips_stages_3_5():
     # Provide garbage bytes that will fail AES-GCM auth
     ipfs = mock_ipfs({"QmSub": bytes([0xAA] * 40)})
     verifier = CardVerifier(
-        VerifierConfig(rpc=rpc, ipfs=ipfs, app_certification_root=DUMMY_APP_CERT_ROOT)
+        VerifierConfig(rpc=rpc, ipfs=ipfs, app_certification_root=DUMMY_APP_CERT_ROOT, login_service_certification_root="5e" * 32)
     )
     result = await verifier.verify_envelope(make_envelope(sub.public_key, sub.secret_key))
     r = result.signatures[0]
@@ -157,6 +157,7 @@ async def test_stage3_depth_exceeded_skips_stages_4_5():
             ipfs=ipfs,
             max_chain_depth=2,
             app_certification_root=app_cert_root.address,
+            login_service_certification_root="5e" * 32,  # card login: branch node not on any test chain
         )
     )
     result = await verifier.verify_envelope(make_envelope(sub.public_key, sub.secret_key))

@@ -62,9 +62,13 @@
  * Providing an `m.room.power_levels` entry in `initial_state` replaces the
  * preset-computed power_levels event outright (Synapse does not merge
  * initial_state overrides into preset defaults the way the separate
- * `power_level_content_override` createRoom parameter would) — so the
- * `users` map here explicitly keeps the creator at 100 (room owner) in
- * addition to granting the enforcement account kick level. Every other
+ * `power_level_content_override` createRoom parameter would). Rooms are
+ * created at Matrix room version 12 (ROOM_VERSION), where the creator
+ * holds unlimited power by virtue of creating the room and must NOT
+ * appear in `users` — Synapse rejects createRoom with "Creator user ...
+ * must not appear in content.users" if it does (found 2026-11-11, when
+ * Synapse v1.165.0 made v12 the default). So `users` grants only the
+ * enforcement account its kick level. Every other
  * field (ban/kick/redact/state_default/events_default/etc.) is left
  * unset deliberately: the Matrix power-level authorization algorithm
  * itself falls back to the same spec-mandated defaults
@@ -87,8 +91,13 @@
  */
 export const ROOM_KICK_POWER_LEVEL = 50;
 
-/** Room owner power level Synapse's presets grant the creator by default. */
-const ROOM_CREATOR_POWER_LEVEL = 100;
+/**
+ * Matrix room version for card-gated rooms. Pinned rather than left to the
+ * homeserver default so power-level semantics don't change under us when
+ * Synapse changes its default (see the header comment). Needs Synapse with
+ * room version 12 support.
+ */
+export const ROOM_VERSION = '12';
 
 /**
  * Thrown when a request's `card_hash` body field does not belong to the
@@ -174,7 +183,6 @@ export async function createMatrixRoomViaSynapse(
       state_key: '',
       content: {
         users: {
-          [creatorMatrixUserId]: ROOM_CREATOR_POWER_LEVEL,
           [enforcementUserId]: ROOM_KICK_POWER_LEVEL,
         },
       },
@@ -183,6 +191,7 @@ export async function createMatrixRoomViaSynapse(
 
   const body: Record<string, unknown> = {
     preset: 'private_chat',
+    room_version: ROOM_VERSION,
     initial_state: initialState,
   };
   if (name !== undefined) body['name'] = name;

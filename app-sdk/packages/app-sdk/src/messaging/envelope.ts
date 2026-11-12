@@ -34,7 +34,9 @@ export type MessageType =
   | 'card_offer_declined'
   | 'card_update_notification'
   | 'auth_request'
-  | 'auth_response';
+  | 'auth_response'
+  | 'auth_confirmation'
+  | 'error';
 
 export interface TextContent {
   body: string;
@@ -93,20 +95,34 @@ export interface CardUpdateNotificationContent {
   updater_message?: string;
 }
 
+/** messaging_protocol.md §13 (v2): a reference to a signed AuthenticationRequest. */
 export interface AuthRequestContent {
-  requester_card: string;
-  policy_cid: string;
-  nonce: string;
-  purpose: string;
-  session_id: string;
-  callback: string;
-  expires: string;
+  request_uri: string;
 }
 
+/** messaging_protocol.md §14 / protocol-objects.md §9. */
 export interface AuthResponseContent {
-  statement: string;
-  context: { session_id: string; [key: string]: unknown };
+  audience: string;
   nonce: string;
+  request_hash: string;
+  state: string;
+  statement: string;
+}
+
+/** messaging_protocol.md §23 — the one-time code for browser binding. */
+export interface AuthConfirmationContent {
+  code: string;
+  expires_at: string;
+  request_hash: string;
+}
+
+/** messaging_protocol.md §22. Login declines add `state`. */
+export interface ErrorContent {
+  code: string;
+  message?: string;
+  retryable?: boolean;
+  in_reply_to?: string;
+  state?: string;
 }
 
 /** Maps each supported `type` to its `content` shape, for call-site type inference. */
@@ -122,6 +138,8 @@ export interface MessageContentByType {
   card_update_notification: CardUpdateNotificationContent;
   auth_request: AuthRequestContent;
   auth_response: AuthResponseContent;
+  auth_confirmation: AuthConfirmationContent;
+  error: ErrorContent;
 }
 
 export interface MessagePayload<T extends MessageType = MessageType> {

@@ -3,11 +3,26 @@ from .card_verifier import CardVerifier
 from .constants import KNOWN_PROTOCOL_VERSIONS, PROTOCOL_VERSION_0_1, ProtocolVersion
 from .crypto import ml_dsa44_verify
 from .errors import CardProtocolError
+from .head import decrypt_card_head
+from .login import (
+    check_domain_binding,
+    check_domain_binding_signature,
+    domain_covers,
+    effective_preferred_services,
+    https_origin,
+    match_mcard_query,
+    read_card_fields,
+    read_sub_card_document,
+    request_hash,
+    signing_bytes,
+)
+from .login.verify import LoginVerificationResult, ServerCardVerificationResult
 from .policy_match import evaluate_policy_match
 from .types import (
     CardDocument,
     CardEntry,
     CardChainEvent,
+    DomainRegistration,
     CardVerificationResult,
     ChainLink,
     EasAnnotation,
@@ -70,4 +85,18 @@ __all__ = [
     "ChainLink",
     "PolicyMatchConditions",
     "PolicyMatchResult",
+    "DomainRegistration",
+    "decrypt_card_head",
+    "request_hash",
+    "signing_bytes",
+    "https_origin",
+    "domain_covers",
+    "check_domain_binding",
+    "check_domain_binding_signature",
+    "read_card_fields",
+    "read_sub_card_document",
+    "match_mcard_query",
+    "effective_preferred_services",
+    "ServerCardVerificationResult",
+    "LoginVerificationResult",
 ]

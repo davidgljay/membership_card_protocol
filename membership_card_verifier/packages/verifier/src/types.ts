@@ -26,6 +26,19 @@ export interface RpcProvider {
     cardAddress: string,
     annotatorAddresses: string[]
   ): Promise<EasAttestation[]>;
+  /**
+   * card_verifier.md §4.1 — DomainRegistrations[domain] (dns_resolution.md §4.1).
+   * Optional on the interface so existing providers keep compiling; required
+   * by the card-login entry points, which throw MISSING_RPC_METHOD without it.
+   */
+  getDomainRegistration?(domain: string): Promise<DomainRegistration | null>;
+}
+
+export interface DomainRegistration {
+  admin_card_address: string;
+  fraud_risk: 0 | 1 | 2;
+  /** Unix seconds; 0 if not suspended. */
+  suspension_expires_at: number;
 }
 
 export interface IpfsProvider {
@@ -114,7 +127,7 @@ export interface SubCardDocument {
   recipient_pubkey: string;
   issued_at: string;
   valid_until?: string;
-  attestation_level: "T1" | "T2";
+  attestation_level: "T1" | "T2" | "S1";
   attestation_proof?: string;
   app_signature: string;
   holder_signature: string;
@@ -145,6 +158,14 @@ export interface VerifierConfig {
    * APP_CERTIFICATION_ROOT_NOT_CONFIGURED rather than skipping the check.
    */
   appCertificationRoot?: string | undefined;
+  /**
+   * On-chain address of the login service branch node under the
+   * app-certification root (card_verifier.md §5). Stage 2 step 16f uses it to
+   * recognize login service cards and enforce the login service scope rule.
+   * Required whenever a sub-card signature is verified with
+   * appCertificationRoot set; missing → LOGIN_SERVICE_CERTIFICATION_ROOT_NOT_CONFIGURED.
+   */
+  loginServiceCertificationRoot?: string | undefined;
   trustedRoots?: string[];
   revocationFreshnessWindowSeconds?: number;
   rejectStaleRevocation?: boolean;
@@ -218,6 +239,8 @@ export interface SignatureVerificationResult {
   // walk, ordered from the card itself up to the trusted root. Exposed 2026-07-16
   // (Phase 3, Tier 1 item 6) — previously computed internally but not surfaced here.
   app_card_chain_valid: boolean | "skipped";
+  /** card_verifier.md §8 — branch of the signing sub-card's app_card (Stage 2 step 16f). Absent when the signer is not a sub-card. */
+  app_card_branch?: "login_service" | "other" | "skipped";
   revocation: RevocationStatus;
   was_valid_at_signing_time: boolean | "skipped";
   is_currently_valid: boolean | "skipped";

@@ -1,14 +1,15 @@
 import base64
+import dataclasses
 import hashlib
-import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, Literal, Optional
 
 from .canonicalize import canonicalize
 from .constants import PROTOCOL_VERSION_0_1
-from .crypto import aes256gcm_decrypt, hkdf_sha3_256, keccak256
+from .crypto import hkdf_sha3_256, keccak256
 from .errors import CardProtocolError
+from .head import decrypt_card_head
 from .policy_match import evaluate_policy_match
 from .stages.stage1 import verify_stage1
 from .stages.stage2 import verify_stage2
@@ -29,6 +30,8 @@ from .types import (
     VerifyCardOptions,
 )
 from .version import extract_protocol_version
+from .login import verify as _login
+from .login.verify import LoginVerificationResult, ServerCardVerificationResult
 
 _DEFAULTS = SimpleNamespace(
     trusted_roots=[],
@@ -67,10 +70,13 @@ class CardVerifier:
         # needed whenever this verifier instance actually encounters a sub-card
         # signature. Stage 2 hard-rejects with APP_CERTIFICATION_ROOT_NOT_CONFIGURED
         # at the point it would otherwise attempt the app-cert chain walk, if unset.
+        # The config as supplied, for the chain-returning variant card login uses.
+        self._raw_config = config
         self.config = SimpleNamespace(
             rpc=config.rpc,
             ipfs=config.ipfs,
             app_certification_root=config.app_certification_root,
+            login_service_certification_root=config.login_service_certification_root,
             trusted_roots=(
                 config.trusted_roots
                 if config.trusted_roots is not None
@@ -138,7 +144,7 @@ class CardVerifier:
                 addressed_to_verifier=False,
                 errors=[VerificationError(stage=1, code=e.code, message=str(e))],
                 annotations=[],
-                **({"chain": []} if self.config.return_chain else {}),
+                chain=[] if self.config.return_chain else None,
             )
             return EnvelopeVerificationResult(
                 envelope_id="",
@@ -175,6 +181,52 @@ class CardVerifier:
             protocol_version=protocol_version,
             signatures=list(signatures),
             policy_match=self._aggregate_envelope_policy_match(list(signatures)),
+        )
+
+    # ─── Card login (card_verifier.md §6.3, §6.4) ────────────────────────────
+
+    async def verify_server_card(
+        self,
+        server_card_pubkey: str,
+        origin: str,
+        required_capability: str = "auth_request",
+        now: Optional[str] = None,
+    ) -> "ServerCardVerificationResult":
+        """§6.4 — who is asking, for a login request or service metadata."""
+        return await _login.verify_server_card(
+            self._login_deps(), server_card_pubkey, origin, required_capability=required_capability, now=now
+        )
+
+    async def verify_login_response(
+        self,
+        response: dict[str, Any],
+        request: dict[str, Any],
+        expected_origin: str,
+        now: Optional[str] = None,
+        max_response_age_seconds: int = 300,
+        clock_skew_seconds: int = 60,
+    ) -> "LoginVerificationResult":
+        """§6.3 — the site's check of a login response."""
+        return await _login.verify_login_response(
+            self._login_deps(),
+            response,
+            request,
+            expected_origin,
+            now=now,
+            max_response_age_seconds=max_response_age_seconds,
+            clock_skew_seconds=clock_skew_seconds,
+        )
+
+    def _login_deps(self) -> "_login.LoginDeps":
+        with_chain = (
+            self if self.config.return_chain else CardVerifier(dataclasses.replace(self._raw_config, return_chain=True))
+        )
+        return _login.LoginDeps(
+            rpc=self.config.rpc,
+            ipfs=self.config.ipfs,
+            config=_login.login_config(self.config),
+            verify_card=self.verify_card,
+            verify_envelope=with_chain.verify_envelope,
         )
 
     async def verify_card(
@@ -216,21 +268,6 @@ class CardVerifier:
         # Stage 3 result: simplified chain for verify_card (can't walk without pubkey)
         chain_addresses = [card_address]
 
-        # Stage 4: revocation check. verify_card has no pubkey, so no card_content can
-        # ever be decrypted here — Stage 4 falls back to `revocation.status: "unknown"`
-        # for this path (see card_verifier.md §7.4 "verify_card limitation").
-        stage4 = await verify_stage4(
-            [ChainLink(card_address=card_address, public_key="", card_content={})],
-            signing_timestamp,
-            self.config.rpc,
-            self.config,
-        )
-
-        # Stage 6: annotations
-        stage6 = await verify_stage6(
-            chain_addresses, self.config.rpc, self.config.ipfs, self.config
-        )
-
         # verify_card cannot decrypt any CardDocument (no pubkey available for the given
         # address alone), so no chain data is ever resolved here — chain is always empty
         # unless the caller provides a pubkey, which enables real chain population.
@@ -254,9 +291,7 @@ class CardVerifier:
             else:
                 content_key = hkdf_sha3_256(pubkey_bytes, "card-content-v1")
                 try:
-                    encrypted = await self.config.ipfs.fetch(card_entry.log_head_cid)
-                    decrypted = aes256gcm_decrypt(content_key, encrypted)
-                    card_doc = json.loads(decrypted.decode("utf-8"))
+                    card_doc = await decrypt_card_head(card_entry.log_head_cid, content_key, self.config.ipfs)
 
                     stage3 = await verify_stage3(
                         card_doc, card_address, self.config.rpc, self.config.ipfs, self.config, pubkey_bytes
@@ -265,9 +300,26 @@ class CardVerifier:
                     chain = stage3.chain
                     real_chain_reaches_trusted_root = stage3.chain_reaches_trusted_root
                     real_chain_addresses = stage3.chain_card_addresses
-                except CardProtocolError as e:
-                    errors.append(VerificationError(stage=3, code=e.code, message=str(e)))
+                except Exception as e:
+                    code = e.code if isinstance(e, CardProtocolError) else "DECRYPTION_FAILED"
+                    errors.append(VerificationError(stage=3, code=code, message=str(e)))
                     # chain stays [] — decryption/parse failure falls back to today's behavior
+
+        # Stage 4: revocation check. Uses the real decrypted chain when options.pubkey
+        # resolved one above; falls back to the content-less stub (revocation.status:
+        # "unknown", card_verifier.md §7.4 "verify_card limitation") otherwise. Must run
+        # after the pubkey branch, matching the JS verifier.
+        stage4 = await verify_stage4(
+            chain if chain else [ChainLink(card_address=card_address, public_key="", card_content={})],
+            signing_timestamp,
+            self.config.rpc,
+            self.config,
+        )
+
+        # Stage 6: annotations
+        stage6 = await verify_stage6(
+            chain_addresses, self.config.rpc, self.config.ipfs, self.config
+        )
 
         all_errors = errors + stage4.errors + stage6.errors
 
@@ -321,6 +373,7 @@ class CardVerifier:
             self.config.ipfs,
             SimpleNamespace(
                 app_certification_root=self.config.app_certification_root,
+                login_service_certification_root=self.config.login_service_certification_root,
                 max_chain_depth=self.config.max_chain_depth,
             ),
         )
@@ -342,6 +395,7 @@ class CardVerifier:
                 log_updates=[],
                 policy_compliant="skipped",
                 chain=[],
+                app_card_branch=stage2.app_card_branch,
             )
 
         # Stage 3
@@ -378,6 +432,7 @@ class CardVerifier:
                 log_updates=[],
                 policy_compliant="skipped",
                 chain=stage3.chain,
+                app_card_branch=stage2.app_card_branch,
             )
 
         # Stage 4. Reuses Stage 3's already-fetched-and-decrypted `chain` (no second
@@ -441,6 +496,7 @@ class CardVerifier:
             addressed_to_verifier=False,
             errors=errors,
             annotations=stage6.annotations,
+            app_card_branch=stage2.app_card_branch,
             **({"chain": stage3.chain} if self.config.return_chain else {}),
         )
 
@@ -459,6 +515,7 @@ class CardVerifier:
         log_updates: list[Any],
         policy_compliant: bool | None | Literal["skipped"],
         chain: list[ChainLink],
+        app_card_branch: Optional[Literal["login_service", "other"]] = None,
     ) -> SignatureVerificationResult:
         return SignatureVerificationResult(
             signer_card=signer_card,
@@ -478,6 +535,7 @@ class CardVerifier:
             addressed_to_verifier=False,
             errors=errors,
             annotations=[],
+            app_card_branch=app_card_branch,
             **({"chain": chain} if self.config.return_chain else {}),
         )
 

@@ -8,6 +8,14 @@ export {
   KNOWN_PROTOCOL_VERSIONS,
 } from "./constants.js";
 export { extractProtocolVersion } from "./version.js";
+export { requestHash, signingBytes, httpsOrigin, domainCovers } from "./login/encoding.js";
+export { checkDomainBindingSignature, checkDomainBinding } from "./login/domainBinding.js";
+export { readCardFields, readSubCardDocument, policyOf, policyLineage, matchMcardQuery, effectivePreferredServices, normAddress } from "./login/chain.js";
+export type { ChainContext, PolicyRef, DcqlMatch } from "./login/chain.js";
+export type { VerifyServerCardOptions, ServerCardVerificationResult, VerifyLoginResponseInput, LoginVerificationResult, LoginWarning } from "./login/verify.js";
+export type { DomainBindingResult } from "./login/domainBinding.js";
+export { decryptCardHead } from "./head.js";
+export type * from "./login/types.js";
 
 export type { ProtocolVersion } from "./constants.js";
 
@@ -37,4 +45,5 @@ export type {
   PastKey,
   ChainLink,
   PolicyMatchConditions,
+  DomainRegistration,
 } from "./types.js";

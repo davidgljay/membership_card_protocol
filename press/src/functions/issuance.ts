@@ -101,6 +101,19 @@ export async function validateIssuanceRequest(
     m.checkRateLimits(kv, 'register_card', request.requester_card_address, 'holder', request.policy_cid)
   );
 
+  // 7. Card login fields (press.md §5.1 step 7). A policy card issued with
+  // preferred_services must have a valid list (P-29); domain_binding is never
+  // present at genesis — it is added later by code 520 (P-28).
+  const offerFields = request.offer as unknown as Record<string, unknown>;
+  if (offerFields['preferred_services'] !== undefined) {
+    const { preferredServicesProblem } = await import('./login.js');
+    const problem = preferredServicesProblem(offerFields['preferred_services']);
+    if (problem) throw Object.assign(new Error(`P-29: ${problem}`), { pressCode: 'P-29' });
+  }
+  if (offerFields['domain_binding'] !== undefined) {
+    throw Object.assign(new Error('P-28: domain_binding cannot be set at issuance; post it with code 520'), { pressCode: 'P-28' });
+  }
+
   // Derive the policy's on-chain address = keccak256(policy_cid bytes).
   const policyAddress =
     '0x' + Buffer.from(keccak256(new TextEncoder().encode(request.policy_cid))).toString('hex');

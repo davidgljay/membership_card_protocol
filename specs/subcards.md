@@ -27,17 +27,35 @@ The wallet is itself an app — it has its own app card and creates its own sub-
 
 ## App Cards and the Trust Chain
 
-Every app that requests sub-cards must hold an **app card** — a registered card in the protocol issued by a governance-approved certifier. App cards are not self-issued.
+Every app that requests sub-cards must hold a certified card issued by a governance-approved certifier; these cards are not self-issued. *(Revised 2026-11-09.)* There are three kinds, each issued under its own branch of the app-certification root:
+
+| Card | Branch | What it is for |
+|---|---|---|
+| **Wallet card** | Wallet branch | A wallet application, which holds users' master keys. It creates its own device sub-cards without a consent step (the wallet self-signing exception) and is the only kind of card the login router lists. |
+| **App card** | App branch | A third-party application that asks a user's wallet for a sub-card and then signs **as that user**, within the capabilities the user granted. |
+| **Login service card** | Login service branch | A website that offers card login. It signs **as itself** and never holds a user's signing authority. It may only create its own server cards (§Server Cards). |
+
+The `SubCardDocument` field that names the certifying card is called `app_card` for all three kinds; the field name is kept for compatibility. In this spec, "app card" means the app-branch kind unless the text says otherwise.
 
 The trust chain for a sub-card is:
 
 ```
 Badge governance authority
-  └── App-certification policy (governed by badge governance authority)
-       └── Certifier card (issued to an approved certifier)
-            └── App card (issued by certifier; attests the app agrees to data-protection norms)
-                 └── SubCardDocument (signed by app card key + holder primary card key)
+  └── App-certification policy root (governed by badge governance authority; VerifierConfig.appCertificationRoot)
+       ├── Wallet branch
+       │    └── Certifier card → Wallet card (wallet operator)
+       │         └── Device SubCardDocument (wallet self-signing)
+       ├── App branch
+       │    └── Certifier card (issued to an approved certifier)
+       │         └── App card (issued by certifier; attests the app agrees to data-protection norms)
+       │              └── SubCardDocument (signed by app card key + holder primary card key)
+       └── Login service branch (VerifierConfig.loginServiceCertificationRoot — added 2026-11-08)
+            └── Login service certifier card
+                 └── Login service card (bound to a DNS domain)
+                      └── Server card SubCardDocument (app card = holder = the login service card; see §Server Cards)
 ```
+
+Runtime verifiers need to recognize only the login service branch: its cards may act as `app_card` only for their own server cards (§Server Cards), and verifiers tell them apart by whether the `app_card` chain passes through `loginServiceCertificationRoot` (`card_verifier.md §7.2` step 16f). Wallet and app cards are treated alike by verifiers. The wallet branch matters to the login router, which lists only wallet cards (`object_specs/login_router.md §5`).
 
 A **certifier** is an entity approved by the governance authority to evaluate whether apps meet the protocol's user data-protection norms. Issuance of an app card by a certifier is a standing attestation that the app has agreed to those norms and passed initial review.
 
@@ -121,7 +139,7 @@ The completed `SubCardDocument` is submitted to an approved press for the primar
 2. Applies the binding check: confirms `keccak256(app_card_pubkey)` equals the `app_card` pointer address. A mismatch is a hard rejection.
 3. Walks the `app_card` chain using `app_card_pubkey` (deriving `HKDF-SHA3-256(app_card_pubkey, info="card-content-v1")` to decrypt the app card, then continuing via the app card's `ancestry_pubkeys`) to confirm it reaches the governance authority's app-certification policy root. Rejects the registration request if the chain does not reach a trusted root.
 
-This **app-chain verification is press-side and registration-time only**. Runtime verifiers (wallets, relying parties evaluating a sub-card-signed statement) do not independently re-walk the `app_card` certification chain — they rely on the press having validated it here, evidenced by the `sub_card_doc_cid` pointer on the on-chain `SubCardEntry`.
+This press-side check is an **early gate**, not the only one: runtime verifiers also walk the `app_card` chain on every sub-card signature (`card_verifier.md §7.2` step 16, `protocol-objects.md §16`). *(Corrected 2026-11-08: this paragraph previously said runtime verifiers do not re-walk the chain, contradicting the verifier spec.)* The press also enforces the login service scope rule here (§Server Cards).
 
 The press then calls `RegisterSubCard` on the Arbitrum One registry contract, creating a `SubCardEntry` (see `protocol-objects.md §15`) that stores `master_card_address`, `registration_log_head`, and `sub_card_doc_cid` (the CID of the IPFS SubCardDocument). The app card address is **not** stored on-chain — it lives in the IPFS document at `sub_card_doc_cid`.
 
@@ -134,6 +152,30 @@ The sub-card is now a live, independently-verifiable credential in the registry.
 **Step 5b: Holder posts the `active_subcards` directory entry.** Registration on-chain (`RegisterSubCard`) and the holder's own `active_subcards` directory (`protocol-objects.md §1.1`) are updated separately: after (or alongside) the press's `RegisterSubCard` call, the holder submits a code-510 `UpdateIntentPayload` against their own master card, adding the new sub-card's `recipient_pubkey` to `active_subcards`. This entry is signed by the holder's primary card key — the same key that produced `holder_signature` on the `SubCardDocument` in Step 4 — and is processed via the standard update flow (`card_updates.md`). A sub-card that is on-chain registered but never added to `active_subcards` fails the runtime verifier's directory check (§16 Verifier chain walk, step 8) even though `SubCardRegistrations[sub_card_address].active` is true — the wallet MUST post the code-510 entry as part of completing sub-card issuance, not as an optional follow-up.
 
 **Step 5c: Press notifies existing subcards of the new sibling.** When the press accepts the code-510 `LogEntry`, it sends a `subcard_sibling_added` message (`messaging_protocol.md §9`) to all existing subcards previously listed in `active_subcards` (not including the newly-added one). This alerts the holder's other devices that a new sibling has been registered, enabling detection of unauthorized additions — a key anti-compromise signal if an attacker gains access to the holder's key.
+
+---
+
+## Server Cards
+
+*(Added 2026-11-08 for card login — `process_specs/card_login.md`.)*
+
+A **server card** is a sub-card that lets a website's server sign login requests and confirmations on behalf of a **login service card** — a card issued under the login service branch and bound to a DNS domain (`protocol-objects.md §17`).
+
+**Shape.** A server card's `SubCardDocument` has:
+- `holder_primary_card` = `app_card` = the login service card (and the matching `*_pubkey` fields);
+- `attestation_level: "S1"`, no `attestation_proof`;
+- `capabilities` including `auth_request`, `auth_confirmation`, and `error`;
+- `valid_until` recommended (e.g. 1 year), so forgotten server keys age out.
+
+**Login service scope rule.** A login-service-branch card may be `app_card` **only** for sub-cards whose `holder_primary_card` is that same card. Without this rule, a login service card — which chains to the app-certification root — could pose as a wallet application and co-sign sub-cards for other people's cards. Enforced by the wallet before countersigning, by the press at registration (`press.md §5.4`, `P-26`), and by every runtime verifier (`card_verifier.md §7.2` step 16f, `LOGIN_SERVICE_SCOPE`).
+
+**Creation flow.**
+1. The site's server generates an ML-DSA-44 key through its `SecureKeyProvider` and builds an unsigned `SubCardDocument` of the shape above (`app_sdk.md §Login`).
+2. The site operator's wallet — which holds the login service card key — checks the document's shape and the scope rule, then signs it twice with the login service card key: `app_signature`, then `holder_signature` (`wallet_sdk.md §Login`). There is no consent screen, as with the wallet self-signing exception (Step 3): the site operator is both app and holder.
+3. The press validates and registers it as in Step 5, applying the scope rule and accepting `S1` only in this shape. Gas comes from the site operator's gas account.
+4. The login service card's holder posts the code-510 `active_subcards` entry (Step 5b). The login service card's policy must have an approved press for this.
+
+**Messages to a site.** Messages route to master cards only (`process_specs/message_routing.md`), so login responses are addressed to the login service card and delivered to each of its active sub-cards — every server card, and any device sub-card the site operator has on the same card. Site operators should keep a card dedicated to login.
 
 ---
 
@@ -157,7 +199,13 @@ App attestation verifies that the sub-card key was generated inside genuine, unm
 | **T1** | Hardware-backed key storage only (iOS Secure Enclave / Android StrongBox) | The private key was generated inside hardware; it cannot be extracted. Does not verify the app binary. |
 | **T2** | Full app attestation (iOS App Attest + DCAP / Android Play Integrity) | Both the private key is hardware-bound AND the app binary is the genuine published version running on a non-rooted, non-emulated device. |
 
-**T2 is the default and required for all sub-cards.** The `SubCardDocument` MUST include an `attestation_level` field with value `"T2"` unless the governing policy explicitly accepts `"T1"`.
+A third level, **S1**, applies only to server cards (§Server Cards):
+
+| Tier | Mechanism | Guarantees |
+|---|---|---|
+| **S1** | Server key held by the site's key provider (KMS, HSM, or a protected file) | None about hardware or app binary. Accepted **only** for a sub-card whose `app_card` is a login-service-branch card equal to its `holder_primary_card`; rejected everywhere else. |
+
+**T2 is the default and required for all device sub-cards.** The `SubCardDocument` MUST include an `attestation_level` field with value `"T2"` unless the governing policy explicitly accepts `"T1"`.
 
 **T1 is available as a policy exception.** Some devices — including older hardware and Android devices without Google Play Services (an estimated 25–30% of Android devices globally) — cannot generate a Play Integrity token or an App Attest certificate. Policy bodies that serve populations where this is significant may explicitly declare that they accept T1-attested sub-cards. This is a policy decision, not a protocol default; absent explicit acceptance, T2 is required.
 
@@ -321,7 +369,7 @@ The wallet is the enforcement point. It:
 - [ ] The sub-card private key is generated inside hardware-backed keystore storage, scoped to the app's signing identity.
 - [ ] The sub-card private key is never exposed in plaintext outside the hardware keystore, even to the app that holds it.
 - [ ] Both `app_signature` (app card key) and `holder_signature` (holder primary card key) are present and independently verifiable in every completed `SubCardDocument`.
-- [ ] A runtime verifier can confirm a statement signed with a sub-card chains to the holder's primary card without contacting the wallet or the app, by reading `holder_primary_card_pubkey` from the decrypted sub-card document, applying the keccak256 binding check, decrypting the master card, and then continuing the chain walk to a trusted root via the master card's own `ancestry_pubkeys`. The runtime verifier does NOT re-walk the `app_card` certification chain — it relies on the press having validated this at registration time.
+- [ ] A runtime verifier can confirm a statement signed with a sub-card chains to the holder's primary card without contacting the wallet or the app, by reading `holder_primary_card_pubkey` from the decrypted sub-card document, applying the keccak256 binding check, decrypting the master card, and then continuing the chain walk to a trusted root via the master card's own `ancestry_pubkeys`. The runtime verifier also re-walks the `app_card` certification chain to `appCertificationRoot` (`card_verifier.md §7.2` step 16); the press's registration-time check is an early gate, not a substitute.
 - [ ] The on-chain `SubCardEntry` for every registered sub-card carries `sub_card_doc_cid` — the CID of the IPFS `SubCardDocument` containing the app card address, app card pubkey, app signature, and holder signature.
 - [ ] Verifiers reject sub-card signatures on message types not present in the sub-card's `capabilities` whitelist.
 - [ ] Verifiers reject sub-card signatures where `valid_until` has passed.
@@ -333,6 +381,8 @@ The wallet is the enforcement point. It:
 - [ ] A `SubCardDocument` with `attestation_level: "T2"` is accepted only if the `attestation_proof` verifies against the platform's attestation service and the attested key hash matches `recipient_pubkey`.
 - [ ] A `SubCardDocument` with `attestation_level: "T1"` is rejected unless the governing policy explicitly declares T1 acceptable.
 - [ ] The wallet blocks issuance if the `attestation_level` is missing or unrecognized.
+- [ ] A `SubCardDocument` with `attestation_level: "S1"` is accepted by presses and verifiers only when its `app_card` is a login-service-branch card equal to `holder_primary_card`.
+- [ ] A login-service-branch `app_card` on a sub-card whose `holder_primary_card` is a different card is rejected by the wallet (refuses to countersign), the press (`P-26`), and the verifier (`LOGIN_SERVICE_SCOPE`).
 - [ ] A runtime verifier rejects a sub-card signature whenever the sub-card's registry address (`keccak256` of its public key) is absent from the master card's `active_subcards` field, **even if** `SubCardRegistrations[sub_card_address].active` is `true` on-chain — the two checks are independent and both must pass.
 - [ ] Sub-card issuance is not considered complete until the holder has posted a code-510 entry adding the new sub-card's pubkey to `active_subcards` on their own master card.
 - [ ] Sub-card deregistration is paired with a code-511 entry removing the sub-card's pubkey from `active_subcards`.
@@ -355,3 +405,5 @@ The wallet is the enforcement point. It:
 ---
 
 **Changelog (spec-consistency Phase 2, Step C):** Added scope note acknowledging this file's out-of-formal-scope status (Fix #32) and updated §Step 5 to describe the DNS-admin-card secp256r1 co-authorization path added to `registry_contract.md §4.3`/`press.md §5.4` in Phase 1 (Fix #33, partial — see `subcard_creation_policy.md`'s companion rewrite for Decision (d)). See `plans/spec-consistency/inconsistencies/phase-2-consolidated-fixes.md`.
+
+**Changelog (2026-11-08, card login):** Added the login service branch to the trust-chain diagram, the `S1` attestation level, and §Server Cards (creation flow and login service scope rule). Corrected Step 5 and an acceptance criterion that said runtime verifiers do not re-walk the `app_card` chain — they do (`card_verifier.md §7.2` step 16).

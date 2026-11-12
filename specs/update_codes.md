@@ -2,7 +2,8 @@
 
 **Version:** 0.1 (draft)
 **Date:** 2026-06-14
-**Status:** Canonical
+**Status:** Canonical  
+**Amended 2026-11-08 (card login):** added code 302 (preferred services update) and code 520 (login service card domain binding).
 
 This is the authoritative registry of update codes for the Card Protocol. All other documents that reference specific codes cross-reference this registry. Before using any new code in a specification, add it here first.
 
@@ -54,6 +55,7 @@ Entries with codes 1xx–7xx use `field_updates` and do not carry an `effective_
 |---|---|
 | 300 | Neutral field update — general |
 | 301 | Valid-until refresh |
+| 302 | Preferred services update — sets a policy card's `preferred_services` (`protocol-objects.md §2`). Authority per the policy's `update_policy` for the field (default `{ "is_holder": true }`). Wallets refresh cached service lists on seeing it. Added 2026-11-08. |
 
 ### 4xx — Neutral Context
 
@@ -69,11 +71,13 @@ Entries with codes 1xx–7xx use `field_updates` and do not carry an `effective_
 | 510 | Subcard addition — adds one pubkey to the holder's own `active_subcards` | `{ "is_holder": true }`, hardcoded |
 | 511 | Subcard removal — deletes one pubkey from the holder's own `active_subcards` | `{ "is_holder": true }`, hardcoded |
 | 512 | Subcard key rotation — atomically replaces one pubkey in `active_subcards` with a new one | `{ "is_holder": true }`, hardcoded |
+| 520 | Domain binding — sets a login service card's `domain_binding` to a `DomainBindingAttestation` signed by the domain's full-domain DNS admin card. Once only. Added 2026-11-08. | `{ "is_holder": true }`, hardcoded, plus a valid attestation (`protocol-objects.md §1.1, §17`) |
 
 **Notes on 510/511/512:**
 - These three codes are **hardcoded to holder-only authorization** — `{ "is_holder": true }` — and are **not policy-configurable**. No policy's `update_policy` may loosen, tighten, or reassign authority over these codes; this is a hard protocol limit for this version of the protocol (see `subcard-registry-strategic-plan.md`'s resolved open questions for rationale). This distinguishes 510/511/512 from code 500, whose authority is policy-defined.
 - These codes apply **only to entries on the master (primary) card's own log** — they record changes the holder makes to their own `active_subcards` directory (`protocol-objects.md §1.1`). They are never posted to a **sub-card's** own log: 5xx updates targeting a sub-card's log remain prohibited per `process_specs/subcard_creation_policy.md §Update Card Content`. A press or verifier encountering a 510/511/512 entry on a sub-card's log rejects it as malformed; encountering one on the master card's log not signed by that card's own holder key rejects it as unauthorized.
 - Code 512 is a single atomic entry (one old pubkey out, one new pubkey in), not a 511+510 pair — this preserves rotation as one logical operation with one log entry rather than a brief window where the directory reflects neither the old nor the intended final state.
+- **Code 520** follows the same hardcoded holder-only pattern, applies only to cards under the login service branch, and may be posted at most once per card (`press.md §5.3` step 4a, error `P-28`). It is how a login service card gets bound to a domain for card login (`process_specs/card_login.md` Phase 0).
 - See `protocol-objects.md §1.1` for the `active_subcards` field definition and `subcards.md` for the sub-card lifecycle these codes support.
 
 ### 6xx — Negative Context

@@ -33,7 +33,7 @@ describe("stage2 — sub-card to master link", () => {
     const sub = generateKeypair();
     const rpc = mockRpc({ getCardEntry: vi.fn().mockResolvedValue(null) });
     const ipfs = mockIpfs();
-    const result = await verifyStage2(sub.publicKey, rpc, ipfs, { appCertificationRoot: DUMMY_CERT_ROOT });
+    const result = await verifyStage2(sub.publicKey, rpc, ipfs, { appCertificationRoot: DUMMY_CERT_ROOT, loginServiceCertificationRoot: '5e'.repeat(32) });
     expect(result.scope_clean).toBe(false);
     expect(result.errors[0]?.code).toBe("CARD_NOT_FOUND");
   });
@@ -44,7 +44,7 @@ describe("stage2 — sub-card to master link", () => {
       getCardEntry: vi.fn().mockResolvedValue({ exists: true, log_head_cid: "QmSub", policy_address: "0x", last_press_address: "0x", forward_to: null }),
     });
     const ipfs = mockIpfs({ QmSub: new Uint8Array(40).fill(0xaa) }); // garbage bytes
-    const result = await verifyStage2(sub.publicKey, rpc, ipfs, { appCertificationRoot: DUMMY_CERT_ROOT });
+    const result = await verifyStage2(sub.publicKey, rpc, ipfs, { appCertificationRoot: DUMMY_CERT_ROOT, loginServiceCertificationRoot: '5e'.repeat(32) });
     expect(result.scope_clean).toBe(false);
     expect(result.errors[0]?.code).toBe("DECRYPTION_FAILED");
   });
@@ -62,7 +62,7 @@ describe("stage2 — sub-card to master link", () => {
       getCardEntry: vi.fn().mockResolvedValue({ exists: true, log_head_cid: "QmSub", policy_address: "0x", last_press_address: "0x", forward_to: null }),
     });
     const ipfs = mockIpfs({ QmSub: encrypted });
-    const result = await verifyStage2(sub.publicKey, rpc, ipfs, { appCertificationRoot: DUMMY_CERT_ROOT });
+    const result = await verifyStage2(sub.publicKey, rpc, ipfs, { appCertificationRoot: DUMMY_CERT_ROOT, loginServiceCertificationRoot: '5e'.repeat(32) });
     expect(result.scope_clean).toBe(false);
     expect(result.errors[0]?.code).toBe("ADDRESS_BINDING_MISMATCH");
   });
@@ -92,7 +92,7 @@ describe("stage2 — sub-card to master link", () => {
       getSubCardEntry: vi.fn().mockResolvedValue({ master_card_address: "0xdifferent", registration_log_head: "0x", sub_card_doc_cid: "QmSub", active: true, registered_at: "2026-01-01T00:00:00Z", deregistered_at: null } as SubCardEntry),
     });
     const ipfs = mockIpfs({ QmSub: encSubDoc, QmMaster: encMasterDoc });
-    const result = await verifyStage2(sub.publicKey, rpc, ipfs, { appCertificationRoot: DUMMY_CERT_ROOT });
+    const result = await verifyStage2(sub.publicKey, rpc, ipfs, { appCertificationRoot: DUMMY_CERT_ROOT, loginServiceCertificationRoot: '5e'.repeat(32) });
     expect(result.scope_clean).toBe(false);
     expect(result.errors[0]?.code).toBe("ADDRESS_BINDING_MISMATCH");
   });
@@ -131,7 +131,7 @@ describe("stage2 — sub-card to master link", () => {
       getSubCardEntry: vi.fn().mockResolvedValue({ master_card_address: holder.address, registration_log_head: "0x", sub_card_doc_cid: "QmSub", active: true, registered_at: "2026-01-01T00:00:00Z", deregistered_at: null } as SubCardEntry),
     });
     const ipfs = mockIpfs({ QmSub: encSubDoc, QmMaster: encMasterDoc, QmApp: encAppDoc });
-    const result = await verifyStage2(sub.publicKey, rpc, ipfs, { appCertificationRoot: certRoot.address });
+    const result = await verifyStage2(sub.publicKey, rpc, ipfs, { appCertificationRoot: certRoot.address, loginServiceCertificationRoot: '5e'.repeat(32) });
     expect(result.scope_clean).toBe(false);
     expect(result.app_card_chain_valid).toBe(false);
     expect(result.errors.some((e) => e.code === "INVALID_APP_SIGNATURE")).toBe(true);
@@ -161,7 +161,7 @@ describe("stage2 — sub-card to master link", () => {
       getSubCardEntry: vi.fn().mockResolvedValue({ master_card_address: holder.address, registration_log_head: "0x", sub_card_doc_cid: "QmSub", active: false, registered_at: "2026-01-01T00:00:00Z", deregistered_at: "2026-06-01T00:00:00Z" } as SubCardEntry),
     });
     const ipfs = mockIpfs({ QmSub: encSubDoc, QmMaster: encMasterDoc });
-    const result = await verifyStage2(sub.publicKey, rpc, ipfs, { appCertificationRoot: DUMMY_CERT_ROOT });
+    const result = await verifyStage2(sub.publicKey, rpc, ipfs, { appCertificationRoot: DUMMY_CERT_ROOT, loginServiceCertificationRoot: '5e'.repeat(32) });
     expect(result.scope_clean).toBe(false);
     expect(result.errors.some((e) => e.code === "SUB_CARD_INACTIVE")).toBe(true);
   });
@@ -195,7 +195,7 @@ describe("stage2 — sub-card to master link", () => {
       getSubCardEntry: vi.fn().mockResolvedValue({ master_card_address: holder.address, registration_log_head: "0x", sub_card_doc_cid: "QmSub", active: true, registered_at: "2026-01-01T00:00:00Z", deregistered_at: null } as SubCardEntry),
     });
     const ipfs = mockIpfs({ QmSub: encSubDoc, QmMaster: encMasterDoc, QmApp: encAppDoc });
-    const result = await verifyStage2(sub.publicKey, rpc, ipfs, { appCertificationRoot: certRoot.address });
+    const result = await verifyStage2(sub.publicKey, rpc, ipfs, { appCertificationRoot: certRoot.address, loginServiceCertificationRoot: '5e'.repeat(32) });
     expect(result.scope_clean).toBe(true);
     expect(result.master_card_doc).toBeDefined();
     expect(result.app_card_chain_valid).toBe(true);
@@ -232,7 +232,7 @@ describe("stage2 — app_card chain walk", () => {
     });
     const ipfs = mockIpfs({ QmSub: encSubDoc, QmMaster: encMasterDoc, QmApp: encAppDoc });
 
-    const result = await verifyStage2(sub.publicKey, rpc, ipfs, { appCertificationRoot: certRoot.address });
+    const result = await verifyStage2(sub.publicKey, rpc, ipfs, { appCertificationRoot: certRoot.address, loginServiceCertificationRoot: '5e'.repeat(32) });
     expect(result.scope_clean).toBe(true);
     expect(result.app_card_chain_valid).toBe(true);
     expect(result.errors.some((e) => e.code === "APP_CARD_CHAIN_NOT_TRUSTED")).toBe(false);
@@ -273,7 +273,7 @@ describe("stage2 — app_card chain walk", () => {
     });
     const ipfs = mockIpfs({ QmSub: encSubDoc, QmMaster: encMasterDoc, QmApp: encAppDoc, QmIntermediate: encIntermediateDoc });
 
-    const result = await verifyStage2(sub.publicKey, rpc, ipfs, { appCertificationRoot: certRoot.address });
+    const result = await verifyStage2(sub.publicKey, rpc, ipfs, { appCertificationRoot: certRoot.address, loginServiceCertificationRoot: '5e'.repeat(32) });
     expect(result.scope_clean).toBe(true);
     expect(result.app_card_chain_valid).toBe(true);
   });
@@ -309,7 +309,7 @@ describe("stage2 — app_card chain walk", () => {
     });
     const ipfs = mockIpfs({ QmSub: encSubDoc, QmMaster: encMasterDoc, QmApp: encAppDoc });
 
-    const result = await verifyStage2(sub.publicKey, rpc, ipfs, { appCertificationRoot: certRoot.address });
+    const result = await verifyStage2(sub.publicKey, rpc, ipfs, { appCertificationRoot: certRoot.address, loginServiceCertificationRoot: '5e'.repeat(32) });
     expect(result.scope_clean).toBe(false);
     expect(result.app_card_chain_valid).toBe(false);
     expect(result.errors.some((e) => e.code === "APP_CARD_CHAIN_NOT_TRUSTED")).toBe(true);
@@ -346,7 +346,7 @@ describe("stage2 — app_card chain walk", () => {
       } as SubCardEntry),
     });
     const ipfs = mockIpfs({ QmSub: encSubDoc, QmMaster: encMasterDoc });
-    const result = await verifyStage2(sub.publicKey, rpc, ipfs, { appCertificationRoot: DUMMY_CERT_ROOT });
+    const result = await verifyStage2(sub.publicKey, rpc, ipfs, { appCertificationRoot: DUMMY_CERT_ROOT, loginServiceCertificationRoot: '5e'.repeat(32) });
     expect(result.scope_clean).toBe(false);
     expect(result.errors.some((e) => e.code === "SUB_CARD_NOT_IN_ACTIVE_DIRECTORY")).toBe(true);
   });
@@ -388,7 +388,7 @@ describe("stage2 — app_card chain walk", () => {
     const ipfs = mockIpfs({ QmSub: encSubDoc, QmMaster: encMasterDoc, QmApp: encAppDoc });
 
     // No appCertificationRoot configured.
-    const result = await verifyStage2(sub.publicKey, rpc, ipfs, { appCertificationRoot: undefined });
+    const result = await verifyStage2(sub.publicKey, rpc, ipfs, { appCertificationRoot: undefined, loginServiceCertificationRoot: '5e'.repeat(32) });
     expect(result.scope_clean).toBe(false);
     expect(result.app_card_chain_valid).toBe(false);
     expect(result.errors.some((e) => e.code === "APP_CERTIFICATION_ROOT_NOT_CONFIGURED")).toBe(true);

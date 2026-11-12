@@ -112,7 +112,7 @@ Verification is executed per `SignatureEntry` in the envelope's `signatures` arr
     - The specific field(s) or press authorization check that failed.
     - The `press_signature` / press card identifying the responsible press.
     - The verifier's own card mutable pointer (so the body can authenticate the report source).
-26. If the verifier additionally requires a specific `required_predicate` or `required_policy` (e.g., in an authentication flow), evaluate those predicates against the signer's chain. Predicate failure is a separate `policy_match` result and does not affect `policy_compliant` (a card can be policy-compliant but not match a relying party's specific predicate requirements).
+26. If the verifier additionally requires a relying-party predicate (e.g., the DCQL `mcard` query of a card login — `protocol-objects.md §8.1`, evaluated by `card_verifier.md §6.3`), evaluate it against the signer's chain. Predicate failure is a separate `policy_match` result and does not affect `policy_compliant` (a card can be policy-compliant but not match a relying party's specific predicate requirements).
 
 ### Stage 5a: Policy Creation Compliance (For Policy-Level Verification)
 

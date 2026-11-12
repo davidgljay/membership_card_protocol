@@ -138,6 +138,16 @@ export function createRpcProvider(registry: RegistryClient, kv: KvStore): RpcPro
     async getEasAnnotations(): Promise<[]> {
       return [];
     },
+
+    async getDomainRegistration(domain: string) {
+      const r = await registry.getDomainRegistration(domain);
+      if (!r.exists) return null;
+      return {
+        admin_card_address: r.admin_card_address.toLowerCase().replace(/^0x/, ''),
+        fraud_risk: r.fraud_risk as 0 | 1 | 2,
+        suspension_expires_at: Number(r.suspension_expires_at),
+      };
+    },
   };
 }
 
@@ -171,6 +181,8 @@ export function buildCardVerifier(
     revocationFreshnessWindowSeconds: config.STALENESS_WINDOW_SECONDS,
     rejectStaleRevocation: true,
     fetchAnnotations: false,
+    appCertificationRoot: config.PRESS_APP_CERTIFICATION_ROOT,
+    loginServiceCertificationRoot: config.PRESS_LOGIN_SERVICE_CERTIFICATION_ROOT,
   });
 }
 

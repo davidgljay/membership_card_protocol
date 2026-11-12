@@ -46,6 +46,12 @@ When a user accepts a new card, their wallet initiates a backup process. The car
 
 If a user loses their device, they authenticate on a new device to retrieve and decrypt their backed-up keys, restoring full access to their cards. The backup scheme is designed so that the wallet service itself cannot read the keys it stores; only the user, with the right combination of credentials, can reconstruct them.
 
+### Logging In
+
+A website can let people log in with a card instead of a password. The site asks for a card issued under policies it names (for example, "any member card from this congregation or its chapters"). The site's login button sends the request through a small static **login router** to whichever wallet the user registered, so the site never needs to know which wallet that is. The wallet checks who is asking before it shows anything: the request must be signed by a **server card** belonging to a **login service card** that is certified for login and bound to the site's domain by that domain's DNS admin card. That binding is what stops a look-alike site from reusing a real site's login.
+
+The wallet shows the user which cards match, the user picks one and confirms with biometrics, and the wallet signs a response with that card. The site checks the response with the verifier — signature, chain, revocation, and that the card falls under an accepted policy — and logs the user in as that card. On the same device the response comes back as a form post tied to the browser's session cookie. When the login starts on another device by QR code, the response travels as a card message and the user types a short one-time code into the site, so a response can't be redeemed in someone else's browser. See [`specs/process_specs/card_login.md`](specs/process_specs/card_login.md).
+
 ### Messaging
 
 Each card has an associated messaging endpoint managed by the user's wallet service. This allows any party who holds a card to receive messages addressed to it without revealing a personal identifier like an email address. Messages are encrypted to the card's public key, so only the cardholder can read them.

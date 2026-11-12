@@ -239,6 +239,7 @@ async function buildCase(id, description, conditions) {
     ipfs,
     trustedRoots: [root.address],
     appCertificationRoot: appCertRoot.address,
+    loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
     returnChain: true,
     conditions,
   });
@@ -284,6 +285,7 @@ await buildCase("PMC-04", "no conditions supplied -> null, chain still returned"
     ipfs,
     trustedRoots: [root.address],
     appCertificationRoot: appCertRoot.address,
+    loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
     returnChain: true,
     conditions,
   });
@@ -344,6 +346,7 @@ await buildCase("PMC-04", "no conditions supplied -> null, chain still returned"
     ipfs,
     trustedRoots: [root.address],
     appCertificationRoot: appCertRoot.address,
+    loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
     returnChain: true,
     conditions,
   });

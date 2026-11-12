@@ -1,6 +1,8 @@
 # Card Login — Strategic Plan
 
-Companion: [card-login-implementation-plan.md](card-login-implementation-plan.md) (not yet written — follows answers to the open questions below)
+> **Renamed 2026-11-09:** "developer card" is now **login service card**, and the app-certification root has three branches (wallet, app, login service). This document is a historical record and keeps the old terms; see `plans/card-login-spec-changes.md` §Amendment 2026-11-09.
+
+Companion: [card-login-implementation-plan.md](card-login-implementation-plan.md). Phase 1 scan: [card-login-spec-impact.md](card-login-spec-impact.md).
 
 Source: design discussion with David, 2026-11-07 → 2026-11-08 (decisions recorded in §Design Decisions below).
 
@@ -35,11 +37,11 @@ So this initiative is mostly **revising §8 and wiring existing primitives toget
 
 ## Goals
 
-- [ ] **G1. Any site with a server can offer "Log in with a membership card," and it works in every major browser.**
-- [ ] **G2. Users can see — and the wallet enforces — who is asking before a card signs anything.**
-- [ ] **G3. A completed login is cryptographically verifiable by the site and bound to the right browser session, on the same device or across devices.**
-- [ ] **G4. Cards lead people to the services that accept them, and logging in from the wallet takes one tap.**
-- [ ] **G5. The specs remain the source of truth: login is fully specified before it is built, and tested against the specs once it is.**
+- [ ] **G1. Any site with a server can offer "Log in with a membership card," and it works in every major browser.** — *Not yet: see G1 sub-items.*
+- [x] **G2. Users can see — and the wallet enforces — who is asking before a card signs anything.** — *Met (2026-11-10).*
+- [ ] **G3. A completed login is cryptographically verifiable by the site and bound to the right browser session, on the same device or across devices.** — *Not yet: see G3 sub-items.*
+- [x] **G4. Cards lead people to the services that accept them, and logging in from the wallet takes one tap.** — *Met (2026-11-10).*
+- [x] **G5. The specs remain the source of truth: login is fully specified before it is built, and tested against the specs once it is.** — *Met (2026-11-10).*
 
 ## Rationale
 
@@ -55,32 +57,45 @@ So this initiative is mostly **revising §8 and wiring existing primitives toget
 
 ## Key Objectives
 
-- [ ] **G1 (any site, any browser)**
-  - [ ] A static login router exists in this repo, serves `/login` and `/register`, and stores wallets only in its own first-party storage; it has no server-side state.
-  - [ ] A test site completes a full same-device login through the router in headless Chromium, Firefox, and WebKit.
-  - [ ] A site-side SDK lets a developer add the button, issue a signed request, and verify the response in under ~50 lines of integration code (measured in the reference example).
-  - [ ] With no registered wallet, the router shows the recovery UI (known-wallet list, QR, address lookup) — never a dead end.
-- [ ] **G2 (who is asking)**
-  - [ ] The wallet rejects, before display, any request not signed by a server card → developer card → developer-policy root chain, and any request whose developer card's domain binding does not cover the `response_uri` origin.
-  - [ ] A developer card with an 8xx/9xx code blocks the login; one with a warning code produces a visible warning; a suspended domain (`DOMAIN_SUSPENDED`) blocks.
-  - [ ] Each of the above has a dedicated test, including a "valid card, wrong origin" phishing test.
-- [ ] **G3 (verifiable, session-bound)**
-  - [ ] The verifier (TS) verifies a login response end-to-end: signature, sub-card → master link, chain walk, revocation, DCQL `mcard` policy match including `include_children`, nonce, `state`/`session_id`, audience origin, and request hash.
-  - [ ] `form_post` and `mcard_message` both complete in the integration stack; a response delivered to the wrong browser session is rejected.
-  - [ ] Every `mcard_message` login records wallet-send → server-receive latency.
-- [ ] **G4 (services and one-tap login)**
-  - [ ] `preferred_services` is defined on `PolicyCardDocument`, with inheritance-with-replace semantics specified and press-validated.
-  - [ ] The wallet SDK resolves a card's effective services list from its policy chain and filters it by each service's `/.well-known/membership-login`.
-  - [ ] Wallet-initiated login completes with no prompt when it matches a pending login, and falls back to the normal prompt when it doesn't (both tested).
-  - [ ] First-card acceptance registers the wallet with the router with no consent screen, and never replaces an existing default (tested).
-- [ ] **G5 (spec-first)**
-  - [ ] `card_protocol_spec.md §8`, `protocol-objects.md §8–9`, and `messaging_protocol.md §13–14` are revised to the decisions above, and every other spec they touch is updated in the same pass.
-  - [ ] A change summary is reviewed and approved by David before any code is written.
-  - [ ] A `card_login` spec suite exists in `dev-tests/` and `integration_tests/`, with every test naming the spec section it verifies.
+- [ ] **G1 (any site, any browser)** — *partly met*
+  - [x] A static login router exists in this repo, serves `/login` and `/register`, and stores wallets only in its own first-party storage; it has no server-side state. — `login-router/`; `src/core.ts`, 23 unit tests.
+  - [ ] A test site completes a full same-device login through the router in headless Chromium, Firefox, and WebKit. — *Not met in full:* the full login (site → router → wallet → site) runs in Chromium only (`integration_tests/harnesses/web/test/login.spec.ts`); the router alone passes 27 browser tests in Chromium, Firefox, and WebKit (`login-router/test/e2e`). Adding Firefox and WebKit projects to the harness is the remaining step.
+  - [x] A site-side SDK lets a developer add the button, issue a signed request, and verify the response in under ~50 lines of integration code (measured in the reference example). — 26 lines (`harnesses/web/test/login/referenceSite.ts`, checked by `login.spec.ts` “under ~50 lines”).
+  - [x] With no registered wallet, the router shows the recovery UI (known-wallet list, QR, address lookup) — never a dead end. — `login-router/test/e2e/router.spec.ts` “no wallet → recovery”.
+- [x] **G2 (who is asking)** — *met*
+  - [x] The wallet rejects, before display, any request not signed by a server card → developer card → developer-policy root chain, and any request whose developer card's domain binding does not cover the `response_uri` origin. — `verifyServerCard` (TS and Python); wallet-sdk `fetchAndValidateLoginRequest`; tests `verifier/test/login/verifyServerCard.test.ts`.
+  - [x] A developer card with an 8xx/9xx code blocks the login; one with a warning code produces a visible warning; a suspended domain (`DOMAIN_SUSPENDED`) blocks. — `LOGIN_SERVICE_REVOKED`, `LOGIN_WARN_*`, `DOMAIN_SUSPENDED`; live in `integration_tests/suites/core/card_login.spec.ts` › revocation, domain status.
+  - [x] Each of the above has a dedicated test, including a "valid card, wrong origin" phishing test. — `verifyServerCard.test.ts` (16 cases); live wrong-origin test in `card_login.spec.ts` › Phase 0 setup.
+- [ ] **G3 (verifiable, session-bound)** — *partly met*
+  - [x] The verifier (TS) verifies a login response end-to-end: signature, sub-card → master link, chain walk, revocation, DCQL `mcard` policy match including `include_children`, nonce, `state`/`session_id`, audience origin, and request hash. — `verifyLoginResponse`; `verifier/test/login/verifyLoginResponse.test.ts`; Python parity in `verifier-py/tests/login/`. `include_children` on the live stack is limited by F13.
+  - [ ] `form_post` and `mcard_message` both complete in the integration stack; a response delivered to the wrong browser session is rejected. — *Partly met:* `form_post` and the wrong-session rejection run live; `mcard_message` + one-time code completes in `card_login.spec.ts` › cross device with in-process delivery, not through the relay — blocked on the missing sub-card ML-KEM key field (F10, checkpoint CP6).
+  - [x] Every `mcard_message` login records wallet-send → server-receive latency. — app-sdk `handleLoginMessage` `onLatency`; asserted in `card_login.spec.ts` › cross device.
+- [x] **G4 (services and one-tap login)** — *met*
+  - [x] `preferred_services` is defined on `PolicyCardDocument`, with inheritance-with-replace semantics specified and press-validated. — `protocol-objects.md §2`; press P-29; `login-conformance.json` preferred_services vectors.
+  - [x] The wallet SDK resolves a card's effective services list from its policy chain and filters it by each service's `/.well-known/membership-login`. — wallet-sdk `resolveEffectiveServices`.
+  - [x] Wallet-initiated login completes with no prompt when it matches a pending login, and falls back to the normal prompt when it doesn't (both tested). — `card_login.spec.ts` › wallet-initiated (both cases).
+  - [x] First-card acceptance registers the wallet with the router with no consent screen, and never replaces an existing default (tested). — wallet-sdk `registrationField` (`test/login/login.test.ts`); router add-only test “a second wallet is added without changing the default”.
+- [x] **G5 (spec-first)** — *met*
+  - [x] `card_protocol_spec.md §8`, `protocol-objects.md §8–9`, and `messaging_protocol.md §13–14` are revised to the decisions above, and every other spec they touch is updated in the same pass. — `plans/card-login-spec-changes.md` lists every touched spec.
+  - [x] A change summary is reviewed and approved by David before any code is written. — approved at CP2 (`card-login-spec-changes.md`).
+  - [x] A `card_login` spec suite exists in `dev-tests/` and `integration_tests/`, with every test naming the spec section it verifies. — `integration_tests/suites/core/card_login.spec.ts` (14 live tests) and `dev-tests/suites/core/card_login.spec.ts` (skipped until Sepolia provisioning, CP4).
 
 ## Open Questions
 
-These came out of reading the existing specs and code, and each changes what gets written. Recommended defaults are marked; "go with defaults" resolves all of them.
+**All resolved 2026-11-08** (David). Resolutions, including two decisions added at checkpoint CP1 after the Phase 1 scan:
+
+| # | Resolution |
+|---|---|
+| 1 | Developer certification is a **branch under the app-certification root**, governed by the AppCertificationBody, with its own governance doc so it can be split off later. G2's "developer-policy root chain" therefore means server card → developer card → developer branch → app-certification root. |
+| 2 | (a) The domain's full-domain DNS admin card co-signs a domain binding for the developer card. |
+| 3 | A developer-branch card may be `app_card` only for sub-cards whose master is itself. |
+| 4–8 | Recommended defaults. |
+| 9 | Recommended default; no wallet front-end in scope — wallet UX is exercised through a test harness. |
+| CP1-a | Server cards use a new sub-card attestation level **`"S1"`** (server key, no device proof), accepted only for developer-scoped sub-cards. |
+| CP1-b | Cross-device (`mcard_message`) logins bind the browser with a one-time code sent to the wallet. Same-device and wallet-initiated logins redeem it automatically; only QR-started cross-device logins make the user type it. The site completes a login only when the browser presents both the `state` cookie and the code. |
+
+Original questions, kept for context:
+
 
 1. **Developer policy vs. app certification.** App cards today certify *wallet* applications (`AppCertificationBody`). The developer policy should be a **new, separate policy root** (per "governed separately"). Who governs it — a new body (e.g. a Service Certification Body) or the AppCertificationBody under a second mandate? *Recommended: a new policy root, governed by the AppCertificationBody initially, with its own governance doc so it can be split off later.*
 

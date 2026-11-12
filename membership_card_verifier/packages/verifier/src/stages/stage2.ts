@@ -1,3 +1,4 @@
+import { decryptCardHead } from "../head.js";
 import { keccak256, hkdfSha3256, aes256gcmDecrypt, mlDsa44Verify, base64UrlToBytes } from "../crypto.js";
 import { CardProtocolError } from "../errors.js";
 import { canonicalize } from "../canonicalize.js";
@@ -16,6 +17,10 @@ export interface Stage2Result {
   master_card_doc?: CardDocument;
   master_card_pubkey?: Uint8Array;
   app_card_chain_valid: boolean | "skipped";
+  /** Set once the app card chain walk completes (step 16f). */
+  app_card_branch?: "login_service" | "other";
+  /** The decrypted SubCardDocument, when the signer is a sub-card. */
+  sub_card_doc?: SubCardDocument;
   errors: VerificationError[];
 }
 
@@ -23,30 +28,48 @@ export async function verifyStage2(
   publicKeyBytes: Uint8Array,
   rpc: RpcProvider,
   ipfs: IpfsProvider,
-  config: Pick<VerifierConfig, "appCertificationRoot" | "maxChainDepth">
+  config: Pick<VerifierConfig, "appCertificationRoot" | "loginServiceCertificationRoot" | "maxChainDepth">
 ): Promise<Stage2Result> {
   const errors: VerificationError[] = [];
   const signerCard = keccak256(publicKeyBytes);
 
-  // Step 2: fetch card entry
+  // Step 2: locate the sub-card document. The registry contract's
+  // RegisterSubCard records a SubCardEntry (sub_card_doc_cid) rather than a
+  // CardEntry, and the press pins the document as plain canonical JSON; a
+  // CardEntry whose head is the encrypted document is also accepted.
   const cardEntry = await rpc.getCardEntry(signerCard);
-  if (!cardEntry || !cardEntry.exists) {
-    errors.push({ stage: 2, code: "CARD_NOT_FOUND", message: `No card entry for ${signerCard}` });
+  let docCid: string | undefined = cardEntry?.exists ? cardEntry.log_head_cid : undefined;
+  if (!docCid) {
+    const sub = await rpc.getSubCardEntry(signerCard);
+    docCid = sub?.sub_card_doc_cid || undefined;
+  }
+  if (!docCid) {
+    errors.push({ stage: 2, code: "CARD_NOT_FOUND", message: `No card or sub-card entry for ${signerCard}` });
     return { scope_clean: false, signer_card: signerCard, app_card_chain_valid: false, errors };
   }
 
   // Step 3: derive leaf content key
   const leafContentKey = hkdfSha3256(publicKeyBytes, "card-content-v1");
 
-  // Step 4: fetch and decrypt sub-card document from IPFS
+  // Step 4: fetch the sub-card document (encrypted under the leaf key, or plain)
   let subCardDoc: SubCardDocument;
   try {
-    const encrypted = await ipfs.fetch(cardEntry.log_head_cid);
-    const decrypted = await aes256gcmDecrypt(leafContentKey, encrypted);
-    subCardDoc = JSON.parse(new TextDecoder().decode(decrypted)) as SubCardDocument;
+    const raw = await ipfs.fetch(docCid);
+    let text: string;
+    try {
+      text = new TextDecoder().decode(await aes256gcmDecrypt(leafContentKey, raw));
+    } catch {
+      text = new TextDecoder().decode(raw);
+    }
+    subCardDoc = JSON.parse(text) as SubCardDocument;
   } catch (e) {
     const code = e instanceof CardProtocolError ? e.code : "DECRYPTION_FAILED";
     errors.push({ stage: 2, code, message: String(e) });
+    return { scope_clean: false, signer_card: signerCard, app_card_chain_valid: false, errors };
+  }
+  // The document must be this signer's: its recipient_pubkey is the signing key.
+  if (typeof subCardDoc.recipient_pubkey !== "string" || keccak256(new Uint8Array(base64UrlToBytes(subCardDoc.recipient_pubkey))) !== signerCard) {
+    errors.push({ stage: 2, code: "ADDRESS_BINDING_MISMATCH", message: "sub-card document recipient_pubkey is not the signing key" });
     return { scope_clean: false, signer_card: signerCard, app_card_chain_valid: false, errors };
   }
 
@@ -85,9 +108,7 @@ export async function verifyStage2(
 
   let masterCardDoc: CardDocument;
   try {
-    const encrypted = await ipfs.fetch(masterCardEntry.log_head_cid);
-    const decrypted = await aes256gcmDecrypt(masterContentKey, encrypted);
-    masterCardDoc = JSON.parse(new TextDecoder().decode(decrypted)) as CardDocument;
+    masterCardDoc = await decryptCardHead(masterCardEntry.log_head_cid, masterContentKey, ipfs);
   } catch (e) {
     const code = e instanceof CardProtocolError ? e.code : "DECRYPTION_FAILED";
     errors.push({ stage: 2, code, message: String(e) });
@@ -205,9 +226,7 @@ export async function verifyStage2(
 
   let appCardDoc: CardDocument;
   try {
-    const encrypted = await ipfs.fetch(appCardEntry.log_head_cid);
-    const decrypted = await aes256gcmDecrypt(appCardContentKey, encrypted);
-    appCardDoc = JSON.parse(new TextDecoder().decode(decrypted)) as CardDocument;
+    appCardDoc = await decryptCardHead(appCardEntry.log_head_cid, appCardContentKey, ipfs);
   } catch (e) {
     const code = e instanceof CardProtocolError ? e.code : "DECRYPTION_FAILED";
     errors.push({ stage: 2, code, message: String(e) });
@@ -216,6 +235,8 @@ export async function verifyStage2(
 
   let currentDoc = appCardDoc;
   let currentAddress = appCardAddress;
+  // Every address on the app card's chain below the root, for step 16f.
+  const visited: string[] = [appCardAddress];
   let chainReached = currentAddress === appCertRoot;
 
   for (let depth = 0; depth < maxDepth && !chainReached; depth++) {
@@ -232,6 +253,7 @@ export async function verifyStage2(
       chainReached = true;
       break;
     }
+    visited.push(nextAddress);
 
     const nextEntry = await rpc.getCardEntry(nextAddress);
     if (!nextEntry || !nextEntry.exists) {
@@ -245,9 +267,7 @@ export async function verifyStage2(
 
     const nextContentKey = hkdfSha3256(nextPubkeyBytes, "card-content-v1");
     try {
-      const encrypted = await ipfs.fetch(nextEntry.log_head_cid);
-      const decrypted = await aes256gcmDecrypt(nextContentKey, encrypted);
-      currentDoc = JSON.parse(new TextDecoder().decode(decrypted)) as CardDocument;
+      currentDoc = await decryptCardHead(nextEntry.log_head_cid, nextContentKey, ipfs);
       currentAddress = nextAddress;
     } catch (e) {
       const code = e instanceof CardProtocolError ? e.code : "DECRYPTION_FAILED";
@@ -265,12 +285,46 @@ export async function verifyStage2(
     return { scope_clean: false, signer_card: signerCard, app_card_chain_valid: false, errors };
   }
 
+  // Step 16f (card_verifier.md §7.2): branch and login service scope rule.
+  // Recognizing the login service branch is mandatory once sub-cards are being
+  // verified: without it, a login service card could pose as an app or wallet card.
+  if (!config.loginServiceCertificationRoot) {
+    errors.push({
+      stage: 2,
+      code: "LOGIN_SERVICE_CERTIFICATION_ROOT_NOT_CONFIGURED",
+      message:
+        "Sub-card signature encountered but VerifierConfig.loginServiceCertificationRoot is not configured on this verifier instance",
+    });
+    return { scope_clean: false, signer_card: signerCard, app_card_chain_valid: true, errors };
+  }
+  const isLoginService = visited.includes(config.loginServiceCertificationRoot);
+  const appCardBranch = isLoginService ? "login_service" : "other";
+  const selfScoped = appCardAddress === holderCardAddress;
+  if (isLoginService && !selfScoped) {
+    errors.push({
+      stage: 2,
+      code: "LOGIN_SERVICE_SCOPE",
+      message: `app_card ${appCardAddress} is a login service card but the sub-card's master is ${holderCardAddress}; a login service card may only authorize its own server cards`,
+    });
+    return { scope_clean: false, signer_card: signerCard, app_card_chain_valid: true, app_card_branch: appCardBranch, errors };
+  }
+  if (subCardDoc.attestation_level === "S1" && !(isLoginService && selfScoped)) {
+    errors.push({
+      stage: 2,
+      code: "ATTESTATION_LEVEL_INSUFFICIENT",
+      message: 'attestation_level "S1" is accepted only on server cards (login service card as both app_card and holder)',
+    });
+    return { scope_clean: false, signer_card: signerCard, app_card_chain_valid: true, app_card_branch: appCardBranch, errors };
+  }
+
   return {
     scope_clean: true,
     signer_card: signerCard,
     master_card_doc: masterCardDoc,
     master_card_pubkey: new Uint8Array(holderPubkeyBytes),
     app_card_chain_valid: true,
+    app_card_branch: appCardBranch,
+    sub_card_doc: subCardDoc,
     errors,
   };
 }

@@ -1,0 +1,27 @@
+{
+  "name": "@membership-card-protocol/login-router",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Static card-login router (specs/object_specs/login_router.md): forwards login requests to the user's registered wallet using only first-party browser storage.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "npm run build && playwright test"
+  },
+  "dependencies": {
+    "@membership-card-protocol/verifier": "file:../membership_card_verifier/packages/verifier"
+  },
+  "devDependencies": {
+    "@noble/post-quantum": "^0.5.4",
+    "@playwright/test": "^1.61.1",
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.6.0",
+    "vitest": "^3.2.4"
+  }
+}

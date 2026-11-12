@@ -44,6 +44,7 @@ const DEV_GAS_PRIVATE_KEY = '0xb6b15c8cb491557369f3c7d2c287b053eb229daa9c2213888
 
 const ROOT_POLICY_BODY = 0;
 const PRESS_REGISTRY_BODY = 1;
+const DNS_GOVERNANCE_BODY = 2;
 
 const STORAGE_ABI = parseAbi([
   'function policyExists(bytes32 policy_address) external view returns (bool)',
@@ -51,11 +52,16 @@ const STORAGE_ABI = parseAbi([
   // uint8[] mixed with static fields needs an explicit outer tuple for the
   // decoder — see bootstrap.sh's doc comment on this exact ABI shape.
   'function getGovernanceKeyset(uint8 body_id) external view returns ((uint8[] keys, uint8 key_count, uint8 quorum, uint32 version, uint8 key_scheme) r)',
+  'function getDnsGovernancePolicyAddress() external view returns (bytes32)',
 ]);
 
 const LOGIC_ABI = parseAbi([
   'function registerPolicy(bytes32 policy_address, uint8[] authorizer_pubkey, uint8[] governance_payload, uint8[][] governance_sigs) external',
   'function authorizePress(bytes32 policy_address, bytes32 press_address, uint8[] press_pubkey, bytes32 mldsa44_key_hash, uint8[] governance_payload, uint8[][] governance_sigs) external',
+  'function setDnsGovernancePolicyAddress(bytes32 new_policy_address, uint8[] governance_payload, uint8[][] governance_sigs) external',
+  'function registerDomain(uint8[] domain, bytes32 admin_card_address, uint8[] admin_secp256r1_key, uint8[] governance_payload, uint8[][] governance_sigs) external',
+  'function flagDomainFraudRisk(uint8[] domain, uint8 fraud_risk, uint64 suspension_expires_at, uint8[] governance_payload, uint8[][] governance_sigs) external',
+  'function getDomainRegistration(uint8[] domain) external view returns (bytes32, uint64, uint8, uint64, bool)',
 ]);
 
 export interface GovernanceKeypair {
@@ -111,7 +117,7 @@ function hexToBytesArg(hex: string): number[] {
 
 function buildGovernancePayload(
   scriptsDir: string,
-  op: 'register_policy' | 'authorize_press',
+  op: 'register_policy' | 'authorize_press' | 'set_dns_governance_policy_address' | 'register_domain' | 'flag_domain_fraud_risk',
   version: number
 ): string {
   return execFileSync(
@@ -223,4 +229,76 @@ export async function ensureGovernanceBootstrap(options: EnsureGovernanceBootstr
     });
     await publicClient.waitForTransactionReceipt({ hash, timeout: 120_000 });
   }
+}
+
+
+// ─── Card login: DNS governance (dns_resolution.md §6.1, §7) ──────────────────
+
+export interface DnsGovernanceOptions {
+  rpcUrl: string;
+  logicAddress: Hex;
+  storageAddress: Hex;
+  governanceKeypair: GovernanceKeypair;
+  contractsScriptsDir: string;
+}
+
+function clients(rpcUrl: string) {
+  const publicClient = createPublicClient({ chain: arbitrumSepolia, transport: http(rpcUrl) });
+  const walletClient = createWalletClient({ account: privateKeyToAccount(DEV_GAS_PRIVATE_KEY), chain: arbitrumSepolia, transport: http(rpcUrl) });
+  return { publicClient, walletClient };
+}
+
+async function dnsQuorum(options: DnsGovernanceOptions, op: 'set_dns_governance_policy_address' | 'register_domain' | 'flag_domain_fraud_risk') {
+  const { publicClient } = clients(options.rpcUrl);
+  const keyset = await publicClient.readContract({ address: options.storageAddress, abi: STORAGE_ABI, functionName: 'getGovernanceKeyset', args: [DNS_GOVERNANCE_BODY] });
+  const payload = buildGovernancePayload(options.contractsScriptsDir, op, keyset.version);
+  const sigHex = signPayload(options.contractsScriptsDir, options.governanceKeypair.private_key, payload);
+  return { payload: Array.from(new TextEncoder().encode(payload)), sigs: [hexToBytesArg(sigHex)] };
+}
+
+/**
+ * Makes `policyAddress` the global DNS governance policy (if it isn't already).
+ * Domain admin cards must be issued under it (RegisterDomain checks
+ * card_policy == dns policy). Other suites set their own the same way, so
+ * whichever runs last before a RegisterDomain wins — call this right before.
+ */
+export async function ensureDnsGovernancePolicy(options: DnsGovernanceOptions & { policyAddress: string }): Promise<void> {
+  const { publicClient, walletClient } = clients(options.rpcUrl);
+  const current = await publicClient.readContract({ address: options.storageAddress, abi: STORAGE_ABI, functionName: 'getDnsGovernancePolicyAddress', args: [] });
+  if (BigInt(current) === BigInt(normalizeHexKey(options.policyAddress))) return;
+  const { payload, sigs } = await dnsQuorum(options, 'set_dns_governance_policy_address');
+  const hash = await walletClient.writeContract({ address: options.logicAddress, abi: LOGIC_ABI, functionName: 'setDnsGovernancePolicyAddress', args: [normalizeHexKey(options.policyAddress) as Hex, payload, sigs] });
+  await publicClient.waitForTransactionReceipt({ hash, timeout: 120_000 });
+}
+
+/** RegisterDomain with a throwaway secp256r1 admin key (dns_resolution.md §6.1 step 4). */
+export async function registerDomain(options: DnsGovernanceOptions & { domain: string; adminCardAddress: string }): Promise<void> {
+  const { publicClient, walletClient } = clients(options.rpcUrl);
+  const adminSecp = p256.getPublicKey(p256.utils.randomPrivateKey(), false).slice(1);
+  const { payload, sigs } = await dnsQuorum(options, 'register_domain');
+  const hash = await walletClient.writeContract({
+    address: options.logicAddress, abi: LOGIC_ABI, functionName: 'registerDomain',
+    args: [Array.from(new TextEncoder().encode(options.domain)), normalizeHexKey(options.adminCardAddress) as Hex, Array.from(adminSecp), payload, sigs],
+  });
+  await publicClient.waitForTransactionReceipt({ hash, timeout: 120_000 });
+}
+
+/** FlagDomainFraudRisk (dns_resolution.md §7). */
+export async function flagDomainFraudRisk(options: DnsGovernanceOptions & { domain: string; fraudRisk: 0 | 1 | 2; suspensionExpiresAt: bigint }): Promise<void> {
+  const { publicClient, walletClient } = clients(options.rpcUrl);
+  const { payload, sigs } = await dnsQuorum(options, 'flag_domain_fraud_risk');
+  const hash = await walletClient.writeContract({
+    address: options.logicAddress, abi: LOGIC_ABI, functionName: 'flagDomainFraudRisk',
+    args: [Array.from(new TextEncoder().encode(options.domain)), options.fraudRisk, options.suspensionExpiresAt, payload, sigs],
+  });
+  await publicClient.waitForTransactionReceipt({ hash, timeout: 120_000 });
+}
+
+/** Reads DomainRegistrations[domain] through the logic contract. */
+export async function readDomainRegistration(rpcUrl: string, logicAddress: Hex, domain: string) {
+  const { publicClient } = clients(rpcUrl);
+  const [admin, , fraudRisk, suspensionExpiresAt, exists] = (await publicClient.readContract({
+    address: logicAddress, abi: LOGIC_ABI, functionName: 'getDomainRegistration', args: [Array.from(new TextEncoder().encode(domain))],
+  })) as unknown as [Hex, bigint, number, bigint, boolean];
+  return { admin_card_address: admin, fraud_risk: Number(fraudRisk), suspension_expires_at: suspensionExpiresAt, exists };
 }

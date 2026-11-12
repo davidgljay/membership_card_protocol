@@ -66,6 +66,7 @@ export async function runScenario(config: HarnessConfig): Promise<ScenarioResult
       ipfs,
       trustedRoots: [config.rootCardAddress],
       appCertificationRoot: config.rootCardAddress,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       fetchAnnotations: false,
     });
 

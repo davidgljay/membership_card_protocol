@@ -6,6 +6,8 @@
 **Contract spec:** [registry_contract.md](object_specs/registry_contract.md) §3.6, §3.8–3.11, §4.17–4.24  
 **Implementation plan:** [dns-implementation-plan.md](../plans/dns-implementation-plan.md)
 
+
+**Amended 2026-11-08 (card login):** §2 adds reserved action hosts (`auth`, `invite`), checked before Forms A and B; new §5.3 describes login-service-card domain bindings signed by full-domain admin cards; §8 notes that a handoff retires them. See `process_specs/card_login.md`.
 ---
 
 ## Table of Contents
@@ -21,6 +23,7 @@
 5. [Domain Admin Cards](#5-domain-admin-cards)
    - 5.1 [Full-Domain Admin Cards](#51-full-domain-admin-cards)
    - 5.2 [Sub-Path-Scoped Admin Cards](#52-sub-path-scoped-admin-cards)
+   - 5.3 [Login Service Card Domain Bindings](#53-login-service-card-domain-bindings)
 6. [Write Authorization Chain](#6-write-authorization-chain)
    - 6.1 [Domain Registration Flow](#61-domain-registration-flow)
    - 6.2 [SetPolicyAddress Flow](#62-setpolicyaddress-flow)
@@ -51,7 +54,22 @@ The design rests on three principles:
 
 ## 2. Address Schema
 
-A valid `mcard://` URI takes one of two forms:
+A valid `mcard://` URI is either an **action link** or one of two address forms.
+
+### Reserved action hosts
+
+```
+mcard://<action>?<parameters>
+```
+
+| Action | Parameters | Meaning | Defined in |
+|---|---|---|---|
+| `auth` | `r` — percent-encoded `https:` URL of an `AuthenticationRequest` | Open a card login request in the wallet | `process_specs/card_login.md` |
+| `invite` | per its spec | Open a card invitation | `process_specs/card_offering_and_acceptance.md`, `open_offer_acceptance_new_wallet.md` |
+
+Action hosts are checked **first**: if the segment immediately after `mcard://` exactly equals a reserved action name (case-sensitive), the URI is an action link and is never parsed as Form A or Form B — no CID fetch and no on-chain read happen. New actions are added only by amending this table. *(Added 2026-11-08. `auth` and `invite` were already in use but fit neither address form; they parsed correctly only because neither starts with a CID prefix character.)*
+
+Otherwise, the URI takes one of two address forms:
 
 ### Form A — Direct CID Reference
 
@@ -125,6 +143,7 @@ Resolution of a Form B URI `mcard://<domain>/<path>`:
 
 - [ ] `mcard://bafyreiabc.../` is identified as Form A and does not trigger any on-chain read from `DomainRegistrations` or `PolicyAddresses`.
 - [ ] `mcard://example.com/staff/reporter` is identified as Form B with domain `example.com` and path `staff/reporter`.
+- [ ] `mcard://auth?r=https%3A%2F%2Fexample.com%2Fr%2Fabc` is identified as an action link and triggers no CID fetch or on-chain read.
 - [ ] Resolution of a registered, non-suspended domain with a matching path entry returns the correct `bytes32` policy card address.
 - [ ] Resolution of a registered domain with no matching path entry returns NOT_FOUND (bytes32(0) from `LookupPolicyAddress`).
 - [ ] Resolution of an unregistered domain returns NOT_FOUND.
@@ -285,6 +304,15 @@ The `dns_path_scope` regex constrains which paths the sub-card may pass to `SetP
 4. For sub-cards of sub-cards: walks the sub-card chain to verify that each parent's scope is consistent with the child's scope.
 
 The contract does not verify scope. Scope verification is exclusively press-side, and fraudulent scope violations are detectable by the DNS governance authority via the `PolicyAddressSet` event (see §6.2 step 8).
+
+### 5.3 Login Service Card Domain Bindings
+
+*(Added 2026-11-08 for card login.)* A full-domain admin card can vouch that a **login service card** — a card certifying a login service, issued under the login service branch of the app-certification root (`subcards.md §Server Cards`) — belongs to the domain's owner. It does so by signing a `DomainBindingAttestation` (`protocol-objects.md §17`) with its ML-DSA-44 holder key. The site operator adds the attestation to their login service card with a code-520 update; the press checks it (`press.md §5.3` step 4a).
+
+- **Who can sign.** Only the domain's current full-domain admin card (`DomainRegistrations[domain].admin_card_address`). Sub-path-scoped admin sub-cards (§5.2) cannot: their scope is paths, not hosts. No secp256r1 signature is involved and no contract change is needed — unlike `AdminAuthorizeSubCardPayload` (§4.4), this binding is checked off-chain by presses and wallets.
+- **What it covers.** `https` origins on the default port whose host is the domain or a subdomain of it (`protocol-objects.md §17` coverage rule).
+- **When it stops working.** Wallets re-check it at every login (`card_verifier.md §6.4`): it stops working as soon as the domain's admin card changes (including a handoff, §8), the admin card is revoked, or the domain is suspended (`fraud_risk == 2`, reported as `DOMAIN_SUSPENDED`). A domain with `fraud_risk == 1` produces a login warning.
+- **What the admin is attesting.** That the login service card's holder is authorized to run login services for the domain. The admin should sign only for login service cards they control or have delegated to.
 
 ---
 
@@ -510,6 +538,8 @@ When a domain transfers to a new owner, the new owner must establish a fresh adm
 
 5. The new owner re-registers their policy entries via `SetPolicyAddress`.
 
+**Login service cards.** The handoff also retires every login-service-card domain binding the previous admin card signed: wallets check that the signing admin card is still the domain's current admin (§5.3). The new owner signs bindings for their own login service cards.
+
 **Audit trail.** The `DomainEntriesCleared` and `DomainRegistered` events on-chain provide a complete audit trail of the handoff. Prior cards issued under the old policy entries remain verifiable from IPFS (policy cards are content-addressed and do not disappear), but their domain/path association is severed from the on-chain table.
 
 ---
@@ -586,5 +616,7 @@ The following table summarizes all acceptance criteria in this spec, grouped by 
 | Suspension enforcement | §7.1, §7.3 |
 | Brand-name scanning | §7.4 |
 | Domain handoff | §8 |
+| Reserved action hosts | §2, §3 |
+| Login service card domain bindings | `process_specs/card_login.md §Acceptance Criteria` |
 
 Contract-level acceptance criteria (on-chain preconditions, state changes, error codes) are specified in `specs/object_specs/registry_contract.md §4.17–4.24`.

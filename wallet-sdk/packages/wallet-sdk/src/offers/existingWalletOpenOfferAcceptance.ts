@@ -1,3 +1,4 @@
+import { registrationField, type LoginRouterRegistration } from './loginRouterHook.js';
 import { reviewOpenOffer, type OfferChainVerificationOptions, type OfferRejection } from './offerVerification.js';
 import { acceptOpenOfferAndCountersign } from './countersign.js';
 import { submitOpenOfferClaim } from './openOfferClaim.js';
@@ -34,6 +35,8 @@ import type { SignedOpenCardOffer, Scip, ObliviousProtocolTransport, StorageProv
  * @property storageKey - Optional key name for storage; defaults to standard keyring storage key.
  */
 export interface AcceptOpenOfferForExistingWalletOptions {
+  /** Register with the login router after acceptance (card_login.md §Router Registration). */
+  loginRouter?: LoginRouterRegistration;
   offer: SignedOpenCardOffer;
   chainVerification: OfferChainVerificationOptions;
   pressBaseUrl: string;
@@ -53,6 +56,8 @@ export interface AcceptOpenOfferForExistingWalletOptions {
  */
 export interface AcceptedOpenOfferForExistingWallet {
   approved: true;
+  /** Present when `loginRouter` was supplied and the wallet is not yet registered: navigate here instead of the redirect. */
+  routerRegistrationUrl?: string;
   cardCid: string;
   scip: Scip;
   newCardPublicKey: Uint8Array;
@@ -84,5 +89,5 @@ export async function acceptOpenOfferForExistingWallet(
     claimSubmission
   );
 
-  return { approved: true, cardCid, scip, newCardPublicKey };
+  return { approved: true, cardCid, scip, newCardPublicKey , ...registrationField(options.loginRouter) };
 }

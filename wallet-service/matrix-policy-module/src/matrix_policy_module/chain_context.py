@@ -43,6 +43,11 @@ from matrix_policy_module.rpc_provider import Web3RpcProvider
 # fixed sentinel, not a configurable value. If a future phase needs this to
 # be real, it belongs in PolicyModuleConfig, not hardcoded here.
 _APP_CERTIFICATION_ROOT = "matrix-policy-module:no-app-certification"
+# The verifier requires a login service root before it checks any sub-card
+# (card_verifier.md §7.2 step 16f). Rooms accept no sub-cards: with the
+# sentinel app root above, a sub-card's app card can never be trusted, so
+# this sentinel only satisfies the config requirement.
+_LOGIN_SERVICE_CERTIFICATION_ROOT = "matrix-policy-module:no-login-service"
 
 
 def build_verifier(config: PolicyModuleConfig, trusted_roots: list[str]) -> CardVerifier:
@@ -57,6 +62,7 @@ def build_verifier(config: PolicyModuleConfig, trusted_roots: list[str]) -> Card
             rpc=rpc,
             ipfs=ipfs,
             app_certification_root=_APP_CERTIFICATION_ROOT,
+            login_service_certification_root=_LOGIN_SERVICE_CERTIFICATION_ROOT,
             trusted_roots=trusted_roots,
             return_chain=True,
         )

@@ -5,6 +5,7 @@ import type {
   SubCardEntry,
   CardChainEvent,
   EasAttestation,
+  DomainRegistration,
 } from "@membership-card-protocol/verifier";
 
 /**
@@ -57,6 +58,18 @@ export interface RegistryContract {
     update_code: number;
     effective_date: string;
   }>>;
+  /**
+   * Card login (card_verifier.md §4.1): the logic contract's
+   * `getDomainRegistration(uint8[] domain)` view, returning
+   * (admin_card_address, registered_at, fraud_risk, suspension_expires_at, exists).
+   * Optional: providers without it cannot be used for card login.
+   */
+  getDomainRegistration?(domain: string): Promise<{
+    admin_card_address: string;
+    fraud_risk: number;
+    suspension_expires_at: number | bigint;
+    exists: boolean;
+  }>;
 }
 
 export class EthersRpcProvider implements RpcProvider {
@@ -92,6 +105,19 @@ export class EthersRpcProvider implements RpcProvider {
   async getCardEventLog(cardAddress: string): Promise<CardChainEvent[]> {
     const entries = await this.#contract.getCardEventLog(cardAddress);
     return entries as CardChainEvent[];
+  }
+
+  async getDomainRegistration(domain: string): Promise<DomainRegistration | null> {
+    if (!this.#contract.getDomainRegistration) {
+      throw new Error("RegistryContract.getDomainRegistration is not available; card login needs it");
+    }
+    const entry = await this.#contract.getDomainRegistration(domain.toLowerCase().replace(/\.$/, ""));
+    if (!entry.exists) return null;
+    return {
+      admin_card_address: entry.admin_card_address.toLowerCase().replace(/^0x/, ""),
+      fraud_risk: entry.fraud_risk as 0 | 1 | 2,
+      suspension_expires_at: Number(entry.suspension_expires_at),
+    };
   }
 
   async getEasAnnotations(

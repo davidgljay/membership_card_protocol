@@ -113,6 +113,7 @@ describe('Sub-card authorization pipeline end-to-end (real WebCryptoSecureKeyPro
       rpc: makeHappyPathRpc(appCardAddress),
       ipfs: fakeIpfs,
       appCertificationRoot: GOVERNANCE_APP_CERT_ROOT,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       trustedRoots: [GOVERNANCE_APP_CERT_ROOT, appCardAddress],
     });
 

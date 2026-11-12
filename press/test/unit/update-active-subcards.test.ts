@@ -44,7 +44,13 @@ function makeCtx(overrides?: Partial<PressContext>): PressContext {
   };
   const ipfs = {
     pinToIPFS: vi.fn().mockResolvedValue('bafybeinewentry'),
-    fetchFromIPFS: vi.fn().mockRejectedValue(new Error('not used in this test')),
+    // The current head: an encrypted genesis document (appendLogEntry reads it).
+    fetchFromIPFS: vi.fn().mockImplementation(async () =>
+      aes256gcmEncrypt(
+        deriveContentKey(HOLDER_PK),
+        canonicalize({ policy_id: 'bafypolicy', recipient_pubkey: toBase64url(HOLDER_PK), ancestry_pubkeys: [] })
+      )
+    ),
   };
   const kv = {
     getItem: vi.fn().mockResolvedValue(null),

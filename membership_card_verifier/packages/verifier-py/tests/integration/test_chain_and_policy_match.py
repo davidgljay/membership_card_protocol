@@ -107,6 +107,7 @@ class TestReturnChain:
             rpc=rpc,
             ipfs=ipfs,
             app_certification_root="0xapp",
+            login_service_certification_root="5e" * 32,  # card login: branch node not on any test chain
             trusted_roots=["0xroot"],
             return_chain=False,  # Explicitly False
         )

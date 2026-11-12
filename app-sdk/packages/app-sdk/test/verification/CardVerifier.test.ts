@@ -49,6 +49,7 @@ describe('createCardVerifier', () => {
     const verifier = createCardVerifier({
       rpc: fakeRpc(),
       appCertificationRoot: TRUSTED_ROOT,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
     });
     expect(verifier).toBeInstanceOf(CardVerifier);
   });
@@ -58,6 +59,7 @@ describe('createCardVerifier', () => {
       rpc: fakeRpc(),
       ipfs: fakeIpfs,
       appCertificationRoot: TRUSTED_ROOT,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       trustedRoots: [TRUSTED_ROOT],
       fetchAnnotations: false,
     });
@@ -79,6 +81,7 @@ describe('createCardVerifier', () => {
       rpc: fakeRpc(),
       ipfs: fakeIpfs,
       appCertificationRoot: TRUSTED_ROOT,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       trustedRoots: [TRUSTED_ROOT],
       fetchAnnotations: false,
     });
@@ -93,6 +96,7 @@ describe('createCardVerifier', () => {
     const verifier = createCardVerifier({
       rpc: fakeRpc(),
       appCertificationRoot: TRUSTED_ROOT,
+      loginServiceCertificationRoot: '5e'.repeat(32), // card login: login service branch node (not on any test chain)
       trustedRoots: [TRUSTED_ROOT],
       fetchAnnotations: false,
     });

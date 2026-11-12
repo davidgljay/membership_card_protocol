@@ -24,7 +24,7 @@ function mockIpfs(): IpfsProvider {
 }
 
 function makeVerifier() {
-  return new CardVerifier({ rpc: mockRpc(), ipfs: mockIpfs(), appCertificationRoot: DUMMY_APP_CERT_ROOT });
+  return new CardVerifier({ rpc: mockRpc(), ipfs: mockIpfs(), appCertificationRoot: DUMMY_APP_CERT_ROOT, loginServiceCertificationRoot: '5e'.repeat(32) });
 }
 
 describe("version routing — verifyEnvelope", () => {

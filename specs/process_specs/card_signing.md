@@ -104,7 +104,7 @@ Card signing is the process by which a card holder signs an arbitrary message us
 
 ### Phase 5: Sending
 
-8. The completed `SignedMessageEnvelope` is transmitted to recipients via HTTPS (optionally via OHTTP for IP privacy). For authentication flows, the signed statement is wrapped in an `AuthenticationResponse` (see `card_protocol_spec.md §8`).
+8. The completed `SignedMessageEnvelope` is transmitted to recipients via HTTPS (optionally via OHTTP for IP privacy). For card login, an `auth_response` envelope is either posted through the browser inside an `AuthenticationResponse` (`form_post`) or routed as an ordinary message (`mcard_message`) — see `process_specs/card_login.md` and `protocol-objects.md §9`.
 
 ---
 
@@ -141,8 +141,9 @@ The canonical type definitions (content schemas, field constraints, and notes) l
 
 | Value | Description |
 |---|---|
-| `auth_request` | Service requests authentication from a card holder |
-| `auth_response` | Holder responds to an `auth_request` |
+| `auth_request` | Site pushes a login request reference (`{ request_uri }`) to a card it knows |
+| `auth_response` | Holder responds to a login request |
+| `auth_confirmation` | Site confirms a login response and sends the one-time code (`messaging_protocol.md §23`) |
 
 ### Programmatic / machine-to-machine
 
