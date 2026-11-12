@@ -58,6 +58,20 @@ Each card has an associated messaging endpoint managed by the user's wallet serv
 
 Cards can receive card offers, signed statements, update notifications, and general messages through this endpoint. This is also the channel through which presses notify cardholders when a registration or update is complete.
 
+### Notaries
+
+Sometimes a community wants an answer about its members without anyone, including the organizer, seeing what any one member said. A **notary** does that. It collects signed answers from cardholders, runs a program the community has chosen, publishes a signed result, and throws the answers away.
+
+Back to the running club:
+
+- **A club health check.** Before asking the city for a grant, the founder wants to show how connected the club is. She asks members how many other members they've run with this month. Members answer from their wallets, and the notary reports only a rounded total, and only if enough people took part. Nobody, the founder included, ever sees an individual answer. The founder can attach the signed result to her request, and anyone at the city can check it.
+- **A vote.** The club votes on moving Saturday runs to 8am. Members can change their vote until the vote closes, and only their latest vote counts. Each voter gets a receipt proving their ballot was counted. When the vote closes, the notary publishes the tally, and anyone can confirm it.
+- **An "anonymous member" card.** A member wants to post in a city-wide runners' forum as "a member of the Thursday club" without revealing who they are. They show their club card to a notary and get back a new card that says only that they're a club member. The new card can't be traced back to their club card. If they leave the club, the notary can quietly revoke the new card too, without revealing which member it belonged to.
+
+Why trust the notary? It runs inside a sealed hardware environment (AWS Nitro Enclaves) whose code anyone can check. Before your wallet sends anything, it checks exactly which program will run on your answer, who will get the result, and that the person running the notary can't read what you send. If any of that doesn't match what the community published, your wallet refuses to send.
+
+Notaries run as several copies on different machines, so a single crash doesn't lose anyone's vote. If they all fail at once, your wallet sends your answer again automatically. See [`specs/process_specs/notary_lifecycle.md`](specs/process_specs/notary_lifecycle.md).
+
 ---
 
 ## Protocol Components
@@ -132,6 +146,18 @@ When an end user sets up a card on their phone, their device will automatically 
 
 If a message comes in, the wallet service will make a POST request to the appropriate relay with a single-use UUID. The relay will look up the user's device info and notify them that a message has been received. To retrieve the message the end user will connect to the wallet service via OHTTP, download the message, and decrypt it locally.
 
+### Notary
+
+A notary is a service that computes results from members' signed answers without seeing them. A notary:
+
+1. Publishes a job (a survey, a vote, or a way to get a reduced card) along with proof of exactly which program it will run
+2. Accepts members' answers, which are encrypted so that only the sealed program can read them
+3. Runs the community's chosen program and applies the community's privacy rules, such as hiding results when too few people took part
+4. Publishes a signed result that anyone can check, and deletes the answers
+5. For reduced cards, issues the new card and can revoke it if the member's original card is revoked
+
+Anyone can run a notary. Because members' wallets check the sealed program before sending anything, communities don't have to trust the person running it, only that it stays online. The Protocol Governance Board keeps the list of approved notary programs and the versions of the sealed software that wallets will accept.
+
 ### Matrix Server
 
 Communities can host card-gated group chat rooms on a Matrix homeserver. A policy module governs who may join and post in a room using the same predicate system that governs card issuance, so access follows a community’s existing policies rather than a separate membership list. This gives cardholders a group messaging surface alongside the protocol’s direct card-to-card messaging, without requiring the homeserver operator to see which cards are talking to each other.
@@ -150,7 +176,7 @@ The full protocol specification covers:
 - Wallet service requirements and backup encryption scheme
 - Card update and revocation status codes (200-range endorsements, 800-range silent revocations, 900-range loud revocations)
 - Open offer format for distributing cards via QR code or link
-- Notary service patterns for anonymization
+- Notaries: attested computation over members' signed answers, votes, and reduced ("derived") cards. See [`specs/card_protocol_spec.md`](specs/card_protocol_spec.md) §9, [`specs/process_specs/notary_lifecycle.md`](specs/process_specs/notary_lifecycle.md), [`specs/process_specs/notary_replication_and_recovery.md`](specs/process_specs/notary_replication_and_recovery.md), [`specs/process_specs/derived_card_revocation_propagation.md`](specs/process_specs/derived_card_revocation_propagation.md), [`specs/object_specs/notary_runtime.md`](specs/object_specs/notary_runtime.md), and [`specs/object_specs/notary_host.md`](specs/object_specs/notary_host.md)
 
 See `/specs` for the current specification documents.
 

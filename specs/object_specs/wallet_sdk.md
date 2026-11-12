@@ -36,6 +36,7 @@
    - 7.4 [Existing-Wallet Open-Offer Acceptance](#74-existing-wallet-open-offer-acceptance)
    - 7.5 [Targeted Offer Acceptance](#75-targeted-offer-acceptance)
 7a. [Login (Wallet-Side)](#7a-login-wallet-side-not-implemented)
+7b. [Notaries (Wallet-Side)](#7b-notaries-wallet-side-not-implemented)
 8. [Messaging Helpers (Active Sub-Card Resolution)](#8-messaging-helpers-active-sub-card-resolution)
    - 8.1 [Resolving Active Sub-Cards from On-Chain Registry](#81-resolving-active-sub-cards-from-on-chain-registry-implemented)
 9. [Cross-Platform Hardening and Documentation (Mostly Complete)](#9-cross-platform-hardening-and-documentation-mostly-complete)
@@ -470,6 +471,115 @@ Computes the card's effective `preferred_services` (`card_login.md §Service Dis
 
 ---
 
+## 7b. Notaries (Wallet-Side) (Not implemented)
+
+*(Added 2026-11-11. Module: `notary/`. Processes: `process_specs/notary_lifecycle.md` Phases 3–5 and 7, `notary_replication_and_recovery.md` §7, `derived_card_revocation_propagation.md` §3 and §8. Objects: `protocol-objects.md` §20–§34.)*
+
+The wallet's side of a notary job. It checks the job and the enclave before encrypting anything, shows a consent screen built from the policy, submits a signed and sealed input, keeps the receipts, resubmits after a new epoch, and requests and countersigns derived cards.
+
+Every gated function returns the §11 discriminated union. Card and chain checks go through the shared `CardVerifier`. The enclave attestation check is **not** card-chain logic, so it lives in the attestation verifier modules below. This is a stated exception to "no verification logic re-derived outside `CardVerifier`" (§10).
+
+### 7b.1 Configuration
+
+```ts
+interface NotaryConfig {
+  attestationRoots: { "aws-nitro-enclaves": Uint8Array; simulator?: Uint8Array };
+  allowSimulator: boolean;                 // hard-coded false in production builds
+  acceptedRuntimesCard: string;            // list card address (protocol-objects.md §34); both lists must pass
+                                           // algorithm L against the on-chain PressRegistryBody keyset
+  programAllowlistCard: string;
+  notaryCardPolicy: string;                // NotaryCardPolicy CID
+  acceptedKems: ["x-wing-draft-06"];
+  maxAttestationAgeSeconds?: number;       // default 86400
+}
+```
+
+### 7b.2 Verifying a job (algorithm W)
+
+```ts
+function verifyNotaryJob(options: {
+  announcement: JobAnnouncement; verifier: CardVerifier; config: NotaryConfig;
+  attestation: AttestationVerifier[]; storage: StorageProvider; now?: string;
+}): Promise<
+  | { valid: true; jobHash: string; consent: NotaryConsent; warnings: string[] }
+  | { valid: false; code: string; reason: string }>;
+```
+
+This implements W1–W15 (`notary_lifecycle.md` Appendix A.2) exactly, using the wallet's own chain reads, never data from the notary host. The attestation verifier is one module per platform (`notary_runtime.md §5`), so only that module knows the AWS document format. The highest epoch seen for each job is stored, so a lower epoch is refused (W12).
+
+### 7b.3 Consent model
+
+```ts
+type NotaryConsent = {
+  collects: FieldDefinition[];                       // notary.input_schema
+  program: { allowlisted: true; name: string; version: string; auditReport: string }
+         | { allowlisted: false };                   // "custom program — not independently audited"
+  recipients: { public: boolean; jobRequester: boolean; cards: string[] };
+  privacy: { kMin: number; transforms: Record<string, object> };
+  notaries: { notaryCard: string; operatorCard: string; platform: string }[];
+  closesAt?: string; endsAt?: string;
+  disclosures: string[];                             // derived_card_revocation_propagation.md §8;
+                                                     // participation disclosure (lifecycle step 31)
+  requesterText?: string;                            // shown only as labelled requester text
+};
+```
+
+The consent is built **only** from the policy (at its current head) and the job's signed fields. `requesterText` is never merged into any other field.
+
+### 7b.4 Submitting an input
+
+```ts
+function submitNotaryInput(options: {
+  announcement: JobAnnouncement; payload: object; revision?: number;
+  signer: SubCardSigner; transport: ObliviousProtocolTransport; storage: StorageProvider;
+}): Promise<
+  | { submitted: true; inputHash: string; hostReceipt: HostReceipt;
+      validationReceipt: ValidationReceipt }
+  | { submitted: false; code: string; reason: string }>;
+```
+
+1. **Capability.** If the wallet's device sub-card lacks the `"notary_input"` capability, the wallet adds it to its own sub-card. This is the wallet self-signing exception (`protocol-objects.md §16`), so there is no app consent step.
+2. **Build and sign.** Build the `NotaryInput`: `revision`, a recent `chain_ref`, and `evidence` (every IPFS object needed to check the contributor's card). Sign it, and **persist it before sending**, the same rule as persist-before-sign for keys.
+3. **Seal.** Seal it to `job_public_key` (`protocol-objects.md §24`, using `@hpke/hybridkem-x-wing`), wrap it in the oblivious envelope, and send it through the relay.
+4. **Check receipts.** Verify the `HostReceipt` against `operator_host_pubkey`. Open `receipt_sealed` with the exported secret, and verify the `ValidationReceipt` against the notary card's key, with `acks ≥ q`.
+5. **Store.** Keep the receipts and the signed input until a valid notarization for the job has been seen, plus 7 days.
+
+### 7b.5 Watching jobs and resubmitting
+
+`watchNotaryJobs()` re-fetches announcements for jobs with stored inputs every 6 hours, and immediately when a validation receipt is missing after 10 minutes. On a higher epoch it:
+1. runs `verifyNotaryJob`;
+2. if the reason is `total_loss`, tells the user their input was resent;
+3. re-seals the **stored** signed input (the latest revision, not re-signed, with no prompt) to the new key, and submits it (`notary_replication_and_recovery.md` steps 27–28).
+
+### 7b.6 Checking inclusion and the result
+
+`checkNotarization(jobHash)` calls `verifier.verifyNotarization` (`card_verifier.md §6.5`). It then confirms the wallet's latest accepted `input_hash` is in `counted_inputs`. If it is missing, the result includes `{ dropped: true, hostReceipt, validationReceipt }`, the evidence that attributes the drop to the operator.
+
+### 7b.7 Derived cards
+
+```ts
+function requestDerivedCard(options: {
+  announcement: JobAnnouncement; sourceCard: HeldCard; targetPeriod: number;
+  signer: SubCardSigner; transport: ObliviousProtocolTransport; storage: StorageProvider;
+}): Promise<
+  | { pending: true; derivedAddress: string; expiresAt: string; issuedAtBoundary: string }
+  | { pending: false; code: string; reason: string }>;
+```
+
+`derived_card_revocation_propagation.md` §3, steps 1–9:
+1. **Key.** Generate a fresh derived key and **persist it before signing** (§7.2's helper).
+2. **Submit.** Submit the request as in §7b.4.
+3. **Check the offer** returned in the validation receipt: `projected` matches the source card, and the fields match what was consented to.
+4. **Countersign** without a new prompt, and send the `NotaryCountersign` the same way.
+5. **Wait** for `keccak256(D_pub)` to appear in the registry. A re-offer (a new boundary) is countersigned automatically.
+6. **Renew.** `renewDerivedCards()` runs during each card's `renewal_window`.
+
+### 7b.8 Error codes
+
+These are the `ATT_*`, `ANN_*`, `JOB_*`, `INPUT_*`, `DERIVE_*` and `NOT_*` codes in `notary_lifecycle.md` §Error Paths and `derived_card_revocation_propagation.md` §Error Paths, plus `NOTARY_NO_RECEIPT` (no validation receipt after retries).
+
+---
+
 ## 8. Messaging Helpers (Active Sub-Card Resolution)
 
 *(Implemented — salvaged from `client-sdk-old` during the split's platform-package reconciliation step, having been built ahead of the original spec's own schedule the same way §6.5's deregistration was. Module: `messaging/`.)*
@@ -503,7 +613,7 @@ Cross-cutting properties this package maintains:
 
 - **`decryption_key` and the master private key never cross a function's return boundary.** `setupWallet` and `recoverWallet` are the *only* functions that ever hold them, and both clear the master key in a `finally` block. Every other function that needs `decryption_key` or `masterSecretKey` (e.g., offer countersigning, sub-card authorization) receives it as a direct parameter from a caller that obtained it some other way — this package has no general "unlock the wallet again after initial setup" primitive (documented gap, not silently assumed away).
 - **Persist before sign**, for every per-card keypair generated during offer acceptance — structurally enforced via a non-exported helper in this package's own `offers/countersign.ts` (§7.2), not a call-site convention and not imported from App SDK.
-- **No verification logic is re-derived outside `CardVerifier` calls** — chain walking, revocation checking, and policy-compliance evaluation are delegated to the shared verifier instance inherited from App SDK.
+- **No verification logic is re-derived outside `CardVerifier` calls** (one stated exception: enclave attestation verification for notaries lives in per-platform `AttestationVerifier` modules, §7b — it is not card-chain logic) — chain walking, revocation checking, and policy-compliance evaluation are delegated to the shared verifier instance inherited from App SDK.
 - **No key derivation input is ever also transmitted to a party the derivation must stay secret from.** The `passkeyOutputFromPrf` correction from the unified spec's CP-1 security review — neither the device passkey's PRF output nor the synced-passkey PRF output is ever sent to the wallet service or any other server (§5.1 reiterates this property).
 - **Deregistration requires the primary card key, structurally, not just by policy** (§6.5) — no signer-substitution is possible via any exported function's type signature.
 - **`SecureKeyProvider` never returns private key material**, on any platform — requester-side sub-card keys (App SDK) and master key usage (this package) both go through hardware-backed or scoped-local key material.
@@ -527,6 +637,7 @@ Functions that gate on a verification step return a discriminated union (`{ appr
 | 1 | 1.1–1.7 (workspace, providers, crypto, verifier, transport, platform defaults, CI) | **Implemented** |
 | 2 | 2.1 Wallet setup | **Implemented** |
 | — | §7a Login (wallet-side) and §6.1 login service scope rule | **Not started** — specified 2026-11-08 (`process_specs/card_login.md`) |
+| — | §7b Notaries (wallet-side) | **Not started** — specified 2026-11-11 (`process_specs/notary_lifecycle.md`) |
 | 2 | 2.2 Device sub-card (collapsed, thin wrapper over App SDK's `requestSubCard`) | **Implemented** |
 | 2 | 2.3 Backup registration | **Implemented** |
 | 2 | 2.4 Recovery and re-registration | **Implemented** |
@@ -605,6 +716,7 @@ Carried forward from `plans/sdk-split-strategic-plan.md`'s resolved decisions an
 - `specs/object_specs/card_verifier.md` — verifier integration (inherited from App SDK)
 - `specs/object_specs/app_sdk.md` — app-side (non-custody) counterpart; this package imports it
 - `specs/object_specs/press.md` — the press-side counterpart
+- `specs/process_specs/notary_lifecycle.md`, `notary_replication_and_recovery.md`, `derived_card_revocation_propagation.md`, `object_specs/notary_runtime.md` — §7b
 - `specs/ARCHITECTURE.md` — ADR-004 (canonicalization/signing), ADR-006 (content encryption), ADR-007 (OHTTP), ADR-009 (keyring storage)
 - `plans/sdk-split-strategic-plan.md` — the source plan for this split
 - `plans/client-sdk/strategic-plan.md`, `plans/client-sdk/implementation-plan.md` — the unified-SDK plans both packages derive from
@@ -613,6 +725,8 @@ Carried forward from `plans/sdk-split-strategic-plan.md`'s resolved decisions an
 
 ## Changelog
 
+- §7b.1: both notary list cards must pass algorithm L (PressRegistryBody member `list_approval`) against the on-chain keyset before use (2026-11-12, notaries, CP3).
+- Added §7b (Notaries, wallet-side): the job and enclave attestation check (algorithm W), a consent model built from the policy, sealed input submission, receipts, resubmission, notarization checks and derived cards. The attestation verifier is a stated exception to the `CardVerifier`-only rule (2026-11-11, notaries, ADR-013).
 - Added §7a (Login, wallet-side), the §6.1 login service scope rule, and router registration on offer acceptance (§7.5 note) (2026-11-08, card login).
 
 - Added `card_migration.md` as a Related Spec (§15) and an unimplemented-gap row in Implementation Status (§12), naming this package as client-side migration-initiation's natural owner pending a firmer decision (`plans/spec-consistency/inconsistencies/phase-1-consolidated-fixes.md` fix #14).

@@ -3,6 +3,7 @@
 **Version:** 0.1 (draft)
 **Date:** 2026-06-14
 **Status:** Canonical  
+**Amended 2026-11-11 (notaries):** added codes 820 and 920 (propagated revocations of notary-derived cards).  
 **Amended 2026-11-08 (card login):** added code 302 (preferred services update) and code 520 (login service card domain binding).
 
 This is the authoritative registry of update codes for the Card Protocol. All other documents that reference specific codes cross-reference this registry. Before using any new code in a specification, add it here first.
@@ -104,6 +105,7 @@ Within the 7xx range, lower subcodes indicate more honorable circumstances; high
 | 801 | Quiet revocation — voluntary surrender by holder |
 | 810 | Quiet revocation — this card's signing key compromised |
 | 811 | Quiet revocation — sub-card lost or stolen (this card only) |
+| 820 | Quiet revocation — propagated: the source credential behind this derived card ended. Posted by a notary under `sealed_link` (`process_specs/derived_card_revocation_propagation.md`) when the source card received an 8xx. Added 2026-11-11. |
 
 **Notes on 8xx:**
 - Code 811 applies to a specific sub-card (device-bound, app-specific credential). It does not revoke the holder's primary card or other sub-cards. See `key_rotation.md §1.3`.
@@ -118,6 +120,9 @@ Within the 7xx range, lower subcodes indicate more honorable circumstances; high
 | 901 | Loud revocation — policy violation identified post-issuance |
 | 910 | Loud revocation — full wallet compromise suspected |
 | 911 | Loud revocation — bad actor or harmful conduct |
+| 920 | Loud revocation — propagated: the source credential behind this derived card was revoked loudly. Posted by a notary under `sealed_link` when the source card received a 9xx. The source subcode is deliberately not copied. Added 2026-11-11. |
+
+**Notes on 820 and 920:** These are posted only on notary-derived cards (`protocol-objects.md §2.2`), by the issuing notary card, as permitted by the template policy's `revocation_permissions`. They keep whether the source revocation was quiet or loud, but never the reason, which a reduced card is meant to withhold. A template policy may instead fix one code for all propagated revocations (`revocation_propagation.derived_code`). Historical semantics follow the range: 820 like 8xx, 920 like 9xx.
 
 **Notes on 9xx:**
 - Code 910 signals that both the master key and one or more sub-card keys may be compromised. See `key_rotation.md §5`.
@@ -153,3 +158,4 @@ To define a new code:
 - `key_rotation.md §1.3` — code 811 for sub-card emergency rotation
 - `key_rotation.md §2.5` — code 810 for master key compromise
 - `key_rotation.md §5` — code 910 for full wallet compromise
+- `process_specs/derived_card_revocation_propagation.md §6` — codes 820 and 920 for propagated revocations

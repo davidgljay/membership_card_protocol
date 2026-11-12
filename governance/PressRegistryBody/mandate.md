@@ -3,13 +3,17 @@
 **On-chain identifier:** `GovernanceBodyId::PressRegistryBody`  
 **Quorum:** 4-of-5  
 **Status:** Active  
-**Last reviewed:** 2026-06-25
+**Last reviewed:** 2026-06-25  
+**Amended 2026-11-11 (notaries):** second mandate, covering notary runtimes, programs and operators (`notary_certification.md`).
+**Amended 2026-11-12:** emergency retirement of notary runtimes and programs (`notary_certification.md`, Emergency Retirement).
 
 ---
 
 ## Purpose
 
 `PressRegistryBody` is the operational governance body for press operators. Its mandate is to ensure that presses operate within their agreements, maintain and enforce rules for press conduct, and advocate for press-related improvements to the protocol.
+
+**Second mandate (2026-11-11): notaries.** The body also maintains the accepted-runtime list and program allowlist for notaries, holds `NotaryCardPolicy` and the derived-card template policies, and authorizes derived-card operators with `AuthorizePress`. That mandate, and its emergency-retirement rule, are in [`notary_certification.md`](./notary_certification.md).
 
 Where `RootPolicyBody` governs the protocol's infrastructure and rules, `PressRegistryBody` governs the operators who use those rules to issue cards. The two bodies have distinct mandates and distinct on-chain powers; neither directs the other's operational decisions.
 
@@ -99,6 +103,7 @@ All substantive decisions follow the off-chain process defined in [`research/off
 
 Key commitments:
 - **Minimum deliberation periods:** 14 days for press authorization/revocation decisions (7 days for emergency revocation), 14 days for rule changes, 21 days for membership changes.
+- **Exception: emergency retirement of notary runtimes and programs.** Any 2 of the 5 members may retire an exploitable runtime or program at once, with `retire_reason: "vulnerable"`. The full body must ratify or reverse it within 7 days, with a public decision record. This exception can only remove acceptance. Runtimes, wallets and verifiers enforce both this threshold and the 4-of-5 quorum for every other list change, through members' signatures on each list version (`notary_certification.md`, Emergency Retirement).
 - **Blocking objections** must be addressed before consensus is called.
 - **Decision records** are produced for every governance action and maintained permanently.
 - **Public summaries** are published after on-chain execution and after enforcement decisions.

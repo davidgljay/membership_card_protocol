@@ -169,8 +169,24 @@ A press operator who cannot comply with an amended rule should notify `PressRegi
 
 ---
 
+## Section 6 — Notary Operators (draft, 2026-11-11)
+
+Notary operators run attested enclaves rather than presses (`specs/ARCHITECTURE.md` ADR-013). Their obligations are set out in [`notary_certification.md`](./notary_certification.md) §Operators, and apply here as press obligations:
+- run only accepted runtimes;
+- keep ciphertexts until close;
+- never filter policy snapshots;
+- anchor every job-log record;
+- keep replicas separate, and never run the relay for jobs the operator serves;
+- protect the host key and gas wallet;
+- never try to read inputs or recover keys.
+
+Violations use the categories in Section 3. The evidence is public job logs, `dropped_after_acceptance`, and contributors' receipts.
+
+---
+
 ## Amendment History
 
 | Version | Date | Summary |
 |---|---|---|
 | 0.1 | 2026-06-25 | Initial skeleton. Structural sections complete; content sections pending `PressRegistryBody` adoption. |
+| 0.2 (draft) | 2026-11-11 | Section 6, Notary Operators (pending adoption) |

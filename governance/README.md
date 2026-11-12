@@ -17,7 +17,7 @@ This folder documents each body's purpose, on-chain powers, member profiles, and
 | Body | On-chain identifier | Primary mandate | Quorum |
 |---|---|---|---|
 | [RootPolicyBody](./RootPolicyBody/mandate.md) | `GovernanceBodyId::RootPolicyBody` | Protocol infrastructure: policy registration, logic upgrades, protocol-level commitments | 4-of-5 |
-| [PressRegistryBody](./PressRegistryBody/mandate.md) | `GovernanceBodyId::PressRegistryBody` | Press operations: authorization, revocation, compliance rules | 4-of-5 |
+| [PressRegistryBody](./PressRegistryBody/mandate.md) | `GovernanceBodyId::PressRegistryBody` | Press operations: authorization, revocation, compliance rules; notary runtimes, programs and operators (2026-11-11) | 4-of-5 |
 | [DnsGovernanceBody](./DnsGovernanceBody/mandate.md) | `GovernanceBodyId::DnsGovernanceBody` | DNS namespace: domain registration, policy address verification, fraud monitoring | M-of-N (bootstrapped 1-of-1) |
 
 **Separation of concerns.** `RootPolicyBody` governs the protocol's rules and infrastructure. `PressRegistryBody` governs the press operators who use those rules to issue cards. `DnsGovernanceBody` governs the `mcard://` human-readable namespace, operating independently of the other two bodies. None of the three bodies directs the others' operational decisions.

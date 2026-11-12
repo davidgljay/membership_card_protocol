@@ -3,6 +3,7 @@
 **Version:** 0.1 (draft)  
 **Date:** 2026-05-28  
 **Status:** Draft  
+**Amended 2026-11-11 (notaries):** new §24 `notary_output`. The sub-card capability string `"notary_input"` is defined; it authorizes signing a `NotaryInput` (`protocol-objects.md §23`), which is not a message envelope.  
 **Amended 2026-11-08 (card login):** §13 `auth_request` is now a reference to a signed `AuthenticationRequest`; §14 `auth_response` content revised; new §23 `auth_confirmation`; MSG-OQ-8 and MSG-OQ-9 resolved; Summary Table numbering corrected.
 
 > **Terminology note.** This spec uses the canonical "card" terminology per the Naming Convention. The issuance service is the "press".
@@ -613,6 +614,30 @@ A site tells the wallet that a `mcard_message` login response was accepted, and 
 
 ---
 
+### 24. `notary_output`
+
+A notary's private result, sent to each recipient listed in the notary policy's `output_recipients`. Added 2026-11-11 (`process_specs/notary_lifecycle.md` step 43).
+
+```json
+{
+  "type": "notary_output",
+  "content": {
+    "job_hash":       "<base64url>",
+    "notarization":   "<cid of the Notarization>",
+    "output":         { "<value matching the policy's output_schema>": "..." },
+    "output_hash":    "<base64url — equals notarization.output_hash>"
+  }
+}
+```
+
+**Notes.**
+- **Signing and encryption.** Signed by the notary card's enclave-held key (`K_id`), and encrypted inside the enclave to each recipient sub-card (§Sender-Side Fan-out in `message_routing.md`). The notary host only relays it.
+- **Recipient checks.** A recipient checks that `output_hash` matches the notarization, and verifies the notarization (`card_verifier.md §6.5`).
+
+**Capability string `"notary_input"`.** Not a message type. A sub-card whose `capabilities` include it may sign `NotaryInput` objects for notary jobs. Wallets add it to their own device sub-card (`wallet_sdk.md §7b.4`).
+
+---
+
 ## Summary Table
 
 | § | Type | Sender | Recipient | Signed | Notes |
@@ -644,6 +669,7 @@ A site tells the wallet that a `mcard_message` login response was accepted, and 
 | 21 | `flag` | Any card | Press of flagged card | Yes | Entry to 6xx/9xx pipeline; not anonymous |
 | 22 | `error` | Any card | Request sender | Yes | Structured error response |
 | 23 | `auth_confirmation` | Login service card (server card signs) | Presented card | Yes | One-time code for browser binding |
+| 24 | `notary_output` | Notary card (enclave key signs) | Policy's output recipients | Yes | Private notary result; host relays ciphertext only |
 
 Section 12 is unused; the number is retained so existing cross-references stay valid. The `§` column was previously a running count that did not match the section headings (corrected 2026-11-08).
 ---

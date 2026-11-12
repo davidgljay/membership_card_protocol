@@ -3,6 +3,13 @@
 **Version:** 0.2 (draft)  
 **Date:** 2026-06-14  
 **Status:** In Review  
+**Amended 2026-11-11 (notaries, ADR-013):**
+- §1 gains the optional `expires_at` field.
+- §2 gains `approved_notaries`, the `notary` section (§2.1) and derived-card template policies (§2.2).
+- §11 gains an exception for notary-issued cards.
+- New §20–§34 define the notary objects.
+
+See `process_specs/notary_lifecycle.md`.  
 **Amended 2026-11-08 (card login):** §8–9 rewritten as v2 (server-card-signed request, DCQL `mcard` query, `form_post`/`mcard_message` response modes); new §17 `DomainBindingAttestation`, §18 `LoginServiceMetadata`, §19 `WalletRegistrationToken`; §1.1 gains `domain_binding`; §2 gains `preferred_services`; §16 gains attestation level `S1` and the login service scope rule. See `process_specs/card_login.md`.  
 **Amended 2026-10-23:** §11 `PressIssuanceRecord` gains `issuer_card`, `policy_id`, and `offer_id`, and is delivered to the issuer and the policy card's holder as well as to auditors; §10 SCIP no longer has an administrator courtesy copy.  
 **Amends:** v0.1 — §14 write authorization updated from ML-DSA-44/Stylus to secp256r1/RIP-7212 per ADR-012. Press dual-key model note added.
@@ -32,6 +39,21 @@ This document is the canonical reference for every structured object in the Card
 17. [DomainBindingAttestation](#17-domainbindingattestation)
 18. [LoginServiceMetadata](#18-loginservicemetadata)
 19. [WalletRegistrationToken](#19-walletregistrationtoken)
+20. [Notary Card and Genesis Request](#20-notary-card-and-genesis-request)
+21. [NotaryJob](#21-notaryjob)
+22. [JobAnnouncement](#22-jobannouncement)
+23. [NotaryInput](#23-notaryinput)
+24. [SealedInput](#24-sealedinput)
+25. [HostReceipt](#25-hostreceipt)
+26. [ValidationReceipt](#26-validationreceipt)
+27. [Notarization](#27-notarization)
+28. [JobLogRecord](#28-joblogrecord)
+29. [HandoffRecord](#29-handoffrecord)
+30. [Heartbeat](#30-heartbeat)
+31. [StateBlobHeader](#31-stateblobheader)
+32. [PropagationBatch](#32-propagationbatch)
+33. [Enclave Attestation Binding](#33-enclave-attestation-binding)
+34. [Notary Governance Lists](#34-notary-governance-lists)
 
 ---
 
@@ -77,6 +99,7 @@ The genesis document of a card. Every card — including policy cards, press sub
     "<base64url — ML-DSA-44 public key of the press card's issuer (policy card holder), if applicable>",
     "..."
   ],
+  "expires_at":        "<ISO 8601 timestamp — optional; the card lapses at this chain time>",
   "holder_signature":  "<base64url — holder's ML-DSA-44 countersignature over the offer including recipient_pubkey (excludes holder_signature, press_signature)>",
   "issued_at":         "<ISO 8601 timestamp>",
   "issuer_card":       "<base64url — mutable pointer in registry of the offerer (issuer) who constructed the offer>",
@@ -116,6 +139,7 @@ The genesis document of a card. Every card — including policy cards, press sub
 | `press_signature` | `base64url` | Yes | No | Press signs the complete countersigned document (all fields except `press_signature`), applied last after validating policy compliance |
 | `supersedes` | `card-pointer` | No | No | Present only on un-revocation cards: the mutable pointer of the prior card this card corrects. Set by the issuer at genesis. See `card_protocol_spec.md §Background`. |
 | `supersession_note` | `text` | No | No | Human-readable explanation of why this card supersedes the one pointed to by `supersedes`. Present only when `supersedes` is set. |
+| `expires_at` | `timestamp` | No | No | *Added 2026-11-11.* When present, the card **lapses** at this time, compared with **chain time** (a block timestamp). Signatures made with the card's key before `expires_at` remain valid, the same "historical signatures valid before" semantics as an 8xx revocation (`update_codes.md`). After it, verifiers treat the card as no longer active. Set by the offerer at genesis, covered by all three signatures (it is in no exclusion list), and never changed: renewal means issuing a new card. Any policy may use it. Derived cards (§2.2) always carry it. Absent means the card does not expire. Distinct from `PolicyCardDocument.valid_until`, which is when a press stops issuing under a policy. |
 
 **Signing sequence (three parties, fixed order):**
 1. The **offerer's wallet service** assembles the document with all policy-defined fields, `issuer_card`, `press_card`, `issued_at`, `ancestry_pubkeys` (the ordered array of ancestor ML-DSA-44 public keys, from immediate parent toward root), and `past_keys` if applicable (present and oldest-first when this card is the product of a master key rotation; omitted otherwise), leaving `recipient_pubkey`, `holder_signature`, `press_signature`, and `protocol_version` absent. (`protocol_version` is added by the press in step 5 — the offerer does not know which version the press will attest to.)
@@ -192,6 +216,8 @@ A policy card is a CardDocument whose content defines the rules for a class of c
   "requester_predicate":   { "<optional card predicate expression>" },
   "auditors":              ["<base64url card-pointer>", "..."],
   "approved_presses":      ["<base64url card-pointer>", "..."],
+  "approved_notaries":     ["<base64url card-pointer — optional; notary cards, §20>", "..."],
+  "notary":                { "<optional — notary section, §2.1>": "..." },
   "valid_until":           "<ISO 8601 timestamp — optional>",
   "allow_open_offers":     false,
   "revocation_permissions": {
@@ -228,7 +254,168 @@ A policy card is a CardDocument whose content defines the rules for a class of c
 | `revocation_permissions` | object | No | Predicates controlling who may post 8xx and 9xx entries; defaults to holder-or-issuer for 8xx, issuer-only for 9xx |
 | `notes` | `append-only-array` of `text` | No | Append-only annotations |
 | `policy_creation` | object | No | Constraints on policies that holders of this policy's cards may create |
+| `approved_notaries` | `card-pointer-array` | No | *Added 2026-11-11.* Notary cards (§20) that may serve jobs under this policy. Read from the policy's **current** head; removing an entry stops new jobs and new inputs at once. For derived-card template policies (§2.2), the on-chain `PressAuthorizations` entry is authoritative for writes, as for presses (ADR-011). Default update policy `{ "is_holder": true }`. |
+| `notary` | object | No | *Added 2026-11-11.* Present on a **notary policy**. Defines the program, its inputs and outputs, who may take part, and the privacy bounds. See §2.1. Default update policy `{ "is_issuer": true }` for the whole section. |
 | `preferred_services` | `service-array` | No | Services card holders can log in to (card login). **Absent** = inherit the nearest ancestor policy's list along the issuance chain (§8.1); **present, including `[]`** = this list replaces the inherited one. Entries: `origin` (`https:` origin, unique), `name`, optional `icon` (CID), optional `description`. Read from the live policy head. Updated with code 302. See `card_protocol_spec.md §1`. Added 2026-11-08. |
+
+
+### 2.1 Notary Section
+
+*Added 2026-11-11 (ADR-013).* A **notary policy** is a `PolicyCardDocument` with a `notary` section. It names a WASM program and says who may open jobs, who may contribute inputs, what the output looks like, who receives it, and the privacy bounds the runtime enforces. The program computes the output; the policy, not the program, decides where it goes.
+
+**`field_definitions` on a notary policy:**
+- For an aggregation or vote policy, nothing is issued under it, so `field_definitions` is `[]`. The field stays required.
+- For a derived-card template policy (§2.2), it describes the derived card.
+
+**Not to be confused with the top-level predicates.** The top-level `requester_predicate` and `recipient_predicate` keep their usual meaning: who may request issuance under the policy, and who may receive a card. The notary predicates below have different names so they can't be mistaken for them.
+
+**Pinning.** Jobs pin the policy state they were opened against (`NotaryJob.policy_state_cid`, §21). Wallets refuse a job whose pinned `notary` section or `approved_notaries` differs from the current head.
+
+```json
+"notary": {
+  "contributor_predicate":   { "<card predicate; may use parameter references>" },
+  "derived_card":            { "<output_action \"card\" only — see below>" },
+  "input_replacement":       "reject_duplicates | latest_wins",
+  "input_schema":            [ { "<field definition, without update_policy>" } ],
+  "isolation":               "shared | dedicated",
+  "job_requester_predicate": { "<optional card predicate>" },
+  "limits":                  { "fuel": 0, "max_inputs": 0, "memory_pages": 0, "wall_ms": 0 },
+  "mode":                    "aggregate | per_input",
+  "output_action":           "statement | card",
+  "output_recipients":       { "cards": ["<card-pointer>"], "job_requester": true, "public": false },
+  "output_schema":           [ { "<field definition, with optional privacy transforms>" } ],
+  "parameter_bounds":        [ { "<field definition>" } ],
+  "platform":                "aws-nitro-enclaves",
+  "privacy":                 { "k_min": 5 },
+  "program_cid":             "<CIDv1, raw codec, sha2-256, of the WASM module>",
+  "retention":               "none",
+  "revocation_propagation":  { "<output_action \"card\" only — see below>" }
+}
+```
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `program_cid` | `cid` | Yes | CIDv1, `raw` codec, sha2-256. The **program hash** is this CID's digest, which equals SHA-256 of the module bytes. |
+| `mode` | `text` | Yes | `"aggregate"`: one output per job, computed at close from all counted inputs. Votes are aggregate jobs. `"per_input"`: a standing job with one output per input, and the job key rotated every `key_period` (§21). |
+| `input_schema` | `field-definition-array` | Yes | Schema for the contributor's `payload` (§23), in the field type system (`card_protocol_spec.md` §The Field Type System) without `update_policy` |
+| `input_replacement` | `text` | Yes | `"reject_duplicates"`: the first valid input per contributor counts. `"latest_wins"`: the input with the highest contributor-signed `revision` counts. A contributor is identified by their master card's **root key**: `past_keys[0].pubkey` if present, otherwise `recipient_pubkey`. A key rotation therefore doesn't create a second contributor. |
+| `contributor_predicate` | `card-predicate` | Yes | Evaluated on the contributor's master card chain. May contain parameter references (below). |
+| `job_requester_predicate` | `card-predicate` | No | Evaluated on the job requester's card chain. Absent means anyone may open a job. `{ "is_holder": true }` means only the policy holder. |
+| `parameter_bounds` | `field-definition-array` | No | The job parameters (§21 `parameters`) and their limits (`min`, `max`, `regex`, `enum`). Absent means the job takes no parameters. |
+| `output_schema` | `field-definition-array` | Yes | The program's output. Field types in v1 are `integer`, `boolean`, and `text` with a required `enum`. Must equal the module's `notary.output_schema` custom section byte for byte after RFC 8785 canonicalization (`object_specs/notary_runtime.md`, program admission). |
+| `output_action` | `text` | Yes | `"statement"`: a notarization (§27) is produced. `"card"`: a derived card (§2.2). |
+| `output_recipients` | object | If `statement` | `{ "public": boolean, "job_requester": boolean, "cards": card-pointer-array }`. If `public` is false, the output is sent only to the listed parties, encrypted as card messages. Absent for `"card"`, where the derived card always goes to the presenting holder. |
+| `retention` | `text` | Yes | `"none"`, the only v1 value |
+| `platform` | `text` | Yes | `"aws-nitro-enclaves"`. `"simulator"` is valid only for verifiers configured to accept the simulator's test root. |
+| `isolation` | `text` | Yes | `"shared"`: the program may share an enclave with other jobs; allowed only if `program_cid` is on the program allowlist (§34). `"dedicated"`: the program runs alone in its enclave. |
+| `privacy` | object | Yes | `{ "k_min": integer ≥ 1 }`. If fewer than `k_min` contributors are counted, the output is the fixed value `{ "insufficient_participation": true }`. The key `"dp"` is reserved for differential privacy, which is specified but not supported in v1; a runtime refuses a policy that sets it. |
+| `limits` | object | No | `{ "fuel", "memory_pages", "wall_ms", "max_inputs" }` (integers). Each must be at or below the runtime's ceiling. Absent fields take the runtime defaults. |
+| `derived_card` | object | If `card` | Issuance parameters (below) |
+| `revocation_propagation` | object | If `card` | Revocation propagation parameters (below) |
+
+**Privacy transforms.** `output_schema` integer fields may carry these. The runtime applies them in order to whatever the program returns:
+1. `clamp: [min, max]`
+2. Either `round_to: r` (to the nearest multiple of `r`, ties to even, in integer arithmetic) or `buckets: [e0, e1, …]` (the value becomes the largest edge ≤ it; requires `clamp` with `min = e0`). Not both.
+3. `suppress_cell_below_k: k` (if `0 < value < k` the field is omitted; the field must be declared `required: false`).
+
+The transforms guarantee that the output stays within the declared ranges and granularity whatever the program does. They do not make an arbitrary program private. For that, rely on the program allowlist (§34).
+
+**Parameter references.** Inside a `notary` section only, a predicate leaf's value may be `{ "param": "<parameter name>" }` instead of a literal. Before the predicate is evaluated, the reference is replaced by the value of that parameter in the job's signed `parameters`. Example: `{ "issued_under_template": { "param": "source_policy" } }`. See `card_protocol_spec.md` §The Predicate System.
+
+**`derived_card`** (`output_action: "card"`). All durations are ISO 8601. Defaults and bounds are in `process_specs/derived_card_revocation_propagation.md`.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `source_kind` | `text` | `"card"` | What the derived card is derived from. `"card"`: a presented source card, as in §2.2. `"web_evidence"`: **reserved** for cards derived from a verified HTTPS response (for example a zkTLS attestor claim), specified later (`card_protocol_spec.md §9`, P2). A v1 runtime refuses a policy with any value other than `"card"` (`ADM_FEATURE_UNSUPPORTED`, `object_specs/notary_runtime.md` §11), and a v1 verifier rejects such a derived card (`card_verifier.md` Stage 5 step 3a). |
+| `nullifier_period` | duration | `P7D` | The length of an issuance period. Periods are aligned to multiples of this length from the Unix epoch, and every card issued for a period expires at its end. |
+| `renewal_window` | duration | `P2D` | How long before a period ends a holder may get a card for the next period |
+| `issuance_batch_interval` | duration | `PT6H` | Cards are released only at these boundaries |
+| `min_batch_size` | integer | 5 | Smallest release batch |
+| `min_anonymity_set` | integer | 10 | Holders who must share a card's issuer, `source_policy`, `projected` value and period before any such card is released |
+
+**`revocation_propagation`** (`output_action: "card"`)
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `mode` | `text` | — | `"expiry_only"`, `"sealed_link"`, or `"escrowed_link"` (specified; refused by v1 runtimes) |
+| `propagated_codes` | array | `["8xx","9xx"]` | Source-card codes that trigger propagation: integers, or `"8xx"` / `"9xx"` ranges |
+| `derived_code` | `text` or integer | `"range"` | `"range"`: 8xx becomes 820 and 9xx becomes 920. An integer: always that code. |
+| `min_delay` | duration | `PT24H` | |
+| `batch_window` | duration | `PT24H` | |
+| `min_revocation_batch` | integer | 3 | |
+
+**Example** (a vote policy; the ellipsis stands for the ordinary `CardDocument` fields):
+
+```json
+{
+  "approved_notaries": ["<notary card A>", "<notary card B>"],
+  "field_definitions": [],
+  "notary": {
+    "contributor_predicate": { "issued_under_template": "<club membership policy CID>" },
+    "input_replacement": "latest_wins",
+    "input_schema": [
+      { "description": "Ballot choice", "enum": ["yes", "no", "abstain"], "name": "choice", "required": true, "type": "text" }
+    ],
+    "isolation": "shared",
+    "job_requester_predicate": { "is_holder": true },
+    "mode": "aggregate",
+    "output_action": "statement",
+    "output_recipients": { "cards": [], "job_requester": true, "public": true },
+    "output_schema": [
+      { "description": "Yes votes", "name": "yes", "required": true, "type": "integer" },
+      { "description": "No votes", "name": "no", "required": true, "type": "integer" },
+      { "description": "Abstentions", "name": "abstain", "required": true, "type": "integer" }
+    ],
+    "parameter_bounds": [
+      { "description": "Question shown to voters", "name": "question", "regex": "^.{1,280}$", "required": true, "type": "text" }
+    ],
+    "platform": "aws-nitro-enclaves",
+    "privacy": { "k_min": 5 },
+    "program_cid": "<CID of the vote template>",
+    "retention": "none"
+  },
+  "...": "..."
+}
+```
+
+### 2.2 Derived-Card Template Policies
+
+*Added 2026-11-11 (ADR-013).* Derived cards are issued **only** under a small set of governance-registered **template policies**, one per audited `derive` program. They are held and registered by the PressRegistryBody. Communities don't create derived-card policies. Anyone may open a derived-card job under a template, naming the source policy in the job's `parameters` (§21).
+
+A template policy `T`:
+- has `notary.output_action: "card"` and `notary.mode: "per_input"`;
+- omits `job_requester_predicate`;
+- has `contributor_predicate: { "issued_under_template": { "param": "source_policy" } }`;
+- has `parameter_bounds` defining `source_policy` (`cid`) and `projected_fields` (an array of source field names, bounded per template);
+- has fixed `field_definitions`:
+
+| Field | Type | Notes |
+|---|---|---|
+| `source_policy` | `cid` | The policy the presented source card was issued under |
+| `projected` | `text` | RFC 8785 canonical JSON of an object whose members are the requested source fields, under their **source-policy names**, with values copied verbatim. There is no free-text claim label. (`text` is used because the field type system has no object type.) |
+| `dup_tag` | `base64url` | 32 bytes. Equal for two cards derived from the same source card for the same period, by any notary serving `T`. Not computable without a key held only in enclaves. See `derived_card_revocation_propagation.md`. |
+
+Every derived card also carries `expires_at` (§1), the end of its period.
+
+**Source kinds.** Everything in this section describes templates with `derived_card.source_kind: "card"` (§2.1), the only kind in v1. The value `"web_evidence"` is reserved for a later template kind that derives a card from a verified HTTPS response rather than a source card (`card_protocol_spec.md §9`, P2). Such a template would replace `source_policy` and `contributor_predicate` with an evidence check, and key `dup_tag` on a hash of the external account identifier instead of the root source key. It is reserved so that adding it later is a new value, not a breaking change.
+
+**Who signs what:**
+- `issuer_card` and `press_card` are the issuing notary card (§20), and its enclave-held key signs both `issuer_signature` and `press_signature`.
+- `recipient_pubkey` is a fresh key the holder generates for this card.
+- `ancestry_pubkeys` is `[<notary card public key>, <T's public key>]`.
+
+**Other fields:**
+- `T.auditors` is absent. No `PressIssuanceRecord` is sent for derived cards (§11 exception).
+- `T.revocation_permissions` allows each approved operator's current notary card through `card_field_matches` on the notary card's `operator_card` field, and keeps `{ "is_holder": true }` in `8xx` so holders can surrender:
+  ```json
+  "revocation_permissions": {
+    "8xx": { "any_of": [ { "is_holder": true },
+      { "card_field_matches": { "template": "<NotaryCardPolicy CID>", "field": "operator_card", "regex": "^<operator card>$" } } ] },
+    "9xx": { "any_of": [
+      { "card_field_matches": { "template": "<NotaryCardPolicy CID>", "field": "operator_card", "regex": "^<operator card>$" } } ] }
+  }
+  ```
+  Each further operator adds one more `card_field_matches` alternative. The template's holder updates `revocation_permissions` when operators join or leave.
 
 ---
 
@@ -719,6 +906,8 @@ The record of a single issuance. Each recipient receives its own independently e
 
 **Binding and consistency check.** After decrypting the issued card at `card_cid`, a recipient SHOULD confirm `keccak256(recipient_pubkey)` equals the card's on-chain registry address, and that `issuer_card` and `policy_id` match the decrypted card. A mismatch indicates a malformed or forged record; an auditor MUST flag it in the audit findings, and an issuer or policy holder MUST NOT add the card to their list.
 
+**Exception: notary-issued cards (added 2026-11-11).** No `PressIssuanceRecord` is sent for a card whose `press_card` is a notary card (§20), that is, a derived card under a template policy (§2.2). A record carries `recipient_pubkey`, which unlocks the card's messaging address and content. Sending one to the template's holder would give governance a decryptable directory of every derived card and its projected values, which derived cards exist to prevent. The notary's public job log records only the number of cards in each issuance batch (§28, `kind: "issued"`). Template policies declare no `auditors`.
+
 **Current state and display.** The record is a snapshot at issuance. Wallets resolve each listed card's current state from its log. Revoked cards (8xx or 9xx) remain in the list and are shown greyed out.
 
 ---
@@ -1022,6 +1211,625 @@ Proves to the login router that a wallet asking to be registered is a certified 
 
 ---
 
+## Notary Objects — Conventions (§20–§34)
+
+*Added 2026-11-11 (ADR-013).* §20–§34 define the objects used by notaries.
+- Processes: `process_specs/notary_lifecycle.md`, `process_specs/notary_replication_and_recovery.md`, `process_specs/derived_card_revocation_propagation.md`.
+- Enclave and host behaviour: `object_specs/notary_runtime.md` and `object_specs/notary_host.md`.
+- **Terminology:** "the enclave" means an AWS Nitro Enclaves enclave, and "enclave attestation" means the AWS Nitro Enclaves attestation document (`ARCHITECTURE.md`, terminology note).
+
+Rules that apply to every notary object:
+
+- **Serialization.** Canonical RFC 8785 JSON. Absent optional fields are omitted, never `null`.
+- **Hash.** `H(x) = SHA-256(RFC 8785 JSON of x)`, encoded base64url. A public notary object is pinned to IPFS as its raw canonical bytes (CIDv1, `raw` codec, sha2-256), so its CID's digest equals `H(object)`.
+- **Domain separation.** Every signed notary object has a `type` field naming the object and its version (e.g. `"notary.job.v1"`). One key signs several object kinds, so verifiers reject an object whose `type` isn't the one they expect.
+- **Signatures.** Each is a `SignatureEntry` over the canonical JSON of the object without that signature field, unless a section says otherwise. The signer's address is `keccak256(public_key)` and must equal the card pointer the object names.
+- **Time.** Wherever a time decides an outcome, chain time (a block timestamp) is used.
+- **Notary keys.** Each section names the signing key:
+
+| Key | Algorithm | Held by | Signs |
+|---|---|---|---|
+| Notary identity key `K_id` | ML-DSA-44 | Enclaves of one notary card only | The notary card's `holder_signature`; derived cards; announcements, receipts, notarizations, job log records |
+| Notary chain key `K_chain` | secp256r1 | Same as `K_id` | On-chain write payloads for derived cards |
+| Instance key `K_inst` | ML-DSA-44 | One enclave boot | Heartbeats, handoffs, cosignatures, job log records |
+| Job key `K_job` | X-Wing (ML-KEM-768 + X25519, draft-06) | The enclaves holding one job, per epoch | Nothing. It decrypts inputs. |
+| Operator host key `K_host` | ML-DSA-44 | The operator's host | Host receipts |
+
+---
+
+## 20. Notary Card and Genesis Request
+
+**Stored on:** IPFS (the notary card is a `CardDocument`)
+**Signed by:**
+- Issuer: the policy card it serves. For a template policy, that is the template's holder.
+- Holder: `K_id`, inside the enclave.
+- Press: an approved press for `NotaryCardPolicy`.
+
+**Serialized for signing:** as `CardDocument` (§1).
+
+A notary card authorizes one operator to serve one notary policy, and is listed in that policy's `approved_notaries`. Its `recipient_pubkey` is the **notary identity key** `K_id`. That key is generated inside an enclave, never leaves enclaves, and moves between them only by attested handoff (`notary_replication_and_recovery.md`). The enclave makes the `holder_signature`. The operator's host never holds `K_id`.
+
+Every notary card has `policy_id` = **`NotaryCardPolicy`**, a single governance-registered policy held by the PressRegistryBody whose `field_definitions` are the fields below. Its `issuer_card` is the notary policy it serves. A verifier walks notary card → issuer (the notary policy) → that policy's chain.
+
+```json
+{
+  "chain_pubkey":         "<base64url — K_chain, secp256r1 x||y, 64 bytes>",
+  "genesis_attestation":  "<cid — enclave attestation, purpose 0x01 (§33)>",
+  "issuer_card":          "<card-pointer — the notary policy this card serves>",
+  "operator_card":        "<card-pointer — the operator's own card>",
+  "operator_host_pubkey": "<base64url — K_host, ML-DSA-44, 1312 bytes>",
+  "platform":             "aws-nitro-enclaves",
+  "policy_id":            "<cid — NotaryCardPolicy>",
+  "recipient_pubkey":     "<base64url — K_id, ML-DSA-44, 1312 bytes>",
+  "...":                  "<other CardDocument fields>"
+}
+```
+
+| Field | Type | Required | Update policy | Notes |
+|---|---|---|---|---|
+| `operator_card` | `card-pointer` | Yes | immutable | The accountable operator, and the messaging address for the policy holder |
+| `operator_host_pubkey` | `base64url` | Yes | `{ "is_issuer": true }`, code 300 | `K_host`. Rotated by the policy holder at the operator's request. |
+| `chain_pubkey` | `base64url` | Yes | immutable | `K_chain`. For a template policy, the same key is registered by `AuthorizePress(T, <notary card address>, chain_pubkey, keccak256(K_id))`. |
+| `platform` | `text` | Yes | immutable | `"aws-nitro-enclaves"` or `"simulator"` (accepted only by verifiers configured for the simulator) |
+| `genesis_attestation` | `cid` | Yes | immutable | Purpose `0x01` (§33). Binds `keccak256(K_id)`, `SHA-256(chain_pubkey)` and the genesis request below. Verifiers of derived cards check it against the accepted-runtime list as of the card's `issued_at`. |
+
+**Genesis request.** The operator sends this to the policy holder before the notary card is issued. `H(genesis request)` is the genesis attestation's `nonce`, so the attestation can't be reused to bind someone else's operator card or host key. The random `nonce` field makes every request, and so every attestation, unique.
+
+```json
+{
+  "chain_pubkey":         "<base64url>",
+  "id_pubkey":            "<base64url — K_id>",
+  "nonce":                "<base64url — 16 random bytes>",
+  "operator_card":        "<card-pointer>",
+  "operator_host_pubkey": "<base64url>",
+  "platform":             "aws-nitro-enclaves",
+  "policy_id":            "<cid — the notary policy>",
+  "requested_at":         "<ISO 8601>",
+  "type":                 "notary.genesis_request.v1"
+}
+```
+
+
+---
+
+## 21. NotaryJob
+
+**Stored on:** IPFS (public); also embedded in every `JobAnnouncement`
+**Signed by:** The job requester's card (`requester_signature`). Must satisfy `notary.job_requester_predicate` if present.
+**Serialized for signing:** Canonical RFC 8785 JSON of all fields except `requester_signature`
+**Identity:** `job_hash = H(complete NotaryJob including requester_signature)`. This is also the attestation `nonce` for the job.
+
+```json
+{
+  "closes_at":           "<ISO 8601 — aggregate mode>",
+  "created_at":          "<ISO 8601>",
+  "ends_at":             "<ISO 8601 — per_input mode>",
+  "key_period":          "<ISO 8601 duration — per_input mode>",
+  "kem":                 "x-wing-draft-06",
+  "min_live":            2,
+  "nonce":               "<base64url — 16 random bytes>",
+  "opens_at":            "<ISO 8601>",
+  "parameters":          { "<name>": "<value validated against notary.parameter_bounds>" },
+  "policy_id":           "<cid — notary policy genesis CID>",
+  "policy_state_cid":    "<cid — the policy's log head when the job was signed>",
+  "replica_set":         [ { "instances": 2, "notary_card": "<card-pointer>" } ],
+  "requester_card":      "<card-pointer>",
+  "requester_pubkey":    "<base64url — ML-DSA-44, 1312 bytes>",
+  "requester_signature": { "public_key": "<base64url>", "signature": "<base64url>" },
+  "requester_text":      "<optional — shown only as labelled requester text>",
+  "type":                "notary.job.v1"
+}
+```
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `type` | `text` | Yes | `"notary.job.v1"` |
+| `policy_id` | `cid` | Yes | |
+| `policy_state_cid` | `cid` | Yes | Wallets require the `notary` section and `approved_notaries` at this state to equal those at the current head |
+| `requester_card` | `card-pointer` | Yes | |
+| `requester_pubkey` | `base64url` | Yes | Untrusted hint. `keccak256(requester_pubkey)` MUST equal `requester_card`. |
+| `replica_set` | array | Yes | `[{ "notary_card", "instances" ≥ 1 }]`. Every `notary_card` must be in `approved_notaries`. Several entries give replicas run by different operators. **N** = sum of `instances`. |
+| `min_live` | `integer` | Yes | Must satisfy q ≤ `min_live` ≤ N, where q = ⌊N/2⌋ + 1 is the quorum. Default 2 of 3. |
+| `kem` | `text` | Yes | `"x-wing-draft-06"`, the only v1 value |
+| `parameters` | object | Yes | Validated against `notary.parameter_bounds`. `{}` if the job takes no parameters. |
+| `opens_at` | `timestamp` | Yes | Inputs whose `chain_ref` is earlier are rejected |
+| `closes_at` | `timestamp` | Aggregate | The job finalizes only when chain time **and** the enclave's hardware clock are both ≥ `closes_at` |
+| `key_period` | duration | Per-input | Interval at which the job key rotates; each rotation starts a new epoch |
+| `ends_at` | `timestamp` | Per-input | At most one year after `opens_at` |
+| `requester_text` | `text` | No | At most 1,000 characters. Never part of the consent content. |
+| `created_at` | `timestamp` | Yes | |
+| `nonce` | `base64url` | Yes | 16 random bytes |
+| `requester_signature` | SignatureEntry | Yes | |
+
+---
+
+## 22. JobAnnouncement
+
+**Stored on:** Notary host (`GET /jobs/{job_hash}/announcement`, reached through oblivious transport); every version also pinned to IPFS
+**Signed by:** `K_id` of a notary card in the job's `replica_set` (`notary_signature`)
+**Serialized for signing:** Canonical RFC 8785 JSON of all fields except `notary_signature`
+
+Tells wallets how to submit to a job in a given epoch. There is at least one per epoch. Within an epoch it is re-issued about every 6 hours with fresh attestations: same `epoch`, later `issued_at`. Wallets use the newest announcement for the highest epoch they can find. Share link: `mcard://notary-job?j=<job_hash>&h=<relay target_id>`.
+
+```json
+{
+  "attestations":      ["<cid — purpose 0x02 enclave attestation, one per live replica>"],
+  "epoch":             0,
+  "epoch_reason":      "<key_period | total_loss — epoch > 0 only>",
+  "issued_at":         "<ISO 8601>",
+  "job":               { "<NotaryJob, §21>": "..." },
+  "job_public_key":    "<base64url — X-Wing public key, 1216 bytes>",
+  "notary_signature":  { "public_key": "<base64url — K_id>", "signature": "<base64url>" },
+  "prev_announcement": "<cid — epoch > 0 only>",
+  "transport":         { "key_config_url": "<https URL>", "relay_target_id": "<text>" },
+  "type":              "notary.announcement.v1"
+}
+```
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `type` | `text` | Yes | `"notary.announcement.v1"` |
+| `job` | NotaryJob | Yes | |
+| `epoch` | `integer` | Yes | Starts at 0. Wallets never accept a lower epoch than one they have seen. |
+| `job_public_key` | `base64url` | Yes | `SHA-256(job_public_key)` must equal the attestations' `public_key`. The key itself is larger than that attestation field allows. |
+| `attestations` | array of `cid` | Yes | Purpose `0x02` (§33). A wallet must verify at least one. The list also shows how many replicas are live. |
+| `prev_announcement` | `cid` | If epoch > 0 | |
+| `epoch_reason` | `text` | If epoch > 0 | `"key_period"` or `"total_loss"`. On `total_loss`, wallets tell users their input was resent. |
+| `issued_at` | `timestamp` | Yes | |
+| `transport` | object | Yes | Untrusted routing hints. A wrong value can only cause denial of service. |
+| `notary_signature` | SignatureEntry | Yes | |
+
+---
+
+## 23. NotaryInput
+
+**Stored on:** Nowhere in plaintext outside an enclave. It is the HPKE plaintext of a `SealedInput` (§24).
+**Signed by:** The contributor's sub-card (`contributor_signature`). The sub-card's `capabilities` (§16) must include the message type `"notary_input"`.
+**Serialized for signing:** Canonical RFC 8785 JSON of all fields except `contributor_signature`
+
+The signature covers `job_hash`, not the epoch. After a new epoch the wallet re-encrypts the same signed input to the new key without re-signing.
+
+```json
+{
+  "chain_ref":               { "block_hash": "<base64url>", "block_number": 0 },
+  "contributor_card":        "<card-pointer — master card>",
+  "contributor_card_pubkey": "<base64url — ML-DSA-44, 1312 bytes>",
+  "contributor_signature":   { "public_key": "<base64url — sub-card key>", "signature": "<base64url>" },
+  "evidence":                [ { "bytes": "<base64url>", "cid": "<cid>" } ],
+  "job_hash":                "<base64url>",
+  "payload":                 { "<validated against notary.input_schema>": "..." },
+  "revision":                0,
+  "signed_at":               "<ISO 8601>",
+  "type":                    "notary.input.v1"
+}
+```
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `type` | `text` | Yes | `"notary.input.v1"` |
+| `job_hash` | `base64url` | Yes | |
+| `contributor_card` | `card-pointer` | Yes | The master card, or the presented source card for a derived-card job. Must equal the signing sub-card's `holder_primary_card`. |
+| `contributor_card_pubkey` | `base64url` | Yes | Untrusted hint; binding check as §16 |
+| `payload` | object | Yes | For a derived-card job: `{ "derived_recipient_pubkey": base64url, "target_period": integer }` |
+| `revision` | `integer` | Yes | ≥ 0. Under `latest_wins` the highest `revision` per contributor counts. The same `revision` with different content is rejected (`REVISION_CONFLICT`). Under `reject_duplicates` it must be 0. Ordering never uses arrival order. |
+| `chain_ref` | object | Yes | A recent block the wallet has seen. The enclave never processes against chain state older than the newest `chain_ref` it has accepted. |
+| `evidence` | array | Yes | `[{ "cid", "bytes" }]`: every IPFS object needed to check the contributor (genesis document and current head of the master card, its sub-card document, and its ancestors). Each is verified against its CID, so the enclave never asks its host for a card by address. |
+| `signed_at` | `timestamp` | Yes | Informational |
+| `contributor_signature` | SignatureEntry | Yes | |
+
+### 23.1 NotaryCountersign
+
+For derived-card jobs only. The holder's countersignature on the derived card offer that the enclave returned in the validation receipt (§26 `derived_offer`). It is sealed and sent exactly like an input.
+
+```json
+{
+  "holder_signature": "<base64url — ML-DSA-44 signature by the derived key, as CardDocument holder_signature>",
+  "job_hash":         "<base64url>",
+  "offer_hash":       "<base64url — H(offer as returned)>",
+  "type":             "notary.countersign.v1"
+}
+```
+
+---
+
+## 24. SealedInput
+
+**Transmitted:** Inside the oblivious-transport envelope to the notary host (`{ "path": "/jobs/{job_hash}/inputs", "method": "POST", "body": <SealedInput> }`), then relayed by the host to its enclave
+**Signed by:** None. It is authenticated encryption to the job key.
+
+**Inner HPKE** (RFC 9180), base mode, with KEM X-Wing draft-06, KDF HKDF-SHA256 and AEAD ChaCha20-Poly1305:
+
+```
+info = "card-notary-input-v1" || 0x00 || job_hash (32 bytes) || epoch (8 bytes, big-endian) || UTF-8 "x-wing-draft-06"
+aad  = RFC 8785 JSON of { "epoch", "job_hash", "kem", "type" } from this object
+pt   = RFC 8785 JSON of the NotaryInput (§23) or NotaryCountersign (§23.1)
+```
+
+```json
+{
+  "ct":       "<base64url — AEAD ciphertext>",
+  "enc":      "<base64url — X-Wing encapsulation, 1120 bytes>",
+  "epoch":    0,
+  "job_hash": "<base64url>",
+  "kem":      "x-wing-draft-06",
+  "type":     "notary.sealed_input.v1"
+}
+```
+
+- **Size.** At most 256 KiB.
+- **Identity.** `input_hash = H(SealedInput)` identifies the input in receipts and in the input commitment.
+- **Response.** The host answers through the outer envelope with `{ host_receipt, receipt_sealed }`. `receipt_sealed` is the ValidationReceipt (§26), encrypted with ChaCha20-Poly1305 under `Export("card-notary-receipt-v1", 32)` from the **inner** HPKE context, so the host can't read it.
+- **Cross-language test vectors** for the X-Wing suite are required (`notary_runtime.md`).
+
+---
+
+## 25. HostReceipt
+
+**Delivered to:** The contributor, in the response to their submission
+**Signed by:** `K_host` (`operator_host_pubkey` on the notary card, §20)
+**Serialized for signing:** Canonical RFC 8785 JSON of all fields except `host_signature`
+
+Proof that the operator received the ciphertext. If the input later goes missing, the loss is attributable to that operator.
+
+```json
+{
+  "epoch":          0,
+  "host_signature": { "public_key": "<base64url — K_host>", "signature": "<base64url>" },
+  "input_hash":     "<base64url>",
+  "job_hash":       "<base64url>",
+  "notary_card":    "<card-pointer>",
+  "received_at":    "<ISO 8601>",
+  "type":           "notary.host_receipt.v1"
+}
+```
+
+---
+
+## 26. ValidationReceipt
+
+**Delivered to:** The contributor only, sealed (§24)
+**Signed by:** `K_id` (`notary_signature`)
+**Serialized for signing:** Canonical RFC 8785 JSON of all fields except `notary_signature`
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `type` | `text` | Yes | `"notary.validation_receipt.v1"` |
+| `job_hash`, `epoch`, `input_hash` | | Yes | |
+| `status` | `text` | Yes | `"accepted"`, `"rejected"` or `"superseded"` |
+| `reject_reason` | `text` | If rejected | An `INPUT_*`, `REVISION_CONFLICT` or `DERIVE_*` code (`notary_runtime.md`) |
+| `revision` | `integer` | Yes | Echoed from the input |
+| `instance` | `base64url` | Yes | `SHA-256(K_inst)` of the replica that validated |
+| `acks` | `integer` | Yes | Replicas holding the input when the receipt was issued. Always ≥ the quorum q. |
+| `processed_at` | `timestamp` | Yes | Chain time of the newest block the enclave has accepted |
+| `derived_offer` | object | Derived-card jobs, if accepted | The offer-phase derived `CardDocument` (§2.2) for the holder to countersign (§23.1) |
+| `notary_signature` | SignatureEntry | Yes | |
+
+A receipt never names the contributor's card. If a contributor shares it, it shows only that some input with this hash was accepted.
+
+```json
+{
+  "acks": 2,
+  "epoch": 0,
+  "input_hash": "<base64url>",
+  "instance": "<base64url>",
+  "job_hash": "<base64url>",
+  "notary_signature": { "public_key": "<base64url — K_id>", "signature": "<base64url>" },
+  "processed_at": "<ISO 8601>",
+  "revision": 1,
+  "status": "accepted",
+  "type": "notary.validation_receipt.v1"
+}
+```
+
+---
+
+## 27. Notarization
+
+**Stored on:** IPFS, public, as raw canonical bytes
+**Signed by:**
+- `K_id` of the closing replica (`notary_signature`)
+- at least q replicas' `K_inst` (`cosignatures`), where q = ⌊N/2⌋ + 1
+
+**Serialized for signing:** Define the **body** as the notarization without `cosignatures` and `notary_signature`. Each cosignature is over `H(body)`. `notary_signature` covers everything except `notary_signature`, cosignatures included.
+
+The signed result of a `statement` job. Anyone can verify it from CIDs and chain data alone (`card_verifier.md`, notarization verification).
+
+```json
+{
+  "accepted":                 42,
+  "attestation":              "<cid — closing replica's purpose 0x02 attestation for final_epoch>",
+  "chain_state":              { "block_hash": "<base64url>", "block_number": 0, "block_timestamp": "<ISO 8601>", "state_root": "<base64url>" },
+  "close_quorum":             2,
+  "closed_at":                "<ISO 8601 — equals chain_state.block_timestamp>",
+  "cosignatures":             [ { "attestation": "<cid>", "instance_signature": { "public_key": "<base64url — K_inst>", "signature": "<base64url>" } } ],
+  "counted_inputs":           "<cid — sorted list of counted input_hash values>",
+  "dropped_after_acceptance": 0,
+  "final_epoch":              0,
+  "input_commitment":         "<base64url — Merkle root>",
+  "job_cid":                  "<cid>",
+  "job_hash":                 "<base64url>",
+  "job_log_head":             "<cid>",
+  "notary_card":              "<card-pointer>",
+  "notary_signature":         { "public_key": "<base64url — K_id>", "signature": "<base64url>" },
+  "output":                   { "public": { "abstain": 3, "no": 12, "yes": 27 } },
+  "output_hash":              "<base64url>",
+  "platform":                 "aws-nitro-enclaves",
+  "policy_id":                "<cid>",
+  "policy_state_cid":         "<cid>",
+  "program_cid":              "<cid>",
+  "rejected":                 4,
+  "suppressed":               false,
+  "type":                     "notary.notarization.v1"
+}
+```
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `type` | `text` | Yes | `"notary.notarization.v1"` |
+| `job_hash`, `job_cid` | | Yes | |
+| `policy_id`, `policy_state_cid`, `program_cid`, `platform` | | Yes | Copied from the job and policy |
+| `notary_card` | `card-pointer` | Yes | |
+| `final_epoch` | `integer` | Yes | |
+| `attestation` | `cid` | Yes | |
+| `chain_state` | object | Yes | Host-supplied chain state the enclave closed on. Verifiers check it against the chain. |
+| `input_commitment` | `base64url` | Yes | Merkle root over the sorted counted `input_hash` values. Leaf = `SHA-256(0x00 ‖ input_hash)`, node = `SHA-256(0x01 ‖ left ‖ right)`, and an odd node is promoted unchanged. |
+| `counted_inputs` | `cid` | Yes | The sorted leaf list, so contributors can check inclusion |
+| `accepted` | `integer` | Yes | Distinct contributors counted |
+| `rejected` | `integer` | Yes | Inputs rejected in any epoch, including those excluded when re-checked at close |
+| `dropped_after_acceptance` | `integer` | Yes | Accepted inputs whose ciphertext was not supplied at close. Attributable to the operator through receipts. |
+| `suppressed` | `boolean` | Yes | `accepted < privacy.k_min`. The output is then `{ "insufficient_participation": true }`. |
+| `output` | object | Yes | `{ "public": <value> }` if `output_recipients.public`. Otherwise `{ "recipients": card-pointer-array }`, and the value is sent to each recipient as a `notary_output` card message signed by `K_id`. |
+| `output_hash` | `base64url` | Yes | `H(output value)` |
+| `job_log_head` | `cid` | Yes | The last job log record (§28) before the notarization |
+| `close_quorum` | `integer` | Yes | q |
+| `cosignatures` | array | Yes | At least q entries from distinct instances. Each `attestation` is that replica's purpose-`0x02` attestation for this job and `final_epoch`. |
+| `closed_at` | `timestamp` | Yes | |
+| `notary_signature` | SignatureEntry | Yes | |
+
+---
+
+## 28. JobLogRecord
+
+**Stored on:** IPFS. Each record of an anchored kind is also anchored by an EAS attestation on Arbitrum One (ADR-008), with schema `{ job_hash, seq, record_cid }` and indexed by `job_hash`.
+**Signed by:** `K_id` (`notary_signature`) and `K_inst` (`instance_signature`) of the job's leader replica
+**Serialized for signing:** Canonical RFC 8785 JSON of all fields except both signatures
+
+The public, hash-chained history of a job. An enclave refuses to sign record `seq + 1` until it has seen the anchor for record `seq`, so a host can't skip a record without stopping the job.
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `type` | `text` | Yes | `"notary.job_log.v1"`, or `"notary.identity_log.v1"` for a notary card's identity log (handoffs of `K_id`, keyed by the card address instead of `job_hash`) |
+| `job_hash` | `base64url` | Yes | The notary card address, for the identity log |
+| `seq` | `integer` | Yes | 0, 1, 2, … with no gaps |
+| `prev` | `cid` | If `seq` > 0 | |
+| `kind` | `text` | Yes | `opened`, `epoch_started`, `handoff`, `replica_lost`, `replicated`, `closed`, `notarized`, `issued`, `aborted` |
+| `body` | object | Yes | Per kind, listed below |
+| `at` | `timestamp` | Yes | Chain time |
+| `instance` | `base64url` | Yes | `SHA-256(K_inst)` |
+| `notary_signature`, `instance_signature` | SignatureEntry | Yes | |
+
+**Anchored kinds:** `opened`, `epoch_started`, `handoff`, `replica_lost`, `notarized`, `issued`, `aborted`.
+
+**Bodies:**
+- `opened`: `{ "attestations": [cid] }`
+- `epoch_started`: `{ "epoch", "epoch_reason" }`
+- `handoff`: a HandoffRecord (§29)
+- `replica_lost`: `{ "instance" }`
+- `replicated`: `{ "instance", "attestation": cid }`
+- `notarized`: `{ "notarization": cid, "accepted", "rejected", "input_commitment" }`
+- `issued`: `{ "count", "period", "batch_boundary" }`, for derived-card batches. A count only.
+- `aborted`: `{ "reason" }`
+
+```json
+{
+  "at": "<ISO 8601>",
+  "body": { "accepted": 42, "input_commitment": "<base64url>", "notarization": "<cid>", "rejected": 4 },
+  "instance": "<base64url>",
+  "instance_signature": { "public_key": "<base64url — K_inst>", "signature": "<base64url>" },
+  "job_hash": "<base64url>",
+  "kind": "notarized",
+  "notary_signature": { "public_key": "<base64url — K_id>", "signature": "<base64url>" },
+  "prev": "<cid>",
+  "seq": 7,
+  "type": "notary.job_log.v1"
+}
+```
+
+---
+
+## 29. HandoffRecord
+
+**Stored on:** Inside a `handoff` JobLogRecord (§28)
+**Signed by:** The receiving replica's `K_inst` (`receiver_signature`). The sending side signs the enclosing record.
+**Serialized for signing:** Canonical RFC 8785 JSON of all fields except `receiver_signature`
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `type` | `text` | Yes | `"notary.handoff.v1"` |
+| `scope` | `text` | Yes | `"job"` (the job key for one epoch, and job state), `"identity"` (`K_id`, `K_chain` and the sealed-link state key), or `"template"` (the template's `dup_tag` key) |
+| `job_hash`, `epoch` | | If `job` | |
+| `from_instance`, `to_instance` | `base64url` | Yes | `SHA-256(K_inst)` of each side |
+| `from_attestation`, `to_attestation` | `cid` | Yes | Each side's purpose-`0x03` attestation for this handoff |
+| `to_notary_card` | `card-pointer` | Yes | |
+| `pcr0_from`, `pcr0_to` | `base64url` | Yes | They may differ only if both are on the accepted-runtime list (a runtime upgrade) |
+| `state_version`, `state_hash` | | Yes | The receiver refuses a version lower than any it has seen |
+| `at` | `timestamp` | Yes | |
+| `receiver_signature` | SignatureEntry | Yes | |
+
+---
+
+## 30. Heartbeat
+
+**Transmitted:** Enclave to enclave, relayed by hosts. Never published.
+**Signed by:** `K_inst` (`instance_signature`)
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `type` | `text` | Yes | `"notary.heartbeat.v1"` |
+| `instance` | `base64url` | Yes | |
+| `jobs` | array | Yes | `[{ "job_hash", "epoch", "state_version" }]` |
+| `identity_state_version` | `integer` | If it holds `K_id` | |
+| `list_versions` | object | Yes | `{ "accepted_runtimes": integer, "program_allowlist": integer }`: the highest governance list versions verified (§34) |
+| `peers_seen` | array of `base64url` | Yes | |
+| `chain_head` | object | Yes | `{ "block_number", "block_hash" }` |
+| `seq` | `integer` | Yes | Per instance, increasing |
+| `instance_signature` | SignatureEntry | Yes | |
+
+---
+
+## 31. StateBlobHeader
+
+**Stored on:** IPFS or operator storage. The header is public. The body it points to is encrypted under a state key that exists only inside enclaves.
+**Signed by:** `K_id` (`notary_signature`)
+
+The versioned header of a notary card's sealed-link and nullifier state. The current version and hash travel in heartbeats and handoffs. There is no on-chain anchor.
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `type` | `text` | Yes | `"notary.state_blob.v1"` |
+| `notary_card` | `card-pointer` | Yes | |
+| `version` | `integer` | Yes | Strictly increasing |
+| `prev_hash` | `base64url` | If `version` > 0 | |
+| `body_hash` | `base64url` | Yes | SHA-256 of the encrypted body |
+| `body_cid` | `cid` | Yes | |
+| `at` | `timestamp` | Yes | |
+| `notary_signature` | SignatureEntry | Yes | |
+
+---
+
+## 32. PropagationBatch
+
+**Transmitted:** Enclave to its own host. Not published; its public effect is a `BatchUpdateCardHeads` transaction under the template policy, plus the revocation `LogEntry`s that transaction points to.
+**Signed by:** `K_chain`, over the chain payload only (`registry_contract.md §4.15`)
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `type` | `text` | Yes | `"notary.propagation_batch.v1"` |
+| `notary_card` | `card-pointer` | Yes | |
+| `policy_id` | `cid` | Yes | The template policy |
+| `batch_seq` | `integer` | Yes | |
+| `release_not_before` | `timestamp` | Yes | Chain time |
+| `entries` | array | Yes | `[{ "card_address", "log_entry_cid", "prev_log_cid" }]`, in shuffled order |
+| `chain_payload` | object | Yes | The `BatchUpdateCardHeadsPayload` |
+| `chain_signature` | `base64url` | Yes | secp256r1 r‖s |
+
+Each revocation `LogEntry` has:
+- `code` 820 or 920, or the policy's fixed `derived_code`;
+- `intent_signature` and `press_signature` both by `K_id`;
+- no `revocation.note`;
+- `effective_date` equal to the release time.
+
+---
+
+## 33. Enclave Attestation Binding
+
+**Format:** AWS Nitro Enclaves attestation document (COSE_Sign1, ES384). Only the platform verifier module parses the format (`notary_runtime.md`, attestation backends).
+**Binding fields:** `user_data`, `public_key` and `nonce`, which every notary attestation sets as follows.
+
+```
+user_data (181 bytes) =
+  "CARDNOTARY" (10 bytes ASCII) || layout_version 0x01 (1)
+  || purpose (1): 0x01 genesis | 0x02 job | 0x03 instance | 0x04 admitted
+  || id_key_hash    (32)  keccak256(K_id)          0x01, 0x02, 0x04; else zeros
+  || chain_key_hash (32)  SHA-256(K_chain)          0x01 only; else zeros
+  || inst_key_hash  (32)  SHA-256(K_inst)           all purposes
+  || program_hash   (32)                            0x02, 0x04; else zeros
+  || job_hash       (32)                            0x02, 0x04; else zeros
+  || epoch          (8, big-endian)                 0x02, 0x04; else zeros
+  || isolation      (1)   0x01 shared | 0x02 dedicated   0x02, 0x04; else 0x00
+
+public_key = SHA-256(job public key)                for 0x02
+           = SHA-256(ephemeral handoff key)         for 0x03 and 0x04 made during a handoff
+           = absent                                 otherwise
+nonce      = job_hash                               for 0x02
+           = H(genesis request)                     for 0x01 (§20)
+           = a fresh 32-byte challenge from the verifying enclave   for 0x03 and 0x04
+```
+
+| Purpose | Made when | Verified by |
+|---|---|---|
+| `0x01` genesis | A notary identity is created | The policy holder before issuing the notary card; derived-card verifiers |
+| `0x02` job | A job's key is generated, and on each re-attestation | Wallets before encrypting; notarization verifiers |
+| `0x03` instance | Enclave boot, and each handoff | The handoff peer |
+| `0x04` admitted | A handoff receiver has admitted the job's program but has no job key yet | The handoff sender |
+
+PCR0 must be on the accepted-runtime list (§34). PCR0, PCR1 and PCR2 all being zero means debug mode, which is always rejected.
+
+---
+
+## 34. Notary Governance Lists
+
+**Stored on:** IPFS, as the card state of two governance-held cards whose addresses verifiers, wallets and runtimes are configured with. Each is under a PressRegistryBody "notary runtime list" policy.
+**Signed by:** As any `CardDocument` / `LogEntry`. Changes are code-300 entries by the list card's holder. **In addition**, every version of a list must carry a `list_approval` (below) signed by PressRegistryBody members. The holder's key alone can publish a list but can't make one valid. *(Member approval added 2026-11-12 at CP3.)*
+
+The **accepted-runtime list** card has field `accepted_runtimes`:
+
+```json
+[
+  {
+    "accepted_from":    "<ISO 8601>",
+    "build_recipe_cid": "<cid>",
+    "pcr0":             "<base64url — 48 bytes>",
+    "platform":         "aws-nitro-enclaves",
+    "retire_reason":    "<superseded | vulnerable — optional>",
+    "retired_at":       "<ISO 8601 — optional>",
+    "source_commit":    "<text>",
+    "version":          "<text>"
+  }
+]
+```
+
+The **program allowlist** card has field `program_allowlist`:
+
+```json
+[
+  {
+    "accepted_from":    "<ISO 8601>",
+    "audit_report_cid": "<cid>",
+    "name":             "<text>",
+    "program_cid":      "<cid>",
+    "retire_reason":    "<superseded | vulnerable — optional>",
+    "retired_at":       "<ISO 8601 — optional>",
+    "source_commit":    "<text>",
+    "toolchain":        "<text>",
+    "version":          "<text>"
+  }
+]
+```
+
+Each list card also has a field **`list_approval`**, replaced on every update. It is a `text` field holding RFC 8785 canonical JSON, as with `projected` (§2.2):
+
+```json
+{
+  "type":               "notary_list_approval",
+  "list":               "<accepted_runtimes | program_allowlist>",
+  "list_card":          "<list card address>",
+  "list_version":       <integer — 1 for the first list, then +1 per update>,
+  "list_hash":          "<base64url — H(JCS(the list field's new value))>",
+  "prev_list_hash":     "<base64url — H(JCS(the previous value)); absent when list_version is 1>",
+  "kind":               "<standard | emergency_retirement>",
+  "governance_version": <uint32 — GovernanceKeysets[PressRegistryBody].version the signers belong to>,
+  "signatures": [
+    { "key_index": <integer — index into that keyset's keys>, "signature": "<base64url>" }
+  ]
+}
+```
+
+- **What is signed.** Each member signs `H(JCS(list_approval without "signatures"))` with their governance key, using the keyset's `key_scheme`: ECDSA secp256r1 (raw 64-byte `r‖s`) for scheme 0, ML-DSA-44 for scheme 1. These are the same HSM-held keys members use for on-chain actions (`registry_contract.md §3.6`).
+- **Thresholds.** `kind: "standard"` needs signatures from at least `GovernanceKeysets[PressRegistryBody].quorum` distinct keys (4 of 5 today). `kind: "emergency_retirement"` needs at least **2** (`EMERGENCY_RETIREMENT_THRESHOLD`, a protocol constant) and is valid only for a removal-only change (rule E below).
+- **Rule E (removal only).** Compared with the previous list, an emergency update has the same entries in the same order. Entries are matched by `pcr0` or `program_cid`. Every changed entry differs only by `retire_reason` becoming `"vulnerable"` and `retired_at` being added or moved earlier, and at least one entry changes. Anything else, including reversing an emergency retirement, needs `"standard"`.
+- **Verification.** Algorithm L (`notary_lifecycle.md` Appendix A.5) verifies the approval of a list's head version. If the head is an emergency update, it also verifies the earlier versions back to the most recent standard one, so two members can't use an emergency update to approve a list that never reached the quorum.
+- **Key rotation.** An approval is valid only under the keyset version it names, and verifiers accept only the **current** version. After `RotateGovernanceKeys`, the body re-approves the unchanged head with a `"standard"` update under the new keyset. Members can sign it in advance, because they know the next version number. Until it is published, verifiers fail closed.
+
+**Acceptance rule.** An entry is accepted at time `t` iff `accepted_from ≤ t` and (`retired_at` is absent or `t < retired_at`). Entries are retired, never deleted.
+
+**Using the rule:**
+- Wallets evaluate it at the current chain time and never encrypt to a runtime retired as `"vulnerable"`.
+- Notarization verifiers evaluate it at the job's `closes_at`, and report a later `"vulnerable"` retirement as a warning.
+- Every reader checks the list with algorithm L first. Wallets and verifiers check it against the current on-chain `GovernanceKeysets[PressRegistryBody]`. Runtimes check it against member keys built into the image, and refuse any version older than one they have seen (`notary_runtime.md` §12).
+
+---
+
 ## Object Relationship Summary
 
 ```
@@ -1062,6 +1870,19 @@ CardEntry (Arbitrum One)
   └── policy_address → policy CardEntry (Arbitrum One)
   └── last_press_address → press sub-card CardEntry (Arbitrum One)
   └── OpenOfferUseCounts[offer_id] → acceptance counter
+
+PolicyCardDocument with a notary section (IPFS)          — notaries (§2.1, §20–§34)
+  └── approved_notaries → [Notary card (CardDocument, policy_id = NotaryCardPolicy)] (IPFS)
+       └── genesis_attestation → enclave attestation, purpose 0x01 (§33)
+  └── jobs → NotaryJob (§21) → JobAnnouncement per epoch (§22; host + IPFS)
+       └── attestations → enclave attestations, purpose 0x02 (§33)
+       └── SealedInput (§24) ⊃ NotaryInput (§23) → HostReceipt (§25), ValidationReceipt (§26)
+       └── job log → [JobLogRecord (§28; IPFS, EAS-anchored)] ⊃ HandoffRecord (§29)
+       └── Notarization (§27; IPFS) → counted_inputs, cosignatures, job_log_head
+  └── template policies only (§2.2): derived cards (CardDocument, policy_id = template)
+       └── issuer_card = press_card = notary card; revocations via PropagationBatch (§32)
+       └── sealed links → StateBlobHeader (§31)
+Accepted-runtime list card, program allowlist card (§34; PressRegistryBody)
 ```
 
 ---
@@ -1088,4 +1909,19 @@ Objects marked **RFC 8785-signed** use canonical RFC 8785 JSON per Appendix A of
 | SubCardDocument | IPFS | RFC 8785-signed (`app_signature` over all fields except both signature fields; `holder_signature` over all fields including `app_signature`); `holder_primary_card_pubkey` and `app_card_pubkey` are present and covered by both signatures |
 | DomainBindingAttestation | IPFS (in login service card's `domain_binding`) | RFC 8785-signed by the full-domain DNS admin card (all except `admin_signature`) |
 | LoginServiceMetadata | HTTPS (`/.well-known/membership-login`) | RFC 8785-signed by the server card (`metadata` only) |
+| Notary card | IPFS | As CardDocument; `holder_signature` by `K_id` in the enclave |
+| Genesis request | In transit (operator → policy holder) | Not signed; `H(genesis request)` is the genesis attestation's nonce |
+| NotaryJob | IPFS | RFC 8785-signed by the requester card (all except `requester_signature`); `job_hash` = SHA-256 of the complete object |
+| JobAnnouncement | Notary host + IPFS | RFC 8785-signed by `K_id` (all except `notary_signature`) |
+| NotaryInput, NotaryCountersign | Inside HPKE only | NotaryInput: RFC 8785-signed by the contributor sub-card (all except `contributor_signature`). Countersign: `CardDocument` `holder_signature` rules. |
+| SealedInput | In transit; host storage | HPKE (X-Wing draft-06, HKDF-SHA256, ChaCha20-Poly1305); not signed |
+| HostReceipt | To contributor | RFC 8785-signed by `K_host` |
+| ValidationReceipt | To contributor, sealed | RFC 8785-signed by `K_id` |
+| Notarization | IPFS | Cosignatures by ≥ q `K_inst` over `H(body)`; `notary_signature` by `K_id` over all except itself |
+| JobLogRecord | IPFS + EAS anchor | RFC 8785-signed by `K_id` and `K_inst` (all except both signatures) |
+| HandoffRecord | Inside a JobLogRecord | `receiver_signature` by receiver `K_inst` |
+| Heartbeat | Enclave to enclave | RFC 8785-signed by `K_inst` |
+| StateBlobHeader | IPFS / operator storage | RFC 8785-signed by `K_id` |
+| PropagationBatch | Enclave to host | `K_chain` secp256r1 over the `BatchUpdateCardHeadsPayload` |
+| Notary governance list cards | IPFS | As CardDocument / LogEntry |
 | WalletRegistrationToken | Login router fragment | RFC 8785-signed by a wallet card (`token` only) |

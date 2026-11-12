@@ -4,6 +4,8 @@
 **Date:** 2026-06-25
 **Status:** Draft
 
+**Amended 2026-11-11 (notaries, cross-reference only):** Notaries (ADR-013) share object definitions with the press but are not presses, and this spec's behaviour is unchanged. Under governance-registered derived-card template policies, a **notary card** acts as `press_card` for the cards it issues and is authorized through `PressAuthorizations` like a press. See `object_specs/notary_host.md` and `process_specs/derived_card_revocation_propagation.md`. **Terminology:** "Nitro" in this spec means the unjs server framework (nitropack), not AWS Nitro Enclaves (`ARCHITECTURE.md`, terminology note).
+
 **Amended 2026-10-23:** §5.5 `appendIssuanceRecord` delivers each `PressIssuanceRecord` to the issuer card and the policy card as well as to auditors, and the record gains `issuer_card`, `policy_id`, and `offer_id`; §5.1 `issueScip` no longer sends an administrator courtesy copy.
 
 **Amended 2026-08-11:** §5.3 `processUpdateIntent` gains step 2b and §7 gains `P-25` — the immutable-fields check `process_specs/card_updates.md` step 7 already required (`policy_id`, `issuer_card`, `press_card`, `recipient_pubkey`, `issued_at`, `issuer_signature`, `holder_signature`, `press_signature`, `ancestry_pubkeys`, `past_keys`, `protocol_version`, plus conditionally-immutable `active_subcards`/`successor`/`supersedes`/`supersession_note`) was never actually specified at the implementation level here, and correspondingly never implemented in `press/src/handlers/update.ts` — found live via a real `dev-tests` run finally reaching this code path cleanly for the first time. Implemented in `handleUpdate`, checked immediately after the staleness check, before any registry/IPFS lookup.

@@ -16,6 +16,10 @@
 
 **Changelog (spec-consistency Phase 3, 2026-07-16, Tier 1 items 6–7):** `chain_card_addresses` (§8) is now actually exposed on the public result — it was computed internally by Stage 3 but never threaded through to the four result-construction sites in either language port; fixed in both, with the field added to every code path (`verifyEnvelope`'s main path, `verifyCard`, the internal `#buildResult`/`_build_result` helper, and the skipped-result fallback). Also documented several already-implemented, previously-undocumented features: `VerifierConfig.returnChain` and the corresponding `chain`/`ChainLink` result fields (§5, §8), `VerifierConfig.conditions`/`PolicyMatchConditions` (§5) — resolving a real contradiction where §7.5 step 4 described an unimplemented call-site `requiredPredicate`/`requiredPolicy` shape instead of the actual, tested construction-time-config design — `CardVerificationResult.protocol_version` (§8), and `SignatureEntry.key_scheme` (§6.1). See `plans/spec-consistency/inconsistencies/phase-3-consolidated-fixes.md` Tier 1 items 6–7.
 
+**Changelog (2026-11-11, notaries, ADR-013):** new `VerifierConfig.notary` (§5); new entry point `verifyNotarization` (§6.5); Stage 4 enforces the optional `expires_at` card field (step 5a); Stage 5 adds notary-issued (derived) card checks (step 3a); new error codes `NOTARY_GENESIS_INVALID`, `NOTARY_DERIVED_SHAPE`, `NOTARY_CONFIG_MISSING`.
+
+**Changelog (2026-11-12, notaries, CP3):** `RpcProvider.getGovernanceKeyset` (§4.1). The notary list cards are checked with algorithm L (member `list_approval`, `notary_lifecycle.md` Appendix A.5) before use.
+
 **Changelog (2026-11-08, card login):** New `VerifierConfig.loginServiceCertificationRoot` (§5); `RpcProvider.getDomainRegistration` (§4.1); new entry points `verifyLoginResponse` (§6.3) and `verifyServerCard` (§6.4); Stage 2 step 14 accepts `"S1"` only on server cards and new step 16f enforces the login service scope rule (`LOGIN_SERVICE_SCOPE`); `app_card_branch` result field (§8); new error codes (§9). See `process_specs/card_login.md`.
 
 ---
@@ -34,6 +38,7 @@
    - 6.2 [verifyCard](#62-verifycard)
    - 6.3 [verifyLoginResponse](#63-verifyloginresponse)
    - 6.4 [verifyServerCard](#64-verifyservercard)
+   - 6.5 [verifyNotarization](#65-verifynotarization)
 7. [Verification Pipeline](#7-verification-pipeline)
    - 7.1 [Stage 1 — Signature Validity](#71-stage-1--signature-validity)
    - 7.2 [Stage 2 — Sub-Card to Master Link](#72-stage-2--sub-card-to-master-link)
@@ -130,6 +135,14 @@ interface RpcProvider {
    * Returns the SubCardEntry for the given sub-card address, or null.
    */
   getSubCardEntry(subCardAddress: string): Promise<SubCardEntry | null>;
+
+  /**
+   * Returns the active GovernanceKeyset { keys, quorum, version, key_scheme }
+   * for a body (registry_contract.md §5, GetGovernanceKeyset). Used only by the
+   * notary checks, to verify governance list approvals with algorithm L.
+   * Added 2026-11-12.
+   */
+  getGovernanceKeyset(bodyId: "PressRegistryBody"): Promise<GovernanceKeyset>;
 
   /**
    * Added 2026-11-08 (card login). Reads DomainRegistrations[domain]
@@ -384,6 +397,21 @@ interface VerifierConfig {
    * policy rather than expecting per-call predicate overrides — none exist.
    */
   conditions?: PolicyMatchConditions;
+
+  /**
+   * Added 2026-11-11 (notaries, ADR-013). Needed by verifyNotarization (§6.5)
+   * and by the notary-issued-card checks in Stage 5 (§7.5). Absent: those
+   * checks return NOTARY_CONFIG_MISSING. Ordinary card verification is unaffected.
+   */
+  notary?: {
+    attestation: AttestationVerifier[];    // one module per platform (notary_runtime.md §5)
+    attestationRoots: Record<string, Uint8Array>;
+    allowSimulator: boolean;               // false in production
+    acceptedRuntimesCard: string;          // protocol-objects.md §34; both lists are checked with
+                                           // algorithm L (notary_lifecycle.md A.5) before use
+    programAllowlistCard: string;
+    notaryCardPolicy: string;              // NotaryCardPolicy CID
+  };
 }
 ```
 
@@ -408,6 +436,7 @@ class CardVerifier {
   verifyCard(cardAddress: string, options?: VerifyCardOptions): Promise<CardVerificationResult>;
   verifyLoginResponse(input: VerifyLoginResponseInput): Promise<LoginVerificationResult>;   // §6.3
   verifyServerCard(serverCardPubkey: string, options?: VerifyServerCardOptions): Promise<ServerCardVerificationResult>; // §6.4
+  verifyNotarization(notarizationCid: string): Promise<NotarizationVerificationResult>;   // §6.5
 }
 ```
 
@@ -558,6 +587,29 @@ type ServerCardVerificationResult =
 
 ---
 
+### 6.5 verifyNotarization
+
+*(Added 2026-11-11 — `process_specs/notary_lifecycle.md` Appendix A.4, algorithm N.)* Verifies a notary's signed result using only CIDs and chain data. Anyone can run it; nothing comes from the notary host.
+
+```typescript
+verifyNotarization(notarizationCid: string): Promise<NotarizationVerificationResult>
+
+type NotarizationVerificationResult =
+  | { valid: true; job_hash: string; notary_card: string; final_epoch: number;
+      accepted: number; rejected: number; dropped_after_acceptance: number;
+      suppressed: boolean; output?: unknown; output_hash: string;
+      chain_state_age_seconds: number;
+      warnings: ("runtime_retired_vulnerable" | "JOB_LOG_GAP" | "JOB_LOG_FORK" | "EPOCH_TOTAL_LOSS")[] }
+  | { valid: false; code: string; reason: string };
+```
+
+**Steps.** These are N1–N13 as numbered in `notary_lifecycle.md` Appendix A.4: job binding, the notary signature, the notary approved at `policy_state_cid`, not revoked, the policy matches, the enclave attestation (algorithm V, `t_eval` = `closes_at`), the chain state, the input commitment, suppression, the output, the job log, the cosignature quorum, and epoch supersession.
+- Card-chain parts (the notary card's chain, revocation, the policy's chain) use Stages 3–5.
+- Attestation parts use the configured `AttestationVerifier` modules.
+- Codes `ATT_*` and `NOT_*` are defined in `notary_lifecycle.md` §Error Paths.
+
+---
+
 ## 7. Verification Pipeline
 
 Stages run in order. A hard rejection within a stage skips remaining steps in that stage and marks dependent downstream stages as `"skipped"`. Stages that do not depend on failed output still run.
@@ -652,6 +704,7 @@ The head content tells us *what* the current state is (revoked or not, which fie
    - **`revocation`, 9xx (loud revocation):** Things on or after `effective_date` are suspect. Verifiers should surface this to allow issuers of other cards held by the same holder to investigate.
    - Genesis `CardDocument` head (never updated): not revoked, no field update.
    - If multiple chain members carry an 8xx or 9xx revocation, the earliest `effective_date` across the whole chain governs.
+5a. **`expires_at` (added 2026-11-11, `protocol-objects.md §1`).** If a chain member's genesis document carries `expires_at`, treat it as a quiet lapse effective at `expires_at`: things signed before it are trusted, and the card is not currently valid on or after it (compared with chain time). Record it under `revocation` with `reason: "expired"`. It enters steps 6–7 like an 8xx `effective_date`. If an 8xx or 9xx is also present, the earlier date governs.
 6. Determine `was_valid_at_signing_time`: if no revocation entry has `effective_date ≤ envelope.payload.timestamp`, record `true`; otherwise `false`.
 7. Determine `is_currently_valid`: if no revocation entry has `effective_date ≤ now`, record `true`; otherwise `false`.
 8. Record `revocation.data_freshness_seconds` — the age in seconds of the revocation data at the time of the check.
@@ -671,6 +724,11 @@ The head content tells us *what* the current state is (revoked or not, which fie
 3. Look up `PressAuthorizations[policy_id_address][press_address]` on-chain:
    - If no entry exists, record `policy_compliant: false`. (No entry means the press was never authorized; the card could not have been validly registered.)
    - If an entry exists, on-chain registration is proof of write-time authorization. A press that is currently `active == false` (subsequently revoked) does **not** retroactively invalidate the card. Record `policy_compliant: true` if field values also passed; surface the subsequent revocation as informational context (`press_subsequently_revoked: true`) in the result.
+3a. **Notary-issued cards (added 2026-11-11).** If the card's `press_card` is a notary card (its `policy_id` is `config.notary.notaryCardPolicy`), the card is a derived card under a template policy (`protocol-objects.md §2.2`). In addition to step 3:
+   - Run algorithm G (`notary_lifecycle.md` Appendix A.3) on the notary card's `genesis_attestation`, with `t_eval` = the notary card's `issued_at`. Failure → `policy_compliant: false`, code `NOTARY_GENESIS_INVALID`. A `"vulnerable"` runtime retirement → warning `runtime_retired_vulnerable`.
+   - Confirm `issuer_card == press_card`, and that `ancestry_pubkeys` matches `[notary card key, template key]`. Failure → `NOTARY_DERIVED_SHAPE`.
+   - Confirm the template's `notary.derived_card.source_kind` is absent or `"card"`. Any other value, including the reserved `"web_evidence"`, isn't supported by this version → `policy_compliant: false`, code `NOTARY_DERIVED_SHAPE` (added 2026-11-12).
+   - `dup_tag` is returned in the result (`derived: { source_policy, projected, dup_tag, expires_at }`), so callers that need one card per person per period can compare tags. It is not checked here.
 4. **Corrected 2026-07-16 (Tier 1 item 7):** if `VerifierConfig.conditions` (§5) is configured — construction-time config, not a call-site option; an earlier draft of this section described a call-site `requiredPredicate`/`requiredPolicy` shape that was never implemented and is not the correct API — evaluate it against the signer's resolved chain. Predicate failure sets `policy_match: false` but does not affect `policy_compliant`. If no `conditions` is configured, `policy_match` is `null` (not evaluated), regardless of the signer's actual compliance.
 5. **Non-compliance reporting:** If `policy_compliant: false`, the package automatically POSTs a non-compliance report to the Press Registry Body endpoint (see §7.8). This is not optional and requires no caller action. The result field `non_compliance_reported` reflects whether the POST succeeded.
 
@@ -914,6 +972,11 @@ The package distinguishes three classes of error:
 | `POLICY_FETCH_FAILED` | 5 | Policy snapshot CID could not be fetched from IPFS |
 | `NO_PRESS_AUTHORIZATION` | 5 | No `PressAuthorizations` entry for `(policy_id, press_address)` |
 | `NON_COMPLIANCE_REPORT_FAILED` | 5 | POST to Press Registry Body endpoint failed (network error or non-2xx response) |
+| `NOTARY_GENESIS_INVALID` | 5 | A derived card's notary card fails the genesis attestation check (added 2026-11-11) |
+| `NOTARY_DERIVED_SHAPE` | 5 | A notary-issued card's issuer, press or ancestry don't match the derived-card shape (added 2026-11-11) |
+| `NOTARY_CONFIG_MISSING` | 5, §6.5 | A notary check was needed but `config.notary` is not set (added 2026-11-11) |
+
+**Notary codes.** `verifyNotarization` (§6.5) returns the `ATT_*` and `NOT_*` codes defined in `process_specs/notary_lifecycle.md §Error Paths`.
 
 **Login codes.** `verifyLoginResponse` (§6.3) and `verifyServerCard` (§6.4) return the `LOGIN_*` codes and `DOMAIN_SUSPENDED` defined in `process_specs/card_login.md §Error Codes`; they are not redefined here.
 

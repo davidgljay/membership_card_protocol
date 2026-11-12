@@ -4,6 +4,8 @@
 **Date:** 2026-07-04
 **Status:** Draft
 
+**Changelog (2026-11-11, notaries, ADR-013):** the **notary host** (`object_specs/notary_host.md`) becomes a third destination kind. Its announcement and input routes are oblivious-only. For inputs, the HPKE body this transport carries is itself a second, inner HPKE envelope sealed to an enclave's job key (`protocol-objects.md §24`), so the destination host can't read it. See §Notary Host Destination.
+
 **Changelog (spec-consistency Phase 2):** Fix #6 — corrected the `relay/server/...` Nitro-style file-path citations in §Relay Target Registry to the actual `relay/src/...` convention (`relay.md`'s v0.9 changelog abandoned the Nitro-style layout); `app_sdk.md §4.7` still needs the same path correction in a future pass, since it wasn't in scope for this edit. Fix #8 — merged §Overview's "sub-card registration/deregistration" and "UUID pool registration/deregistration" wallet-service categories into one, per `wallet.md §7.7` (same endpoint pair). Fix #9 — changed §Request Path's wire format from `Content-Type: message/ohttp-req` (the RFC 9458 Binary HTTP media type, which conflicted with this document's own rejection of RFC 9458 encoding) to a custom `application/x-card-protocol-ohttp+hpke` type. Fix #10 — added a disambiguation note to §Related Specs distinguishing this document's OHTTP usage from `card_protocol_spec.md`'s unrelated wallet↔requesting-site CHAPI usage. See `plans/spec-consistency/inconsistencies/phase-2-consolidated-fixes.md`.
 
 ---
@@ -130,6 +132,22 @@ The relay resolves `target_id → { ohttp_gateway_url }` via a registry that is 
 The three excluded press endpoints are public reads with no device-correlation value to protect — there is nothing sensitive in a response to "what's this press's identity" or "is it healthy" that IP-hiding improves, and routing them through the relay would add latency with no corresponding privacy benefit. A request naming a path outside the six sensitive press endpoints is rejected by the press gateway's dispatcher rather than silently forwarded.
 
 This is the default transport for every in-scope call, with no separate "enable privacy mode" the host application must remember to turn on. An explicit direct-HTTPS bypass mode exists for testing and for the excluded public-read endpoints, but the oblivious path is the default for every sensitive call — falling back to direct HTTPS is the explicit opt-out, not the default behavior.
+
+---
+
+## Notary Host Destination
+
+*Added 2026-11-11 (ADR-013).* The notary host runs the same gateway (`GET /ohttp/key-config`, `POST /ohttp/gateway`) and registers a `target_id` with the relay, like the wallet service and the press.
+
+| Endpoint | Oblivious-routed? |
+|---|---|
+| `GET /jobs/{job_hash}/announcement` | Yes (only) |
+| `POST /jobs/{job_hash}/inputs` | Yes (only) |
+| `POST /jobs`, `GET /jobs/{job_hash}/status`, `/peer`, `/genesis*`, `/health` | No — direct HTTPS |
+
+**Double envelope.** For `POST /jobs/{job_hash}/inputs`, the `body` inside this transport's HPKE envelope is a `SealedInput`, sealed to the enclave's job key with X-Wing. The relay sees the device's IP and `target_id`. The notary host sees the job and an opaque ciphertext, but not the IP. Only the enclave sees the content. The response carries a host receipt in the clear, and the enclave's validation receipt sealed under a key exported from the inner context.
+
+The Honest Caveat below applies unchanged. If the relay and the notary host are run by the same party, that party learns contributors' IP addresses (notary threat-model assumption T10).
 
 ---
 

@@ -1,9 +1,11 @@
 # Card Protocol — Architecture Decision Record
 
-**Version:** 1.2  
-**Date:** 2026-06-29  
+**Version:** 1.3  
+**Date:** 2026-11-11  
 **Status:** Current  
 **Source:** Synthesized from `card_protocol_spec.md` (v0.3) and supporting raw notes. v1.1 adds ADR-012 (secp256r1 for on-chain verification; ML-DSA-44 retained for IPFS content signing) and closes OQ-2. v1.2 adds ADR-009-AMEND: the keyring blob moves off IPFS to traditional, deletable storage replicated across the wallet service federation.  
+
+**Amended 2026-11-11 (notaries):** v1.3 adds ADR-013 (notaries: attested computation over signed inputs on AWS Nitro Enclaves), notary components in the Component Map, Key Data Flow 5, and a terminology note on "Nitro" in the System Overview. The TOC also gains the previously missing ADR-012 entry.
 
 **Amended (spec-consistency Phase 2, Fix #11):** ADR-004's cryptographic-primitives list no longer includes "audit epoch entries" — the audit-epoch/AEK model was removed and replaced by direct E2E-encrypted `PressIssuanceRecord` messaging to each `policy.auditors` address; nothing is posted to IPFS under the new model. See `plans/spec-consistency/inconsistencies/phase-2-consolidated-fixes.md` Fix #11.
 
@@ -24,6 +26,8 @@
 10a. [ADR-009-AMEND: Keyring Blob Storage — Federation Replication, Not IPFS](#adr-009-amend-keyring-blob-storage--federation-replication-not-ipfs)
 11. [ADR-010: Canonical Serialization — RFC 8785 vs. CBOR](#adr-010-canonical-serialization--rfc-8785-vs-cbor)
 12. [ADR-011: On-Chain Press Authorization and Protocol Governance](#adr-011-on-chain-press-authorization-and-protocol-governance)
+12a. [ADR-012: On-Chain Signing — secp256r1 Now, ML-DSA-44 Upgrade Path](#adr-012-on-chain-signing--secp256r1-now-ml-dsa-44-upgrade-path)
+12b. [ADR-013: Notaries — Attested Computation over Signed Inputs](#adr-013-notaries--attested-computation-over-signed-inputs)
 13. [Component Map](#component-map)
 12. [Key Data Flows](#key-data-flows)
 13. [Open Questions](#open-questions)
@@ -46,6 +50,16 @@ The Card Protocol is a decentralized, privacy-preserving credential system. Its 
 **What a card is, structurally:**
 
 A card is a JSON document containing protocol-required fields (issuer, recipient public key, signatures, policy reference) plus policy-defined fields. The document is content-addressed and immutable on IPFS. Its current state is tracked by a **mutable pointer** — an on-chain registry entry pointing to the current head CID of an append-only log. The mutable pointer is the stable identity of the card across all updates.
+
+**Terminology note: "Nitro" (added 2026-11-11).** Three different things share the word, so specs written from 2026-11-11 on avoid it on its own:
+
+| Term | Meaning |
+|---|---|
+| "Nitro" in existing specs (e.g. `press.md §3.1`, `press/OPERATOR.md`) | The unjs server framework the press and other services are built on. New text calls it **nitropack**, after its npm package. |
+| **AWS Nitro Enclaves** ("the enclave") | The trusted execution environment notaries run in (ADR-013). Its signed document is the **enclave attestation** (or "AWS Nitro Enclaves attestation document"). That is distinct from App Attest / Play Integrity attestations (`subcards.md`) and from `DomainBindingAttestation`. |
+| `nitro-devnode` | The Arbitrum local development node used by `integration_tests/`. Unrelated to either of the above. |
+
+Existing specs are not rewritten; this note is the key for reading them.
 
 ---
 
@@ -540,6 +554,31 @@ The tradeoff is trust surface, not cost: replicating to every operator means eve
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
+**Notary components (ADR-013):**
+
+```
+┌──────────── Notary operator (one per approved notary card) ─────────────┐
+│  Notary host (nitropack)                 AWS Nitro Enclaves enclave     │
+│  - OHTTP gateway (outer envelope)  vsock  - broker: all keys, HPKE,     │
+│  - serves job announcements      ◄──────►   input checks, privacy       │
+│  - stores sealed inputs, receipts          transforms, NSM attestation  │
+│  - policy snapshots from chain           - workers: one per job,        │
+│  - pins notarizations / job log            WASM (wasmi), no keys        │
+│  - submits EAS anchors and derived-                                     │
+│    card writes (gas wallet only)                                        │
+└────────▲──────────────────────────────────────────────▲─────────────────┘
+         │ relay (oblivious transport)                  │ peer handoff and
+         │ outer: OHTTP to host; inner: X-Wing          │ heartbeats via hosts
+         │ HPKE to the job key                          ▼
+   Contributor wallet                          Other replicas (same or
+   - verifies enclave attestation              other operators)
+     before encrypting (algorithm W)
+   - keeps signed inputs for resubmission
+
+Governance (PressRegistryBody): accepted-runtime list card, program allowlist card,
+NotaryCardPolicy, derived-card template policies. EAS on Arbitrum One: job-log anchors.
+```
+
 ---
 
 ## Key Data Flows
@@ -678,6 +717,32 @@ Site
       → wallet opens response_uri?code=… (same device) or shows the code (QR) → browser redeems with cookie + code → session
 ```
 
+### 5. Notary Job (Aggregation or Vote)
+
+*Added 2026-11-11 (ADR-013). Full flows in `process_specs/notary_lifecycle.md` and `process_specs/notary_replication_and_recovery.md`; derived cards in `process_specs/derived_card_revocation_propagation.md`.*
+
+```
+Requester (satisfies the policy's notary.job_requester_predicate)
+  → signs a NotaryJob: policy, policy state, replica set, parameters, opens_at / closes_at, KEM
+Operator hosts
+  → the enclaves admit the program, generate the job key, hand it to a majority of replicas
+    (mutual attestation; each handoff logged and anchored with EAS)
+  → publish a JobAnnouncement carrying each replica's enclave attestation
+Contributor wallet
+  → algorithm W: AWS root, debug off, PCR0 on the accepted list, program hash, job hash,
+    isolation, job key hash, notary approved; consent screen built from the policy only
+  → signs NotaryInput {job_hash, payload, revision} with a sub-card, plus an evidence bundle
+  → inner HPKE (X-Wing) to the job key, outer OHTTP to the host, via the relay
+  → keeps a host receipt; gets a validation receipt once a majority of replicas hold the input
+Enclaves at close (chain time AND enclave clock ≥ closes_at)
+  → recompute from all stored inputs: latest revision per card, eligibility re-checked
+  → k-suppression and output transforms; a majority of replicas co-sign
+  → Notarization pinned to IPFS; job log record anchored with EAS; keys erased
+  → private outputs sent as card messages to the policy's recipients
+Anyone
+  → verifies the notarization from CIDs and chain data alone (card_verifier.md)
+```
+
 ---
 
 ## Open Questions
@@ -697,7 +762,7 @@ These are engineering and design questions from the spec that have not yet been 
 | OQ-9 | Design | Trusted root configuration UX: how are trusted roots configured by the user and synced across devices? Design work should begin in parallel with protocol engineering. | High |
 | OQ-10 | Design | Recovery UX when the holder has both a lost primary service and a lost YubiKey. Out of scope for v1? | Medium |
 | OQ-11 | Design | What is the UX when a recipient declines an offer? Should a decline notification be sent to the press? | Low |
-| OQ-12 | Engineering | Is a transparency log of approved press implementations operated by the protocol foundation needed? Relevant if TEE attestation is added in P2. | Low (P2 dependency) |
+| OQ-12 | Engineering | Is a transparency log of approved press implementations operated by the protocol foundation needed? Relevant if TEE attestation is added in P2. *2026-11-11:* ADR-013 introduces governance-held list cards of accepted enclave runtimes and audited programs for notaries; the same mechanism could serve a TEE-hardened press. | Low (P2 dependency) |
 | OQ-13 | Design | ~~Should wallet services publish a `/.well-known/card-wallet.json` transport manifest?~~ **Resolved 2026-11-08:** superseded — sites no longer construct callbacks for wallets; the login router and response modes replace them (`process_specs/card_login.md`). | — |
 | OQ-14 | Governance | **Coercion resistance / governance key holder identity.** Should governance body key holders be pseudonymous (organizations or anonymous participants, harder to coerce) or identifiable (named individuals/organizations with public accountability, easier to hold accountable but more coercible)? Deferred pending governance charter design. See also red-team Finding 1.4-B (press legal compulsion). | Medium |
 | OQ-15 | Governance | **Chain amendment authority for harmful content.** A malicious press could attach a link to harmful content (e.g., NCII) to a widely-held badge, then let their reputation absorb the cost while leaving the badge holder exposed. Mitigation: allow a co-signed amendment to the CID chain — mark holder + governance body both sign — that re-routes the linked-CID-chain to skip the offending entry and updates the on-chain head. Normal protocol traversal would see a clean history; the amendment itself (not the removed content) is visible in Arbitrum One transaction history. The on-chain record would effectively read "SEALED at this point" — transparent about the redaction without preserving the harm. Note: this does not apply to EAS annotations, which are on-chain state and cannot be amended this way. Requires defining amendment authority, quorum, and appeal process. Defer to post-v1 governance design. | Medium |
@@ -872,6 +937,8 @@ Controls press registration and revocation via `AuthorizePress` and `RevokePress
 - Authorize approved presses via `AuthorizePress`.
 - Revoke presses that have violated the ethics criteria via `RevokePress`.
 
+> **Amendment note (ADR-013, 2026-11-11):** the Press Registry Governance Body also holds the notary accepted-runtime list, the notary program allowlist, `NotaryCardPolicy` and the derived-card template policies, as governance-held cards. Notary operators that issue derived cards are authorized through the same `AuthorizePress` operation, once per (template policy, operator). No new on-chain table or operation is added.
+
 The quorum requirement for this body is set to reflect operational cadence while maintaining meaningful accountability. Specific quorum thresholds are deferred to the governance specification.
 
 **Shared principles for both bodies**
@@ -956,6 +1023,144 @@ Governance keys in `GovernanceKeysets` follow the same three-phase path via `Rot
 - IPFS content signatures remain ML-DSA-44 throughout — no change to card document structure, log entry structure, or client-side verification.
 - The split model introduces two key types per press, which must be tracked in press operator key management tooling.
 - Migration in Phase 2 is self-service per press (no re-registration, no new press card issuance) — presses rotate their own on-chain key using the dual-sign flow.
+
+---
+
+## ADR-013: Notaries — Attested Computation over Signed Inputs
+
+**Status:** Accepted
+**Date:** 2026-11-11
+**Design record:** `plans/notary-design-decisions.md` (approved at CP2, 2026-11-11), which gives the reasoning behind every decision summarized here
+**Amends:** ADR-007 (adds the notary host as a third oblivious-transport destination), ADR-008 (EAS becomes the anchor for notary job logs), ADR-011 (widens PressRegistryBody's remit to notary runtimes, programs and operators)
+**Related:** `card_protocol_spec.md` P2 items for a TEE-hardened press, partly fulfilled here; OQ-12
+
+### Context
+
+Communities want to learn things from their members' signed data without anyone seeing the individual records. Examples: how much members talk to one another, the result of a vote, or a reduced card that says only "Meta employee". The press already follows the right pattern: it receives signed inputs, runs a fixed check, signs an output, and keeps nothing readable (ADR-005). But a press only checks predicates, and its operator sees every input.
+
+A **notary** generalizes the pattern to declared programs whose inputs the operator can't read. A notary observes signed statements from card holders, runs a program named by a policy, signs the result, and discards the inputs. Version 1 has four use cases, all built and tested: aggregation, voting, derived cards, and revocation propagation from a source card to the derived card made from it.
+
+The trust question is the same as for the press: why should a contributor believe the operator can't read or alter their input? The answer must be checkable by the contributor's own wallet *before* it encrypts anything, not asserted by the operator.
+
+### Decision
+
+Run notary programs inside **AWS Nitro Enclaves** (a trusted execution environment, TEE). The wallet checks an **enclave attestation**, the AWS Nitro Enclaves attestation document, before it encrypts any input to the enclave.
+
+**Separation of roles.**
+- The **program** computes: a WASM module, named by CID, that maps inputs to an output value.
+- The **policy** routes: a `PolicyCardDocument` with a `notary` section that names the program, who may contribute, who receives the output, and the privacy bounds.
+- The **operator** runs a host plus an enclave, and is authorized per policy by a **notary card** listed in `approved_notaries`.
+
+The program never decides who receives the output.
+
+**What the wallet checks** (`wallet_sdk.md`, algorithm W):
+- The certificate chain from the AWS root, with debug mode off.
+- The runtime measurement (PCR0) is on the governance-held accepted-runtime list.
+- The attestation binds this program's hash, this job's hash and epoch, the job's public key, the isolation mode, and the notary card's key.
+- The notary card is approved by the policy.
+
+The consent screen is generated from the policy and the job, never from requester text.
+
+**Generic measured runtime.** One audited Rust runtime image (one PCR0) serves many jobs, because AWS allows only four enclaves per parent instance:
+- A **broker** process holds every key and decrypts inputs.
+- Each job runs in its own **worker** process, in a WASM interpreter (wasmi, not a JIT). It runs under fuel, memory and time limits, and receives only its own job's checked payloads.
+- The runtime admits a program only after checking its imports, features and limits, and that its output schema matches the policy. It then generates the job key.
+- The runtime, not the program, applies the privacy transforms: k-suppression, clamping, rounding and bucketing. Differential privacy is specified and deferred. v1 refuses policies that set a DP budget.
+- Only programs on the governance **program allowlist** may share an enclave with other jobs (`isolation: "shared"`). Others run `dedicated`.
+
+**Key custody.** The notary card's ML-DSA-44 key, and its secp256r1 on-chain key, are generated inside an enclave and never leave enclaves. They pass between enclaves only by a mutual-attestation handoff, which is logged. The operator's host holds only a receipt-signing key, its transport key and the gas wallet. This is what lets derived cards carry the notary card as both issuer and press without the operator being able to mint them.
+
+**Transport.** Two envelopes:
+- The outer one is the existing oblivious transport to the notary host (ADR-007, `oblivious_transport.md`). It hides the contributor's IP address.
+- The inner one is HPKE with X-Wing (ML-KEM-768 + X25519, draft-06) to the per-job enclave key. It hides the content from the host.
+
+**Records.** What becomes public is only that the notary acted:
+- **Notarizations** are enclave-signed records on IPFS, signed by a quorum of replicas.
+- A **job log** of enclave-signed, hash-chained records on IPFS, each anchored by an EAS attestation (ADR-008), shows every epoch, handoff and close.
+- Outputs are public only if the policy says so. Otherwise they are encrypted to their recipients as ordinary card messages.
+
+Notary records don't use card logs, so aggregation and vote policies need no on-chain authorization at all.
+
+**Replication.**
+- A job names a replica set (default three instances across availability zones; several operators recommended for votes).
+- An input is acknowledged only once a majority of replicas hold it.
+- A result is final only when a majority of replicas recompute it and co-sign. Any two majorities share an honest replica, so a partitioned host can't produce two different results.
+- A vote closes only when chain time **and** the enclave's hardware clock both pass `closes_at`.
+- Losing every replica loses the job key. This is deliberate: deletion has to be credible. The job restarts in a new, publicly logged epoch, and wallets resubmit their latest signed input.
+
+**Derived cards and revocation propagation.**
+- Derived cards are issued under a small set of governance-registered **template policies**, one per audited `derive` program, not one per community. The card states only the source policy's CID and field values copied verbatim from the source card.
+- Each card carries a keyed `dup_tag`, so a holder can't get several cards from one source card in a period.
+- Cards are issued in batches, only once enough holders share the same values, and expire at the end of a fixed period.
+- Under `sealed_link`, the enclave keeps the source-to-derived link and watches whole-policy registry updates, so the host never learns which source cards are linked. It propagates revocations with new codes 820 or 920, after a minimum delay and in batches.
+
+**Governance and on-chain authorization.**
+- **PressRegistryBody** holds the accepted-runtime list, the program allowlist, the `NotaryCardPolicy` and the template policies, all as cards updated with 3xx entries (no contract change).
+- Notary operators get write authority under a template policy through the existing `PressAuthorizations` table: one `AuthorizePress` per (template, operator).
+- The write gate's known calldata-binding gap (`registry_contract.md §6.1`) is fixed before derived cards ship.
+
+### Platform choice and how to replace it
+
+AWS Nitro Enclaves is a pragmatic v1 choice, not a protocol commitment:
+- They are available today on ordinary EC2 instances at no charge beyond the instance.
+- They have a documented attestation format and a reproducible image measurement (PCR0).
+- They have no persistent storage or network, which suits credible deletion.
+
+The AWS dependency is confined to two places:
+1. One attestation-verifier module per platform, behind a shared `AttestationVerifier` interface. Only the module knows the document format and root certificate; the binding checks are shared.
+2. Packaging the runtime image.
+
+Notary cards and policies carry a `platform` field. Adding SEV-SNP or TDX later means a new verifier module, a new value for `platform`, and new entries on the accepted-runtime list. Objects, the job log and wallet flows don't change. All development and CI use a local simulator that emits the same document format signed by a test root, which production verifiers refuse.
+
+### Trust assumptions and known limits
+
+Stated in full in `process_specs/notary_lifecycle.md` (threat model). In summary:
+- **Trusted:** AWS as the hardware root (attestation keys, enclave memory isolation); the audited runtime and allowlisted programs; governance bodies acting in good faith (as in ADR-011); the cryptography; that a quorum of a job's operators don't collude; that the relay and notary host are run by different parties.
+- **Out of scope:** enclave side channels.
+- **Known limits:**
+  - The operator controls I/O. It can drop inputs, delay close, or force a restart, and each is attributable through receipts and the job log.
+  - Losing every replica loses offline voters' ballots.
+  - The host-supplied chain data that v1 relies on can be stale, because there are no state proofs. Every notarization records the chain state it used.
+  - k-anonymity doesn't stop differencing across repeated jobs.
+  - Small communities get weaker timing protection for propagated revocations.
+
+### Alternatives considered
+
+| Alternative | Why not in v1 |
+|---|---|
+| **Other TEEs (AMD SEV-SNP, Intel TDX)** | Comparable trust model, but whole-VM attestation needs more image engineering. Kept swappable through the `platform` field. |
+| **Prio / DAP or general MPC** | No trusted hardware, but needs two or more non-colluding aggregators per job, and covers sums and histograms well and other programs poorly. Doesn't cover derived cards or sealed links. A good later template for aggregation. |
+| **zkVM (proving the program ran correctly)** | Proves correctness but not confidentiality: whoever runs the prover sees the inputs. Proving costs are high for votes recomputed at close. |
+| **Client-side zero-knowledge proofs** | Each holder proves a statement about their own card. A fit for derived cards (and for a holder-computed `dup_tag`) once proof tooling for ML-DSA-signed cards exists. Doesn't do aggregation. |
+| **Refactoring the press into a notary** | Shares object definitions only. The press stays unchanged in v1 to limit how far changes spread. |
+| **Notarizations on the notary card's log** | A `LogEntry` reposts its whole `history`, so total size grows quadratically, and every write needs a press. Replaced by the EAS-anchored job log. |
+| **One derived-card policy per community** | Every such policy would need a RootPolicyBody `RegisterPolicy` and a PressRegistryBody `AuthorizePress` per operator. Replaced by template policies. May be revisited with delegated policy registration. |
+
+### Consequences
+
+- Communities can run audited analyses, votes and derived cards by signing a job against a template policy, with no code and no infrastructure of their own (G3).
+- Contributors' wallets enforce the guarantees before encryption. A swapped program or a debug enclave never receives plaintext (G2).
+- New shared-object fields, all optional (CP6 not triggered):
+  - `approved_notaries` and `notary` on `PolicyCardDocument`
+  - `expires_at` on `CardDocument`
+  - predicate parameter references inside `notary` sections
+  - update codes 820 and 920
+  - an exception in `protocol-objects.md §11`: no `PressIssuanceRecord`s for notary-issued cards
+- One contract change (the write-gate calldata binding) and several one-time governance registrations are needed before derived cards ship.
+- PressRegistryBody takes on software certification for notary runtimes and programs, with an emergency-retirement path: any 2 of 5 members can retire an exploitable runtime or program at once, subject to full-body ratification within 7 days (`governance/PressRegistryBody/notary_certification.md`). Both thresholds are enforced cryptographically: each list version carries members' governance-key signatures, checked by runtimes, wallets and verifiers (`protocol-objects.md §34`).
+- X-Wing draft-06 is not final. The KEM and draft version are bound into every job and announcement, so a later wire-incompatible draft can be rejected cleanly.
+
+### Specification
+
+- Process specs:
+  - `process_specs/notary_lifecycle.md`
+  - `process_specs/notary_replication_and_recovery.md`
+  - `process_specs/derived_card_revocation_propagation.md`
+- Object specs:
+  - `object_specs/notary_runtime.md`
+  - `object_specs/notary_host.md`
+- Objects: `protocol-objects.md` (notary sections)
+- Feature section: `card_protocol_spec.md` (Notaries)
 
 ---
 

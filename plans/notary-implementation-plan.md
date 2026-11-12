@@ -81,43 +81,43 @@ Goal: a complete list of every spec and code area that must change or be created
 
 Goal: settle every design question the specs depend on, and get David's approval, before writing spec text. Output: `plans/notary-design-decisions.md`, one section per topic, each with the decision, the alternatives considered, and the reason.
 
-- [ ] **2.1 Object schemas**
+- [x] **2.1 Object schemas**
   - **What**: Define the fields, signers and canonical serialization (RFC 8785) for: the `notary` section of `PolicyCardDocument` (including `isolation`, `revocation_propagation`, privacy parameters), NotaryJob, job announcement, NotaryInput, host receipt, enclave validation receipt, Notarization, public log entry, HandoffRecord, Heartbeat, state-blob anchor, and propagation batch. Follow the conventions in `protocol-objects.md`.
   - **Who**: Claude, then David reviews
   - **Context needed**: `notary-spec-impact.md §A, §C`; `protocol-objects.md` (conventions, §2, §3, §6); strategic plan §Design Decisions
   - **Done when**: every object has a field table and an example, and every signature names what it covers.
 
-- [ ] **2.2 On-chain authorization and governance ownership**
+- [x] **2.2 On-chain authorization and governance ownership**
   - **What**: Choose how notary sub-cards are authorized on-chain (from §B's options), and which governance body owns the PCR0 list and the program allowlist (from §D), including how each list is signed, logged and distributed to wallets and runtimes.
   - **Who**: Claude proposes; **David decides**
   - **Context needed**: `notary-spec-impact.md §B, §D`; ADR-011
   - **Done when**: the decision is recorded, with the contract changes it implies.
 
-- [ ] **2.3 Attestation and admission**
+- [x] **2.3 Attestation and admission**
   - **What**: Specify the wallet's attestation verification algorithm (certificate chain, PCR0, debug check, `user_data` layout, nonce, freshness), the abstraction that lets a simulator backend and an AWS Nitro Enclaves backend share it, and the runtime's program admission checks (exact import list, banned features, limits, output-schema custom section format).
   - **Who**: Claude
   - **Context needed**: strategic plan §Design Decisions (runtime, admission, isolation); `notary-spec-impact.md §C`
   - **Done when**: both algorithms are written as numbered steps with a reject reason for each check.
 
-- [ ] **2.4 Runtime architecture and host protocol**
+- [x] **2.4 Runtime architecture and host protocol**
   - **What**: Define the broker/worker split, the broker↔worker protocol, the host↔enclave (vsock) message set, job lifecycle states, per-job limits, zeroization, and the privacy transforms (k-suppression, clamping, bucketing). Decide whether differential-privacy noise ships in v1 or is specified and deferred.
   - **Who**: Claude; **David decides** on DP scope
   - **Context needed**: strategic plan §Design Decisions (multi-job runtime, privacy)
   - **Done when**: a message table and a state diagram exist for both protocols.
 
-- [ ] **2.5 Long-running jobs, replication and recovery**
+- [x] **2.5 Long-running jobs, replication and recovery**
   - **What**: Specify the mutual-attestation key handoff, handoff records, heartbeats, re-replication, epochs and wallet resubmission, the latest-ballot-wins rule (keyed per card, across epochs), chain-anchored close, and the state-blob format with on-chain anchoring and rollback protection used by `sealed_link`.
   - **Who**: Claude
   - **Context needed**: strategic plan §Design Decisions (replication, epochs, close, revocation propagation)
   - **Done when**: each protocol is written as numbered steps, with what an attacker controlling the host can and cannot do at each step.
 
-- [ ] **2.6 Derived cards and revocation propagation**
+- [x] **2.6 Derived cards and revocation propagation**
   - **What**: Specify the derived-card nullifier (inputs, period), the anonymity-set check (how the enclave counts cards with the same projected value, given that it only sees the host's chain data), batched issuance, `valid_until` and renewal, and the `sealed_link` watch loop: which registry events the host feeds, the batching window, minimum delay, and propagated codes.
   - **Who**: Claude
   - **Context needed**: strategic plan §Design Decisions (derived cards, revocation propagation); `update_codes.md`
   - **Done when**: both flows are written as numbered steps, and the timing-linkage defenses are stated as parameters with defaults.
 
-- [ ] **2.7 Phase 2 Milestone Review**
+- [x] **2.7 Phase 2 Milestone Review**
   - **What**: Check the sections for consistency with each other and with the strategic plan: shared field names, one serialization, no protocol relying on a property another removes. List the threat-model assumptions in one place.
   - **Who**: Claude
   - **Context needed**: `notary-design-decisions.md`; strategic plan
@@ -129,37 +129,37 @@ Goal: settle every design question the specs depend on, and get David's approval
 
 Goal: notaries fully specified, consistent with existing specs, and approved before code. Every step uses `notary-design-decisions.md` as its source of truth.
 
-- [ ] **3.1 ARCHITECTURE.md: new ADR** *(Opus)*
+- [x] **3.1 ARCHITECTURE.md: new ADR** *(Opus)*
   - **What**: Add an ADR (next number after ADR-012) titled "Notaries — Attested Computation over Signed Inputs". It covers context, decision, the AWS Nitro Enclaves choice and how to swap it later, the multi-job runtime, trust assumptions and known limits, and alternatives considered: other TEEs, Prio/MPC, zkVM, client-side proofs. Add notary components to the Component Map and the notary flow to Key Data Flows, and update the Table of Contents.
   - **Who**: Claude
   - **Context needed**: `specs/ARCHITECTURE.md` (ADR format, ADR-005, ADR-011); `notary-design-decisions.md`; strategic plan
   - **Done when**: the ADR is present, linked from the TOC and Component Map, and consistent with ADR-005 and ADR-011.
 
-- [ ] **3.2 protocol-objects.md: new and changed objects** *(Sonnet)*
+- [x] **3.2 protocol-objects.md: new and changed objects** *(Sonnet)*
   - **What**: Add the `notary` section to §2 PolicyCardDocument and new numbered sections for each new object from 2.1. Update the Object Relationship Summary and the Serialization Quick Reference.
   - **Who**: Claude
   - **Context needed**: `specs/protocol-objects.md`; `notary-design-decisions.md §2.1`
   - **Done when**: every object in 2.1 has a section in the existing format, and serialization examples are given.
 
-- [ ] **3.3 Process spec: notary lifecycle** *(Opus)*
+- [x] **3.3 Process spec: notary lifecycle** *(Opus)*
   - **What**: Create `specs/process_specs/notary_lifecycle.md`. It covers: operator setup, notary policy creation, job activation and announcement, sharing, contributor verification and consent, input submission and receipts, processing, output routing, and the notarization. Include the three job modes and the aggregation, vote and derived-card flows. Use the same format as `open_offer_creation.md`: actors, preconditions, steps, failure cases.
   - **Who**: Claude
   - **Context needed**: `notary-design-decisions.md §2.1–2.4, §2.6`; `process_specs/open_offer_creation.md` (format)
   - **Done when**: every step names its actor, its inputs and outputs, and its failure handling.
 
-- [ ] **3.4 Process spec: replication and recovery** *(Opus)*
+- [x] **3.4 Process spec: replication and recovery** *(Opus)*
   - **What**: Create `specs/process_specs/notary_replication_and_recovery.md`: the handoff protocol, heartbeats, re-replication, epochs, wallet resubmission, latest-ballot-wins, chain-anchored close, and what happens on total loss.
   - **Who**: Claude
   - **Context needed**: `notary-design-decisions.md §2.5`
   - **Done when**: written in the same process format, with a threat note at each step.
 
-- [ ] **3.5 Process spec: derived-card revocation propagation** *(Opus)*
+- [x] **3.5 Process spec: derived-card revocation propagation** *(Opus)*
   - **What**: Create `specs/process_specs/derived_card_revocation_propagation.md`: `expiry_only`, `sealed_link`, and `escrowed_link` (marked "specified, not implemented in v1"), the state blob, batching and delay, and propagated codes.
   - **Who**: Claude
   - **Context needed**: `notary-design-decisions.md §2.5–2.6`; `update_codes.md`
   - **Done when**: written in process format, with timing-linkage defenses as named parameters.
 
-- [ ] **3.6 Object specs: runtime and host; changes to existing object specs** *(Sonnet)*
+- [x] **3.6 Object specs: runtime and host; changes to existing object specs** *(Sonnet)*
   - **What**:
     - Create `specs/object_specs/notary_runtime.md` (broker/worker, admission, privacy transforms, attestation backends, limits) and `specs/object_specs/notary_host.md` (nitropack service: endpoints, relay ingress, IPFS and log publishing, registry writes, monitoring).
     - Update `wallet_sdk.md`, `wallet.md`, `card_verifier.md`, `registry_contract.md` (if 2.2 requires it) and `press.md` (cross-references only).
@@ -167,7 +167,7 @@ Goal: notaries fully specified, consistent with existing specs, and approved bef
   - **Context needed**: `notary-design-decisions.md`; `notary-spec-impact.md §B, §C`; each target spec
   - **Done when**: each new spec exists in the house format, and each changed spec has a changelog line.
 
-- [ ] **3.7 card_protocol_spec.md and governance text** *(Sonnet)*
+- [x] **3.7 card_protocol_spec.md and governance text** *(Sonnet)*
   - **What**:
     - Add a numbered feature section, "Notaries," to `card_protocol_spec.md`: problem statement, goals, non-goals, user stories for the four use cases, P0/P1/P2 requirements, acceptance criteria and open questions, in the style of the existing sections.
     - Add governance text for the PCR0 list and the program allowlist to the body chosen in 2.2.
@@ -176,13 +176,13 @@ Goal: notaries fully specified, consistent with existing specs, and approved bef
   - **Context needed**: `card_protocol_spec.md` (§1 format); `notary-design-decisions.md §2.2`; the chosen body's `mandate.md`
   - **Done when**: the acceptance criteria map one-to-one onto the strategic plan's Key Objectives.
 
-- [ ] **3.8 README.md: Notaries section** *(Sonnet)*
+- [x] **3.8 README.md: Notaries section** *(Sonnet)*
   - **What**: Add a "Notaries" subsection under §Core Flows (what a notary does, using the running-club voice and examples already in the README: a club health check, a vote, an "anonymous member" card). Add a "Notary" entry under §Protocol Components, and link the new specs from §Specification. Plain language, no cryptographic detail.
   - **Who**: Claude
   - **Context needed**: `README.md` (full, for voice); strategic plan §Starting point
   - **Done when**: the section reads consistently with the surrounding README, and every spec link resolves.
 
-- [ ] **3.9 Phase 3 Milestone Review and spec-change summary** *(Opus)*
+- [x] **3.9 Phase 3 Milestone Review and spec-change summary** *(Opus)*
   - **What**: Run a consistency pass in the style of `plans/spec-consistency/` across every file touched in 3.1–3.8: field names, object numbers, cross-links, and terminology (no bare "Nitro"). Write `plans/notary-spec-changes.md` summarizing every change by file, for David's review.
   - **Who**: Claude
   - **Context needed**: all files changed in Phase 3; `notary-design-decisions.md`
