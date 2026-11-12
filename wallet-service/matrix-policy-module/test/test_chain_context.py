@@ -45,6 +45,8 @@ from matrix_policy_module.chain_context import extract_chain, walk_join_attestat
 from matrix_policy_module.predicates import evaluate_room_predicate  # noqa: E402
 
 POLICY_CID = "QmRoomPolicy"
+# Not in any test chain: the app cards here are on the "other" branch.
+LOGIN_SERVICE_ROOT = "0x" + "11" * 32
 
 
 def _build_join_attestation_fixture():
@@ -162,6 +164,7 @@ async def test_walk_join_attestation_chain_produces_usable_chain() -> None:
             rpc=rpc,
             ipfs=ipfs,
             app_certification_root=app_cert_root.address,
+            login_service_certification_root=LOGIN_SERVICE_ROOT,
             trusted_roots=[root.address],
             return_chain=True,
         )
@@ -184,6 +187,7 @@ async def test_extracted_chain_satisfies_room_predicate() -> None:
             rpc=rpc,
             ipfs=ipfs,
             app_certification_root=app_cert_root.address,
+            login_service_certification_root=LOGIN_SERVICE_ROOT,
             trusted_roots=[root.address],
             return_chain=True,
         )
