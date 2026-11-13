@@ -22,7 +22,10 @@ export interface HostConfig {
   REGISTRY_CONTRACT_ADDRESS: string;
   EAS_CONTRACT_ADDRESS: string;
   NOTARY_EAS_SCHEMA_UID: string;
-  IPFS_PROVIDER: "mock" | "kubo";
+  IPFS_PROVIDER: "mock" | "kubo" | "sim";
+  /** `rpc` (Phase 7 clients) or `sim`: the simulated chain at `SIM_CHAIN_URL` (docker-compose.sim.yml only). */
+  CHAIN_PROVIDER: "rpc" | "sim";
+  SIM_CHAIN_URL: string | undefined;
   KUBO_API_URL: string | undefined;
   EXTERNAL_KV_URL: string;
   ENCLAVE_CIDS: string[];
@@ -59,7 +62,11 @@ export function loadConfig(env: Env): HostConfig {
   const schema = req("NOTARY_EAS_SCHEMA_UID");
   if (schema && !/^0x[0-9a-fA-F]{64}$/.test(schema)) problems.push("NOTARY_EAS_SCHEMA_UID must be 0x plus 64 hex characters");
   const provider = env["IPFS_PROVIDER"] ?? "";
-  if (provider !== "mock" && provider !== "kubo") problems.push('IPFS_PROVIDER must be "mock" or "kubo"');
+  if (provider !== "mock" && provider !== "kubo" && provider !== "sim") problems.push('IPFS_PROVIDER must be "mock", "kubo" or "sim"');
+  const chainProvider = env["CHAIN_PROVIDER"] ?? "rpc";
+  if (chainProvider !== "rpc" && chainProvider !== "sim") problems.push('CHAIN_PROVIDER must be "rpc" or "sim"');
+  if ((chainProvider === "sim" || provider === "sim") && !env["SIM_CHAIN_URL"]) problems.push("SIM_CHAIN_URL is required with the simulated chain");
+  if (provider === "sim" && chainProvider !== "sim") problems.push("IPFS_PROVIDER=sim requires CHAIN_PROVIDER=sim");
   if (provider === "kubo" && !env["KUBO_API_URL"]) problems.push("KUBO_API_URL is required when IPFS_PROVIDER=kubo");
   const cids = list("ENCLAVE_CIDS");
   const endpoints: EnclaveEndpoint[] = [];
@@ -75,7 +82,8 @@ export function loadConfig(env: Env): HostConfig {
     NOTARY_CARD_ADDRESSES: cards, NOTARY_HOST_MLDSA44_SEED: key32("NOTARY_HOST_MLDSA44_PRIVATE_KEY"), NOTARY_OHTTP_PRIVATE_KEY: key32("NOTARY_OHTTP_PRIVATE_KEY"),
     NOTARY_GAS_WALLET_PRIVATE_KEY: gas, ARBITRUM_RPC_URL: req("ARBITRUM_RPC_URL"), EXPECTED_CHAIN_ID: int("EXPECTED_CHAIN_ID", 42161),
     REGISTRY_CONTRACT_ADDRESS: addr("REGISTRY_CONTRACT_ADDRESS"), EAS_CONTRACT_ADDRESS: addr("EAS_CONTRACT_ADDRESS"), NOTARY_EAS_SCHEMA_UID: schema,
-    IPFS_PROVIDER: provider === "kubo" ? "kubo" : "mock", KUBO_API_URL: env["KUBO_API_URL"], EXTERNAL_KV_URL: req("EXTERNAL_KV_URL"),
+    IPFS_PROVIDER: provider === "kubo" ? "kubo" : provider === "sim" ? "sim" : "mock",
+    CHAIN_PROVIDER: chainProvider === "sim" ? "sim" : "rpc", SIM_CHAIN_URL: env["SIM_CHAIN_URL"] || undefined, KUBO_API_URL: env["KUBO_API_URL"], EXTERNAL_KV_URL: req("EXTERNAL_KV_URL"),
     ENCLAVE_CIDS: cids, ENCLAVE_ENDPOINTS: endpoints, PEER_HOSTS: list("PEER_HOSTS", false), SNAPSHOT_REFRESH_SECONDS: int("SNAPSHOT_REFRESH_SECONDS", 30),
     REATTEST_INTERVAL_SECONDS: int("REATTEST_INTERVAL_SECONDS", 21_600), ALERT_WEBHOOK_URL: env["ALERT_WEBHOOK_URL"] || undefined,
     NOTARY_ADMIN_TOKEN: admin, NOTARY_RELAY_TARGET_ID: req("NOTARY_RELAY_TARGET_ID"), NOTARY_PUBLIC_BASE_URL: req("NOTARY_PUBLIC_BASE_URL"),

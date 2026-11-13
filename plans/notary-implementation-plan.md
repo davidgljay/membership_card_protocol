@@ -255,7 +255,7 @@ Goal: one end-to-end path running in the simulator: a job is announced with an a
   - **Context needed**: `wallet_sdk.md` and `card_verifier.md` (notary sections); `notary_lifecycle.md`
   - **Done when**: tests reject each failure case in strategic-plan objective G2.
 
-- [ ] **5.5 Host service**
+- [x] **5.5 Host service**
   - **What**: Build `notary/host` on nitropack: job intake and validation against the policy, enclave job creation, announcement publishing (IPFS and wallet service), ciphertext ingress via the relay with receipts, feeding chain state, notarization publishing, log entries, and notary sub-card setup. Add it to `notary/deploy` docker-compose.
   - **Who**: Claude
   - **Context needed**: `notary_host.md`; `press/` (patterns for nitropack, `viem`, IPFS)

@@ -589,3 +589,15 @@ fn enclaves_do_not_enforce_the_single_operator_switch() {
     let job = job_for(&w, &MlDsaKey::generate(), 1);
     create_and_open(&mut w, &job);
 }
+
+/// The end-to-end run (step 5.5, `notary/e2e`) uses this same tally program as a committed fixture.
+/// `UPDATE_E2E_FIXTURE=1 cargo test -p notary-broker --test broker e2e_tally_fixture` rewrites it.
+#[test]
+fn e2e_tally_fixture_is_current() {
+    let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/fixtures/tally.wasm");
+    let program = tally_program(&output_schema());
+    if std::env::var("UPDATE_E2E_FIXTURE").is_ok() {
+        std::fs::write(&p, &program).unwrap();
+    }
+    assert_eq!(std::fs::read(&p).expect("run with UPDATE_E2E_FIXTURE=1"), program, "notary/e2e/fixtures/tally.wasm is stale");
+}

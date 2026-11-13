@@ -2,3 +2,4 @@ packages:
   - "attestation-ts"
   - "host"
   - "vectors-tools"
+  - "e2e"

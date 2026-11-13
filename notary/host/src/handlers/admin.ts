@@ -23,7 +23,8 @@ export async function handleGenesis(ctx: HostContext, authorization: string | un
   requireOperator(ctx, authorization);
   if (!body?.request) throw new HostError("MISSING_FIELD", "request is required");
   const r = await viaEnclave(() => liveSession(ctx).call("genesis", { request: body.request }));
-  return { id_pubkey: r["id_pubkey"], chain_pubkey: r["chain_pubkey"], attestation: r["attestation"] };
+  // `request` and `notary_card` (runtime §9, E24): the completed request is what the notary card's `genesis_request` names
+  return { id_pubkey: r["id_pubkey"], chain_pubkey: r["chain_pubkey"], attestation: r["attestation"], request: r["request"], notary_card: r["notary_card"] };
 }
 
 /** `POST /genesis/countersign`: passes the policy holder's notary card offer to the enclave. */

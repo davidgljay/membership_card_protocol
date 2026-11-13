@@ -41,3 +41,11 @@ export interface ReplicaStarter { start(forJob: string | null, notaryCard: strin
 
 /** Operator alerts. They never carry job data: only a level, a code and counts. */
 export interface Monitor { alert(level: "info" | "warn" | "error", code: string, counts?: Record<string, number>): Promise<void> }
+
+/** The chain feed behind the host's schedulers (notary_host.md §8): new block headers and the registry's events. */
+export interface ChainFeed {
+  /** Headers after block `n`, oldest first: `header_rlp` base64url, `timestamp` in seconds. */
+  headersAfter(n: number): Promise<{ number: number; header_rlp: string; timestamp: number }[]>;
+  /** Every `CardRegistered` / `CardHeadUpdated` under `policy`, every sub-card registration, and the newest block. */
+  registry(policy: string): Promise<{ events: import("./chain/snapshots.js").RegistryEvent[]; subcards: import("./chain/snapshots.js").SubCardEvent[]; block: number }>;
+}

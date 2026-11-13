@@ -1,26 +1,38 @@
-# Local and CI shape: the host, Redis, and the enclave simulator in place of the vsock proxy and a real enclave
-# (code-plan §2.2, §4 step 5.5). The enclave service is `notary-runtime` run by the simulator launcher.
-#
-# STATUS (2026-11-12, step 5.5): the host half is complete and tested against a mock enclave. The enclave service
-# below needs the runtime from step 5.3 (`notary-runtime --mode broker`), which is not built yet, so this file has
-# NOT been run end to end. The 5.5 "Done when" (an end-to-end run against the simulator) waits for 5.3.
+# Step 5.5 end to end against the simulator (code-plan §2.2): the host, Redis, the simulated enclave (notary-runtime +
+# the fake enclave service), and a simulated chain/IPFS/EAS service in place of Arbitrum One, Kubo and EAS (Phase 7).
+# Run it with notary/e2e/run-compose.sh, which also drives the scenario. Every key in e2e/sim.env is a TEST value.
 services:
-  host:
-    build: { context: ../.., dockerfile: notary/deploy/Dockerfile.host }
-    environment:
-      IPFS_PROVIDER: mock
-      EXTERNAL_KV_URL: redis://redis:6379
-      ENCLAVE_CIDS: sim-1
-      ENCLAVE_ENDPOINTS: "sim-1=enclave-sim:7001"
-      NOTARY_RELAY_TARGET_ID: notary-sim
-      NOTARY_PUBLIC_BASE_URL: http://host:3000
-    env_file: .env.sim
-    ports: ["3000:3000"]
-    depends_on: [redis, enclave-sim]
+  sim-chain:
+    build: { context: ../.., dockerfile: notary/deploy/Dockerfile.e2e }
+    image: notary-e2e:dev
+    environment: { SIM_CHAIN_PORT: "8545" }
   redis:
     image: redis:7-alpine
   enclave-sim:
-    # The simulated enclave: notary-runtime in broker mode, attesting through the fake enclave service in notary/sim.
-    # Requires step 5.3. Placeholder image name; the Dockerfile arrives with the runtime.
+    build: { context: .., dockerfile: deploy/Dockerfile.runtime-sim }
     image: notary-runtime-sim:dev
-    command: ["notary-runtime", "--mode", "broker", "--listen", "0.0.0.0:7001", "--attestation", "simulator"]
+  host:
+    build: { context: ../.., dockerfile: notary/deploy/Dockerfile.host }
+    image: notary-host:dev
+    env_file: ../e2e/sim.env
+    environment:
+      EXTERNAL_KV_URL: redis://redis:6379
+      SIM_CHAIN_URL: http://sim-chain:8545
+      ENCLAVE_CIDS: sim-1
+      ENCLAVE_ENDPOINTS: "sim-1=enclave-sim:7001"
+      NOTARY_PUBLIC_BASE_URL: http://host:3000
+      NOTARY_CARD_ADDRESSES: ${NOTARY_CARD_ADDRESSES:-0000000000000000000000000000000000000000000000000000000000000000}
+    ports: ["3000:3000"]
+    depends_on: [redis, enclave-sim, sim-chain]
+  driver:
+    image: notary-e2e:dev
+    profiles: ["driver"]
+    env_file: ../e2e/sim.env
+    environment:
+      HOST_URL: http://host:3000
+      SIM_CHAIN_URL: http://sim-chain:8545
+      STATE_FILE: /state/e2e-state.json
+    volumes: ["e2e-state:/state"]
+    entrypoint: ["node", "--experimental-strip-types", "src/driver.ts"]
+volumes:
+  e2e-state: {}

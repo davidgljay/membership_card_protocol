@@ -1,0 +1,22 @@
+# The simulated enclave for docker-compose.sim.yml (step 5.5): notary-runtime in broker mode plus the simulator's fake
+# enclave service (attestations under the deterministic TEST root, attested clock = real time). Test use only.
+# Build context: notary/.  The image's pins are e2e/fixtures/pins.json (in a real image they are covered by PCR0).
+FROM rust:1.96 AS build
+WORKDIR /notary
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+COPY runtime runtime
+COPY sim sim
+COPY lint lint
+COPY guest guest
+# the pinned AWS Nitro Enclaves root is compiled into notary-attest (include_bytes!)
+COPY deploy/aws deploy/aws
+RUN cargo build --release -p notary-runtime -p notary-sim --bin notary-runtime --bin fake-enclave
+
+# same Debian release as the rust:1.96 build image (glibc)
+FROM debian:trixie-slim
+COPY --from=build /notary/target/release/notary-runtime /notary/target/release/fake-enclave /usr/local/bin/
+COPY e2e/fixtures/pins.json /etc/notary/pins.json
+RUN useradd --system --uid 2000 worker
+EXPOSE 7001
+# The fake enclave service listens on loopback only; the broker is what the host reaches.
+CMD ["sh", "-c", "fake-enclave --listen 127.0.0.1:7100 & sleep 1; exec notary-runtime --mode broker --listen tcp:0.0.0.0:7001 --attest sim:tcp:127.0.0.1:7100 --pins /etc/notary/pins.json"]

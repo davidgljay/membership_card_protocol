@@ -1,0 +1,18 @@
+# The step 5.5 end-to-end tooling (test use only): the simulated chain service and the driver.
+# Build context: repository root.
+FROM node:22-slim
+RUN corepack enable && corepack prepare pnpm@9.6.0 --activate
+WORKDIR /repo
+COPY membership_card_verifier/packages/verifier membership_card_verifier/packages/verifier
+COPY membership_card_verifier/packages/verifier-ipfs-provider membership_card_verifier/packages/verifier-ipfs-provider
+COPY app-sdk/packages/app-sdk app-sdk/packages/app-sdk
+COPY notary/attestation-ts notary/attestation-ts
+COPY wallet-sdk/packages/wallet-sdk wallet-sdk/packages/wallet-sdk
+COPY notary/deploy/build-ts-deps.sh /build-ts-deps.sh
+RUN sh /build-ts-deps.sh
+COPY notary/e2e notary/e2e
+RUN cd notary && printf '{"name":"notary-e2e-workspace","private":true}\n' > package.json && printf 'packages:\n  - "attestation-ts"\n  - "e2e"\n' > pnpm-workspace.yaml \
+ && pnpm install --frozen-lockfile=false
+WORKDIR /repo/notary/e2e
+ENV SIM_CHAIN_PORT=8545
+CMD ["node", "--experimental-strip-types", "src/sim-chain.ts"]

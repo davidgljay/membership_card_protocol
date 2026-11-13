@@ -31,6 +31,8 @@ export interface StoredInput { sealedInput: unknown; receivedAt: string }
 export function jobStore(kv: KvStore) {
   return {
     get: (jobHash: string) => kv.getItem<StoredJob>(`job:${jobHash}`),
+    /** Every job record still held (live ones and those within their 30-day retention). */
+    list: async () => (await kv.getKeys("job:")).map((k) => k.replace(/^job:/, "")),
     put: (j: StoredJob) => kv.setItem(`job:${j.jobHash}`, j),
     /** On finalize or end, the job record stays for 30 days. */
     retire: async (j: StoredJob, state: "finalized" | "ended" | "aborted") => kv.setItem(`job:${j.jobHash}`, { ...j, state }, { ttlSeconds: 30 * DAY }),

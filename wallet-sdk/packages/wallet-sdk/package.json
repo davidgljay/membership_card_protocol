@@ -16,6 +16,10 @@
       "import": "./dist/index.js",
       "require": "./dist/index.js"
     },
+    "./notary": {
+      "types": "./dist/notary/index.d.ts",
+      "import": "./dist/notary/index.js"
+    },
     "./notary-types": {
       "types": "./dist/notary/notary-types.d.ts",
       "import": "./dist/notary/notary-types.js"

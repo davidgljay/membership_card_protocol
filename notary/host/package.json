@@ -21,6 +21,7 @@
     "@noble/post-quantum": "^0.5.4",
     "hpke-js": "^1.8.0",
     "nitropack": "^2.11.0",
+    "unstorage": "1.17.6",
     "viem": "^2.30.0"
   },
   "devDependencies": {
@@ -28,5 +29,8 @@
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"
   },
-  "engines": { "node": ">=22", "pnpm": ">=9" }
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=9"
+  }
 }

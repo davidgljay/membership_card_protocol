@@ -12,7 +12,7 @@
 | 5.3 | **Done, ticked** (Opus session, 2026-11-12). CP9 checkpoint 4 (wasmi) passed. See "5.3 session" below. |
 | 5.3a | **Done, ticked** (Opus, 2026-11-12). B5–B8 are ported and agree with TypeScript on all 58 cases. The policy, requester and list reads (W3–W5, W10, §12) are open (**E31**) and fail closed. |
 | 5.4 wallet and verifier support | **Done, ticked** (its Done-when is met). Four items are deliberately deferred; see "5.4: deferred". |
-| 5.5 host service | **Built against a mock enclave; NOT ticked.** The Done-when (the end-to-end path in compose against the simulator) needs the runtime from 5.3 (and a chain, EAS and IPFS wired for real, Phase 7). See "5.5: built and not built". |
+| 5.5 host service | **Ticked 2026-11-13: the end-to-end path runs in docker-compose against the simulator** (see "5.5 end to end: done" below). Earlier status: built against a mock enclave. The Done-when (the end-to-end path in compose against the simulator) needs the runtime from 5.3 (and a chain, EAS and IPFS wired for real, Phase 7). See "5.5: built and not built". |
 | 5.6 capacity benchmark | **Not started.** Unblocked for the runtime itself (5.3 done); a meaningful benchmark of input checking also needs 5.3a. |
 | 5.7 milestone review | Separate session. |
 
@@ -221,3 +221,71 @@ The approved spec wording (`notary-spec-wording-e31.md`) is now implemented. Not
 **After E34 (2026-11-12):** Rust 79 passed; verifier 257; wallet 235 + 1 todo; host 69; vector tools 43; attestation 92; card-vector and AWS-isolation checks pass.
 
 **Batch 2 approved and applied (2026-11-12).** `plans/notary-spec-wording-batch2.md` is in the specs: E1, E2, E3, E6, E7, E10–E18 and E26. E26 is implemented (identity-log `seq` 0 written at countersign, jobs gated on its anchor, algorithm E requires it). E33 moved to a separate protocol-wide question. **E35 approved and applied.** **Open:** E27 (native x86_64 sandbox run). **Next:** 5.5 end to end, then 5.6.
+
+## 5.5 end to end: in progress (2026-11-12, stopped at a usage limit)
+
+Batch 2, E26 and E35 are committed in 4d09f6d3. **The 5.5 work below is uncommitted.**
+
+**Built (not yet run end to end):**
+- `notary/sim/src/bin/fake-enclave.rs`: the fake enclave service as a process (`--listen`, `--print-root`, `--print-pcr0`).
+- `notary/e2e/` (new pnpm workspace package):
+  - `src/sim-chain.ts`: the simulated registry, IPFS, block headers (Ethereum RLP, keccak hash), EAS and txs, as one HTTP service, plus `GET /world` (a `CardWorld`). Smoke-tested.
+  - `src/world.ts`: a deterministic world (keys from seeds; governance list cards with 4-of-5 P-256 approvals; policy, chapter, app, requester, operator and contributor cards; `notary_input` sub-cards). Also `approveNotary` (policy field update after genesis) and `pins()`.
+  - `fixtures/pins.json`: generated with the fake-enclave root.
+  - `fixtures/tally.wasm`: the broker test's tally program, kept current by `broker.rs::e2e_tally_fixture_is_current`.
+- `wallet-sdk` `package.json`: a new `./notary` subpath export.
+
+**Still to do:**
+1. Host: sim-chain clients for `IpfsService`, `EasAnchorer`, `ChainReader` (`card_head` → canonical `{head_cid, events}`, `subcard`), `PolicyReader` and `ChainSubmitter`; a `ChainFeed` interface; startup selection (e.g. `CHAIN_PROVIDER=sim` + `SIM_CHAIN_URL`).
+2. Host schedulers (production code over `ChainFeed`): header streaming (`chain_headers`), snapshots for policies named in `contributor_predicate` (`policy_snapshot`, then `policy_updates`), and close (`close_chunk` with the stored sealed inputs after `closes_at`; on `job_closed`, retire the job and delete its ciphertexts).
+3. `e2e/src/driver.ts`, in this order:
+   - genesis via `/genesis`, then countersign;
+   - register the notary card under `IDS.notaryCardPolicy`, then `approveNotary`;
+   - restart the host with `NOTARY_CARD_ADDRESSES` set;
+   - submit the job (`policy_state_cid` = the approval head);
+   - the wallet runs `verifyNotaryJob` with `NotaryChainReads` over sim-chain (W10 `issuer_card` = the policy CID, per E11) and with the lists verified by algorithm L;
+   - submit inputs through the OHTTP gateway;
+   - wait for close;
+   - check the notarization with TypeScript `verifyNotarization` (the chain view comes from sim-chain).
+4. A runtime-sim Dockerfile (`notary-runtime` + `fake-enclave`, `--pins` = the fixture). Update `docker-compose.sim.yml`: sim-chain, redis, enclave-sim, host, driver.
+5. Run it, tick 5.5, update code-plan §8.3. Then 5.6.
+
+## 5.5 end to end: done (2026-11-13)
+
+**Done when holds:** `notary/e2e/run-compose.sh` runs the end-to-end path in docker-compose against the simulator and passes. Linux arm64 containers run the real worker sandbox. `run-local.sh` runs the same path as processes.
+
+The path is:
+- genesis, with algorithm G;
+- identity-log `seq` 0 anchored (E26);
+- the job accepted;
+- algorithm W through the OHTTP gateway, with the single-operator disclosure;
+- 3 contributors' sealed inputs, each with a host receipt and an accepted validation receipt;
+- close on chain time;
+- a notarization counting 3 inputs with the public output `{no:1, yes:2}`;
+- algorithm N, valid, with warning `SINGLE_OPERATOR_QUORUM`.
+
+**Built since the previous note:**
+- **Host simulated-chain clients:** `src/sim/`, used when `CHAIN_PROVIDER=sim` / `IPFS_PROVIDER=sim`.
+- **`ChainFeed` and the schedulers:** `src/schedulers/`, covering headers, snapshots then updates, and close with `CLOSE_NOT_DUE` retried. 5 new tests (host: 74).
+- **The mock enclave** answers `close_chunk`.
+- **`/genesis`** now returns `request` and `notary_card` (E24).
+- **Host startup:**
+  - storage is mounted at run time from `EXTERNAL_KV_URL` (it was baked in at build time);
+  - the enclave connection is retried for up to 60 s.
+- **The e2e package:** `reads.ts` (wallet and verifier reads over the simulated chain, plus an OHTTP client), `driver.ts`, `README.md`.
+- **Images:**
+  - `Dockerfile.runtime-sim` (Debian trixie, to match the glibc of the build image);
+  - `Dockerfile.e2e`;
+  - `build-ts-deps.sh`, which builds the TypeScript dependency chain in images.
+  - In images, the wallet's two provider devDependencies are dropped (only its tests use them), and `verifier-ipfs-provider`'s `workspace:*` is rewritten to `file:`.
+- **Both Node images pin pnpm 9.6.0.** pnpm 10 refuses esbuild's install script.
+
+**Simulated, not real (Phase 7 replaces them):** the chain, IPFS and EAS (`e2e/src/sim-chain.ts`), and the attestation service (fake enclave, test root). The adapters in `e2e/src/reads.ts` stand in for the Phase 7 `CardVerifier` adapters:
+- W5 `satisfies` returns true, because the policy has no requester predicate;
+- the genesis PCR0 passed to algorithm E is the simulator's known value, not parsed from the document;
+- the notarization reads report `chainValid: true` for the policy and the notary card;
+- the issuer is resolved per E11.
+
+**Not covered by this run:** multiple replicas and operators (6.3), per-input jobs, derived cards, `policy_updates` changing a contributor mid-job, and the production chain/EAS/Kubo clients (Phase 7).
+
+**Next:** 5.6 capacity benchmark.

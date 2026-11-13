@@ -12,6 +12,8 @@ export interface MockScript {
   /** Reply to `create_job`: default `job_keyed`. Return `{ reject: "ADM_..." }` for `job_rejected`. */
   createJob?(m: Msg): { reject: string } | { epoch: number; job_public_key: string; attestation: string; announcement?: unknown; extra?: Msg[] };
   submitInput?(m: Msg): { error: string } | { input_hash: string; receipt_sealed: string };
+  /** Reply to the last `close_chunk`: default `job_closed` with a small notarization. */
+  closeChunk?(m: Msg): { error: string } | { notarization: unknown };
 }
 
 export class MockEnclave implements EnclaveTransport {
@@ -52,6 +54,11 @@ export class MockEnclave implements EnclaveTransport {
       case "genesis": return reply({ kind: "genesis_ready", id_pubkey: "TU9DS19JRA", chain_pubkey: "TU9DS19DSEFJTg", attestation: "TU9DS19BVFQ" });
       case "countersign_notary_card": return reply({ kind: "countersigned", offer: (m as { offer?: unknown }).offer });
       case "abort_job": return reply({ kind: "job_log_record", record: {} });
+      case "close_chunk": {
+        if (m["last"] !== true) return;
+        const r = this.script.closeChunk?.(m) ?? { notarization: { type: "notary.notarization.v1", mock: true } };
+        return "error" in r ? reply({ kind: "error", code: r.error, message: "mock enclave refused the close" }) : reply({ kind: "job_closed", notarization: r.notarization, record: null, outputs: [] });
+      }
       default: return; // fetch_result, anchor_receipt, chain_result, peer_message, policy_updates: no reply
     }
   }

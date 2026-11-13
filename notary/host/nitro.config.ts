@@ -11,7 +11,6 @@ export default defineNitroConfig({
   // Tracing externals flattens them to one version and breaks the other at runtime; bundling resolves each import per importer.
   noExternals: true,
   routeRules: {},
-  storage: {
-    notary: { driver: 'redis', url: process.env['EXTERNAL_KV_URL'] ?? '' },
-  },
+  // Storage `notary` is mounted at startup (server/plugins/startup.ts) from EXTERNAL_KV_URL, read at run time:
+  // a `storage` entry here would bake the build machine's URL into the image.
 });

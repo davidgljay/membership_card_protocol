@@ -1,0 +1,29 @@
+{
+  "name": "@membership-card-protocol/notary-e2e",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Step 5.5 end-to-end run against the simulator: a simulated chain/IPFS/EAS service, the world builder, and the driver that plays operator, policy holder, requester and wallets.",
+  "scripts": {
+    "sim-chain": "node --experimental-strip-types src/sim-chain.ts",
+    "world": "node --experimental-strip-types src/world.ts",
+    "drive": "node --experimental-strip-types src/driver.ts",
+    "test": "NODE_OPTIONS=--experimental-global-webcrypto vitest run"
+  },
+  "dependencies": {
+    "@membership-card-protocol/notary-attestation": "workspace:*",
+    "@membership-card-protocol/verifier": "file:../../membership_card_verifier/packages/verifier",
+    "@membership-card-protocol/wallet-sdk": "file:../../wallet-sdk/packages/wallet-sdk",
+    "@noble/ciphers": "^1.0.0",
+    "@noble/curves": "^1.9.0",
+    "@noble/hashes": "^1.7.2",
+    "@noble/post-quantum": "^0.5.4",
+    "hpke-js": "^1.8.0",
+    "viem": "^2.30.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}

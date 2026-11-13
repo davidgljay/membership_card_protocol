@@ -36,6 +36,46 @@ importers:
         specifier: ^3.2.4
         version: 3.2.7(@types/node@22.20.5)(jiti@2.7.0)(terser@5.51.2)
 
+  e2e:
+    dependencies:
+      '@membership-card-protocol/notary-attestation':
+        specifier: workspace:*
+        version: link:../attestation-ts
+      '@membership-card-protocol/verifier':
+        specifier: file:../../membership_card_verifier/packages/verifier
+        version: file:../membership_card_verifier/packages/verifier
+      '@membership-card-protocol/wallet-sdk':
+        specifier: file:../../wallet-sdk/packages/wallet-sdk
+        version: file:../wallet-sdk/packages/wallet-sdk
+      '@noble/ciphers':
+        specifier: ^1.0.0
+        version: 1.3.0
+      '@noble/curves':
+        specifier: ^1.9.0
+        version: 1.9.7
+      '@noble/hashes':
+        specifier: ^1.7.2
+        version: 1.8.0
+      '@noble/post-quantum':
+        specifier: ^0.5.4
+        version: 0.5.4
+      hpke-js:
+        specifier: ^1.8.0
+        version: 1.8.1
+      viem:
+        specifier: ^2.30.0
+        version: 2.57.19(typescript@5.9.3)
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.5
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/node@22.20.5)(jiti@2.7.0)(terser@5.51.2)
+
   host:
     dependencies:
       '@membership-card-protocol/verifier':
@@ -62,6 +102,9 @@ importers:
       nitropack:
         specifier: ^2.11.0
         version: 2.13.6(bare-buffer@3.7.1)(vite@7.3.8(@types/node@22.20.5)(jiti@2.7.0)(terser@5.51.2))
+      unstorage:
+        specifier: 1.17.6
+        version: 1.17.6(db0@0.3.4)(ioredis@5.11.1)
       viem:
         specifier: ^2.30.0
         version: 2.57.19(typescript@5.9.3)
