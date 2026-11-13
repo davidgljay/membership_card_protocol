@@ -9,14 +9,19 @@ import { HostError } from "../src/context.js";
 import { harness } from "./helpers.js";
 
 const POL = "pol-1";
-const ev = (card: string, head: string, block: number, kind: RegistryEvent["kind"] = "CardHeadUpdated", policy = POL): RegistryEvent => ({ kind, policyAddress: policy, cardAddress: card, headCid: head, pressAddress: "press", block });
+const ev = (card: string, head: string, block: number, kind: RegistryEvent["kind"] = "CardHeadUpdated", policy = POL): RegistryEvent => ({ kind, policyAddress: policy, cardAddress: card, headCid: head, pressAddress: "press", block, timestamp: `2027-01-01T00:00:${String(block).padStart(2, "0")}.000Z` });
 const heads = new Map([["h1", new Uint8Array([1])], ["h2", new Uint8Array([2])], ["h3", new Uint8Array([3])], ["h4", new Uint8Array([4])]]);
 
 describe("policy snapshots and updates are NEVER filtered (notary_host.md §8)", () => {
   const events = [ev("c1", "h1", 1, "CardRegistered"), ev("c2", "h2", 2, "CardRegistered"), ev("c1", "h3", 5), ev("c3", "h4", 6, "CardRegistered"), ev("other", "hx", 3, "CardRegistered", "pol-2")];
   it("a snapshot holds every card under the policy with its CURRENT head, in address order, and nothing from other policies", () => {
     const s = buildSnapshot(POL, events, [], heads, 10);
-    expect(s.entries).toEqual([{ address: "c1", head_cid: "h3", last_press: "press" }, { address: "c2", head_cid: "h2", last_press: "press" }, { address: "c3", head_cid: "h4", last_press: "press" }]);
+    const t = (b: number) => `2027-01-01T00:00:${String(b).padStart(2, "0")}.000Z`;
+    expect(s.entries).toEqual([
+      { address: "c1", head_cid: "h3", last_press: "press", events: [{ cid: "h1", timestamp: t(1) }, { cid: "h3", timestamp: t(5) }] },
+      { address: "c2", head_cid: "h2", last_press: "press", events: [{ cid: "h2", timestamp: t(2) }] },
+      { address: "c3", head_cid: "h4", last_press: "press", events: [{ cid: "h4", timestamp: t(6) }] },
+    ]); // each card's full head history with block timestamps (Stage 4 provenance; E30)
     expect(s.heads.map((h) => h.cid)).toEqual(["h3", "h2", "h4"]);
     expect(Buffer.from(s.heads[0]!.bytes, "base64url")).toEqual(Buffer.from([3]));
   });
@@ -28,8 +33,8 @@ describe("policy snapshots and updates are NEVER filtered (notary_host.md §8)",
     expect(buildSnapshot(POL, events, [], heads, 2).entries.map((e) => e.address)).toEqual(["c1", "c2"]);
   });
   it("includes sub-card registrations only for master cards in the set, with their current active flag", () => {
-    const subs: SubCardEvent[] = [{ masterCard: "c1", subCard: "s1", active: true, block: 3 }, { masterCard: "c1", subCard: "s1", active: false, block: 7 }, { masterCard: "zz", subCard: "s9", active: true, block: 3 }];
-    expect(buildSnapshot(POL, events, subs, heads, 10).subcards).toEqual([{ master_card: "c1", sub_card: "s1", active: false }]);
+    const subs: SubCardEvent[] = [{ masterCard: "c1", subCard: "s1", subCardDocCid: "bafkreisub1", active: true, block: 3 }, { masterCard: "c1", subCard: "s1", subCardDocCid: "bafkreisub1", active: false, block: 7 }, { masterCard: "zz", subCard: "s9", subCardDocCid: "bafkreisub9", active: true, block: 3 }];
+    expect(buildSnapshot(POL, events, subs, heads, 10).subcards).toEqual([{ master_card: "c1", sub_card: "s1", sub_card_doc_cid: "bafkreisub1", active: false }]);
   });
   it("updates since a block are every registration and head change under the policy, in order, unfiltered", () => {
     const u = buildUpdates(POL, events, 1, heads);

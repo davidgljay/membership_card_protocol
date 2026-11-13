@@ -9,10 +9,11 @@
 | 5.0 questions | **Done, ticked.** CP5 answered "OK to all" (Q11 downloads approved; E1 agreed). |
 | 5.1 types and serialization | **Done, ticked.** TS and Rust agree on every vector; X-Wing and ML-DSA interop proven both ways (CP9 checkpoint 1 passed). |
 | 5.2 simulator and attestation | **Done, ticked.** Simulator documents verify in Rust and TypeScript through the same parser path; every `ATT_*` code has a failing fixture. Real AWS documents: not tested (see Deviations). |
-| 5.3, 5.3a | **Not started** (Opus; not in scope). |
+| 5.3 | **Done, ticked** (Opus session, 2026-11-12). CP9 checkpoint 4 (wasmi) passed. See "5.3 session" below. |
+| 5.3a | **Done, ticked** (Opus, 2026-11-12). B5–B8 are ported and agree with TypeScript on all 58 cases. The policy, requester and list reads (W3–W5, W10, §12) are open (**E31**) and fail closed. |
 | 5.4 wallet and verifier support | **Done, ticked** (its Done-when is met). Four items are deliberately deferred; see "5.4: deferred". |
 | 5.5 host service | **Built against a mock enclave; NOT ticked.** The Done-when (the end-to-end path in compose against the simulator) needs the runtime from 5.3 (and a chain, EAS and IPFS wired for real, Phase 7). See "5.5: built and not built". |
-| 5.6 capacity benchmark | **Blocked on 5.3.** |
+| 5.6 capacity benchmark | **Not started.** Unblocked for the runtime itself (5.3 done); a meaningful benchmark of input checking also needs 5.3a. |
 | 5.7 milestone review | Separate session. |
 
 ## Tests (all run at the end of this session)
@@ -93,3 +94,98 @@
 2. (5.4 done.)
 3. 5.5: finish after 5.3 exists: run the compose against the simulator, wire the real chain/EAS/IPFS services, add the header-streaming and refresh schedulers, then tick.
 4. Stop at 5.3 and tell David.
+
+
+---
+
+## 5.3 session (Opus, 2026-11-12)
+
+Brief: `plans/notary-opus-prompt-5.3.md`. Decisions and errata: `plans/notary-questions-5.3.md` (D1–D12, E20–E27). Nothing committed (CP11).
+
+### Built
+
+- **`notary-worker`**: the `notary_v1` engine on **wasmi =2.0.0** with an explicitly set and frozen fuel table, eager compilation and every §6-rejected feature off; the seven-import ABI; per-run fresh instances; fuel and memory limits; the §8 protocol.
+- **CP9 checkpoint 4 passed.** Every §6-rejected feature (20 modules plus a component) is refused, and the four allowed extensions are accepted. A five-program fuel corpus gives identical fuel and output in debug, release, portable-dispatch, Linux aarch64 and Linux x86_64 builds (`vectors/fuel/corpus.json`).
+- **`notary-admission`**: algorithm A1–A11, the deferred-feature refusals, and the lint warnings. **`notary-lint`**: the CLI.
+- **`notary-crypto`**: production wrappers. Secrets are mlocked and zeroized. Covers ML-DSA-44, X-Wing draft-06 (raw secrets, no `derive_keypair`), E7 receipts, secp256r1 under E12, hashes and HKDF.
+- **`notary-broker`**:
+  - `keyring` (I1–I3; job keys only with an `Admitted` proof; key lineage and exposure);
+  - `lists` (algorithm L, floors, no regression);
+  - `chain` (RLP headers, hash linkage, freshness floor);
+  - `transforms`, `joblog` (anchor-gated), `params` (W6/B9);
+  - `jobs` (step-17 checks, admission before any key, attestation, `opened` record, the announcement only after its anchor);
+  - `inputs` (B1–B4, B9–B11, sealed receipts);
+  - `close` (chain time AND attested time; the notarization with its cosignature over H(body); counted inputs, commitment, dropped-after-acceptance; `k_min`);
+  - genesis and countersign (G2), abort, and the `CardOracle` / `Workers` / `HostIo` seams.
+- **`notary-runtime`** binary:
+  - `--mode worker` runs under its own UID, rlimits, and a seccomp filter exactly matching runtime §3's list;
+  - `--mode broker` runs the host loop with queued fetches, per-job worker processes and the wall-clock kill.
+- **`notary-guest`**: the guest library for templates (no_std, no floats, canonical output, fixed point). It builds for wasm32.
+- **Cross-language list vectors**: `vectors/lists/cases.json` is written by Rust (14 cases, ECDSA and ML-DSA keysets), and the TypeScript `verifyListApproval` agrees on every case.
+
+### Tested (commands run at the end of the session)
+
+| Command | Result |
+|---|---|
+| `cargo test --workspace` in `notary/` | 71 passed, 0 failed (per-crate counts in code-plan §8.3) |
+| `cargo test -q --release -p notary-worker --test cp9`; same with `--features portable-dispatch` | 7 passed each |
+| `cargo test -p notary-worker --test cp9` and `-p notary-runtime --test worker_process` in `rust:1.96` linux/arm64 | 7 and 2 passed (sandbox verified) |
+| `cargo test -p notary-worker --test cp9` in `rust:1.96` linux/amd64 (emulated) | 7 passed. The sandbox test can't run under emulation (E27). |
+| `pnpm test` in `notary/vectors-tools` | 37 passed (incl. 15 new list cross-checks) |
+| `notary/scripts/check-aws-isolation.sh` | OK |
+
+### Bugs found and fixed on the way
+
+- Counted inputs were sorted by base64url text, which fails N8 for most sets. Now sorted by raw bytes (D11), found by the broker close test.
+- Rust's exit path made `sigaltstack` calls outside the seccomp list (D10).
+
+### Not done
+
+- **5.3a `notary-cards`**: the Rust card-check port, the TypeScript vector generator, the CI regeneration check and the coverage map. Until it exists, the runtime binary refuses every job (fail-closed oracle). The broker's card-dependent checks are tested only through a test oracle.
+- **5.5**: the compose run end to end with the real runtime; the host-side header-streaming, snapshot-refresh and `close_chunk` schedulers. These need 5.3a for any job to open.
+- **5.6**: the capacity benchmark.
+- **Not built in 5.3, by plan:** per-input jobs (6.4); epochs and restarts (6.2); multi-replica acknowledgments, cosigning and handoff (6.3); private `notary_output` delivery (6.1). The broker refuses each with `NH_UNSUPPORTED`.
+- **Cross-language check of a broker-produced notarization** with the TypeScript `verifyNotarization`. The Rust test checks the same signatures, commitment and hashes. The TypeScript run belongs with 5.5.
+
+### Needs David
+
+Errata **E20, E21, E24, E25** need one-line spec approvals. **E26** asks whether a first identity-log record is intended, and with which `kind`, which affects algorithm E. **E27** needs a native x86_64 Linux run of the sandbox test.
+
+
+---
+
+## 5.3a session (Opus, 2026-11-12)
+
+Decisions: **E28** (a TypeScript predicate evaluator is the reference), **E29** (trusted, app-certification and login-service roots pinned in the image). Errata: **E30** (snapshot fields), **E31** (policy and list reads, open). All in `plans/notary-questions-5.3.md`. Nothing committed.
+
+### Built
+
+- **TypeScript reference** (verifier `notary` subpath):
+  - `predicates.ts`: the spec's predicate system with parameter references. Fail-closed, with a regex subset shared with Rust.
+  - `contributor.ts` (`checkContributor`): B5–B8 over a card world, running the verifier's **real** Stage 2/3/4 code.
+- **Generator** `verifier/scripts/gen-notary-conformance.ts`: deterministic worlds with real ML-DSA keys and AES-GCM card documents. 58 cases (one per check, accepting and rejecting) and a coverage map of 35 checks, written to `notary/vectors/cards/`.
+- **`notary-cards`** (Rust): Stage 2, 3 and 4, the predicates, B5–B8 and the root key. A line-by-line port, including the verifier's lenient base64url decoding of chain keys and `decryptCardHead`'s merge rule.
+- **CI**: `notary/scripts/check-card-vectors.sh` regenerates the vectors in check mode and runs the Rust conformance test. `integration_tests/run.sh` gains three notary steps (Rust workspace, AWS isolation, card vectors).
+- **Enclave oracle** `SnapshotOracle`: evidence first, then whole-policy snapshots, then per-card fetches, every object CID-checked. It's wired into `notary-runtime` in place of the fail-closed placeholder.
+- **Host** snapshot builder: per-card event history and `sub_card_doc_cid` (E30).
+
+### Tested
+
+| Command | Result |
+|---|---|
+| `cargo test --workspace` in `notary/` | 75 passed, 0 failed |
+| `cargo test -p notary-cards --test conformance` | 2 passed (all 58 cases agree; coverage complete) |
+| Planted predicate bug (`any_of` evaluated as `all_of`) | 2 disagreements reported, as expected; restored |
+| `cargo test -p notary-broker --test cards_oracle` | 2 passed (58 cases × 3 deliveries; forged evidence refused, genuine accepted) |
+| `notary/scripts/check-card-vectors.sh` | passes; with one planted stale verdict, exit 1 ("stale: notary/vectors/cards/cases.json") |
+| verifier `pnpm test` | 252 passed |
+| `pnpm test` in `notary/host`, `notary/vectors-tools`, `notary/attestation-ts` | 69, 37, 91 passed |
+| `notary/scripts/check-aws-isolation.sh` | OK |
+
+### Not done
+
+- **E31, needs David:** the enclave can't yet read or trust a policy at `policy_state_cid`, a requester's chain, or a list card's history. These fail closed, so the runtime opens no job.
+- **5.5:** the end-to-end compose run and the host's header, snapshot and close schedulers. Blocked by E31.
+- **5.6:** the capacity benchmark. Input checking can now be measured in isolation (`notary-cards`), but an end-to-end measurement needs E31.
+- **§7.5 mechanism 4 (nightly differential fuzzing):** not built.
+- **The press's predicate stub** (CP10 report in `notary-questions-5.3.md`): reported, not fixed.

@@ -1,0 +1,17 @@
+[package]
+name = "notary-admission"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+description = "Program admission, algorithm A (notary_runtime.md §6), shared by the broker and notary-lint."
+
+[dependencies]
+# The same wasmparser version wasmi =2.0.0 uses, so admission and execution validate identically.
+wasmparser = { version = "=0.228.0", default-features = false, features = ["std", "validate", "features"] }
+notary-types = { path = "../notary-types" }
+serde_json.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+wat = "1.228"
+notary-worker = { path = "../notary-worker" }

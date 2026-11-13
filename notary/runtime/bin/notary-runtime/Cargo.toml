@@ -1,0 +1,27 @@
+[package]
+name = "notary-runtime"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+description = "The notary runtime binary: `--mode broker` (keys, host protocol) and `--mode worker` (one job's program, sandboxed). notary_runtime.md §2–§3, §8–§9."
+
+[[bin]]
+name = "notary-runtime"
+path = "src/main.rs"
+
+[dependencies]
+notary-broker = { path = "../../crates/notary-broker" }
+notary-worker = { path = "../../crates/notary-worker" }
+notary-attest = { path = "../../crates/notary-attest" }
+notary-admission = { path = "../../crates/notary-admission" }
+notary-types = { path = "../../crates/notary-types" }
+notary-crypto = { path = "../../crates/notary-crypto" }
+serde_json.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+seccompiler = "0.5"
+nix = { version = "0.30", features = ["resource", "user", "process"] }
+libc = "0.2"
+
+[dev-dependencies]
+wat = "1.228"

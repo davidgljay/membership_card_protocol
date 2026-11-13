@@ -1,0 +1,22 @@
+[package]
+name = "notary-broker"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+description = "The notary broker (notary_runtime.md §3, §4, §9–§13, §15): keys, host protocol, jobs, input checks, transforms, close, job log, workers."
+
+[dependencies]
+notary-types = { path = "../notary-types" }
+notary-crypto = { path = "../notary-crypto" }
+notary-attest = { path = "../notary-attest" }
+notary-admission = { path = "../notary-admission" }
+notary-worker = { path = "../notary-worker" }
+notary-cards = { path = "../notary-cards" }
+serde_json.workspace = true
+sha2.workspace = true
+regex = { version = "1", default-features = false, features = ["std", "unicode-perl"] }
+
+[dev-dependencies]
+wat = "1.228"
+notary-attest = { path = "../notary-attest", features = ["test-pki"] }
+notary-sim = { path = "../../../sim" }

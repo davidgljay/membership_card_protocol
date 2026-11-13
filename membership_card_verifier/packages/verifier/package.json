@@ -35,7 +35,9 @@
     "typecheck": "tsc --noEmit",
     "test": "NODE_OPTIONS=--experimental-global-webcrypto vitest run",
     "test:watch": "NODE_OPTIONS=--experimental-global-webcrypto vitest",
-    "prepublishOnly": "pnpm run build && pnpm run test"
+    "prepublishOnly": "pnpm run build && pnpm run test",
+    "gen:notary-conformance": "pnpm build && node --experimental-strip-types scripts/gen-notary-conformance.ts",
+    "check:notary-conformance": "pnpm build && node --experimental-strip-types scripts/gen-notary-conformance.ts --check"
   },
   "dependencies": {
     "@noble/curves": "^1.9.0",

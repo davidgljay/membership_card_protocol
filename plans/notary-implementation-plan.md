@@ -231,13 +231,13 @@ Goal: one end-to-end path running in the simulator: a job is announced with an a
   - **Context needed**: `notary_runtime.md` (attestation); `notary-design-decisions.md §2.3`
   - **Done when**: the runtime can request per-job attestations from the simulator, and the documents parse with the same code that will parse real ones.
 
-- [ ] **5.3 Runtime core: broker, workers, admission, privacy** *(Opus)*
+- [x] **5.3 Runtime core: broker, workers, admission, privacy** *(Opus)* — done 2026-11-12; see `notary-questions-5.3.md` (CP9 checkpoint 4 passed; errata E20–E27)
   - **What**: Implement the broker (per-job keygen, HPKE decryption, key custody, zeroization), the worker processes (wasmi execution, fuel and memory limits), the admission checks, the privacy transforms, the per-job single-use output, and the host protocol. Build `notary/lint` on the shared admission crate.
   - **Who**: Claude
   - **Context needed**: `notary_runtime.md`; `notary-design-decisions.md §2.3–2.4`
   - **Done when**: unit tests cover every admission reject reason, key isolation between jobs, and the privacy transforms, including a deliberately leaky test program.
 
-- [ ] **5.3a Card checks in Rust (`notary-cards`)** *(Opus; added at CP4)*
+- [x] **5.3a Card checks in Rust (`notary-cards`)** *(Opus; added at CP4)* — done 2026-11-12: agrees with all 58 TypeScript-generated cases, coverage complete, CI fails on stale vectors. Differential fuzzing (mechanism 4) not built; policy/list reads open (E31).
   - **What**: Port the verifier logic that B1–B11 need into `notary-cards` (`notary-code-plan.md` §7.5). Build the TypeScript vector generator, the CI regeneration check and the coverage map.
   - **Who**: Claude
   - **Context needed**: `card_verifier.md` Stages 2–5; `card_validation.md`; `notary_lifecycle.md` Appendix B; `notary-code-plan.md` §7.5

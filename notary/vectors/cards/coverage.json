@@ -1,0 +1,308 @@
+{
+ "about": "Each ported check (code-plan §7.5) with the cases that exercise it. CI fails if a check lacks an accepting or a rejecting case (shared accepting case: ok).",
+ "checks": {
+  "B5.active": {
+   "accept": [
+    "ok"
+   ],
+   "reject": [
+    "b5_subcard_inactive"
+   ]
+  },
+  "B5.active_subcards": {
+   "accept": [
+    "ok"
+   ],
+   "reject": [
+    "b5_not_in_active_subcards"
+   ]
+  },
+  "B5.app_binding": {
+   "accept": [
+    "ok"
+   ],
+   "reject": [
+    "b5_app_pointer_mismatch"
+   ]
+  },
+  "B5.app_chain": {
+   "accept": [
+    "ok"
+   ],
+   "reject": [
+    "b5_app_chain_untrusted"
+   ]
+  },
+  "B5.app_signature": {
+   "accept": [
+    "ok"
+   ],
+   "reject": [
+    "b5_bad_app_signature"
+   ]
+  },
+  "B5.attestation_level": {
+   "accept": [
+    "ok"
+   ],
+   "reject": [
+    "b5_attestation_s1",
+    "b5_attestation_t1"
+   ]
+  },
+  "B5.capability": {
+   "accept": [
+    "ok"
+   ],
+   "reject": [
+    "b5_missing_capability"
+   ]
+  },
+  "B5.holder_binding": {
+   "accept": [
+    "ok"
+   ],
+   "reject": [
+    "b5_holder_pointer_mismatch"
+   ]
+  },
+  "B5.holder_signature": {
+   "accept": [
+    "ok"
+   ],
+   "reject": [
+    "b5_bad_holder_signature"
+   ]
+  },
+  "B5.input_signature": {
+   "accept": [
+    "ok"
+   ],
+   "reject": [
+    "b5_bad_input_signature"
+   ]
+  },
+  "B5.login_scope": {
+   "accept": [
+    "ok"
+   ],
+   "reject": [
+    "b5_login_service_scope"
+   ]
+  },
+  "B5.master_exists": {
+   "accept": [
+    "ok"
+   ],
+   "reject": [
+    "b5_master_card_missing"
+   ]
+  },
+  "B5.recipient_binding": {
+   "accept": [
+    "ok"
+   ],
+   "reject": [
+    "b5_subcard_recipient_mismatch"
+   ]
+  },
+  "B5.registered": {
+   "accept": [
+    "ok"
+   ],
+   "reject": [
+    "b5_subcard_unregistered",
+    "b5_signer_not_a_subcard"
+   ]
+  },
+  "B5.registration_master": {
+   "accept": [
+    "ok"
+   ],
+   "reject": [
+    "b5_registration_other_master"
+   ]
+  },
+  "B5.valid_until": {
+   "accept": [
+    "ok"
+   ],
+   "reject": [
+    "b5_valid_until_passed"
+   ]
+  },
+  "B6": {
+   "accept": [
+    "ok"
+   ],
+   "reject": [
+    "b6_contributor_card_mismatch",
+    "b6_contributor_pubkey_mismatch"
+   ]
+  },
+  "B7.ancestor_decrypts": {
+   "accept": [
+    "ok"
+   ],
+   "reject": [
+    "b7_ancestor_undecryptable"
+   ]
+  },
+  "B7.ancestor_exists": {
+   "accept": [
+    "ok"
+   ],
+   "reject": [
+    "b7_ancestor_missing"
+   ]
+  },
+  "B7.depth": {
+   "accept": [
+    "ok"
+   ],
+   "reject": [
+    "b7_chain_too_deep"
+   ]
+  },
+  "B7.expires_at": {
+   "accept": [
+    "ok",
+    "b7_not_yet_expired"
+   ],
+   "reject": [
+    "b7_master_expired"
+   ]
+  },
+  "B7.history": {
+   "accept": [
+    "ok"
+   ],
+   "reject": [
+    "b7_history_mismatch",
+    "b7_history_empty_breaks_state"
+   ]
+  },
+  "B7.revocation": {
+   "accept": [
+    "ok",
+    "b7_revoked_after_chain_time",
+    "b7_field_update_not_revoked"
+   ],
+   "reject": [
+    "b7_master_revoked_8xx",
+    "b7_ancestor_revoked_9xx"
+   ]
+  },
+  "B7.trusted_root": {
+   "accept": [
+    "ok"
+   ],
+   "reject": [
+    "b7_no_trusted_root"
+   ]
+  },
+  "B8.all_of": {
+   "accept": [
+    "ok",
+    "b8_all_of_empty"
+   ],
+   "reject": [
+    "b8_field_regex_mismatch"
+   ]
+  },
+  "B8.any_of": {
+   "accept": [
+    "ok",
+    "b8_any_of_one"
+   ],
+   "reject": [
+    "b8_any_of_empty"
+   ]
+  },
+  "B8.card_field_matches": {
+   "accept": [
+    "ok",
+    "b8_field_on_ancestor"
+   ],
+   "reject": [
+    "b8_field_regex_mismatch",
+    "b8_field_regex_is_full_match",
+    "b8_field_after_update"
+   ]
+  },
+  "B8.chain_depth_at_most": {
+   "accept": [
+    "ok",
+    "b8_depth_at_most_3_ok"
+   ],
+   "reject": [
+    "b8_depth_at_most_2_no"
+   ]
+  },
+  "B8.chain_includes": {
+   "accept": [
+    "ok",
+    "b8_chain_includes_ok",
+    "b8_chain_includes_root_ok"
+   ],
+   "reject": [
+    "b8_chain_includes_no"
+   ]
+  },
+  "B8.fail_closed": {
+   "accept": [
+    "ok"
+   ],
+   "reject": [
+    "b8_unknown_leaf",
+    "b8_code_equals_invalid_here",
+    "b8_is_holder_false",
+    "b8_two_keys"
+   ]
+  },
+  "B8.issued_under_template": {
+   "accept": [
+    "ok"
+   ],
+   "reject": [
+    "b8_template_param_mismatch"
+   ]
+  },
+  "B8.none_of": {
+   "accept": [
+    "ok",
+    "b8_none_of_ok"
+   ],
+   "reject": [
+    "b8_none_of"
+   ]
+  },
+  "B8.param": {
+   "accept": [
+    "ok",
+    "b8_param_object_value"
+   ],
+   "reject": [
+    "b8_template_param_mismatch",
+    "b8_param_missing"
+   ]
+  },
+  "B8.regex_subset": {
+   "accept": [
+    "ok"
+   ],
+   "reject": [
+    "b8_lookaround_regex",
+    "b8_backreference_regex",
+    "b8_invalid_regex"
+   ]
+  },
+  "root_key": {
+   "accept": [
+    "ok",
+    "ok_root_key_from_past_keys"
+   ],
+   "reject": []
+  }
+ }
+}

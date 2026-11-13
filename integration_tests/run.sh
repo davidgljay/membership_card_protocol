@@ -103,6 +103,15 @@ run_unit_tests() {
   step "membership_card_verifier: pnpm -r test" \
     bash -c "cd '$ROOT/membership_card_verifier' && pnpm install --frozen-lockfile && pnpm run build && pnpm run typecheck && pnpm run test"
 
+  # Notary (code-plan §3.5, §7.4, §7.5): the Rust workspace, the AWS-format isolation check (G5), and the card
+  # conformance vectors (regenerated from the TypeScript verifier; notary-cards must agree with every case).
+  step "notary: cargo test --workspace" \
+    bash -c "cd '$ROOT/notary' && cargo test --workspace"
+  step "notary: AWS-format isolation (G5)" \
+    bash -c "'$ROOT/notary/scripts/check-aws-isolation.sh'"
+  step "notary: card vectors in step with the verifier" \
+    bash -c "'$ROOT/notary/scripts/check-card-vectors.sh'"
+
   # press/wallet-service use pnpm (pnpm-lock.yaml only, no package-lock.json)
   # -- `npm ci` here would fail with EUSAGE (confirmed live).
   #

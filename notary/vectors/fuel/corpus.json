@@ -1,0 +1,31 @@
+{
+  "abi": "notary_v1",
+  "about": "CP9 checkpoint 4: fuel consumed by the notary_v1 engine (wasmi =2.0.0, frozen table) for a fixed corpus. Must be identical in every build.",
+  "cases": [
+    {
+      "fuel_used": 1600008,
+      "name": "sum_loop",
+      "output_sha256": "2619fe609185e93fbc0b88f8983a321ad5ffcb46e7da267dd61a91c7b1a6c1c4"
+    },
+    {
+      "fuel_used": 630448,
+      "name": "fib_22",
+      "output_sha256": "3471b7f822a115c300b03399dc67c53f7cbe83290a6178997b15428e5fcc737f"
+    },
+    {
+      "fuel_used": 49472,
+      "name": "bulk_memory",
+      "output_sha256": "4bb06f8e4e3a7715d201d573d0aa423762e55dabd61a2c02278fa56cc6d294e0"
+    },
+    {
+      "fuel_used": 600008,
+      "name": "multi_value_sign_ext",
+      "output_sha256": "54bb5f53b9c34abb361c7d3da6aaa52af9ee6b8e53e486a139464c134c02fc5f"
+    },
+    {
+      "fuel_used": 52815,
+      "name": "tally_200_inputs",
+      "output_sha256": "8363fc5439c0bf2886b22d17acafd978451fac49e5669a80fd56de5b6ad51de5"
+    }
+  ]
+}

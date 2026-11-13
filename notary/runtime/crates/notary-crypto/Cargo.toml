@@ -3,16 +3,24 @@ name = "notary-crypto"
 version = "0.1.0"
 edition.workspace = true
 publish.workspace = true
-description = "Notary cryptography: X-Wing draft-06 HPKE, ML-DSA-44 (step 5.1 builds the interop proofs; the rest lands in 5.3)"
+description = "Notary cryptography (notary_runtime.md §4, §15): X-Wing draft-06 HPKE, ML-DSA-44, secp256r1, ChaCha20-Poly1305 receipts, hashes and HKDF, with zeroizing mlocked secret buffers"
 
 [dependencies]
 hpke = { version = "=0.15.1", default-features = false, features = ["alloc", "chacha", "hkdfsha2", "x25519", "mlkem"] }
 x-wing = { version = "=0.1.1", features = ["zeroize"] }
-ml-dsa = "=0.1.2"
+ml-dsa = { version = "=0.1.2", features = ["zeroize"] }
+p256 = { version = "0.14", features = ["ecdsa"] }
+chacha20poly1305 = { version = "0.11", default-features = false, features = ["alloc", "zeroize"] }
+hkdf = "0.13"
+sha2_11 = { package = "sha2", version = "0.11" }
+sha3.workspace = true
+zeroize = "1.8"
+memsec = { version = "0.7", default-features = false, features = ["use_os"] }
+getrandom = "0.4"
+rand_core = "0.10"
 sha2.workspace = true
 serde_json.workspace = true
 notary-types = { path = "../notary-types" }
 
 [dev-dependencies]
 x-wing = { version = "=0.1.1", features = ["zeroize", "hazmat", "getrandom"] }
-rand_core = "0.10"

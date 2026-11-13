@@ -1,0 +1,18 @@
+[package]
+name = "notary-lint"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+description = "notary-lint: runs program admission (algorithm A) and the lint warnings at policy creation (notary_lifecycle.md Phase 1, step 11)."
+
+[[bin]]
+name = "notary-lint"
+path = "src/main.rs"
+
+[dependencies]
+notary-admission = { path = "../runtime/crates/notary-admission" }
+serde_json.workspace = true
+
+[dev-dependencies]
+wat = "1.228"
+notary-types = { path = "../runtime/crates/notary-types" }

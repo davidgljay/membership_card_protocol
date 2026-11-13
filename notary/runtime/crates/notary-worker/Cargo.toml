@@ -1,0 +1,25 @@
+[package]
+name = "notary-worker"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+description = "The notary_v1 program executor: wasmi with the frozen fuel table, the program ABI, run limits, and the broker–worker protocol (notary_runtime.md §3, §7, §8, §14)."
+
+[features]
+default = []
+# Alternative interpreter dispatch, used only by the CP9 determinism test to show that fuel does not depend on
+# how wasmi dispatches instructions (notary_runtime.md §17 checkpoint 4).
+portable-dispatch = ["wasmi/portable-dispatch"]
+
+[dependencies]
+# CP9 checkpoint 4: wasmi is pinned exactly. 2.0.0 is chosen over 1.0.9 because it lets the runtime set the
+# per-operator fuel table and the dynamic fuel costs explicitly (`operator_cost`, `fuel_cost`), and refuse start
+# functions (`allow_start_fn`). Default features are off: no `memory64`, no `simd`, no `wat`. `auto-dispatch` uses
+# tail-call dispatch in optimized builds and the portable loop otherwise (unoptimized builds would overflow the stack).
+wasmi = { version = "=2.0.0", default-features = false, features = ["std", "validate", "deterministic", "auto-dispatch"] }
+notary-types = { path = "../notary-types" }
+serde_json.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+wat = "1.228"

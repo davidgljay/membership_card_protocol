@@ -193,3 +193,12 @@ fn rfc8785_conformance_cases() {
     println!("RFC 8785 conformance: {checked} matched, {skipped} rejected by notary strictness");
     assert!(checked >= 20);
 }
+
+#[test]
+fn format_timestamp_round_trips() {
+    use notary_types::formats::{format_timestamp, parse_timestamp};
+    for ms in [0i64, 1, 951_782_400_000, 1_778_457_600_123, 4_102_444_799_999] {
+        assert_eq!(parse_timestamp(&format_timestamp(ms)).unwrap(), ms);
+    }
+    assert_eq!(format_timestamp(1_778_457_600_123), "2026-05-11T00:00:00.123Z");
+}

@@ -1,0 +1,9 @@
+[package]
+name = "notary-guest"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+description = "Guest-side library for notary_v1 programs (notary_runtime.md §7): the seven ABI imports, input and parameter reading, canonical JSON output of integer/boolean/enum fields, and integer fixed-point arithmetic. no_std, no floats."
+
+[lib]
+path = "src/lib.rs"

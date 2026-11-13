@@ -10,3 +10,5 @@ export * from "./notarization.js";
 export * from "./genesis.js";
 export * from "./exposure.js";
 export * from "./derived.js";
+export * from "./predicates.js";
+export * from "./contributor.js";

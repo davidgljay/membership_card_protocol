@@ -1,0 +1,16 @@
+[package]
+name = "notary-cards"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+description = "Card checks inside the enclave (step 5.3a): the Rust port of the verifier's Stage 2–4 logic and the predicate system that B5–B8 need, kept in step with TypeScript by notary/vectors/cards (code-plan §7.5)."
+
+[dependencies]
+notary-types = { path = "../notary-types" }
+notary-crypto = { path = "../notary-crypto" }
+serde_json.workspace = true
+sha2.workspace = true
+sha3_12 = { package = "sha3", version = "0.12" }
+hkdf = "0.13"
+aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
+regex = { version = "1", default-features = false, features = ["std", "unicode"] }
