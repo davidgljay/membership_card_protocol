@@ -261,7 +261,7 @@ Goal: one end-to-end path running in the simulator: a job is announced with an a
   - **Context needed**: `notary_host.md`; `press/` (patterns for nitropack, `viem`, IPFS)
   - **Done when**: the end-to-end path above runs in docker-compose against the simulator.
 
-- [ ] **5.6 Capacity benchmark**
+- [x] **5.6 Capacity benchmark**
   - **What**: Measure inputs per second, per-job memory and close-time recomputation for 1,000 and 10,000 inputs, with many concurrent jobs, in the simulator. Record the results and a provisional instance-size recommendation in `notary-code-plan.md`.
   - **Who**: Claude
   - **Context needed**: the runtime from 5.3

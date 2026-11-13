@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["runtime/crates/notary-types", "runtime/crates/notary-crypto", "runtime/crates/notary-attest", "runtime/crates/notary-worker", "runtime/crates/notary-admission", "runtime/crates/notary-broker", "runtime/crates/notary-cards", "runtime/bin/notary-runtime", "lint", "guest", "sim"]
+members = ["runtime/crates/notary-types", "runtime/crates/notary-crypto", "runtime/crates/notary-attest", "runtime/crates/notary-worker", "runtime/crates/notary-admission", "runtime/crates/notary-broker", "runtime/crates/notary-cards", "runtime/bin/notary-runtime", "runtime/benches/capacity", "lint", "guest", "sim"]
 
 [workspace.package]
 edition = "2021"

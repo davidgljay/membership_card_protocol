@@ -522,4 +522,102 @@ These affect structure, so they are asked now rather than at 5.0.
 
 ## 11. Capacity benchmark results (step 5.6)
 
-*To be filled in at 5.6.*
+*Measured 2026-11-13.* The harness is `notary/runtime/benches/capacity`, run with `run-linux.sh`. The worlds come from `notary/e2e/src/bench-world.ts`, and the raw results are in `results-2026-11-13-linux-arm64.jsonl`.
+
+### What runs
+
+The benchmark drives the real broker the way the host does:
+- real card checks on every input (B5–B8 through `SnapshotOracle`/`notary-cards`), with the contributors' template policy sent as a whole-policy snapshot;
+- real X-Wing opening, ML-DSA validation receipts and sealed receipts;
+- the real wasmi engine running the e2e tally program;
+- close (`close_chunk` → `job_closed`): re-open, re-check and run over every input.
+
+It leaves out:
+- the vsock round trip: `fetch` is answered in-process, and each input makes **7 per-card fetches**;
+- the worker's process boundary (`InProcessWorkers`);
+- the host;
+- the once-per-job reads of the policy, the requester and the lists.
+
+### Hardware
+
+Linux arm64 in Docker on Apple Silicon, one broker thread. This is not Graviton.
+
+A first run in the same VM gave per-input times 2–5× higher, and they varied between identical runs (5.1 vs 2.7 ms for the card checks on the same world). The VM's threads were landing on efficiency cores. The recorded run below was consistent across all five scenarios.
+
+### Results (recorded run)
+
+| Scenario | Submit, ms per input (inputs/s) | Card checks in submit, ms | Close, ms per input | Close of one job |
+|---|---|---|---|---|
+| 1 job × 1,000, shared | 3.49 (≈ 287/s) | 1.44 | 2.26 | 2.3 s |
+| 1 job × 1,000, dedicated | 3.54 | 1.43 | 2.23 | 2.2 s |
+| 1 job × 10,000 (10k-card world) | 3.42 (≈ 292/s) | 1.44 | 2.35 | 23.5 s |
+| 20 jobs × 1,000, interleaved | 3.51 | 1.41 | 2.18 | 2.3 s each |
+| 5 jobs × 10,000, interleaved | 3.17 (≈ 315/s) | 1.34 | 2.29 | 24.2 s each |
+
+- **Throughput doesn't depend on world size or on the number of concurrent jobs.** The 10k-card snapshot costs nothing per input; lookups are `BTreeMap`s.
+- Card checks take about 40% of an input. The rest is X-Wing opening, the ML-DSA receipt signature and the sealed receipt.
+- Close is about 2.3 ms per input. It is linear and single-threaded.
+
+### Memory
+
+These figures come from `VmRSS`/`VmHWM`, with the peak counter reset around each step. Allocator reuse makes small deltas unreliable: the snapshot and job-open deltas read as about zero or negative.
+
+- **Per-input state held by an open job:** about 0.1 MiB per 1,000 inputs, and about 0.4 MiB per 10,000 (≈ 200 B per input: hashes and root keys only; the host holds the ciphertexts).
+- **Close working set:** it holds every sealed input (`close_buffer`) plus its plaintext.
+  - A 1,000-input close peaked under 1 MiB above the held state.
+  - Five sequential 10,000-input closes peaked 232 MiB above it. That figure includes the benchmark's own copy of the close message.
+  - **Estimate: about 10–25 KB per input at close, so ≈ 100–250 MiB for a 10,000-input job.** Only one close runs at a time per broker.
+- **Snapshots:** not isolated by this run. **Estimate: ≈ 5 KB per card under a snapshotted policy** (head bytes plus entry), so ≈ 50 MiB for 10,000 cards.
+
+### Provisional instance-size recommendation
+
+The economics assume c7g.large per replica (2 vCPU, 4 GiB).
+
+- **CPU.** One broker sustains ≈ 290 inputs/s on these cores. Graviton cores may be slower; **to be measured in Phase 8**, and 150–200/s is a planning assumption, not a measurement. Even so, a 10,000-member vote costs about a minute of enclave CPU to accept and about 25–60 s to close.
+- **Memory.** A c7g.large enclave with **1–2 vCPU and ≈ 2 GiB** covers:
+  - tens of concurrent shared jobs;
+  - snapshots for a few large source policies;
+  - one 10,000-input close.
+- **c7g.xlarge** is needed only for much larger snapshots or inputs, or for sustained input rates above one broker's throughput.
+
+**Recommendation: c7g.large per replica, enclave 2 vCPU / 2 GiB, provisional until Phase 8 measures it on Graviton inside an enclave.**
+
+### Initial deployment (smallest viable)
+
+Early loads are far below the figures above: hundreds of inputs per job and few concurrent jobs.
+
+**The instance can't get smaller than a 2-vCPU Graviton.** On Graviton (no SMT), the parent instance must keep at least 1 vCPU, and the enclave gets whole vCPUs from the rest. T4g instances are excluded (AWS Nitro Enclaves requirements).
+
+The saving is in what runs on that instance and how many there are:
+- **Instance:** c6g.large or c7g.large (2 vCPU, 4 GiB), the smallest Graviton size that can host an enclave.
+- **Enclave:** **1 vCPU, ≈ 1 GiB**. One broker thread is all the input path uses anyway (≈ 290 inputs/s measured). A 1,000-input job's close takes about 2 s and under 1 MiB above its held state, and even one 10,000-input close (≈ 100–250 MiB) fits. The 1 GiB must also hold the enclave image; Phase 8 confirms the figure.
+- **Parent:** the remaining 1 vCPU and about 3 GiB run the host and Redis.
+- **Replicas:** start with 1 enclave per operator (≈ $50/month on demand, less with a savings plan), not the 3 the economics assume. The trade-off:
+  - a single replica is the disclosed single-operator bootstrap allowance (L4, §34);
+  - if that one enclave is lost, its open jobs lose their keys and restart at a new epoch (`total_loss`), and contributors resubmit.
+  - Two instances (≈ $100/month) survive one loss for jobs with `min_live` 1 of 2.
+- **Isolation:** use `shared` (allowlisted) programs. A `dedicated` job occupies the whole enclave, so a second concurrent dedicated job would need a second instance.
+
+**Decided (David, 2026-11-13): proceed with this initial setup.**
+- **Hardware:** one c6g.large per operator, on a 1-year compute savings plan, shared by the first communities. One notary card is approved by each community's policy.
+- **Cost:** ≈ $55/month on demand, or ≈ $35–40/month with the savings plan. Prices come from a third-party tracker and typical discount ranges; check them against AWS pricing before purchase.
+- **Per-job costs:** EAS anchors and derived-card writes on Arbitrum, under $0.10 each.
+- **Rejected as smaller options:**
+  - **Smaller instances:** none can host an enclave.
+  - **Running only while jobs are open:** stopping every enclave loses `K_id`, which means genesis again.
+  - **Spot with a single replica:** an interruption is a total loss.
+- **Noted for later, not decided:** KMS attestation-bound key release would let a stopped notary recover `K_id`. That needs a spec decision and a security review.
+
+**Move up when:**
+- sustained input rates approach one broker's throughput;
+- concurrent `dedicated` jobs are needed;
+- snapshotted source policies grow past roughly 100,000 cards (≈ 500 MiB);
+- the community wants jobs to survive an enclave loss without resubmission (go to 2–3 replicas).
+
+### Findings flagged to David
+
+These don't contradict the economics, but they qualify them.
+
+1. **`dedicated` isolation means one job per enclave** (admission refuses a second job: `ADM_DEDICATED_REQUIRED`). Every concurrent dedicated job needs its own enclave per replica. The strategic plan's "one operator can serve many communities" holds for `shared` (allowlisted) programs only.
+2. **One broker thread per enclave.** A second vCPU helps the worker runs, not input throughput. Scaling input throughput beyond ≈ 300/s needs more enclaves (or a multi-threaded broker, which would be a design change).
+3. **7 vsock fetches per input.** The chapter ancestor and the app-certification chain aren't in the snapshot, and nothing is cached between inputs. At 0.1–0.5 ms per vsock round trip (unmeasured), that adds 1–3.5 ms per input, up to doubling the per-input time. Caching ancestors per job would remove it. That is a change for review (5.7), not made here.

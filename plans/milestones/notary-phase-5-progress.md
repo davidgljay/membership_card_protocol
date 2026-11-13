@@ -289,3 +289,24 @@ The path is:
 **Not covered by this run:** multiple replicas and operators (6.3), per-input jobs, derived cards, `policy_updates` changing a contributor mid-job, and the production chain/EAS/Kubo clients (Phase 7).
 
 **Next:** 5.6 capacity benchmark.
+
+## 5.6 capacity benchmark: done (2026-11-13)
+
+The results and the provisional instance-size recommendation are in code-plan §11. The harness is `notary/runtime/benches/capacity` (with `run-linux.sh`), and the worlds come from `notary/e2e/src/bench-world.ts`.
+
+**Headline (Linux arm64, one broker thread):**
+- ≈ 290 inputs/s, the same for 1,000 and 10,000 inputs and for 1, 20 or 5 concurrent jobs;
+- close ≈ 2.3 ms per input (24 s for 10,000);
+- held per-input state ≈ 200 B;
+- close working set ≈ 10–25 KB per input.
+
+**Recommendation:** c7g.large per replica, with the enclave at 2 vCPU / 2 GiB, provisional until Phase 8.
+
+**Flagged to David:**
+1. `dedicated` means one job per enclave.
+2. There is one broker thread per enclave.
+3. Each input makes 7 vsock fetches, with no ancestor cache.
+
+**Next:** 5.7 milestone review (a separate session).
+
+**Initial deployment decided (David, 2026-11-13):** one c6g.large per operator (enclave 1 vCPU / ≈ 1 GiB), on a 1-year savings plan, shared by the first communities: ≈ $35–40/month. Details are in code-plan §11, "Initial deployment". Phase 8 confirms the enclave memory figure on real hardware.

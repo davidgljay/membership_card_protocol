@@ -763,6 +763,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "notary-capacity"
+version = "0.1.0"
+dependencies = [
+ "notary-attest",
+ "notary-broker",
+ "notary-crypto",
+ "notary-sim",
+ "notary-types",
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "notary-cards"
 version = "0.1.0"
 dependencies = [

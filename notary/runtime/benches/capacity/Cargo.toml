@@ -1,0 +1,15 @@
+[package]
+name = "notary-capacity"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+description = "Step 5.6 capacity benchmark: inputs per second, per-job memory and close time for 1,000 and 10,000 inputs and many concurrent jobs, against the real broker and card checks under the simulator."
+
+[dependencies]
+notary-broker = { path = "../../crates/notary-broker" }
+notary-crypto = { path = "../../crates/notary-crypto" }
+notary-types = { path = "../../crates/notary-types" }
+notary-attest = { path = "../../crates/notary-attest" }
+notary-sim = { path = "../../../sim" }
+serde_json.workspace = true
+sha2.workspace = true
