@@ -18,6 +18,8 @@
 
 **Changelog (2026-11-11, notaries, ADR-013):** new `VerifierConfig.notary` (§5); new entry point `verifyNotarization` (§6.5); Stage 4 enforces the optional `expires_at` card field (step 5a); Stage 5 adds notary-issued (derived) card checks (step 3a); new error codes `NOTARY_GENESIS_INVALID`, `NOTARY_DERIVED_SHAPE`, `NOTARY_CONFIG_MISSING`.
 
+**Changelog (2026-11-12, notaries, E31/E32):** `NotarizationVerificationResult.warnings` adds `notary_key_exposed_later` (already returned by algorithm N) and `SINGLE_OPERATOR_QUORUM`.
+
 **Changelog (2026-11-12, notaries, CP3):** Stage 5 step 3a runs algorithm E, with new codes `NOTARY_KEY_EXPOSED` and `NOTARY_LINEAGE_INCOMPLETE`. `RpcProvider.getGovernanceKeyset` and `getNotaryLogAnchors` (§4.1). The notary list cards are checked with algorithm L (member `list_approval`, `notary_lifecycle.md` Appendix A.5) before use.
 
 **Changelog (2026-11-08, card login):** New `VerifierConfig.loginServiceCertificationRoot` (§5); `RpcProvider.getDomainRegistration` (§4.1); new entry points `verifyLoginResponse` (§6.3) and `verifyServerCard` (§6.4); Stage 2 step 14 accepts `"S1"` only on server cards and new step 16f enforces the login service scope rule (`LOGIN_SERVICE_SCOPE`); `app_card_branch` result field (§8); new error codes (§9). See `process_specs/card_login.md`.
@@ -608,7 +610,7 @@ type NotarizationVerificationResult =
       accepted: number; rejected: number; dropped_after_acceptance: number;
       suppressed: boolean; output?: unknown; output_hash: string;
       chain_state_age_seconds: number;
-      warnings: ("runtime_retired_vulnerable" | "JOB_LOG_GAP" | "JOB_LOG_FORK" | "EPOCH_TOTAL_LOSS")[] }
+      warnings: ("runtime_retired_vulnerable" | "notary_key_exposed_later" | "JOB_LOG_GAP" | "JOB_LOG_FORK" | "EPOCH_TOTAL_LOSS" | "SINGLE_OPERATOR_QUORUM")[] }
   | { valid: false; code: string; reason: string };
 ```
 

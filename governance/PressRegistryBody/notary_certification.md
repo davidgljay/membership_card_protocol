@@ -1,6 +1,6 @@
 # PressRegistryBody — Notary Runtimes, Programs and Operators
 
-**Status:** Approved at notary checkpoint CP3 (2026-11-12), including the emergency-retirement rule. Publishing any list or registering any policy is still a CP7 action.
+**Status:** Approved at notary checkpoint CP3 (2026-11-12), including the emergency-retirement rule. Amended 2026-11-12: Retiring Single-Operator Quorums. Publishing any list or registering any policy is still a CP7 action.
 **Parent body:** PressRegistryBody (`mandate.md`)
 **Context:**
 - `specs/ARCHITECTURE.md` ADR-013;
@@ -145,6 +145,12 @@ The exception to deliberation periods is also recorded in `mandate.md`, Off-Chai
 - re-approves both lists under the new keyset version (signed in advance where possible), because readers fail closed until it does;
 - publishes a runtime image that pins the new keyset;
 - emergency-retires older images if a member was removed for key compromise.
+
+---
+
+## Retiring Single-Operator Quorums
+
+While few operators are active, jobs may be served by replicas of a single operator: a bootstrap allowance, disclosed to contributors and verifiers (`specs/process_specs/notary_lifecycle.md` L4). Once enough independent operators are active for communities to form multi-operator replica sets, the body retires the allowance. It sets `single_operator_quorums: "refused"` on the program allowlist's `list_approval` by a standard (quorum) update, with the usual deliberation period and a decision record. Wallets and runtimes then refuse new single-operator jobs. Jobs already running are unaffected. The body may restore `"allowed"` the same way.
 
 ---
 

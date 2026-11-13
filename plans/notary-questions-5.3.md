@@ -75,3 +75,9 @@ Library and interface choices that don't affect security or a spec are made here
 ## Code-plan deviation (5.3a)
 
 The conformance generator lives at `membership_card_verifier/packages/verifier/scripts/gen-notary-conformance.ts` (run with `pnpm gen:notary-conformance` / `pnpm check:notary-conformance`), not at `membership_card_verifier/scripts/`, so that it resolves the verifier package's own dependencies and reads its built `dist/`.
+
+| **E32** | Threat model L4, T7; consent; notarization | A host running every replica of a job can forge eligible contributors (it controls the registry state the card checks rely on). See `notary-e31-proposal.md` Part B. | **Decided (David, 2026-11-12): B3, disclose and allow.** Single-operator jobs stay allowed as a **bootstrap allowance** for early deployment, while few operators are active; as operators join, multi-operator replica sets are expected and single-operator use should no longer be needed. Spec wording still to write: restate L4, add the single-operator disclosure to the consent model and to the notarization or its verification result. |
+
+## Resolution (2026-11-12)
+
+David approved `notary-spec-wording-e31.md` in full, and it has been applied to the specs. **Resolved:** E20 (list read path, runtime §12), E21 (policy read via `fetch`, runtime §9 and lifecycle A.7), E24 (`genesis_ready` fields), E25 (`CLOSE_NOT_DUE`), E30 (snapshot and per-card fetch shapes, host §8), E31 (algorithm R, Part A approved, no network connection from the enclave), and E32 (B3 bootstrap allowance, disclosed and retirable by the `single_operator_quorums` switch). **Still open:** E26 (the first identity-log record) and E27 (a native x86_64 sandbox run). **Not yet implemented:** algorithm R, the list reads, the single-operator disclosure and switch (in wallet, verifier, runtime), and the `ListApproval` type field.

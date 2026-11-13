@@ -4,6 +4,7 @@
 **Date:** 2026-11-11  
 **Status:** Draft. Specified, not implemented.  
 **Architecture:** `ARCHITECTURE.md` ADR-013 · **Processes:** `process_specs/notary_lifecycle.md`, `notary_replication_and_recovery.md`, `derived_card_revocation_propagation.md` · **Objects:** `protocol-objects.md` §20–§34 · **Design record:** `plans/notary-design-decisions.md` §2.3, §2.4
+**Amended 2026-11-12:** §9 `create_job` reads the policy with algorithm R through `fetch`; `genesis_ready` adds `request` and `notary_card`. §12 pins list-card public keys and reads list history through `fetch`. §16 adds `CLOSE_NOT_DUE`. Source: `plans/notary-spec-wording-e31.md`, approved by David 2026-11-12.
 
 > **Terminology.** This spec describes software that runs inside **AWS Nitro Enclaves**, called "the enclave". "NSM" is the enclave's security module, which issues the **enclave attestation** (the AWS Nitro Enclaves attestation document). This software is unrelated to nitropack, the web framework the host uses. See `ARCHITECTURE.md`, terminology note.
 
@@ -251,9 +252,9 @@ The transport is vsock, using the framing in §8. **Everything from the host is 
 | `fetch_result` | `req_id`, `bytes` or `not_found` | Answers an enclave `fetch`. IPFS objects are checked against their CID. | — |
 | `policy_snapshot` | `policy_address`, `entries[]`, `subcards[]`, `heads[]`, `at_block` | Replaces the local snapshot for that policy | `snapshot_ack` |
 | `policy_updates` | `policy_address`, `updates[]` (each `CardHeadUpdated` with the new head's bytes) | Applies the updates to the snapshot and runs the `sealed_link` watch loop (`derived_card_revocation_propagation.md` §6) | — |
-| `genesis` | genesis request | Generates `K_id` and `K_chain` and attests (purpose `0x01`) | `genesis_ready { id_pubkey, chain_pubkey, attestation }` |
+| `genesis` | genesis request | Generates `K_id` and `K_chain` and attests (purpose `0x01`) | `genesis_ready { id_pubkey, chain_pubkey, attestation, request, notary_card }`. `request` is the completed genesis request whose hash is the attestation `nonce`; the enclave also `publish`es it, so the notary card can carry its CID (`genesis_request`, E17). `notary_card` is `keccak256(K_id)`. |
 | `countersign_notary_card` | offer | Runs check G2 against its own keys, then signs `holder_signature` | `countersigned` |
-| `create_job` | `job`, `program`, optional `restart` | Job checks (`notary_lifecycle.md` step 17), then algorithm A, then `K_job` and attestation (`0x02`) | `job_keyed { epoch, job_public_key, attestation }` or `job_rejected { code }` |
+| `create_job` | `job`, `program`, optional `restart` | Job checks (`notary_lifecycle.md` step 17), reading the policy and any requester chain with algorithm R (Appendix A.7) through `fetch`. Then algorithm A, then `K_job` and attestation (`0x02`). | `job_keyed { epoch, job_public_key, attestation }` or `job_rejected { code }` |
 | `submit_input` | `job_hash`, `sealed_input` | B1–B11, then quorum forwarding (`notary_replication_and_recovery.md` §4) | `input_result { input_hash, receipt_sealed }` |
 | `close_chunk` | `job_hash`, `seq`, `sealed_inputs[]`, `last` | Collects inputs for the close computation | `job_closed { notarization, record, outputs[] }` |
 | `anchor_receipt` | `scope_id`, `seq`, `tx_receipt` | Unblocks the next job-log or identity-log record | — |
@@ -327,13 +328,13 @@ The broker applies these in order to whatever a run returns:
 The runtime needs the accepted-runtime list (for handoff check P2) and the program allowlist (for A11). Its only source for them is the host.
 
 1. **Pinned at build time.** The image contains:
-   - the two list-card addresses;
+   - the two list-card addresses and their **public keys** (each address is `keccak256` of its key; the key gives the list card's content key);
    - the ML-DSA-44 public keys allowed to sign their updates (the list holder's key and the PressRegistryBody press key);
    - the PressRegistryBody **member keyset** `{ keys, quorum, version, key_scheme }` used to check `list_approval` (algorithm L);
    - a **version floor** for each list.
 
    All of these are covered by PCR0.
-2. **Signatures checked.** The host supplies each list card's genesis document and log entries. The broker checks every `intent_signature` and `press_signature` against the pinned keys, checks the `prev_log_root` chain, and runs algorithm L (`notary_lifecycle.md` Appendix A.5) against the pinned member keyset. It uses the `card_state` of the highest version that passes both.
+2. **Read and checked.** The broker reads each list card's history through `fetch`, with no network connection: `card_head:<list card>` gives the head events in order (`notary_host.md` §8 shape), and `ipfs:<cid>` gives each version, checked against its CID and decrypted with the pinned list-card key (`decryptCardHead`). It checks every `intent_signature` and `press_signature` against the pinned keys, checks the `prev_log_root` chain, and runs algorithm L (`notary_lifecycle.md` Appendix A.5) against the pinned member keyset. A host that omits or reorders versions breaks L's `list_version` and `prev_list_hash` continuity, and a host that withholds the newest version is limit L5. The broker uses the `card_state` of the highest version that passes all checks.
 3. **Reacts to retirements.** On each newly verified accepted-runtime list, the broker runs the key-lineage check (§4).
 4. **Never goes backwards.** The broker refuses any version below the floor or below the highest it has seen. The highest version seen travels in heartbeats (`list_versions`) and handoffs, so restarted replicas inherit it.
 
@@ -403,6 +404,7 @@ The host can't read enclave memory in any case. Zeroization limits what a later 
 | `HANDOFF_*` | Broker | `notary_replication_and_recovery.md` algorithm P and step 7 |
 | `ATT_*` | Verifier modules and algorithm V | `notary_lifecycle.md` Appendix A.1 |
 | `LIST_VERSION_REGRESSION` | §12 | A host supplied an older governance list version; refused and alerted |
+| `CLOSE_NOT_DUE` | §9 `close_chunk` | Chain time or the attested time is still before `closes_at`; nothing closed, and the host retries later (`notary_replication_and_recovery.md` §5) |
 | `LIST_APPROVAL_*` | §12 | A list version isn't validly approved by members (`notary_lifecycle.md` Appendix A.5); refused, and the last verified version is kept |
 | `LINT_WEAK_GRANULARITY`, `LINT_NO_SNAPSHOT_POLICY` | `notary-lint` | Warnings |
 

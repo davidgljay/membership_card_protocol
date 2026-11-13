@@ -4,6 +4,7 @@
 **Date:** 2026-11-11  
 **Status:** Draft  
 **Architecture:** `ARCHITECTURE.md` ADR-013 · **Objects:** `protocol-objects.md` §2.1, §2.2, §20–§34 · **Design record:** `plans/notary-design-decisions.md` (approved at CP2)
+**Amended 2026-11-12:** new Appendix A.7, algorithm R (policy and requester reads, over vsock only); step 17 and W3–W5 point to it. L4 and T7 restated (a single-operator quorum can count forged contributors), with a consent disclosure (step 25), the `SINGLE_OPERATOR_QUORUM` warning in N, and the governance switch in W7 (`JOB_SINGLE_OPERATOR_REFUSED`). Source: `plans/notary-spec-wording-e31.md`, approved by David 2026-11-12.
 
 > **Terminology.** "The enclave" means an AWS Nitro Enclaves enclave. "Enclave attestation" means the AWS Nitro Enclaves attestation document, which is not the App Attest / Play Integrity attestation of `subcards.md`. "nitropack" is the web framework the notary host runs on. See the terminology note in `ARCHITECTURE.md`.
 
@@ -122,7 +123,7 @@ Each step names its **actor**, what it takes and produces, and how failure is ha
     It computes `job_hash = H(job)` and pins the job to IPFS.
 15. **Requester → operator hosts.** Sends the job to the host of each operator in `replica_set`.
 16. **Host → enclave.** Sends `create_job` with the job and the program bytes.
-17. **Enclave (originator).** Repeats the wallet's job checks W2–W10 (Appendix A.2), plus a check that its own notary card is in `replica_set`. Runs program admission (algorithm A). **Only then** generates the job key `K_job,0` (X-Wing) and requests a purpose-`0x02` attestation (`public_key` = `SHA-256(K_job public key)`, `nonce = job_hash`).
+17. **Enclave (originator).** Repeats the wallet's job checks W2–W10 (Appendix A.2), plus a check that its own notary card is in `replica_set`. It reads the policy with **algorithm R** (Appendix A.7) and, when `job_requester_predicate` is present, the requester's chain the same way. Everything comes over vsock (`fetch`), checked by CID, and the enclave makes no network connection. Runs program admission (algorithm A). **Only then** generates the job key `K_job,0` (X-Wing) and requests a purpose-`0x02` attestation (`public_key` = `SHA-256(K_job public key)`, `nonce = job_hash`).
     - *Failure:* `job_rejected` with the W or `ADM_` code. No key is created.
 18. **Enclaves.** The originator hands `K_job,0` to the other replicas until a quorum q holds it (`notary_replication_and_recovery.md`, forming the replica set). Each receiver attests with purpose `0x02` for the same key.
 19. **Job leader enclave.** Writes the `opened` job-log record listing the attestations, and waits for its EAS anchor.
@@ -146,6 +147,7 @@ Each step names its **actor**, what it takes and produces, and how failure is ha
     - who receives the output (`output_recipients`);
     - the privacy bounds (`k_min` and the output transforms);
     - the notary operators and their platform;
+    - if the job has a single-operator quorum (L4): "One operator runs enough of this job's notaries to close it alone. The count can include contributors that operator invents. Your own input stays private either way."
     - the close time;
     - for derived cards, the disclosure lines in `derived_card_revocation_propagation.md`.
 
@@ -262,6 +264,7 @@ Each step names its **actor**, what it takes and produces, and how failure is ha
 | `JOB_POLICY_UNTRUSTED`, `JOB_POLICY_CHANGED` | W | Policy chain invalid, or `notary` / `approved_notaries` changed since the job was signed | Reject; the requester re-issues the job |
 | `JOB_REQUESTER_NOT_PERMITTED`, `JOB_PARAMETERS_OUT_OF_BOUNDS`, `JOB_NOTARY_NOT_APPROVED`, `JOB_KEM_UNSUPPORTED`, `JOB_PROGRAM_NOT_ALLOWLISTED` | W | The job isn't allowed by the policy or the wallet | Reject |
 | `JOB_CLOSED` | W | Past `closes_at` / `ends_at` | Reject |
+| `JOB_SINGLE_OPERATOR_REFUSED` | W (step 7), enclave (step 17) | One operator's replicas reach the quorum, and governance has retired single-operator quorums (`protocol-objects.md §34`) | Reject; the requester re-issues the job with replicas from several operators |
 | `NOTARY_LINEAGE_INCOMPLETE` | E | The notary card's identity log has a gap or fork, so its key lineage can't be established | Reject the item; the operator investigates the missing anchor |
 | `JOB_NOTARY_KEY_EXPOSED` | W (step 10a) | A replica's notary card key has lived in a runtime retired as `"vulnerable"` (algorithm E) | Reject; the operator must redo genesis and the policy holder reissue |
 | `LIST_APPROVAL_MISSING`, `LIST_APPROVAL_MALFORMED`, `LIST_APPROVAL_HASH_MISMATCH`, `LIST_APPROVAL_KEYSET_STALE`, `LIST_APPROVAL_THRESHOLD`, `LIST_APPROVAL_NOT_REMOVAL_ONLY` | L | A governance list's head isn't validly approved by PressRegistryBody members (Appendix A.5) | Fail closed: treat no runtime as accepted and no program as allowlisted. Runtimes keep their last verified version. |
@@ -289,7 +292,7 @@ Each step names its **actor**, what it takes and produces, and how failure is ha
 | T4 | Allowlisted programs match their audits (reproducible builds) | A malicious program can leak within its declared output bounds, but not beyond them |
 | T5 | Governance (PressRegistryBody) acts in good faith: fewer than a quorum of members (4 of 5) collude to accept a runtime or program, and fewer than 2 collude to retire one. Each list version must carry member signatures (algorithm L), so the list-holder key alone can't change what is accepted. | A quorum could accept a malicious runtime. Two members could retire good runtimes or programs, which stops new jobs but discloses nothing and is reversed by the full body. |
 | T6 | Cryptography holds: ML-DSA-44, X-Wing draft-06, ChaCha20-Poly1305, SHA-256, HMAC-SHA256, secp256r1 (on-chain only), and ES384 (AWS attestations) | X-Wing is a hybrid, so both halves would have to break to expose inputs |
-| T7 | The operators of a quorum of a job's replicas do not collude | With collusion: stalls, forced resets, and drops that agree across replicas (still exposed by receipts). Never disclosure or forgery. |
+| T7 | The operators of a quorum of a job's replicas do not collude | With collusion: stalls, forced resets, and drops that agree across replicas (still exposed by receipts), and forged contributors (L4). Never disclosure, and never a forged result over the inputs counted. **A single-operator quorum is collusion by construction**, so T7 holds for such a job only if that operator is honest. |
 | T8 | Chain data is only as honest as the host's feed (v1 has no state proofs) | See L3 and L4 |
 | T9 | The parent instance can't influence NSM time | Early close would become possible. Must be confirmed on real hardware before launch. |
 | T10 | The relay and the notary host are run by different parties | The operator learns contributors' IP addresses |
@@ -301,7 +304,7 @@ Each step names its **actor**, what it takes and produces, and how failure is ha
 | L1 | The operator controls I/O. It can drop inputs, delay close, refuse handoffs or force a total loss. | Receipts make drops attributable. The anchored job log makes resets visible. Cross-operator replicas for votes. |
 | L2 | Losing every replica loses offline voters' ballots | Online wallets resubmit. Three replicas across availability zones by default. |
 | L3 | Block headers are checked only for hash linkage | Notarization check N7 compares against the real chain. NSM time gates close. |
-| L4 | Registry reads are unverified. A recently revoked card can be counted, and a recipient's removed device may read a private output. | Wallet `chain_ref` floors. `chain_state` recorded in every notarization. |
+| L4 | Registry reads are unverified, and card checks trust the registry to say which document is a card's head. The registry state comes from each replica's own host. So a host can count a recently revoked card, let a recipient's removed device read a private output, and **forge eligible contributors**: it can fabricate cards whose chains reach a trusted root's address, because no card signature binds a card to its key without the registry. With a **single-operator quorum** (the replicas whose notary cards share one `operator_card` number at least q), that operator can add forged inputs to a job's count undetected. With replicas from several operators, a forged input fails at every honest operator's replica, and close stalls. | Wallet `chain_ref` floors. `chain_state` recorded in every notarization. Single-operator quorums are a **bootstrap allowance** for early deployment, while few operators are active; they are disclosed to contributors (consent, step 25) and to verifiers (warning `SINGLE_OPERATOR_QUORUM`), and governance retires the allowance once several operators are active (`protocol-objects.md §34`, `single_operator_quorums`). Verified chain reads (`card_protocol_spec.md §9`, P2) close this. |
 | L5 | A host can withhold governance list updates from its runtime | Version floors built into the runtime image. Wallets enforce the current lists. Retire the runtime's PCR0 for serious issues. |
 | L6 | k-anonymity and output transforms don't stop differencing across repeated jobs | Differential privacy is specified for a later version. `notary-lint` warns. |
 | L7 | Ancestor cards outside snapshotted policies, and fallback predicates, are fetched by address | Disclosed on the consent screen |
@@ -350,11 +353,11 @@ The wallet uses its **own** chain reads, never data from the notary host. Config
 
 1. Announcement `type` and required fields → `ANN_MALFORMED`.
 2. Job `type`. `keccak256(requester_pubkey) == requester_card`. `requester_signature` verifies. Compute `job_hash` → `JOB_SIGNATURE_INVALID`.
-3. The policy chain reaches a trusted root → `JOB_POLICY_UNTRUSTED`.
-4. `policy_state_cid` is the current head or in its history, and `notary` and `approved_notaries` are unchanged at the current head → `JOB_POLICY_CHANGED`.
-5. The requester satisfies `job_requester_predicate` (absent means anyone) → `JOB_REQUESTER_NOT_PERMITTED`.
+3. The policy chain reaches a trusted root → `JOB_POLICY_UNTRUSTED`. (Algorithm R, A.7, step R3.)
+4. `policy_state_cid` is the current head or in its history, and `notary` and `approved_notaries` are unchanged at the current head → `JOB_POLICY_CHANGED`. (Algorithm R, step R2.)
+5. The requester satisfies `job_requester_predicate` (absent means anyone) → `JOB_REQUESTER_NOT_PERMITTED`. The requester's chain is read as in algorithm R, step R5. `is_holder` holds iff `requester_card` is the policy card's holder (`keccak256` of the policy's `recipient_pubkey`).
 6. `parameters` are within `parameter_bounds` → `JOB_PARAMETERS_OUT_OF_BOUNDS`.
-7. The mode-specific fields are consistent, and q ≤ `min_live` ≤ N → `JOB_MALFORMED`.
+7. The mode-specific fields are consistent, and q ≤ `min_live` ≤ N → `JOB_MALFORMED`. If the verified program allowlist's `single_operator_quorums` is `"refused"`, the replicas whose notary cards share one `operator_card` number fewer than q → `JOB_SINGLE_OPERATOR_REFUSED`.
 8. Chain time is before `closes_at` / `ends_at` → `JOB_CLOSED`.
 9. `kem` is accepted → `JOB_KEM_UNSUPPORTED`.
 10. Every `replica_set` card is in the current `approved_notaries` and not revoked, has `policy_id = NotaryCardPolicy` and `issuer_card` = this policy, and its `platform` equals `notary.platform` → `JOB_NOTARY_NOT_APPROVED`.
@@ -390,7 +393,7 @@ Uses CIDs and chain data only, so anyone can run it. Also specified as a verifie
 12. There are at least `close_quorum` cosignatures (= ⌊N/2⌋ + 1) from distinct instances. Each attestation passes **V** as in step 6 with `id_key_hash` set to its replica's own notary card (any card in `replica_set`), and each signature verifies over `H(body)` → `NOT_QUORUM_INSUFFICIENT`.
 13. No `epoch_started` record for a higher epoch was anchored before `closed_at` → `NOT_EPOCH_SUPERSEDED`.
 
-**Result:** valid, or the first reject code. Warnings are returned with the result: `runtime_retired_vulnerable`, `notary_key_exposed_later`, the chain-state age, `JOB_LOG_GAP` / `JOB_LOG_FORK`, and any `total_loss` epochs.
+**Result:** valid, or the first reject code. Warnings are returned with the result: `runtime_retired_vulnerable`, `notary_key_exposed_later`, the chain-state age, `JOB_LOG_GAP` / `JOB_LOG_FORK`, any `total_loss` epochs, and `SINGLE_OPERATOR_QUORUM` when the replicas whose notary cards share one `operator_card` number at least `close_quorum` (L4: the count may include contributors that operator invented).
 
 ### A.5 Algorithm L: governance list approval
 
@@ -422,6 +425,20 @@ A notary card's keys (`K_id`, `K_chain`) are **exposed** once any runtime image 
    If `t ≥ t_x`, the item is **rejected**. If `t < t_x`, it gets the warning `notary_key_exposed_later`.
 
 **Why the log is complete.** A receiving enclave doesn't serve until its `handoff` record is anchored (`notary_replication_and_recovery.md` step 10). So every enclave that has used the keys appears in the anchored log. A copy taken outside the protocol is exactly what an exposed runtime makes possible, and the lineage already includes that runtime.
+
+### A.7 Algorithm R: reading a policy and a requester
+
+Used by the enclave at step 17, and by wallets and verifiers through the same logic. Wallets read the registry over their own chain connection. The enclave reads everything through the host over vsock (`fetch`, `notary_runtime.md` §9) and makes no network connection. Content is checked against its CID. Trust comes from the trusted roots pinned in the reader (in the enclave: the runtime image), never from where the bytes came from.
+
+**Inputs:** `policy_id`, `policy_state_cid`, the job, and the reader's trusted roots.
+
+1. **R1. Documents.** Fetch the documents at `policy_id` and `policy_state_cid` and check each against its CID. A document is accepted as plain RFC 8785 JSON, or as AES-256-GCM ciphertext under `HKDF-SHA3-256(recipient_pubkey, "card-content-v1")`, with `recipient_pubkey` read from the `policy_id` document. The policy's registry address is `keccak256(recipient_pubkey)`. → `JOB_POLICY_UNTRUSTED`.
+2. **R2. State.** The policy's registry entry (a `card_head:` read) lists `policy_state_cid` among its head events. The `notary` section and `approved_notaries` of the current head (decrypted as any card head, `card_verifier.md` Stage 3) equal those at `policy_state_cid`. → `JOB_POLICY_CHANGED`.
+3. **R3. Chain.** The policy card's chain reaches a trusted root and no card on it is revoked at chain time (`card_verifier.md` Stages 3–4). → `JOB_POLICY_UNTRUSTED`.
+4. **R4. Notaries.** Every `replica_set` card is in `approved_notaries` at the current head. → `JOB_NOTARY_NOT_APPROVED`.
+5. **R5. Requester** (only with `job_requester_predicate`). Read `requester_card`'s head from its registry entry, decrypted under `HKDF-SHA3-256(requester_pubkey, "card-content-v1")`. The binding is already checked in W2. Run Stages 3–4 on its chain, then the predicate with the parameters resolved, with `is_holder` as in W5. → `JOB_REQUESTER_NOT_PERMITTED`.
+
+Registry reads are unverified in the enclave (L4). Wallets check R2–R4 with their own chain reads before contributing, so a host that misreports policy state can stop a job but can't mislead a contributor.
 
 ---
 

@@ -519,7 +519,9 @@ type NotaryConsent = {
   notaries: { notaryCard: string; operatorCard: string; platform: string }[];
   closesAt?: string; endsAt?: string;
   disclosures: string[];                             // derived_card_revocation_propagation.md §8;
-                                                     // participation disclosure (lifecycle step 31)
+                                                     // participation disclosure (lifecycle step 31);
+                                                     // single-operator quorum disclosure (lifecycle step 25)
+  singleOperatorQuorum: boolean;                     // L4: one operator's replicas reach q
   requesterText?: string;                            // shown only as labelled requester text
 };
 ```
@@ -725,6 +727,7 @@ Carried forward from `plans/sdk-split-strategic-plan.md`'s resolved decisions an
 
 ## Changelog
 
+- §7b.3: `NotaryConsent.singleOperatorQuorum` and the single-operator disclosure; W7 adds `JOB_SINGLE_OPERATOR_REFUSED` when governance has retired single-operator quorums (2026-11-12, notaries, E31/E32).
 - §7b.1: both notary list cards must pass algorithm L (PressRegistryBody member `list_approval`) against the on-chain keyset before use (2026-11-12, notaries, CP3).
 - Added §7b (Notaries, wallet-side): the job and enclave attestation check (algorithm W), a consent model built from the policy, sealed input submission, receipts, resubmission, notarization checks and derived cards. The attestation verifier is a stated exception to the `CardVerifier`-only rule (2026-11-11, notaries, ADR-013).
 - Added §7a (Login, wallet-side), the §6.1 login service scope rule, and router registration on offer acceptance (§7.5 note) (2026-11-08, card login).

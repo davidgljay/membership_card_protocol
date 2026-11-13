@@ -3,6 +3,7 @@
 **Version:** 0.2 (draft)  
 **Date:** 2026-06-14  
 **Status:** In Review  
+**Amended 2026-11-12 (notaries):** §34 `list_approval` gains `single_operator_quorums` (program allowlist only), and rule E keeps it unchanged in emergency updates. Source: `plans/notary-spec-wording-e31.md`, approved by David 2026-11-12.
 **Amended 2026-11-11 (notaries, ADR-013):**
 - §1 gains the optional `expires_at` field.
 - §2 gains `approved_notaries`, the `notary` section (§2.1) and derived-card template policies (§2.2).
@@ -1811,6 +1812,7 @@ Each list card also has a field **`list_approval`**, replaced on every update. I
   "prev_list_hash":     "<base64url — H(JCS(the previous value)); absent when list_version is 1>",
   "kind":               "<standard | emergency_retirement>",
   "governance_version": <uint32 — GovernanceKeysets[PressRegistryBody].version the signers belong to>,
+  "single_operator_quorums": "<allowed | refused — program_allowlist only; optional, absent = allowed>",
   "signatures": [
     { "key_index": <integer — index into that keyset's keys>, "signature": "<base64url>" }
   ]
@@ -1819,7 +1821,8 @@ Each list card also has a field **`list_approval`**, replaced on every update. I
 
 - **What is signed.** Each member signs `H(JCS(list_approval without "signatures"))` with their governance key, using the keyset's `key_scheme`: ECDSA secp256r1 (raw 64-byte `r‖s`) for scheme 0, ML-DSA-44 for scheme 1. These are the same HSM-held keys members use for on-chain actions (`registry_contract.md §3.6`).
 - **Thresholds.** `kind: "standard"` needs signatures from at least `GovernanceKeysets[PressRegistryBody].quorum` distinct keys (4 of 5 today). `kind: "emergency_retirement"` needs at least **2** (`EMERGENCY_RETIREMENT_THRESHOLD`, a protocol constant) and is valid only for a removal-only change (rule E below).
-- **Rule E (removal only).** Compared with the previous list, an emergency update has the same entries in the same order. Entries are matched by `pcr0` or `program_cid`. Every changed entry differs only by `retire_reason` becoming `"vulnerable"` and `retired_at` being added or moved earlier, and at least one entry changes. Anything else, including reversing an emergency retirement, needs `"standard"`.
+- **Rule E (removal only).** Compared with the previous list, an emergency update has the same entries in the same order, and (for the program allowlist) the same `single_operator_quorums` value. Entries are matched by `pcr0` or `program_cid`. Every changed entry differs only by `retire_reason` becoming `"vulnerable"` and `retired_at` being added or moved earlier, and at least one entry changes. Anything else, including reversing an emergency retirement, needs `"standard"`.
+- **`single_operator_quorums`** *(program allowlist only; added 2026-11-12)*. Whether jobs whose quorum one operator can reach alone (`notary_lifecycle.md` L4) may run. Absent means `"allowed"`, the bootstrap allowance for early deployment. When enough operators are active, the body sets it to `"refused"` by a standard update. An emergency update must carry the same value as the version it follows (rule E). Readers take the value from the verified head.
 - **Verification.** Algorithm L (`notary_lifecycle.md` Appendix A.5) verifies the approval of a list's head version. If the head is an emergency update, it also verifies the earlier versions back to the most recent standard one, so two members can't use an emergency update to approve a list that never reached the quorum.
 - **Key rotation.** An approval is valid only under the keyset version it names, and verifiers accept only the **current** version. After `RotateGovernanceKeys`, the body re-approves the unchanged head with a `"standard"` update under the new keyset. Members can sign it in advance, because they know the next version number. Until it is published, verifiers fail closed.
 

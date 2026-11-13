@@ -4,6 +4,7 @@
 **Date:** 2026-11-11  
 **Status:** Draft. Specified, not implemented.  
 **Architecture:** `ARCHITECTURE.md` ADR-013 · **Runtime:** `object_specs/notary_runtime.md` · **Processes:** `process_specs/notary_lifecycle.md`, `notary_replication_and_recovery.md`, `derived_card_revocation_propagation.md`
+**Amended 2026-11-12:** §8 snapshot entries carry head-event history and `sub_card_doc_cid`; per-card fetch shapes defined; policy, requester and list-card reads use per-card fetches. Source: `plans/notary-spec-wording-e31.md`, approved by David 2026-11-12.
 
 > **Terminology.** The notary host is a **nitropack** application, built on the same server framework as the press (which `press.md` calls "Nitro"). It runs on the parent EC2 instance of one or more **AWS Nitro Enclaves** enclaves, which run the notary runtime. See `ARCHITECTURE.md`, terminology note.
 
@@ -148,14 +149,14 @@ The host stores only ciphertexts, receipts and public objects. It never stores a
 
 - **Headers.** The host streams new Arbitrum One block headers to each enclave (`chain_headers`). On request (`fetch`) it supplies the headers that link to a wallet's `chain_ref`.
 - **Policy snapshots.** For each policy a live job depends on, the host builds and keeps current a snapshot. Relevant policies are the derived-card job's `source_policy`, and each `issued_under_template` policy in `contributor_predicate`. The snapshot contains:
-  - every `CardRegistered` and `CardHeadUpdated` under the policy, giving each card's address, current head CID and last press address;
-  - the `SubCardRegistrations` entries whose master card is in the set;
+  - every `CardRegistered` and `CardHeadUpdated` under the policy, giving each card's address, current head CID and last press address, and its head-event history `events: [{ cid, timestamp }]` (the block timestamp of each event, oldest first). Card checks use it for provenance and for authoritative revocation dates;
+  - the `SubCardRegistrations` entries whose master card is in the set, each with `master_card`, `sub_card`, `sub_card_doc_cid` and `active`;
   - the IPFS bytes of each current head.
 
-  It is sent as `policy_snapshot`, then `policy_updates` every `SNAPSHOT_REFRESH_SECONDS`.
+  It is sent as `policy_snapshot`, then `policy_updates` every `SNAPSHOT_REFRESH_SECONDS`. `policy_updates` entries also carry `timestamp`.
 - **Never filtered.** The host must send **every** update under the policy. It is never told which cards matter, and must not filter. That is what keeps the source card hidden (`derived_card_revocation_propagation.md` §2).
-- **Per-card fetches.** These are answered only for ancestors outside snapshotted policies, and for the disclosed fallback. The host can log them; they reveal issuers, not holders.
-- **List cards.** The host also supplies the two governance list cards' documents and log entries, which the runtime verifies against its pinned keys, including each version's member `list_approval` (algorithm L).
+- **Per-card fetches.** These are answered for ancestors outside snapshotted policies, for the disclosed fallback, for policy and requester reads (algorithm R; jobs are public), and for list cards. The host can log them; they reveal issuers, policies and requesters, not contributors. Shapes: `card_head:<address>` → RFC 8785 JSON `{ "head_cid", "events": [{ "cid", "timestamp" }] }`; `subcard:<address>` → `{ "master_card_address", "sub_card_doc_cid", "active" }`.
+- **List cards.** The runtime reads the two governance list cards through per-card fetches (`notary_runtime.md` §12) and verifies them against its pinned keys, including each version's member `list_approval` (algorithm L).
 
 ---
 

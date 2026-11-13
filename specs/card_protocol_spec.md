@@ -5,6 +5,7 @@
 **Status:** In Review
 **Changes from v0.3:** Corrected §3's keyring structure description and YubiKey recovery flow to describe wallet-service keyring storage and federation replication, replacing an earlier IPFS-based description (approved via CP-SPEC-2, `plans/wallet-service/spec-discrepancies.md` D-8; second passage found during the Phase 5 consistency pass).
 
+**Amended 2026-11-12 (notaries):** §9 Replication and close: single-operator quorums are a disclosed bootstrap allowance, retired by governance. Source: `plans/notary-spec-wording-e31.md`, approved by David 2026-11-12.
 **Amended 2026-11-11 (notaries, ADR-013):**
 - New §9 Notaries.
 - §1's protocol-defined policy fields gain `approved_notaries` and `notary`.
@@ -1418,6 +1419,7 @@ Today, any service that computes over members' signed data sees all of it. Membe
 - a job names a replica set (default three instances across availability zones) and `min_live`;
 - key handoff uses mutual attestation and is logged before the new replica acts;
 - a result needs a cosigning majority quorum;
+- a job whose quorum one operator can reach alone (a single-operator quorum) is allowed as a **bootstrap allowance**, for early deployment while few operators are active, and is disclosed: on the consent screen, and as the verifier warning `SINGLE_OPERATOR_QUORUM`. Such an operator could count contributors it invents (`notary_lifecycle.md` L4). As operators join, jobs are expected to use replicas from several operators, and governance retires the allowance (`single_operator_quorums`, `protocol-objects.md §34`);
 - close needs both chain time and enclave hardware time to pass `closes_at`;
 - a total loss starts a new, publicly logged epoch, and wallets resubmit their latest signed input automatically;
 - runtime upgrades move work while it runs:

@@ -124,6 +124,21 @@ These changes came from David's question about how enclave updates work. They cl
 
 New codes: `HANDOFF_COMPAT_MISMATCH`, `HANDOFF_KEY_EXPOSED`, `JOB_NOTARY_KEY_EXPOSED`, `NOT_NOTARY_KEY_EXPOSED`, `NOTARY_KEY_EXPOSED`, `NOTARY_LINEAGE_INCOMPLETE`. New warning: `notary_key_exposed_later`.
 
+## Added during Phase 5 (2026-11-12): enclave reads and the single-operator disclosure
+
+Approved by David as `plans/notary-spec-wording-e31.md` (errata E20, E21, E24, E25, E30, E31, E32 in `notary-questions-5.3.md`).
+
+| File | Change |
+|---|---|
+| `specs/process_specs/notary_lifecycle.md` | New Appendix A.7, **algorithm R** (policy and requester reads, over vsock only); step 17 and W3–W5 point to it. L4 and T7 restated: a single-operator quorum can count forged contributors. Consent disclosure (step 25). `SINGLE_OPERATOR_QUORUM` warning in algorithm N. W7 and a new error row `JOB_SINGLE_OPERATOR_REFUSED`. |
+| `specs/protocol-objects.md` §34 | `list_approval.single_operator_quorums` (program allowlist only); rule E keeps it unchanged in emergency updates |
+| `specs/object_specs/notary_runtime.md` | §9 `create_job` reads the policy through `fetch`; `genesis_ready` adds `request`, `notary_card`. §12 pins list-card public keys and reads history through `fetch`. §16 `CLOSE_NOT_DUE`. |
+| `specs/object_specs/notary_host.md` §8 | Snapshot event history and `sub_card_doc_cid`; per-card fetch shapes; policy, requester and list reads |
+| `specs/object_specs/card_verifier.md` §6.5 | Warnings add `notary_key_exposed_later` and `SINGLE_OPERATOR_QUORUM` |
+| `specs/object_specs/wallet_sdk.md` §7b.3 | `NotaryConsent.singleOperatorQuorum` and disclosure |
+| `specs/card_protocol_spec.md` §9 | Single-operator quorums are a disclosed bootstrap allowance, retired by governance |
+| `governance/PressRegistryBody/notary_certification.md` | New section "Retiring Single-Operator Quorums" |
+
 ## Decisions for David at CP3
 
 1. **Approve the spec text** (CP3).
