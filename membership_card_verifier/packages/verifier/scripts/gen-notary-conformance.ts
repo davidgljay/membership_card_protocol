@@ -17,7 +17,7 @@ import { ml_dsa44 } from "@noble/post-quantum/ml-dsa.js";
 import { sha256 } from "@noble/hashes/sha256";
 import { keccak_256, sha3_256 } from "@noble/hashes/sha3";
 import { hkdf } from "@noble/hashes/hkdf";
-import { b64uEncode, canonicalNotary, cidOfBytes, withoutFields, checkContributor } from "../dist/notary/index.js";
+import { b64uEncode, canonicalNotary, cidOfBytes, withoutFields, checkContributor, readPolicy, requesterAllowed } from "../dist/notary/index.js";
 import { canonicalize } from "../dist/canonicalize.js";
 
 const OUT = new URL("../../../../notary/vectors/cards/", import.meta.url);
@@ -207,6 +207,113 @@ const cases: Case[] = [
   { id: "b8_param_object_value", checks: ["B8.param"], mutate: (s) => { s.predicate = { chain_includes: { param: "who" } }; s.parameters = { who: K("P").addr }; } },
 ];
 
+// ---------------------------------------------------------------------------------------------------------------
+// Algorithm R (notary_lifecycle.md Appendix A.7): the policy at policy_state_cid, and the requester
+
+interface PSpec {
+  genesis: Record<string, unknown>;
+  /** Encrypt the genesis under the policy key instead of pinning it plain. */
+  genesisEncrypted?: boolean;
+  /** Replace the policy's head by a log entry (state change or revocation). */
+  head?: { entry: Record<string, unknown>; at: string; encrypted?: boolean };
+  /** Which document the job names as policy_state_cid: "genesis" (default), "head", or a literal CID. */
+  state?: string;
+  replicaCards: string[];
+  requester: string;
+  requesterDoc: Record<string, unknown>;
+  predicate: unknown;
+  parameters: Record<string, unknown>;
+  config: { trustedRoots: string[]; nowIso: string; maxChainDepth?: number };
+  post?: (w: World, ids: { policyId: string; registryGenesis: string }) => void;
+}
+
+const NC1 = "a".repeat(64), NC2 = "b".repeat(64), NC3 = "c".repeat(64);
+const NOTARY_SECTION = { mode: "aggregate", output_action: "statement", platform: "simulator", program_cid: "bafkreiprogram" };
+
+function pbase(): PSpec {
+  const [R, Y, Q] = ["R", "Y", "Q"].map(key);
+  return {
+    genesis: { ancestry_pubkeys: [R!.b64], approved_notaries: [NC1, NC2], issued_at: T_ISSUED, issuer_card: "x", notary: NOTARY_SECTION,
+      policy_id: "bafkreimetapolicy", recipient_pubkey: Y!.b64 },
+    replicaCards: [NC1, NC2], requester: "Q",
+    requesterDoc: { ancestry_pubkeys: [Y!.b64, R!.b64], issued_at: T_ISSUED, policy_id: "bafkreisource", recipient_pubkey: Q!.b64, role: "organizer" },
+    predicate: null, parameters: {},
+    config: { trustedRoots: [R!.addr], nowIso: NOW },
+  };
+}
+
+function pbuild(s: PSpec) {
+  const w: World = { cards: {}, subcards: {}, ipfs: {} };
+  const put = (bytes: Uint8Array) => { const cid = cidOfBytes(bytes); w.ipfs[cid] = b64uEncode(bytes); return cid; };
+  const Y = key("Y");
+  // policy_id: the plain snapshot verifiers read (card_verifier §7.5); the registry holds the card, encrypted (ADR-006)
+  const policyId = put(s.genesisEncrypted ? encrypt(Y, s.genesis, "policy-genesis-snapshot") : canonicalNotary(s.genesis));
+  const genesisCid = put(encrypt(Y, s.genesis, "policy-genesis-registry"));
+  const events = [{ cid: genesisCid, timestamp: T_ISSUED }];
+  let head = genesisCid;
+  if (s.head) {
+    const entry = { ...s.head.entry, history: [genesisCid] };
+    head = put(s.head.encrypted ? encrypt(Y, entry, `policy-head-${JSON.stringify(entry)}`) : canonicalNotary(entry));
+    events.push({ cid: head, timestamp: s.head.at });
+  }
+  w.cards[Y.addr] = { log_head_cid: head, policy_address: "0xmeta", last_press_address: "0xpress", events };
+  const Q = key(s.requester);
+  if (s.requester !== "Y") {
+    const rq = put(encrypt(Q, s.requesterDoc, `requester-${JSON.stringify(s.requesterDoc)}`));
+    w.cards[Q.addr] = { log_head_cid: rq, policy_address: "0xpolicy", last_press_address: "0xpress", events: [{ cid: rq, timestamp: T_ISSUED }] };
+  }
+  let stateCid = s.state === undefined || s.state === "genesis" ? genesisCid : s.state === "head" ? head : s.state;
+  if (s.state === "orphan") stateCid = put(canonicalNotary({ ...s.genesis, display_name: "a state the registry never had" }));
+  s.post?.(w, { policyId, registryGenesis: genesisCid });
+  const job = { parameters: s.parameters, requester_card: Q.addr, requester_pubkey: Q.b64 };
+  return { world: w, policyId, stateCid, job };
+}
+
+const fieldUpdate = (state: Record<string, unknown>) => ({ card_state: state, code: 301, entry_type: "field_update", prev_log_root: "x", version: 1 });
+
+const pcases: { id: string; checks: string[]; mutate: (s: PSpec) => void }[] = [
+  { id: "r_ok", checks: ["*"], mutate: () => {} },
+  { id: "r_state_is_current_head", checks: ["R2.history"], mutate: (s) => { s.head = { entry: fieldUpdate({ display_name: "Club" }), at: "2027-01-01T00:00:00.000Z" }; s.state = "head"; } },
+  { id: "r_head_updated_elsewhere_ok", checks: ["R2.unchanged"], mutate: (s) => { s.head = { entry: fieldUpdate({ display_name: "Club" }), at: "2027-01-01T00:00:00.000Z" }; } },
+  { id: "r_state_not_in_history", checks: ["R2.history"], mutate: (s) => { s.state = "orphan"; } },
+  { id: "r_state_missing", checks: ["R1.fetch"], mutate: (s) => { s.state = "bafkreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"; } },
+  { id: "r_notary_changed_at_head", checks: ["R2.unchanged"], mutate: (s) => { s.head = { entry: fieldUpdate({ notary: { ...NOTARY_SECTION, program_cid: "bafkreiother" } }), at: "2027-01-01T00:00:00.000Z" }; } },
+  { id: "r_approved_changed_at_head", checks: ["R2.unchanged"], mutate: (s) => { s.head = { entry: fieldUpdate({ approved_notaries: [NC1] }), at: "2027-01-01T00:00:00.000Z" }; } },
+  { id: "r_encrypted_head_ok", checks: ["R1.encrypted"], mutate: (s) => { s.head = { entry: fieldUpdate({ display_name: "Club" }), at: "2027-01-01T00:00:00.000Z", encrypted: true }; s.state = "head"; } },
+  { id: "r_genesis_encrypted", checks: ["R1.genesis_plain"], mutate: (s) => { s.genesisEncrypted = true; } },
+  { id: "r_genesis_missing", checks: ["R1.fetch"], mutate: (s) => { s.post = (w, ids) => { delete w.ipfs[ids.policyId]; }; } },
+  { id: "r_genesis_bytes_not_cid", checks: ["R1.cid_check"], mutate: (s) => { s.post = (w, ids) => { w.ipfs[ids.policyId] = b64uEncode(canonicalNotary({ ...s.genesis, approved_notaries: [NC1, NC2, NC3] })); }; } },
+  { id: "r_not_registered", checks: ["R2.registered"], mutate: (s) => { s.post = (w) => { delete w.cards[key("Y").addr]; }; } },
+  { id: "r_no_trusted_root", checks: ["R3.root"], mutate: (s) => { s.config.trustedRoots = []; } },
+  { id: "r_policy_revoked", checks: ["R3.revocation"], mutate: (s) => { s.head = { entry: { card_state: {}, code: 910, entry_type: "revocation", prev_log_root: "x", revocation: { effective_date: "2027-02-01T00:00:00.000Z" }, version: 1 }, at: "2027-02-01T00:00:00.000Z" }; } },
+  { id: "r_replica_not_approved", checks: ["R4"], mutate: (s) => { s.replicaCards = [NC1, NC3]; } },
+  // R5: requester
+  { id: "r5_holder_ok", checks: ["R5.is_holder"], mutate: (s) => { s.requester = "Y"; s.requesterDoc = { ...s.genesis }; s.predicate = { is_holder: true }; } },
+  { id: "r5_not_holder", checks: ["R5.is_holder"], mutate: (s) => { s.predicate = { is_holder: true }; } },
+  { id: "r5_field_ok", checks: ["R5.predicate"], mutate: (s) => { s.predicate = { card_field_matches: { field: "role", regex: "organizer|admin", template: "bafkreisource" } }; } },
+  { id: "r5_field_no", checks: ["R5.predicate"], mutate: (s) => { s.predicate = { card_field_matches: { field: "role", regex: "admin", template: "bafkreisource" } }; } },
+  { id: "r5_param_ok", checks: ["R5.param"], mutate: (s) => { s.predicate = { issued_under_template: { param: "p" } }; s.parameters = { p: "bafkreisource" }; } },
+  { id: "r5_requester_untrusted", checks: ["R5.chain"], mutate: (s) => { s.predicate = { issued_under_template: "bafkreisource" }; s.requesterDoc = { ...s.requesterDoc, ancestry_pubkeys: [key("X").b64] }; } },
+];
+
+async function policyCases() {
+  const out = [];
+  for (const c of pcases) {
+    const spec = pbase();
+    c.mutate(spec);
+    const { world, policyId, stateCid, job } = pbuild(spec);
+    const r = await readPolicy({ policyId, stateCid, replicaCards: spec.replicaCards, world, config: spec.config });
+    let expect: Record<string, unknown>;
+    if (!r.ok) expect = { ok: false, code: r.code };
+    else {
+      expect = { ok: true, policy_address: r.policyAddress, notary: r.notary, approved_notaries: r.approvedNotaries };
+      if (spec.predicate !== null) expect["requester_allowed"] = await requesterAllowed({ job, predicate: spec.predicate, policyAddress: r.policyAddress, world, config: spec.config });
+    }
+    out.push({ id: c.id, checks: c.checks, config: spec.config, policy_id: policyId, policy_state_cid: stateCid, replica_cards: spec.replicaCards, job, predicate: spec.predicate, world, expect });
+  }
+  return out;
+}
+
 async function main() {
   const out = [];
   for (const c of cases) {
@@ -225,7 +332,9 @@ async function main() {
       return [ch, { accept: ["ok", ...ids.filter((o) => o.expect.ok).map((o) => o.id)], reject: ids.filter((o) => !o.expect.ok).map((o) => o.id) }];
     })),
   };
+  const pout = await policyCases();
   const files: Record<string, string> = {
+    "policy_cases.json": JSON.stringify({ about: "Algorithm R (notary_lifecycle.md Appendix A.7), judged by the TypeScript verifier (readPolicy, requesterAllowed). Generated by gen-notary-conformance.ts; do not edit.", cases: pout }, null, 1) + "\n",
     "cases.json": JSON.stringify({ about: "Contributor checks B5–B8 (notary_lifecycle.md Appendix B), judged by the TypeScript verifier (checkContributor). Generated by membership_card_verifier/packages/verifier/scripts/gen-notary-conformance.ts; do not edit.", cases: out }, null, 1) + "\n",
     "coverage.json": JSON.stringify(coverage, null, 1) + "\n",
   };
@@ -242,6 +351,6 @@ async function main() {
   }
   for (const [ch, v] of Object.entries(coverage.checks)) if (v.reject.length === 0 && ch !== "root_key") { console.error(`coverage: ${ch} has no rejecting case`); stale = true; }
   if (stale) process.exit(1);
-  console.log(`${check ? "checked" : "wrote"} ${out.length} cases, ${allChecks.length} checks`);
+  console.log(`${check ? "checked" : "wrote"} ${out.length} contributor cases, ${allChecks.length} checks, ${pout.length} policy cases`);
 }
 await main();

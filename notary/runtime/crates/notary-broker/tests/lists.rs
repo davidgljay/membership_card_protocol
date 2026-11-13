@@ -51,10 +51,18 @@ fn runtime(pcr: u8, retired: Option<(&str, &str)>) -> Value {
 
 #[allow(clippy::too_many_arguments)]
 fn approval(m: &Members, value: &Value, version: u64, prev: Option<&Value>, kind: &str, gov: u32, signer_idx: &[usize], list: &str) -> String {
+    approval_sw(m, value, version, prev, kind, gov, signer_idx, list, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn approval_sw(m: &Members, value: &Value, version: u64, prev: Option<&Value>, kind: &str, gov: u32, signer_idx: &[usize], list: &str, switch: Option<&str>) -> String {
     let mut a = json!({ "governance_version": gov, "kind": kind, "list": list, "list_card": RT_CARD,
         "list_hash": jcs::h(value).unwrap(), "list_version": version, "signatures": [], "type": "notary_list_approval" });
     if let Some(p) = prev {
         a["prev_list_hash"] = json!(jcs::h(p).unwrap());
+    }
+    if let Some(sw) = switch {
+        a["single_operator_quorums"] = json!(sw);
     }
     let d = approval_digest(&a).unwrap();
     a["signatures"] = Value::Array(signer_idx.iter().map(|i| json!({ "key_index": i, "signature": b64u::encode(&m.signers[*i].sign(&d)) })).collect());
@@ -65,7 +73,7 @@ fn ver(value: Value, approval: Option<String>) -> ListVersion {
     ListVersion { value, approval_text: approval }
 }
 
-fn cases() -> Vec<(&'static str, Keyset, Vec<ListVersion>, Result<u64, &'static str>)> {
+fn cases() -> Vec<(&'static str, &'static str, Keyset, Vec<ListVersion>, Result<(u64, &'static str), &'static str>)> {
     let e = members(0, 8);
     let m = members(1, 3);
     let l = "accepted_runtimes";
@@ -77,55 +85,75 @@ fn cases() -> Vec<(&'static str, Keyset, Vec<ListVersion>, Result<u64, &'static 
     let v1_later = json!([runtime(1, Some(("2026-09-01T00:00:00Z", "vulnerable"))), runtime(2, None)]);
     let all = [0, 1, 2, 3];
     let mut out = vec![];
-    out.push(("standard_v1_ecdsa_ok", e.keyset.clone(), vec![ver(v1.clone(), Some(approval(&e, &v1, 1, None, "standard", 8, &all, l)))], Ok(1)));
-    out.push((
-        "standard_v2_mldsa_ok",
+    out.push(("standard_v1_ecdsa_ok", "accepted_runtimes", e.keyset.clone(), vec![ver(v1.clone(), Some(approval(&e, &v1, 1, None, "standard", 8, &all, l)))], Ok((1, "allowed"))));
+    out.push(("standard_v2_mldsa_ok", "accepted_runtimes",
         m.keyset.clone(),
         vec![ver(v1.clone(), Some(approval(&m, &v1, 1, None, "standard", 3, &all, l))), ver(v2.clone(), Some(approval(&m, &v2, 2, Some(&v1), "standard", 3, &[1, 2, 3, 4], l)))],
-        Ok(2),
+        Ok((2, "allowed")),
     ));
-    out.push(("missing", e.keyset.clone(), vec![ver(v1.clone(), None)], Err("LIST_APPROVAL_MISSING")));
-    out.push(("malformed_wrong_list", e.keyset.clone(), vec![ver(v1.clone(), Some(approval(&e, &v1, 1, None, "standard", 8, &all, "program_allowlist")))], Err("LIST_APPROVAL_MALFORMED")));
-    out.push(("hash_mismatch_list_changed", e.keyset.clone(), vec![ver(v2.clone(), Some(approval(&e, &v1, 1, None, "standard", 8, &all, l)))], Err("LIST_APPROVAL_HASH_MISMATCH")));
-    out.push((
-        "hash_mismatch_version_gap",
+    out.push(("missing", "accepted_runtimes", e.keyset.clone(), vec![ver(v1.clone(), None)], Err("LIST_APPROVAL_MISSING")));
+    out.push(("malformed_wrong_list", "accepted_runtimes", e.keyset.clone(), vec![ver(v1.clone(), Some(approval(&e, &v1, 1, None, "standard", 8, &all, "program_allowlist")))], Err("LIST_APPROVAL_MALFORMED")));
+    out.push(("hash_mismatch_list_changed", "accepted_runtimes", e.keyset.clone(), vec![ver(v2.clone(), Some(approval(&e, &v1, 1, None, "standard", 8, &all, l)))], Err("LIST_APPROVAL_HASH_MISMATCH")));
+    out.push(("hash_mismatch_version_gap", "accepted_runtimes",
         e.keyset.clone(),
         vec![ver(v1.clone(), Some(approval(&e, &v1, 1, None, "standard", 8, &all, l))), ver(v2.clone(), Some(approval(&e, &v2, 3, Some(&v1), "standard", 8, &all, l)))],
         Err("LIST_APPROVAL_HASH_MISMATCH"),
     ));
-    out.push(("keyset_stale", e.keyset.clone(), vec![ver(v1.clone(), Some(approval(&e, &v1, 1, None, "standard", 7, &all, l)))], Err("LIST_APPROVAL_KEYSET_STALE")));
-    out.push(("threshold_three_of_four", e.keyset.clone(), vec![ver(v1.clone(), Some(approval(&e, &v1, 1, None, "standard", 8, &[0, 1, 2], l)))], Err("LIST_APPROVAL_THRESHOLD")));
-    out.push(("threshold_duplicate_signer", e.keyset.clone(), vec![ver(v1.clone(), Some(approval(&e, &v1, 1, None, "standard", 8, &[0, 0, 1, 1], l)))], Err("LIST_APPROVAL_THRESHOLD")));
+    out.push(("keyset_stale", "accepted_runtimes", e.keyset.clone(), vec![ver(v1.clone(), Some(approval(&e, &v1, 1, None, "standard", 7, &all, l)))], Err("LIST_APPROVAL_KEYSET_STALE")));
+    out.push(("threshold_three_of_four", "accepted_runtimes", e.keyset.clone(), vec![ver(v1.clone(), Some(approval(&e, &v1, 1, None, "standard", 8, &[0, 1, 2], l)))], Err("LIST_APPROVAL_THRESHOLD")));
+    out.push(("threshold_duplicate_signer", "accepted_runtimes", e.keyset.clone(), vec![ver(v1.clone(), Some(approval(&e, &v1, 1, None, "standard", 8, &[0, 0, 1, 1], l)))], Err("LIST_APPROVAL_THRESHOLD")));
     let std_v1 = approval(&e, &v2, 1, None, "standard", 8, &all, l);
-    out.push((
-        "emergency_two_of_five_ok",
+    out.push(("emergency_two_of_five_ok", "accepted_runtimes",
         e.keyset.clone(),
         vec![ver(v2.clone(), Some(std_v1.clone())), ver(v2_retired.clone(), Some(approval(&e, &v2_retired, 2, Some(&v2), "emergency_retirement", 8, &[3, 4], l)))],
-        Ok(2),
+        Ok((2, "allowed")),
     ));
-    out.push((
-        "emergency_adds_entry",
+    out.push(("emergency_adds_entry", "accepted_runtimes",
         e.keyset.clone(),
         vec![ver(v2.clone(), Some(std_v1.clone())), ver(v2_added.clone(), Some(approval(&e, &v2_added, 2, Some(&v2), "emergency_retirement", 8, &[3, 4], l)))],
         Err("LIST_APPROVAL_NOT_REMOVAL_ONLY"),
     ));
-    out.push((
-        "emergency_over_unapproved_version",
+    out.push(("emergency_over_unapproved_version", "accepted_runtimes",
         e.keyset.clone(),
         vec![ver(v2.clone(), Some(approval(&e, &v2, 1, None, "standard", 8, &[0, 1], l))), ver(v2_retired.clone(), Some(approval(&e, &v2_retired, 2, Some(&v2), "emergency_retirement", 8, &[3, 4], l)))],
         Err("LIST_APPROVAL_THRESHOLD"),
     ));
-    out.push((
-        "emergency_moves_retirement_later",
+    out.push(("emergency_moves_retirement_later", "accepted_runtimes",
         e.keyset.clone(),
         vec![ver(v1_late.clone(), Some(approval(&e, &v1_late, 1, None, "standard", 8, &all, l))), ver(v1_later.clone(), Some(approval(&e, &v1_later, 2, Some(&v1_late), "emergency_retirement", 8, &[3, 4], l)))],
         Err("LIST_APPROVAL_NOT_REMOVAL_ONLY"),
     ));
-    out.push((
-        "emergency_one_signature",
+    out.push(("emergency_one_signature", "accepted_runtimes",
         e.keyset.clone(),
         vec![ver(v2.clone(), Some(std_v1)), ver(v2_retired.clone(), Some(approval(&e, &v2_retired, 2, Some(&v2), "emergency_retirement", 8, &[4], l)))],
         Err("LIST_APPROVAL_THRESHOLD"),
+    ));
+    // single_operator_quorums (program allowlist only; §34, 2026-11-12)
+    let pl = "program_allowlist";
+    let prog = |cid: &str, retired: Option<(&str, &str)>| {
+        let mut e = json!({ "accepted_from": "2026-01-01T00:00:00Z", "audit_report_cid": "bafkreia", "name": "t", "program_cid": cid, "source_commit": "c", "toolchain": "r", "version": "1" });
+        if let Some((at, why)) = retired { e["retired_at"] = json!(at); e["retire_reason"] = json!(why); }
+        e
+    };
+    let p1 = json!([prog("bafkreiprogone", None)]);
+    let p2 = json!([prog("bafkreiprogone", Some(("2026-06-01T00:00:00Z", "vulnerable")))]);
+    out.push(("switch_absent_means_allowed", pl, e.keyset.clone(), vec![ver(p1.clone(), Some(approval_sw(&e, &p1, 1, None, "standard", 8, &all, pl, None)))], Ok((1, "allowed"))));
+    out.push(("switch_refused", pl, e.keyset.clone(), vec![ver(p1.clone(), Some(approval_sw(&e, &p1, 1, None, "standard", 8, &all, pl, Some("refused"))))], Ok((1, "refused"))));
+    out.push(("switch_bad_value", pl, e.keyset.clone(), vec![ver(p1.clone(), Some(approval_sw(&e, &p1, 1, None, "standard", 8, &all, pl, Some("maybe"))))], Err("LIST_APPROVAL_MALFORMED")));
+    out.push(("switch_on_runtime_list", "accepted_runtimes", e.keyset.clone(), vec![ver(v1.clone(), Some(approval_sw(&e, &v1, 1, None, "standard", 8, &all, l, Some("refused"))))], Err("LIST_APPROVAL_MALFORMED")));
+    out.push((
+        "switch_kept_by_emergency",
+        pl,
+        e.keyset.clone(),
+        vec![ver(p1.clone(), Some(approval_sw(&e, &p1, 1, None, "standard", 8, &all, pl, Some("refused")))), ver(p2.clone(), Some(approval_sw(&e, &p2, 2, Some(&p1), "emergency_retirement", 8, &[3, 4], pl, Some("refused"))))],
+        Ok((2, "refused")),
+    ));
+    out.push((
+        "switch_flipped_by_emergency",
+        pl,
+        e.keyset.clone(),
+        vec![ver(p1.clone(), Some(approval_sw(&e, &p1, 1, None, "standard", 8, &all, pl, Some("refused")))), ver(p2.clone(), Some(approval_sw(&e, &p2, 2, Some(&p1), "emergency_retirement", 8, &[3, 4], pl, Some("allowed"))))],
+        Err("LIST_APPROVAL_NOT_REMOVAL_ONLY"),
     ));
     out
 }
@@ -152,10 +180,10 @@ fn write_vectors_and_judge_them() {
     if std::env::var("NOTARY_WRITE_VECTORS").is_ok() {
         let cs: Vec<Value> = cases()
             .into_iter()
-            .map(|(id, k, h, want)| {
-                json!({ "id": id, "list": "accepted_runtimes", "list_card": RT_CARD, "keyset": keyset_json(&k),
+            .map(|(id, list, k, h, want)| {
+                json!({ "id": id, "list": list, "list_card": RT_CARD, "keyset": keyset_json(&k),
                     "history": h.iter().map(|v| json!({ "value": v.value, "approval_text": v.approval_text })).collect::<Vec<_>>(),
-                    "expect": match want { Ok(v) => json!({ "ok": true, "list_version": v }), Err(c) => json!({ "ok": false, "code": c }) } })
+                    "expect": match want { Ok((v, sw)) => json!({ "ok": true, "list_version": v, "single_operator_quorums": sw }), Err(c) => json!({ "ok": false, "code": c }) } })
             })
             .collect();
         let out = json!({ "about": "Algorithm L (notary_lifecycle.md A.5): Rust-produced list histories with member signatures. Rust (notary-broker) and TypeScript (verifier lists.ts) must agree.", "cases": cs });
@@ -164,7 +192,7 @@ fn write_vectors_and_judge_them() {
     }
     let v: Value = serde_json::from_str(&std::fs::read_to_string(path()).expect("vectors/lists/cases.json")).unwrap();
     let cs = v["cases"].as_array().unwrap();
-    assert!(cs.len() >= 14);
+    assert!(cs.len() >= 20);
     for c in cs {
         let hist: Vec<ListVersion> = c["history"]
             .as_array()
@@ -172,10 +200,11 @@ fn write_vectors_and_judge_them() {
             .iter()
             .map(|h| ListVersion { value: h["value"].clone(), approval_text: h["approval_text"].as_str().map(String::from) })
             .collect();
-        let got = verify_list_approval(ListKind::AcceptedRuntimes, c["list_card"].as_str().unwrap(), &hist, &keyset_from(&c["keyset"]));
+        let kind = if c["list"] == "program_allowlist" { ListKind::ProgramAllowlist } else { ListKind::AcceptedRuntimes };
+        let got = verify_list_approval(kind, c["list_card"].as_str().unwrap(), &hist, &keyset_from(&c["keyset"]));
         let want = &c["expect"];
         match got {
-            Ok((_, version)) => assert_eq!(want, &json!({ "ok": true, "list_version": version }), "{}", c["id"]),
+            Ok(v) => assert_eq!(want, &json!({ "ok": true, "list_version": v.version, "single_operator_quorums": if v.single_operator_quorums_refused { "refused" } else { "allowed" } }), "{}", c["id"]),
             Err(code) => assert_eq!(want, &json!({ "ok": false, "code": code }), "{}", c["id"]),
         }
     }

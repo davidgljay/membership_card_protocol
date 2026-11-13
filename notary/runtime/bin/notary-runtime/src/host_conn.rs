@@ -4,7 +4,7 @@
 //! `fetch_result`; any other message read meanwhile is queued and handled afterwards, in arrival order.
 use crate::process_workers::ProcessWorkers;
 use notary_broker::{
-    cards_oracle::{CardPins, SnapshotOracle},
+    cards_oracle::{CardPins, ListCardPin, SnapshotOracle},
     env::{HostIo, Platform},
     lists::{Keyset, Pins},
     Broker,
@@ -64,6 +64,18 @@ fn load_pins(path: &str) -> Result<(Pins, CardPins, Vec<u8>), String> {
         app_certification_root: v["app_certification_root"].as_str().ok_or("pins: app_certification_root")?.into(),
         login_service_root: v["login_service_root"].as_str().ok_or("pins: login_service_root")?.into(),
         max_chain_depth: v["max_chain_depth"].as_u64().unwrap_or(64) as usize,
+        list_cards: [("accepted_runtimes", "accepted_runtimes_card", "accepted_runtimes_card_key"), ("program_allowlist", "program_allowlist_card", "program_allowlist_card_key")]
+            .iter()
+            .map(|(field, a, k)| -> Result<ListCardPin, String> {
+                Ok(ListCardPin {
+                    address: v[*a].as_str().ok_or(format!("pins: {a}"))?.into(),
+                    public_key: b64u::decode(v[*k].as_str().ok_or(format!("pins: {k}"))?).map_err(|_| format!("pins: {k}"))?,
+                    field: (*field).into(),
+                })
+            })
+            .collect::<Result<_, _>>()?,
+        list_holder_key: b64u::decode(v["list_holder_key"].as_str().ok_or("pins: list_holder_key")?).map_err(|_| "pins: list_holder_key")?,
+        list_press_key: b64u::decode(v["list_press_key"].as_str().ok_or("pins: list_press_key")?).map_err(|_| "pins: list_press_key")?,
     };
     Ok((pins, cards, root))
 }

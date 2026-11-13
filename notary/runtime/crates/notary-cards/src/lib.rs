@@ -13,6 +13,8 @@
 //! Card documents come from a `CardSource` (registry entries + IPFS objects): in the vectors a JSON world, in the enclave
 //! the input's `evidence` and the host's whole-policy snapshots.
 pub mod contributor;
+pub mod lists_read;
+pub mod policy;
 pub mod predicates;
 pub mod stages;
 pub mod support;

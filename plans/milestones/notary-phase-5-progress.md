@@ -189,3 +189,35 @@ Decisions: **E28** (a TypeScript predicate evaluator is the reference), **E29** 
 - **5.6:** the capacity benchmark. Input checking can now be measured in isolation (`notary-cards`), but an end-to-end measurement needs E31.
 - **§7.5 mechanism 4 (nightly differential fuzzing):** not built.
 - **The press's predicate stub** (CP10 report in `notary-questions-5.3.md`): reported, not fixed.
+
+
+---
+
+## E31 implementation (Opus, 2026-11-12)
+
+The approved spec wording (`notary-spec-wording-e31.md`) is now implemented. Nothing committed.
+
+**Built:**
+- Algorithm R, in TypeScript (`readPolicy`, `requesterAllowed`) and Rust (`notary-cards::policy`), with 21 generated cases that Rust agrees on.
+- List-history reads over `fetch` (`notary-cards::lists_read`), checking press signatures, `prev_log_root` and the holder intent signer (E33), with pinned list-card keys.
+- `single_operator_quorums` in `list_approval`, plus rule E, in both languages; 6 new list vectors.
+- Single-operator detection, the `SINGLE_OPERATOR_QUORUM` warning in N, the wallet's consent flag, disclosure and W7 refusal, and the enclave's step-17 refusal, which fails closed on unknown operators (E34).
+- The runtime's `SnapshotOracle` now serves policy, requester and list reads, so the binary can open jobs given real card data.
+- The CI vector check also runs the algorithm R conformance.
+
+**Tested** (all run after the last change):
+
+| Command | Result |
+|---|---|
+| `cargo test --workspace` in `notary/` | 79 passed, 0 failed |
+| `notary/scripts/check-card-vectors.sh` | up to date; Rust agrees on all contributor and policy cases |
+| `notary/scripts/check-aws-isolation.sh` | OK |
+| verifier `pnpm test` | 257 passed |
+| wallet-sdk `pnpm test` (after `pnpm install --force` refresh of `file:` copies) | 235 passed, 1 todo; 4 consecutive clean runs. A flaky assertion was fixed (see `notary-questions-5.3.md`). |
+| `notary/host`, `notary/vectors-tools`, `notary/attestation-ts` | 69, 43, 91 passed |
+
+**E34 resolved (drop the enclave check; verifiers reject after the switch).** **Open:** E33 (LogEntry intent payload; suggested as a separate protocol-wide decision), E26 (first identity-log record), E27 (native x86_64 sandbox run). **Next:** 5.5 end-to-end in compose: the host's header-streaming, snapshot-refresh, list and close schedulers, the runtime pins file for the simulator stack, and the run itself. Then 5.6.
+
+**After E34 (2026-11-12):** Rust 79 passed; verifier 257; wallet 235 + 1 todo; host 69; vector tools 43; attestation 92; card-vector and AWS-isolation checks pass.
+
+**Batch 2 approved and applied (2026-11-12).** `plans/notary-spec-wording-batch2.md` is in the specs: E1, E2, E3, E6, E7, E10–E18 and E26. E26 is implemented (identity-log `seq` 0 written at countersign, jobs gated on its anchor, algorithm E requires it). E33 moved to a separate protocol-wide question. **E35 approved and applied.** **Open:** E27 (native x86_64 sandbox run). **Next:** 5.5 end to end, then 5.6.

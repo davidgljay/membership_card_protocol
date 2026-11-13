@@ -6,7 +6,7 @@
  *
  * 1. **Lineage.** The PCR0 of the genesis attestation, plus `pcr0_to` of every `identity`-scope handoff record in
  *    the card's identity log. The log is found through its EAS anchors (`anchors(cardAddress)`), and walked to
- *    seq 0: a missing seq, a fork (two different records anchored for one seq), a broken `prev` link, or a record
+ *    seq 0, which must be the `opened` record naming the card's `genesis_attestation` (erratum E26): a missing seq, a fork (two different records anchored for one seq), a broken `prev` link, or a record
  *    that fails its checks → `NOTARY_LINEAGE_INCOMPLETE`.
  * 2. **Exposure time** `t_x`: the earliest `retired_at` among lineage entries retired with `retire_reason:
  *    "vulnerable"` on the (algorithm-L-verified) accepted-runtime list. None → not exposed.
@@ -37,13 +37,13 @@ const verifySig = (pub: string, msg: Uint8Array, sig: string) => {
 };
 
 /** Step 1: the set of PCR0s (base64url) the card's keys have lived in. */
-export async function keyLineage(o: { card: string; kIdPubkey: string; genesisPcr0: Uint8Array; reads: ExposureReads }): Promise<Lineage> {
+export async function keyLineage(o: { card: string; kIdPubkey: string; genesisPcr0: Uint8Array; genesisAttestation: string; reads: ExposureReads }): Promise<Lineage> {
   const incomplete = (reason: string): Lineage => ({ ok: false, code: "NOTARY_LINEAGE_INCOMPLETE", reason });
   const pcr0s = new Set<string>([b64uEncode(o.genesisPcr0)]);
   const anchors = await o.reads.anchors(o.card);
   const bySeq = new Map<number, Set<string>>();
   for (const a of anchors) { const s = bySeq.get(a.seq) ?? new Set<string>(); s.add(a.record_cid); bySeq.set(a.seq, s); }
-  if (bySeq.size === 0) return { ok: true, pcr0s }; // no handoff yet: only the genesis runtime
+  if (bySeq.size === 0) return incomplete("no anchored identity-log record: seq 0 (opened) is required");
   const max = Math.max(...bySeq.keys());
   let prevCid: string | undefined;
   for (let seq = 0; seq <= max; seq++) {
@@ -65,6 +65,10 @@ export async function keyLineage(o: { card: string; kIdPubkey: string; genesisPc
     let ok = rec.notary_signature.public_key === o.kIdPubkey && verifySig(o.kIdPubkey, unsigned, rec.notary_signature.signature);
     try { ok = ok && rec.instance === b64uEncode(sha256(b64uDecode(rec.instance_signature.public_key, 1312))) && verifySig(rec.instance_signature.public_key, unsigned, rec.instance_signature.signature); } catch { ok = false; }
     if (!ok) return incomplete(`record ${seq} signatures do not verify`);
+    if (seq === 0) {
+      const att = (rec.body as { attestations?: unknown }).attestations;
+      if (rec.kind !== "opened" || !Array.isArray(att) || att.length !== 1 || att[0] !== o.genesisAttestation) return incomplete("record 0 is not the opened record naming the genesis attestation");
+    }
     if (rec.kind === "handoff") {
       const body = rec.body as { scope?: string; pcr0_to?: string };
       if (body.scope === "identity" && typeof body.pcr0_to === "string") {
@@ -99,13 +103,13 @@ export function judgeItem(tx: number | undefined, tMs: number): "none" | "expose
 export function makeKeyExposureRead(o: {
   reads: ExposureReads;
   accepted: AcceptedRuntime[];
-  /** The card's K_id (`recipient_pubkey`) and the PCR0 of its genesis attestation (from algorithm G / V). */
-  card: (pointer: string) => Promise<{ kIdPubkey: string; genesisPcr0: Uint8Array } | null>;
+  /** The card's K_id (`recipient_pubkey`), the PCR0 of its genesis attestation (from algorithm G / V), and that attestation's CID. */
+  card: (pointer: string) => Promise<{ kIdPubkey: string; genesisPcr0: Uint8Array; genesisAttestation: string } | null>;
 }): (pointer: string, tMs: number) => Promise<"none" | "exposed" | "later" | "lineage_incomplete"> {
   return async (pointer, tMs) => {
     const c = await o.card(pointer);
     if (!c) return "lineage_incomplete";
-    const l = await keyLineage({ card: pointer, kIdPubkey: c.kIdPubkey, genesisPcr0: c.genesisPcr0, reads: o.reads });
+    const l = await keyLineage({ card: pointer, kIdPubkey: c.kIdPubkey, genesisPcr0: c.genesisPcr0, genesisAttestation: c.genesisAttestation, reads: o.reads });
     if (!l.ok) return "lineage_incomplete";
     return judgeItem(exposureTime(l.pcr0s, o.accepted), tMs);
   };

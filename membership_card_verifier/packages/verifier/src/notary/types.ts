@@ -125,6 +125,8 @@ export interface ListApproval {
   type: "notary_list_approval"; list: "accepted_runtimes" | "program_allowlist"; list_card: CardPointer;
   list_version: number; list_hash: Base64Url; prev_list_hash?: Base64Url; kind: "standard" | "emergency_retirement";
   governance_version: number; signatures: { key_index: number; signature: Base64Url }[];
+  /** Program allowlist only; absent means "allowed" (protocol-objects.md §34, 2026-11-12). */
+  single_operator_quorums?: "allowed" | "refused";
 }
 
 // ---- AttestationVerifier (notary_runtime.md §5) --------------------------------------------
@@ -173,7 +175,7 @@ export const OBJECT_FIELDS: Record<string, FieldSpec> = {
   "notary.heartbeat.v1": { required: ["chain_head", "instance", "instance_signature", "jobs", "list_versions", "peers_seen", "seq", "type"], optional: ["identity_state_version"] },
   "notary.state_blob.v1": { required: ["at", "body_cid", "body_hash", "notary_card", "notary_signature", "type", "version"], optional: ["prev_hash"] },
   "notary.propagation_batch.v1": { required: ["batch_seq", "chain_payload", "chain_signature", "entries", "notary_card", "policy_id", "release_not_before", "type"] },
-  "notary_list_approval": { required: ["governance_version", "kind", "list", "list_card", "list_hash", "list_version", "signatures", "type"], optional: ["prev_list_hash"] },
+  "notary_list_approval": { required: ["governance_version", "kind", "list", "list_card", "list_hash", "list_version", "signatures", "type"], optional: ["prev_list_hash", "single_operator_quorums"] },
 };
 
 /** Reject an object whose `type` is not the expected one or whose top-level fields are not exactly the table's. */

@@ -18,9 +18,11 @@
 
 **Changelog (2026-11-11, notaries, ADR-013):** new `VerifierConfig.notary` (§5); new entry point `verifyNotarization` (§6.5); Stage 4 enforces the optional `expires_at` card field (step 5a); Stage 5 adds notary-issued (derived) card checks (step 3a); new error codes `NOTARY_GENESIS_INVALID`, `NOTARY_DERIVED_SHAPE`, `NOTARY_CONFIG_MISSING`.
 
-**Changelog (2026-11-12, notaries, E31/E32):** `NotarizationVerificationResult.warnings` adds `notary_key_exposed_later` (already returned by algorithm N) and `SINGLE_OPERATOR_QUORUM`.
+**Changelog (2026-11-12, notaries, E31/E32/E34):** `NotarizationVerificationResult.warnings` adds `notary_key_exposed_later` (already returned by algorithm N) and `SINGLE_OPERATOR_QUORUM`. A single-operator notarization closed at or after governance retired the allowance is rejected (`NOT_SINGLE_OPERATOR_REFUSED`).
 
 **Changelog (2026-11-12, notaries, CP3):** Stage 5 step 3a runs algorithm E, with new codes `NOTARY_KEY_EXPOSED` and `NOTARY_LINEAGE_INCOMPLETE`. `RpcProvider.getGovernanceKeyset` and `getNotaryLogAnchors` (§4.1). The notary list cards are checked with algorithm L (member `list_approval`, `notary_lifecycle.md` Appendix A.5) before use.
+
+**Changelog (2026-11-12, notaries, batch 2):** Stage 4 step 5a records `expires_at` only once it has passed (E15); Stage 5 step 3a runs algorithm G with the notary card's `genesis_request` (E17). Source: `plans/notary-spec-wording-batch2.md`, approved by David 2026-11-12.
 
 **Changelog (2026-11-08, card login):** New `VerifierConfig.loginServiceCertificationRoot` (§5); `RpcProvider.getDomainRegistration` (§4.1); new entry points `verifyLoginResponse` (§6.3) and `verifyServerCard` (§6.4); Stage 2 step 14 accepts `"S1"` only on server cards and new step 16f enforces the login service scope rule (`LOGIN_SERVICE_SCOPE`); `app_card_branch` result field (§8); new error codes (§9). See `process_specs/card_login.md`.
 
@@ -715,7 +717,7 @@ The head content tells us *what* the current state is (revoked or not, which fie
    - **`revocation`, 9xx (loud revocation):** Things on or after `effective_date` are suspect. Verifiers should surface this to allow issuers of other cards held by the same holder to investigate.
    - Genesis `CardDocument` head (never updated): not revoked, no field update.
    - If multiple chain members carry an 8xx or 9xx revocation, the earliest `effective_date` across the whole chain governs.
-5a. **`expires_at` (added 2026-11-11, `protocol-objects.md §1`).** If a chain member's genesis document carries `expires_at`, treat it as a quiet lapse effective at `expires_at`: things signed before it are trusted, and the card is not currently valid on or after it (compared with chain time). Record it under `revocation` with `reason: "expired"`. It enters steps 6–7 like an 8xx `effective_date`. If an 8xx or 9xx is also present, the earlier date governs.
+5a. **`expires_at` (added 2026-11-11, `protocol-objects.md §1`).** If a chain member's genesis document carries `expires_at`, treat it as a quiet lapse effective at `expires_at`: things signed before it are trusted, and the card is not currently valid on or after it (compared with chain time). **Only once `expires_at` has passed**, record it under `revocation` (`status: "revoked"`, `code: null`, `reason: "expired"`), and it enters steps 6–7 like an 8xx `effective_date`. A future `expires_at` changes nothing. If an 8xx or 9xx is also present, the earlier date governs.
 6. Determine `was_valid_at_signing_time`: if no revocation entry has `effective_date ≤ envelope.payload.timestamp`, record `true`; otherwise `false`.
 7. Determine `is_currently_valid`: if no revocation entry has `effective_date ≤ now`, record `true`; otherwise `false`.
 8. Record `revocation.data_freshness_seconds` — the age in seconds of the revocation data at the time of the check.
@@ -736,7 +738,7 @@ The head content tells us *what* the current state is (revoked or not, which fie
    - If no entry exists, record `policy_compliant: false`. (No entry means the press was never authorized; the card could not have been validly registered.)
    - If an entry exists, on-chain registration is proof of write-time authorization. A press that is currently `active == false` (subsequently revoked) does **not** retroactively invalidate the card. Record `policy_compliant: true` if field values also passed; surface the subsequent revocation as informational context (`press_subsequently_revoked: true`) in the result.
 3a. **Notary-issued cards (added 2026-11-11).** If the card's `press_card` is a notary card (its `policy_id` is `config.notary.notaryCardPolicy`), the card is a derived card under a template policy (`protocol-objects.md §2.2`). In addition to step 3:
-   - Run algorithm G (`notary_lifecycle.md` Appendix A.3) on the notary card's `genesis_attestation`, with `t_eval` = the notary card's `issued_at`. Failure → `policy_compliant: false`, code `NOTARY_GENESIS_INVALID`. A `"vulnerable"` runtime retirement → warning `runtime_retired_vulnerable`.
+   - Run algorithm G (`notary_lifecycle.md` Appendix A.3, including step 0) on the notary card's `genesis_attestation` and `genesis_request`, with `t_eval` = the notary card's `issued_at`. Failure → `policy_compliant: false`, code `NOTARY_GENESIS_INVALID`. A `"vulnerable"` runtime retirement → warning `runtime_retired_vulnerable`.
    - Confirm `issuer_card == press_card`, and that `ancestry_pubkeys` matches `[notary card key, template key]`. Failure → `NOTARY_DERIVED_SHAPE`.
    - Run algorithm E (`notary_lifecycle.md` Appendix A.6) on the issuing notary card, with `t` = the derived card's `CardRegistered` timestamp. An exposure at or before `t` → `policy_compliant: false`, code `NOTARY_KEY_EXPOSED`. An exposure after `t` → warning `notary_key_exposed_later`. A broken identity log → `NOTARY_LINEAGE_INCOMPLETE` (added 2026-11-12).
    - Confirm the template's `notary.derived_card.source_kind` is absent or `"card"`. Any other value, including the reserved `"web_evidence"`, isn't supported by this version → `policy_compliant: false`, code `NOTARY_DERIVED_SHAPE` (added 2026-11-12).

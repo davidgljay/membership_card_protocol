@@ -12,6 +12,7 @@ import {
   parseTimestamp, verifyAttestation, withoutFields,
 } from "@membership-card-protocol/verifier/notary";
 import type { AcceptedRuntime, AllowlistedProgram, AttestationVerifier, CardPredicate, NotarySection } from "@membership-card-protocol/verifier/notary";
+import { singleOperatorQuorum } from "@membership-card-protocol/verifier/notary";
 import { mlDsa44Verify } from "@membership-card-protocol/verifier";
 import { sha256 } from "@noble/hashes/sha256";
 import type { NotaryConfig } from "./config.js";
@@ -56,6 +57,8 @@ export interface NotaryChainReads {
 export interface VerifiedLists {
   acceptedRuntimes: AcceptedRuntime[];
   programAllowlist: AllowlistedProgram[];
+  /** From the verified program allowlist's approval (§34); absent means "allowed" (the bootstrap allowance). */
+  singleOperatorQuorums?: "allowed" | "refused";
 }
 
 export interface VerifyJobOptions {
@@ -115,6 +118,11 @@ export async function verifyNotaryJob(o: VerifyJobOptions): Promise<VerifyJobRes
   const malformed = (r: string) => bad("JOB_MALFORMED", r);
   if (job.replica_set.length === 0 || job.replica_set.some((r) => !Number.isInteger(r.instances) || r.instances < 1)) return malformed("replica_set");
   if (!(q <= job.min_live && job.min_live <= n)) return malformed("min_live must satisfy q <= min_live <= N");
+  // W7 (2026-11-12): single-operator quorums, refused once governance retires the allowance (§34, L4)
+  const operatorOf = new Map<string, string | undefined>();
+  for (const r of job.replica_set) operatorOf.set(r.notary_card, (await reads.notaryCard(r.notary_card))?.operator_card || undefined);
+  const soq = singleOperatorQuorum(job.replica_set, (c) => operatorOf.get(c));
+  if (lists.singleOperatorQuorums === "refused" && soq.single) return bad("JOB_SINGLE_OPERATOR_REFUSED", "one operator's replicas reach the quorum");
   try {
     const opens = parseTimestamp(job.opens_at);
     if (notary.mode === "aggregate") {
@@ -186,7 +194,7 @@ export async function verifyNotaryJob(o: VerifyJobOptions): Promise<VerifyJobRes
   // W15
   if (passed.warnings.includes("runtime_retired_vulnerable")) return bad("ATT_RUNTIME_NOT_ACCEPTED", "runtime retired as vulnerable");
   void cidOfBytes; void b64uEncode;
-  return { valid: true, jobHash, epoch: ann.epoch, consent: buildConsent({ job, notary, allowlisted: allow, notaries: [...idKeys.keys()].map((c) => ({ notaryCard: c })) as never, operatorCards: await operatorCards(reads, [...idKeys.keys()]), platform: notary.platform }), warnings: passed.warnings };
+  return { valid: true, jobHash, epoch: ann.epoch, consent: buildConsent({ job, notary, allowlisted: allow, notaries: [...idKeys.keys()].map((c) => ({ notaryCard: c })) as never, operatorCards: await operatorCards(reads, [...idKeys.keys()]), platform: notary.platform, singleOperatorQuorum: soq.single }), warnings: passed.warnings };
 }
 
 async function operatorCards(reads: NotaryChainReads, cards: string[]): Promise<Record<string, string>> {

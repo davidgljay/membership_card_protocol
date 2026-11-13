@@ -107,6 +107,8 @@ struct Approval {
     v: Value,
     list_version: u64,
     kind: String,
+    /// `single_operator_quorums`, normalized: absent is "allowed".
+    switch: String,
 }
 
 fn parse_approval(text: Option<&str>, list: ListKind, list_card: &str) -> Result<Approval, &'static str> {
@@ -117,12 +119,27 @@ fn parse_approval(text: Option<&str>, list: ListKind, list_card: &str) -> Result
     if a.list != list.name() || a.list_card != list_card || a.list_version < 1 || !["standard", "emergency_retirement"].contains(&a.kind.as_str()) {
         return Err("LIST_APPROVAL_MALFORMED");
     }
-    Ok(Approval { list_version: a.list_version, kind: a.kind, v })
+    if let Some(sw) = &a.single_operator_quorums {
+        if list != ListKind::ProgramAllowlist || !["allowed", "refused"].contains(&sw.as_str()) {
+            return Err("LIST_APPROVAL_MALFORMED");
+        }
+    }
+    let switch = a.single_operator_quorums.unwrap_or_else(|| "allowed".into());
+    Ok(Approval { list_version: a.list_version, kind: a.kind, v, switch })
 }
 
-/// Algorithm L steps 1–5. `history` is oldest first, head last. Returns the head list and its `list_version`.
-pub fn verify_list_approval(list: ListKind, list_card: &str, history: &[ListVersion], k: &Keyset) -> Result<(Value, u64), &'static str> {
+/// What algorithm L accepts: the head list, its `list_version`, and (program allowlist) `single_operator_quorums`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Verified {
+    pub value: Value,
+    pub version: u64,
+    pub single_operator_quorums_refused: bool,
+}
+
+/// Algorithm L steps 1–5. `history` is oldest first, head last.
+pub fn verify_list_approval(list: ListKind, list_card: &str, history: &[ListVersion], k: &Keyset) -> Result<Verified, &'static str> {
     let mut head_version = 0;
+    let mut head_refused = false;
     for idx in (0..history.len()).rev() {
         let ver = &history[idx];
         let prev = idx.checked_sub(1).map(|i| &history[i]);
@@ -130,6 +147,7 @@ pub fn verify_list_approval(list: ListKind, list_card: &str, history: &[ListVers
         let a = parse_approval(ver.approval_text.as_deref(), list, list_card)?;
         if idx == history.len() - 1 {
             head_version = a.list_version;
+            head_refused = a.switch == "refused";
         }
         // 2
         if a.v.get("list_hash").and_then(Value::as_str) != h(&ver.value).as_deref() {
@@ -163,11 +181,17 @@ pub fn verify_list_approval(list: ListKind, list_card: &str, history: &[ListVers
             return Err("LIST_APPROVAL_THRESHOLD");
         }
         if a.kind == "standard" {
-            return Ok((history[history.len() - 1].value.clone(), head_version));
+            return Ok(Verified { value: history[history.len() - 1].value.clone(), version: head_version, single_operator_quorums_refused: head_refused });
         }
-        // 5
+        // 5: removal-only, with the same single_operator_quorums as the previous version (rule E)
         match prev {
-            Some(p) if is_removal_only(&p.value, &ver.value, list.key_field()) => {}
+            Some(p) if is_removal_only(&p.value, &ver.value, list.key_field()) => {
+                if let Ok(pa) = parse_approval(p.approval_text.as_deref(), list, list_card) {
+                    if pa.switch != a.switch {
+                        return Err("LIST_APPROVAL_NOT_REMOVAL_ONLY");
+                    }
+                }
+            }
             _ => return Err("LIST_APPROVAL_NOT_REMOVAL_ONLY"),
         }
     }
@@ -190,11 +214,13 @@ pub struct Lists {
     pub pins: Pins,
     pub runtimes: Option<(Value, u64)>,
     pub programs: Option<(Value, u64)>,
+    /// From the verified program allowlist head (§34). False until a list is verified (the bootstrap default).
+    pub single_operator_quorums_refused: bool,
 }
 
 impl Lists {
     pub fn new(pins: Pins) -> Self {
-        Self { pins, runtimes: None, programs: None }
+        Self { pins, runtimes: None, programs: None, single_operator_quorums_refused: false }
     }
 
     /// Accepts a host-supplied history for one list (runtime §12 steps 2–4). Returns the newly accepted version.
@@ -203,7 +229,8 @@ impl Lists {
             ListKind::AcceptedRuntimes => (&self.pins.accepted_runtimes_card, self.pins.accepted_runtimes_floor, &self.runtimes),
             ListKind::ProgramAllowlist => (&self.pins.program_allowlist_card, self.pins.program_allowlist_floor, &self.programs),
         };
-        let (value, version) = verify_list_approval(list, card, history, &self.pins.keyset)?;
+        let v = verify_list_approval(list, card, history, &self.pins.keyset)?;
+        let (value, version) = (v.value, v.version);
         if version < floor || current.as_ref().is_some_and(|(_, seen)| version < *seen) {
             return Err("LIST_VERSION_REGRESSION");
         }
@@ -212,6 +239,9 @@ impl Lists {
             ListKind::ProgramAllowlist => &mut self.programs,
         };
         *slot = Some((value, version));
+        if list == ListKind::ProgramAllowlist {
+            self.single_operator_quorums_refused = v.single_operator_quorums_refused;
+        }
         Ok(version)
     }
 

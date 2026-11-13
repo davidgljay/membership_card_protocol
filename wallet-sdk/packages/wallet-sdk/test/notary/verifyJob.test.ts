@@ -1,3 +1,4 @@
+import { SINGLE_OPERATOR_DISCLOSURE } from "@membership-card-protocol/verifier/notary";
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -134,6 +135,27 @@ describe("algorithm W (wallet_sdk.md §7b.2) with real simulator attestations", 
     expect(await code(opts({ lists: { acceptedRuntimes: accepted.map((r) => ({ ...r, retired_at: "2027-01-01T00:00:00Z", retire_reason: "vulnerable" as const })), programAllowlist: allowlist } }))).toBe("ATT_RUNTIME_NOT_ACCEPTED"));
 });
 
+describe("single-operator quorums (lifecycle L4, W7; protocol-objects.md §34)", () => {
+  it("the fixture's one-card replica set is a single-operator quorum: flagged and disclosed in the consent", async () => {
+    const r = await verifyNotaryJob(opts());
+    expect(r.valid).toBe(true);
+    if (!r.valid) return;
+    expect(r.consent.singleOperatorQuorum).toBe(true);
+    expect(r.consent.disclosures).toContain(SINGLE_OPERATOR_DISCLOSURE);
+  });
+  it("allowed when the list says nothing or \"allowed\" (the bootstrap allowance)", async () => {
+    expect((await verifyNotaryJob(opts({ lists: { acceptedRuntimes: accepted, programAllowlist: allowlist, singleOperatorQuorums: "allowed" } }))).valid).toBe(true);
+  });
+  it("refused once governance retires the allowance", async () =>
+    expect(await code(opts({ lists: { acceptedRuntimes: accepted, programAllowlist: allowlist, singleOperatorQuorums: "refused" } }))).toBe("JOB_SINGLE_OPERATOR_REFUSED"));
+  it("no disclosure for a multi-operator quorum", async () => {
+    const { buildConsent } = await import("../../src/notary/consent.js");
+    const c = buildConsent({ job: baseAnn.job, notary: notarySection, allowlisted: allowlist[0], notaries: [{ notaryCard: CARD1 }], operatorCards: { [CARD1]: "operator-1" }, platform: "simulator", singleOperatorQuorum: false });
+    expect(c.singleOperatorQuorum).toBe(false);
+    expect(c.disclosures).not.toContain(SINGLE_OPERATOR_DISCLOSURE);
+  });
+});
+
 describe("consent model (wallet_sdk.md §7b.3)", () => {
   it("requester text is shown only as labelled requester text and never merged into other fields", async () => {
     const r = await verifyNotaryJob(opts());
@@ -150,7 +172,7 @@ describe("consent model (wallet_sdk.md §7b.3)", () => {
     const a = await verifyNotaryJob(opts()); // original
     // a re-signed job would need its own attestation; compare the consent builder directly
     const { buildConsent } = await import("../../src/notary/consent.js");
-    const mk = (job: NotaryJob) => buildConsent({ job, notary: notarySection, allowlisted: allowlist[0], notaries: [{ notaryCard: CARD1 }], operatorCards: { [CARD1]: "operator-1" }, platform: "simulator" });
+    const mk = (job: NotaryJob) => buildConsent({ job, notary: notarySection, allowlisted: allowlist[0], notaries: [{ notaryCard: CARD1 }], operatorCards: { [CARD1]: "operator-1" }, platform: "simulator", singleOperatorQuorum: false });
     const { requesterText: t1, ...c1 } = mk(baseAnn.job);
     const { requesterText: t2, ...c2 } = mk(other);
     expect(c1).toEqual(c2);

@@ -81,3 +81,30 @@ The conformance generator lives at `membership_card_verifier/packages/verifier/s
 ## Resolution (2026-11-12)
 
 David approved `notary-spec-wording-e31.md` in full, and it has been applied to the specs. **Resolved:** E20 (list read path, runtime §12), E21 (policy read via `fetch`, runtime §9 and lifecycle A.7), E24 (`genesis_ready` fields), E25 (`CLOSE_NOT_DUE`), E30 (snapshot and per-card fetch shapes, host §8), E31 (algorithm R, Part A approved, no network connection from the enclave), and E32 (B3 bootstrap allowance, disclosed and retirable by the `single_operator_quorums` switch). **Still open:** E26 (the first identity-log record) and E27 (a native x86_64 sandbox run). **Not yet implemented:** algorithm R, the list reads, the single-operator disclosure and switch (in wallet, verifier, runtime), and the `ListApproval` type field.
+
+## Implementing the approved E31 wording (2026-11-12)
+
+| ID | Where | Observation | Handling |
+|---|---|---|---|
+| **E33** | `protocol-objects.md` §3–§4; runtime §12 step 2 | A `LogEntry` carries `intent_signature` but not the `UpdateIntentPayload` it signs. `target_card`, `updater_card` and `timestamp` aren't in the entry, so no reader can verify the intent signature from the log. | For list cards: the `press_signature` (over the whole entry) is verified against the pinned press key, the `prev_log_root` chain is checked, and the intent **signer** must be the pinned holder key. The intent signature itself isn't verified. Algorithm L's member signatures carry the list's trust. **Needs David:** a spec decision whether a LogEntry should carry its intent payload (or enough to rebuild it). |
+| **E34** | lifecycle W7 / step 17 (single-operator switch) | To count operators, a reader needs each replica's notary-card `operator_card`. A notary card's content is encrypted under its `K_id`, but a job names replicas only by pointer, so the **enclave** can't read other operators' notary cards. Wallets can, through their notary-card reads (`NotaryChainReads.notaryCard`). | The wallet's W7 check is exact. The enclave knows the operators of the notary cards it created (from their genesis requests). Once governance sets `"refused"`, it **fails closed** on any replica whose operator it can't establish. In practice, until handoff (6.3) shares replica identities, an enclave refuses every job with another operator's replicas once the switch is set. **Needs David:** acceptable for now, or should the job (or announcement) carry each replica's `operator_card` so enclaves can check it? |
+
+**Flaky test fixed (notary code):** `wallet-sdk/test/notary/submit.test.ts` asserted that sealed JSON doesn't contain `"yes"`. Random base64 ciphertext contains any three-letter string about 0.6% of the time, which caused one failure. It now checks for the quoted payload text, which base64 can't contain.
+
+**E34 decided (David, 2026-11-12): drop the enclave check.** Single-operator quorums are enforced only where the data is trustworthy:
+- **wallets** (W7, `JOB_SINGLE_OPERATOR_REFUSED`);
+- **verifiers**: algorithm N now **rejects** (`NOT_SINGLE_OPERATOR_REFUSED`) a single-operator notarization closed at or after `refused_since`, the on-chain time of the earliest program-allowlist version from which the switch has been `"refused"` without interruption. Earlier ones stay valid with the warning.
+
+Reason: an enclave can read other operators' notary cards only from host-supplied registry data (L4), so a host could defeat the check with forged cards, and the step-17 timing problem goes away with it. Specs updated: lifecycle A.4 result and error rows, §34 field note, `card_verifier.md` changelog, and the governance section. Code: the broker check and its operator map removed; a broker test confirms the enclave opens the job with the switch set; the verifier's `NotarizationConfig.singleOperatorRefusedSinceMs` and an N test (rejected at the boundary, valid one millisecond earlier).
+
+## Batch 2 approved and applied (2026-11-12)
+
+David approved `notary-spec-wording-batch2.md` in full ("Approve all"), and it has been applied to the specs. **Resolved:** E1, E2, E3, E6, E7, E10, E11, E12, E13, E14, E15, E16 (`bytes32, uint64, string`, as implemented), E17, E18, and E26 (option A). **E33** is now a separate protocol-wide question (an optional `LogEntry` field first, with its own privacy review); notary code is unchanged. **E27** stays open as a test run (native x86_64 Linux, CI or Phase 8).
+
+**E26 implemented.** The broker writes identity-log `seq` 0 (`opened`, body `{ "attestations": [<genesis_attestation>] }`) when it countersigns the notary card offer, and `create_job` refuses a card whose `seq` 0 isn't anchored yet. Algorithm E (`verifier/src/notary/exposure.ts`) requires `seq` 0 to be that record; an empty log is now `NOTARY_LINEAGE_INCOMPLETE`. Tests: `exposure.test.ts` (new E26 case), `broker.rs::genesis_ignores_host_keys_and_countersign_checks_g2` (record content, single write, the job gate).
+
+| ID | Where | Observation | Handling |
+|---|---|---|---|
+| **E35** | `notary_runtime.md §16`; lifecycle step 9 | Step 9 says the enclave opens no job until identity-log `seq` 0 is anchored, but no error code exists for that refusal. The record is also written at countersign (step 6), not after registration (step 7), because the enclave isn't told when the card is registered. The record doesn't depend on registration. | Implemented: `create_job` answers `error` with code `IDENTITY_LOG_PENDING` (the host anchors and retries), like `CLOSE_NOT_DUE`. **Needs David:** approve the §16 row "`IDENTITY_LOG_PENDING` \| §9 `create_job` \| The notary card's identity-log `seq` 0 isn't anchored yet; the host anchors it and retries", and the countersign timing. |
+
+**E35 decided (David, 2026-11-12): approved.** `IDENTITY_LOG_PENDING` added to runtime §16; lifecycle step 9 says the record is written at countersign.

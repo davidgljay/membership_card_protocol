@@ -4,7 +4,9 @@
 **Date:** 2026-11-11  
 **Status:** Draft  
 **Architecture:** `ARCHITECTURE.md` ADR-013 · **Objects:** `protocol-objects.md` §2.1, §2.2, §20–§34 · **Design record:** `plans/notary-design-decisions.md` (approved at CP2)
-**Amended 2026-11-12:** new Appendix A.7, algorithm R (policy and requester reads, over vsock only); step 17 and W3–W5 point to it. L4 and T7 restated (a single-operator quorum can count forged contributors), with a consent disclosure (step 25), the `SINGLE_OPERATOR_QUORUM` warning in N, and the governance switch in W7 (`JOB_SINGLE_OPERATOR_REFUSED`). Source: `plans/notary-spec-wording-e31.md`, approved by David 2026-11-12.
+**Amended 2026-11-12:** new Appendix A.7, algorithm R (policy and requester reads, over vsock only); step 17 and W3–W5 point to it. L4 and T7 restated (a single-operator quorum can count forged contributors), with a consent disclosure (step 25), the `SINGLE_OPERATOR_QUORUM` warning in N, and the governance switch in W7 (`JOB_SINGLE_OPERATOR_REFUSED`) and in N (`NOT_SINGLE_OPERATOR_REFUSED`); enclaves don't enforce it (E34). Source: `plans/notary-spec-wording-e31.md`, approved by David 2026-11-12.
+
+**Amended 2026-11-12 (batch 2):** step 5 offer includes `genesis_request`, and A.3 step 0 lets later verifiers recompute the nonce (E17); step 9 writes identity-log `seq` 0 as `opened`, and A.6 requires it (E26); A.1 step 10, W13 and N6 say which bound fields aren't compared (E10, E13); W10 says how `issuer_card` names the policy (E11). Source: `plans/notary-spec-wording-batch2.md`, approved by David 2026-11-12.
 
 > **Terminology.** "The enclave" means an AWS Nitro Enclaves enclave. "Enclave attestation" means the AWS Nitro Enclaves attestation document, which is not the App Attest / Play Integrity attestation of `subcards.md`. "nitropack" is the web framework the notary host runs on. See the terminology note in `ARCHITECTURE.md`.
 
@@ -89,7 +91,7 @@ Each step names its **actor**, what it takes and produces, and how failure is ha
    - `policy_id` = `NotaryCardPolicy`;
    - `issuer_card` = the notary policy;
    - `recipient_pubkey` = `id_pubkey`;
-   - the fields `operator_card`, `operator_host_pubkey`, `chain_pubkey`, `platform` and `genesis_attestation`.
+   - the fields `operator_card`, `operator_host_pubkey`, `chain_pubkey`, `platform`, `genesis_attestation` and `genesis_request` (the CID of the pinned request).
 
    It then signs `issuer_signature`.
    - *Failure:* G fails. Reject with the G code and don't issue.
@@ -98,7 +100,7 @@ Each step names its **actor**, what it takes and produces, and how failure is ha
 7. **A press for `NotaryCardPolicy`.** Validates and registers the notary card.
 8. **Policy holder.** Adds the card to `approved_notaries` (code 300 on the policy card).
    - For a template policy, governance also submits `AuthorizePress`. That is a CP7-class on-chain action, done once per (template, operator).
-9. **Enclave.** Writes the first identity-log record (`protocol-objects.md §28`, `type: "notary.identity_log.v1"`). The operator then forms its identity replica set by identity-scope handoff (`notary_replication_and_recovery.md`).
+9. **Enclave.** Writes the first identity-log record (`protocol-objects.md §28`, `type: "notary.identity_log.v1"`): `seq` 0, kind `opened`, body `{ "attestations": [<genesis_attestation>] }`. The enclave writes it when it countersigns (step 6), since it isn't told when the card is registered and the record doesn't depend on registration. It opens no job and issues no derived card for this notary card until it has seen that record's anchor (`IDENTITY_LOG_PENDING`, `notary_runtime.md §16`). The operator then forms its identity replica set by identity-scope handoff (`notary_replication_and_recovery.md`).
 
 **Postcondition:** an approved notary card whose key exists only inside the operator's enclaves.
 
@@ -264,7 +266,8 @@ Each step names its **actor**, what it takes and produces, and how failure is ha
 | `JOB_POLICY_UNTRUSTED`, `JOB_POLICY_CHANGED` | W | Policy chain invalid, or `notary` / `approved_notaries` changed since the job was signed | Reject; the requester re-issues the job |
 | `JOB_REQUESTER_NOT_PERMITTED`, `JOB_PARAMETERS_OUT_OF_BOUNDS`, `JOB_NOTARY_NOT_APPROVED`, `JOB_KEM_UNSUPPORTED`, `JOB_PROGRAM_NOT_ALLOWLISTED` | W | The job isn't allowed by the policy or the wallet | Reject |
 | `JOB_CLOSED` | W | Past `closes_at` / `ends_at` | Reject |
-| `JOB_SINGLE_OPERATOR_REFUSED` | W (step 7), enclave (step 17) | One operator's replicas reach the quorum, and governance has retired single-operator quorums (`protocol-objects.md §34`) | Reject; the requester re-issues the job with replicas from several operators |
+| `JOB_SINGLE_OPERATOR_REFUSED` | W (step 7) | One operator's replicas reach the quorum, and governance has retired single-operator quorums (`protocol-objects.md §34`) | Reject; the requester re-issues the job with replicas from several operators |
+| `NOT_SINGLE_OPERATOR_REFUSED` | N (result) | A single-operator notarization closed at or after the time governance retired single-operator quorums | Verifier rejects |
 | `NOTARY_LINEAGE_INCOMPLETE` | E | The notary card's identity log has a gap or fork, so its key lineage can't be established | Reject the item; the operator investigates the missing anchor |
 | `JOB_NOTARY_KEY_EXPOSED` | W (step 10a) | A replica's notary card key has lived in a runtime retired as `"vulnerable"` (algorithm E) | Reject; the operator must redo genesis and the policy holder reissue |
 | `LIST_APPROVAL_MISSING`, `LIST_APPROVAL_MALFORMED`, `LIST_APPROVAL_HASH_MISMATCH`, `LIST_APPROVAL_KEYSET_STALE`, `LIST_APPROVAL_THRESHOLD`, `LIST_APPROVAL_NOT_REMOVAL_ONLY` | L | A governance list's head isn't validly approved by PressRegistryBody members (Appendix A.5) | Fail closed: treat no runtime as accepted and no program as allowlisted. Runtimes keep their last verified version. |
@@ -343,7 +346,7 @@ All reject codes are listed in §Error Paths.
 7. PCR0 is accepted at `t_eval` (`protocol-objects.md §34`) → `ATT_RUNTIME_NOT_ACCEPTED`. If the only match was retired as `"vulnerable"`, return success with the warning `runtime_retired_vulnerable`.
 8. `user_data` is 181 bytes, with tag `CARDNOTARY` and version `0x01` → `ATT_USER_DATA_MALFORMED`.
 9. The purpose is the expected one → `ATT_PURPOSE_MISMATCH`.
-10. Each bound field equals the expected value, and each unused field is zero → `ATT_BINDING_MISMATCH`.
+10. Each bound field equals the expected value, and each unused field is zero → `ATT_BINDING_MISMATCH`. Where a caller gives no expected value for a bound field (W13 for `inst_key_hash`; N6 for `inst_key_hash` and `public_key`), the field must be present, 32 bytes and non-zero, and isn't compared.
 11. `nonce` and `public_key` are as §33 requires → `ATT_NONCE_MISMATCH` / `ATT_KEY_MISMATCH`.
 12. If `max_age` is set: `now − max_age ≤ timestamp ≤ now + 5 min` → `ATT_STALE`.
 
@@ -360,16 +363,17 @@ The wallet uses its **own** chain reads, never data from the notary host. Config
 7. The mode-specific fields are consistent, and q ≤ `min_live` ≤ N → `JOB_MALFORMED`. If the verified program allowlist's `single_operator_quorums` is `"refused"`, the replicas whose notary cards share one `operator_card` number fewer than q → `JOB_SINGLE_OPERATOR_REFUSED`.
 8. Chain time is before `closes_at` / `ends_at` → `JOB_CLOSED`.
 9. `kem` is accepted → `JOB_KEM_UNSUPPORTED`.
-10. Every `replica_set` card is in the current `approved_notaries` and not revoked, has `policy_id = NotaryCardPolicy` and `issuer_card` = this policy, and its `platform` equals `notary.platform` → `JOB_NOTARY_NOT_APPROVED`.
+10. Every `replica_set` card is in the current `approved_notaries` and not revoked, has `policy_id = NotaryCardPolicy` and `issuer_card` = this policy's card (the address derived from the `recipient_pubkey` of the job's `policy_id` document, as in A.7 R1), and its `platform` equals `notary.platform` → `JOB_NOTARY_NOT_APPROVED`.
     - 10a. No `replica_set` card's key is exposed (algorithm **E**, A.6, at `t = now`) → `JOB_NOTARY_KEY_EXPOSED`.
 11. `notary_signature` is by a `replica_set` card and verifies → `ANN_SIGNATURE_INVALID`.
 12. The epoch chain is consistent, and the epoch isn't below the highest the wallet has stored for this job → `ANN_EPOCH_REGRESSION`.
-13. At least one attestation passes **V** with: purpose `0x02`; `id_key_hash` = a `replica_set` card; `program_hash` from `program_cid`; `job_hash`; `epoch`; `isolation`; `public_key = SHA-256(job_public_key)`; `nonce = job_hash`; `t_eval = now`; `max_age = max_attestation_age` → `ATT_*`.
+13. At least one attestation passes **V** with: purpose `0x02`; `id_key_hash` = a `replica_set` card; `program_hash` from `program_cid`; `job_hash`; `epoch`; `isolation`; `public_key = SHA-256(job_public_key)`; `inst_key_hash` not compared (a wallet can't know a replica's instance key); `nonce = job_hash`; `t_eval = now`; `max_age = max_attestation_age` → `ATT_*`.
 14. If `isolation == "shared"`: `program_cid` is on the current allowlist → `JOB_PROGRAM_NOT_ALLOWLISTED`.
 15. If V raised `runtime_retired_vulnerable` → `ATT_RUNTIME_NOT_ACCEPTED`.
 
 ### A.3 Algorithm G: genesis attestation
 
+0. **Later verifiers only.** Fetch the request at the card's `genesis_request` and check it against its CID. It must equal the card's `id_pubkey` (= `recipient_pubkey`), `chain_pubkey`, `operator_card`, `operator_host_pubkey` and `platform`, and its `policy_id` must be the card's `issuer_card` policy → `NOT_GENESIS_MISMATCH`. `H(genesis request)` in step 1 is that request's hash. (The policy holder already holds the request.)
 1. **V** passes with: purpose `0x01`; `id_key_hash = keccak256(id_pubkey)`; `chain_key_hash = SHA-256(chain_pubkey)`; `nonce = H(genesis request)`. `t_eval` is `now` for the policy holder, or the notary card's `issued_at` for a later verifier. `max_age` is 7 days for the policy holder and none for a later verifier. → `ATT_*`.
 2. The offer's `recipient_pubkey`, `chain_pubkey` and `genesis_attestation` match the request and the document → `NOT_GENESIS_MISMATCH`.
 3. `operator_card` resolves and isn't revoked → `NOT_OPERATOR_INVALID`.
@@ -384,7 +388,7 @@ Uses CIDs and chain data only, so anyone can run it. Also specified as a verifie
 4. The notary card has no 8xx or 9xx revocation effective at or before `closed_at` → `NOT_NOTARY_REVOKED`.
     - 4a. Run algorithm **E** (A.6) on the notary card and on each cosigning replica's card, with `t` = the chain time of the EAS anchor of the job's `notarized` record. An exposure at or before `t` → `NOT_NOTARY_KEY_EXPOSED`. An exposure after `t` → warning `notary_key_exposed_later`.
 5. `program_cid` and `platform` equal the policy's at `policy_state_cid` → `NOT_POLICY_MISMATCH`.
-6. `attestation` passes **V**: purpose `0x02`; `job_hash`, `final_epoch` and `program_hash`; `id_key_hash = notary_card`; `t_eval = closes_at` (aggregate) or `closed_at` (per-input); no `max_age` → `ATT_*`.
+6. `attestation` passes **V**: purpose `0x02`; `job_hash`, `final_epoch` and `program_hash`; `id_key_hash = notary_card`; `nonce = job_hash`; `public_key` and `inst_key_hash` not compared (the notarization doesn't carry the final epoch's job key or the instance key); `t_eval = closes_at` (aggregate) or `closed_at` (per-input); no `max_age` → `ATT_*`.
 7. The block named in `chain_state` exists on the verifier's own chain view with that hash and timestamp, `closed_at` equals its timestamp, and `closed_at ≥ closes_at` → `NOT_CHAIN_MISMATCH`.
 8. `counted_inputs` is sorted, has no duplicates, has `accepted` entries, and its Merkle root equals `input_commitment` → `NOT_COMMITMENT_MISMATCH`.
 9. `suppressed == (accepted < k_min)`, with the fixed output when suppressed → `NOT_SUPPRESSION_INVALID`.
@@ -393,7 +397,9 @@ Uses CIDs and chain data only, so anyone can run it. Also specified as a verifie
 12. There are at least `close_quorum` cosignatures (= ⌊N/2⌋ + 1) from distinct instances. Each attestation passes **V** as in step 6 with `id_key_hash` set to its replica's own notary card (any card in `replica_set`), and each signature verifies over `H(body)` → `NOT_QUORUM_INSUFFICIENT`.
 13. No `epoch_started` record for a higher epoch was anchored before `closed_at` → `NOT_EPOCH_SUPERSEDED`.
 
-**Result:** valid, or the first reject code. Warnings are returned with the result: `runtime_retired_vulnerable`, `notary_key_exposed_later`, the chain-state age, `JOB_LOG_GAP` / `JOB_LOG_FORK`, any `total_loss` epochs, and `SINGLE_OPERATOR_QUORUM` when the replicas whose notary cards share one `operator_card` number at least `close_quorum` (L4: the count may include contributors that operator invented).
+**Result:** valid, or the first reject code. Warnings are returned with the result: `runtime_retired_vulnerable`, `notary_key_exposed_later`, the chain-state age, `JOB_LOG_GAP` / `JOB_LOG_FORK`, any `total_loss` epochs, and `SINGLE_OPERATOR_QUORUM` when the replicas whose notary cards share one `operator_card` number at least `close_quorum` (L4: the count may include contributors that operator invented). A single-operator notarization whose `closed_at` is at or after `refused_since` is **rejected** with `NOT_SINGLE_OPERATOR_REFUSED`. `refused_since` is the on-chain time of the earliest program-allowlist version from which `single_operator_quorums` has been `"refused"` without interruption (`protocol-objects.md §34`).
+
+**Where single-operator quorums are enforced.** Only wallets (W7) and verifiers (N), which read notary cards and the governance lists over their own chain connections. Enclaves don't check. An enclave can read another operator's notary card only from host-supplied registry data (L4), so a host could feed it forged cards claiming several operators, and the check would protect nothing. (Decided 2026-11-12, erratum E34.)
 
 ### A.5 Algorithm L: governance list approval
 
@@ -415,7 +421,7 @@ A notary card's keys (`K_id`, `K_chain`) are **exposed** once any runtime image 
 
 **Inputs:** the notary card, its identity log (`protocol-objects.md §28`, `type: "notary.identity_log.v1"`, found through its EAS anchors), and the accepted-runtime list verified by **L**.
 
-1. **Lineage.** The set of PCR0s the keys have lived in. It contains the PCR0 of the genesis attestation, plus `pcr0_to` of every `identity`-scope handoff record in the identity log. Walk the log to `seq` 0 as in N11; a gap or fork → `NOTARY_LINEAGE_INCOMPLETE`.
+1. **Lineage.** The set of PCR0s the keys have lived in. It contains the PCR0 of the genesis attestation, plus `pcr0_to` of every `identity`-scope handoff record in the identity log. Walk the log to `seq` 0 as in N11. Record `seq` 0 must be `opened` and name the card's `genesis_attestation`. A gap, a fork, or a missing or different `seq` 0 → `NOTARY_LINEAGE_INCOMPLETE`.
 2. **Exposure time.** `t_x` is the earliest `retired_at` among lineage entries retired with `retire_reason: "vulnerable"`. None → not exposed.
 3. **Judging an item** dated `t`, where `t` must come from the chain and never from a notary-signed field:
    - derived card: the timestamp of its `CardRegistered` event;

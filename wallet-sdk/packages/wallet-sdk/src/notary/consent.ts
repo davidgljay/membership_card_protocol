@@ -5,6 +5,7 @@
  */
 import type { AllowlistedProgram, FieldDefinition, NotarySection } from "@membership-card-protocol/verifier/notary";
 import type { NotaryJob } from "./types.js";
+import { SINGLE_OPERATOR_DISCLOSURE } from "@membership-card-protocol/verifier/notary";
 
 export interface NotaryConsent {
   collects: FieldDefinition[];
@@ -16,6 +17,8 @@ export interface NotaryConsent {
   endsAt?: string;
   /** Lines the contributor sees before consenting. Built from policy fields only. */
   disclosures: string[];
+  /** L4: one operator's replicas reach the quorum (a disclosed bootstrap allowance). */
+  singleOperatorQuorum: boolean;
   /** Shown only inside a box labelled as the requester's own words. */
   requesterText?: string;
 }
@@ -39,6 +42,7 @@ export function buildConsent(o: {
   notaries: { notaryCard: string }[];
   operatorCards: Record<string, string>;
   platform: string;
+  singleOperatorQuorum: boolean;
 }): NotaryConsent {
   const { job, notary } = o;
   const transforms: Record<string, Record<string, unknown>> = {};
@@ -49,6 +53,7 @@ export function buildConsent(o: {
   }
   const disclosures: string[] = [];
   if (!hasSnapshotablePolicy(notary.contributor_predicate)) disclosures.push(PARTICIPATION_DISCLOSURE);
+  if (o.singleOperatorQuorum) disclosures.push(SINGLE_OPERATOR_DISCLOSURE);
   if (notary.output_action === "card" && notary.derived_card && notary.revocation_propagation) {
     const d = notary.derived_card, r = notary.revocation_propagation;
     const source = String(job.parameters["source_policy"] ?? "the source");
@@ -70,6 +75,7 @@ export function buildConsent(o: {
     ...(job.closes_at ? { closesAt: job.closes_at } : {}),
     ...(job.ends_at ? { endsAt: job.ends_at } : {}),
     disclosures,
+    singleOperatorQuorum: o.singleOperatorQuorum,
     ...(job.requester_text !== undefined ? { requesterText: job.requester_text } : {}),
   };
 }

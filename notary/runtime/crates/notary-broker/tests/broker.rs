@@ -59,10 +59,10 @@ struct Oracle {
     lists: (Vec<ListVersion>, Vec<ListVersion>),
 }
 impl CardOracle for Oracle {
-    fn policy(&mut self, _: &mut dyn HostIo, _: &str, _: &str) -> Result<PolicyView, &'static str> {
+    fn policy(&mut self, _: &mut dyn HostIo, _: &str, _: &str, _: i64) -> Result<PolicyView, &'static str> {
         Ok(PolicyView { notary: self.policy.clone(), approved_notaries: self.approved.clone() })
     }
-    fn requester_allowed(&mut self, _: &mut dyn HostIo, _: &Value, _: &Value) -> bool {
+    fn requester_allowed(&mut self, _: &mut dyn HostIo, _: &Value, _: &Value, _: i64) -> bool {
         true
     }
     fn contributor(&mut self, _: &mut dyn HostIo, input: &Value, _: &Value, _: &Value, _: i64) -> Result<[u8; 32], &'static str> {
@@ -128,12 +128,15 @@ fn output_schema() -> Value {
            { "name": "yes", "type": "integer", "required": true, "clamp": [0, 1000000] }])
 }
 
-fn signed_lists(pcr0: &[u8], program_cid: &str) -> (Vec<ListVersion>, Vec<ListVersion>, Keyset) {
+fn signed_lists(pcr0: &[u8], program_cid: &str, refuse_single_operator: bool) -> (Vec<ListVersion>, Vec<ListVersion>, Keyset) {
     let members: Vec<ChainKey> = (0..5).map(|_| ChainKey::generate()).collect();
     let keyset = Keyset { keys: members.iter().map(|k| k.public_key_xy()).collect(), quorum: 4, version: 1, key_scheme: 0 };
     let sign = |list: &str, card: &str, value: &Value| -> String {
         let mut a = json!({ "governance_version": 1, "kind": "standard", "list": list, "list_card": card, "list_hash": jcs::h(value).unwrap(),
             "list_version": 1, "signatures": [], "type": "notary_list_approval" });
+        if list == "program_allowlist" && refuse_single_operator {
+            a["single_operator_quorums"] = json!("refused");
+        }
         let d = approval_digest(&a).unwrap();
         a["signatures"] = json!((0..4).map(|i| json!({ "key_index": i, "signature": b64u::encode(&members[i].sign_digest(&d).unwrap()) })).collect::<Vec<_>>());
         String::from_utf8(jcs::canonical(&a).unwrap()).unwrap()
@@ -165,10 +168,14 @@ fn backend(addr: &notary_attest::sim::SimAddr) -> SimulatorBackend {
 }
 
 fn world(isolation: &str, replacement: &str, k_min: u64) -> World {
+    world_ext(isolation, replacement, k_min, false)
+}
+
+fn world_ext(isolation: &str, replacement: &str, k_min: u64, refuse_single_operator: bool) -> World {
     let enclave = FakeEnclave::start_tcp("127.0.0.1:0", EnclaveConfig { pcr0_seed: 0x42, debug: false, clock_ms: Some(T0 as u64) }).unwrap();
     let program = tally_program(&output_schema());
     let program_cid = formats::cid_of_bytes(&program);
-    let (rt, progs, keyset) = signed_lists(&notary_sim::pcr0_of(0x42), &program_cid);
+    let (rt, progs, keyset) = signed_lists(&notary_sim::pcr0_of(0x42), &program_cid, refuse_single_operator);
     let policy = json!({
         "contributor_predicate": { "issued_under_template": "bafkreisource" }, "input_replacement": replacement,
         "input_schema": [{ "name": "choice", "type": "text", "required": true, "enum": ["yes", "no"] }],
@@ -211,7 +218,19 @@ fn genesis(w: &mut World) -> String {
     w.broker.handle(&mut w.host, &json!({ "kind": "genesis", "req_id": "g1", "request": req }));
     let out = w.host.take();
     let ready = find(&out, "genesis_ready").expect("genesis_ready").clone();
-    ready["notary_card"].as_str().unwrap().to_string()
+    let card = ready["notary_card"].as_str().unwrap().to_string();
+    // step 6 and step 9 (E26): countersign writes identity-log seq 0, and jobs wait for its anchor
+    let att_cid = formats::cid_of_bytes(&b64u::decode(ready["attestation"].as_str().unwrap()).unwrap());
+    let offer = json!({ "chain_pubkey": ready["chain_pubkey"], "genesis_attestation": att_cid, "issuer_card": "c".repeat(64), "operator_card": "a".repeat(64),
+        "platform": "simulator", "policy_id": "bafkreinotarycardpolicy", "recipient_pubkey": ready["id_pubkey"], "issuer_signature": "sig" });
+    w.broker.handle(&mut w.host, &json!({ "kind": "countersign_notary_card", "req_id": "c", "offer": offer }));
+    let out = w.host.take();
+    assert!(find(&out, "countersigned").is_some());
+    let anchor = out.iter().find(|m| m["kind"] == "eas_anchor").expect("seq 0 is anchored").clone();
+    assert_eq!((anchor["scope_id"].as_str(), anchor["seq"].as_u64()), (Some(card.as_str()), Some(0)));
+    w.broker.handle(&mut w.host, &json!({ "kind": "anchor_receipt", "req_id": "a", "scope_id": card, "seq": 0, "tx_receipt": "0x0" }));
+    w.host.take();
+    card
 }
 
 fn push_header(w: &mut World, ts_ms: i64) -> ([u8; 32], u64) {
@@ -345,9 +364,35 @@ fn genesis_ignores_host_keys_and_countersign_checks_g2() {
     let offer = json!({ "chain_pubkey": ready["chain_pubkey"], "genesis_attestation": att_cid, "issuer_card": "c".repeat(64), "operator_card": "b".repeat(64),
         "platform": "simulator", "policy_id": "bafkreinotarycardpolicy", "recipient_pubkey": ready["id_pubkey"], "issuer_signature": "sig" });
     w.broker.handle(&mut w.host, &json!({ "kind": "countersign_notary_card", "req_id": "c", "offer": offer }));
-    let signed = find(&w.host.take(), "countersigned").unwrap()["offer"].clone();
+    let out = w.host.take();
+    let signed = find(&out, "countersigned").unwrap()["offer"].clone();
     let sig = b64u::decode(signed["holder_signature"].as_str().unwrap()).unwrap();
     assert!(mldsa_verify(&id_pub, &jcs::canonical(&jcs::without_fields(&signed, &["holder_signature"])).unwrap(), &sig));
+    // E26: identity-log seq 0 is `opened`, names the genesis attestation, is signed by K_id, and is anchored
+    let card = ready["notary_card"].as_str().unwrap().to_string();
+    let anchor = out.iter().find(|m| m["kind"] == "eas_anchor").expect("seq 0 anchor requested").clone();
+    assert_eq!((anchor["scope_id"].as_str(), anchor["seq"].as_u64()), (Some(card.as_str()), Some(0)));
+    let rec_bytes = out.iter().filter(|m| m["kind"] == "publish").map(|m| b64u::decode(m["object"].as_str().unwrap()).unwrap())
+        .find(|b| formats::cid_of_bytes(b) == anchor["record_cid"].as_str().unwrap()).expect("record published");
+    let rec: Value = serde_json::from_slice(&rec_bytes).unwrap();
+    assert_eq!((rec["type"].as_str(), rec["kind"].as_str(), rec["seq"].as_u64(), rec["job_hash"].as_str()), (Some("notary.identity_log.v1"), Some("opened"), Some(0), Some(card.as_str())));
+    assert_eq!(rec["body"], json!({ "attestations": [att_cid] }));
+    let unsigned = jcs::canonical(&jcs::without_fields(&rec, &["notary_signature", "instance_signature"])).unwrap();
+    assert!(mldsa_verify(&id_pub, &unsigned, &b64u::decode(rec["notary_signature"]["signature"].as_str().unwrap()).unwrap()), "signed by K_id");
+    // a second countersign doesn't write another seq 0
+    w.broker.handle(&mut w.host, &json!({ "kind": "countersign_notary_card", "req_id": "c", "offer": offer }));
+    assert!(w.host.take().iter().all(|m| m["kind"] != "eas_anchor"));
+    // no job for this card until seq 0 is anchored
+    push_header(&mut w, T0);
+    w.card = card.clone();
+    let requester = MlDsaKey::generate();
+    let job = job_for(&w, &requester, 9);
+    w.broker.handle(&mut w.host, &json!({ "kind": "create_job", "req_id": "j", "job": job, "program": b64u::encode(&w.program) }));
+    assert_eq!(find(&w.host.take(), "error").expect("refused")["code"], "IDENTITY_LOG_PENDING");
+    w.broker.handle(&mut w.host, &json!({ "kind": "anchor_receipt", "req_id": "a", "scope_id": card, "seq": 0, "tx_receipt": "0x0" }));
+    w.host.take();
+    w.broker.handle(&mut w.host, &json!({ "kind": "create_job", "req_id": "j", "job": job, "program": b64u::encode(&w.program) }));
+    assert!(w.host.take().iter().all(|m| m["code"] != "IDENTITY_LOG_PENDING"), "after the anchor the identity-log gate passes");
     let mut wrong = offer.clone();
     wrong["recipient_pubkey"] = json!(b64u::encode(MlDsaKey::generate().public_key()));
     w.broker.handle(&mut w.host, &json!({ "kind": "countersign_notary_card", "req_id": "c", "offer": wrong }));
@@ -534,4 +579,13 @@ fn jobs_are_isolated_from_each_other() {
     assert_eq!(s.broker.job_epochs_for_tests(&b2.job_hash), vec![0]);
     assert_eq!(submit(&mut s, &seal_input(&b2, 0, &"1".repeat(64), "yes", 0, r)).unwrap()["status"], "accepted");
     let _ = a;
+}
+
+#[test]
+fn enclaves_do_not_enforce_the_single_operator_switch() {
+    // E34: wallets (W7) and verifiers (N) enforce it; an enclave reading host-supplied notary cards couldn't.
+    let mut w = world_ext("dedicated", "latest_wins", 2, true);
+    push_header(&mut w, T0);
+    let job = job_for(&w, &MlDsaKey::generate(), 1);
+    create_and_open(&mut w, &job);
 }

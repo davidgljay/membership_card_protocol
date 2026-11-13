@@ -107,11 +107,18 @@ impl Broker {
         // step 17: this enclave's notary card must be in replica_set
         let held = self.keys.identity_cards();
         let card = typed.replica_set.iter().map(|r| r.notary_card.clone()).find(|c| held.contains(c)).ok_or(e("JOB_NOTARY_NOT_APPROVED", "this enclave holds no replica_set card"))?;
+        // lifecycle step 9 (E26): no job until the identity log's `opened` record (seq 0) is anchored
+        if !self.logs.is_settled(&card, 0) {
+            return Err(e("IDENTITY_LOG_PENDING", "the notary card's identity log has no anchored seq 0 yet; retry after anchoring"));
+        }
         // governance lists (runtime §12) before anything depends on them
         self.refresh_lists(io);
         // W3, W4: the policy at policy_state_cid, from a chain to a trusted root
-        let policy = self.oracle.policy(io, &typed.policy_id, &typed.policy_state_cid).map_err(|c| (c, "policy".to_string()))?;
+        let read_now = self.chain_now_ms().or_else(|| self.attested_now_ms().ok()).unwrap_or(0);
+        let policy = self.oracle.policy(io, &typed.policy_id, &typed.policy_state_cid, read_now).map_err(|c| (c, "policy".to_string()))?;
         let notary = policy.notary.clone();
+        // Single-operator quorums are enforced by wallets (W7) and verifiers (N), not here: an enclave could read other
+        // operators' notary cards only from host-supplied data (lifecycle A.4, erratum E34).
         // W10
         if !typed.replica_set.iter().all(|r| policy.approved_notaries.contains(&r.notary_card)) {
             return Err(e("JOB_NOTARY_NOT_APPROVED", "a replica_set card is not in approved_notaries"));
@@ -139,7 +146,7 @@ impl Broker {
         }
         // W5
         if let Some(pred) = notary.get("job_requester_predicate") {
-            if !self.oracle.requester_allowed(io, &job, pred) {
+            if !self.oracle.requester_allowed(io, &job, pred, read_now) {
                 return Err(e("JOB_REQUESTER_NOT_PERMITTED", "requester does not satisfy job_requester_predicate"));
             }
         }

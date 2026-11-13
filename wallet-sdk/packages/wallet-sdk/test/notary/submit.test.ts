@@ -36,7 +36,9 @@ describe("sealing (protocol-objects.md §24)", () => {
     const s = await sealInput({ plaintext, jobPublicKey: JOB_PK, epoch: EPOCH });
     expect(s.sealed).toMatchObject({ epoch: EPOCH, job_hash: JOB_HASH, kem: "x-wing-draft-06", type: "notary.sealed_input.v1" });
     expect(b64uDecode(s.sealed.enc).length).toBe(1120);
-    expect(JSON.stringify(s.sealed)).not.toContain("yes"); // payload choice is not visible
+    // payload not visible. (Checking for a bare "yes" was flaky: base64 ciphertext contains any 3-letter string by
+    // chance ~0.6% of the time. Quoted JSON text can't occur in base64.)
+    expect(JSON.stringify(s.sealed)).not.toContain(new TextDecoder().decode(canonicalNotary(plaintext.payload)).replace(/"/g, '\\"'));
     expect(s.inputHash).toBe(b64uEncode(sha256(canonicalNotary(s.sealed))));
     const st = suite();
     const sk = await st.kem.deserializePrivateKey(b64uDecode(xw.sk_b64u).buffer as ArrayBuffer);

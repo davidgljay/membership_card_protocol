@@ -29,9 +29,10 @@ pub struct PolicyView {
 
 pub trait CardOracle {
     /// W3/W4: `Err("JOB_POLICY_UNTRUSTED" | "JOB_POLICY_CHANGED")`.
-    fn policy(&mut self, io: &mut dyn HostIo, policy_id: &str, state_cid: &str) -> Result<PolicyView, &'static str>;
+    /// `now_ms` is chain time, for the policy chain's revocation check (algorithm R, R3).
+    fn policy(&mut self, io: &mut dyn HostIo, policy_id: &str, state_cid: &str, now_ms: i64) -> Result<PolicyView, &'static str>;
     /// W5: whether the requester satisfies `job_requester_predicate` (resolved parameters).
-    fn requester_allowed(&mut self, io: &mut dyn HostIo, job: &Value, predicate: &Value) -> bool;
+    fn requester_allowed(&mut self, io: &mut dyn HostIo, job: &Value, predicate: &Value, now_ms: i64) -> bool;
     /// B5–B8 on a decrypted `NotaryInput`. Returns the contributor's root-key hash for dedupe (B10).
     /// `now_ms` is chain time (newest verified header), for `valid_until` and revocation dates.
     fn contributor(&mut self, io: &mut dyn HostIo, input: &Value, notary: &Value, params: &Value, now_ms: i64) -> Result<[u8; 32], &'static str>;

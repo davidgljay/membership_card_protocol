@@ -208,6 +208,8 @@ Not covered: **E26** (the first identity-log record), which is still your questi
 
 ### 1b.4 `process_specs/notary_lifecycle.md` §Error Paths, new row
 
+*Superseded 2026-11-12 (E34, David: "drop it"): enclaves don't enforce the switch. The row now names W only; verifiers reject after the switch with `NOT_SINGLE_OPERATOR_REFUSED`. See `notary-questions-5.3.md` E34.*
+
 > | `JOB_SINGLE_OPERATOR_REFUSED` | W (step 7), enclave (step 17) | One operator's replicas reach the quorum, and governance has retired single-operator quorums (`protocol-objects.md §34`) | Reject; the requester re-issues the job with replicas from several operators |
 
 ### 1b.5 `governance/PressRegistryBody/notary_certification.md`, new section after "Emergency Retirement"

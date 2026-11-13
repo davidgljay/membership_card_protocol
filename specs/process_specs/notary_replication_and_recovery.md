@@ -5,6 +5,8 @@
 **Status:** Draft  
 **Architecture:** `ARCHITECTURE.md` ADR-013 · **Objects:** `protocol-objects.md` §21, §22, §26–§31, §33 · **Lifecycle:** `notary_lifecycle.md` · **Design record:** `plans/notary-design-decisions.md` §2.5
 
+**Amended 2026-11-12:** step 33, genesis after total loss makes a new notary card with its own identity log (E26). Source: `plans/notary-spec-wording-batch2.md`, approved by David 2026-11-12.
+
 > **Terminology.** "The enclave" means an AWS Nitro Enclaves enclave. "Enclave attestation" means the AWS Nitro Enclaves attestation document. See `ARCHITECTURE.md`, terminology note.
 
 ---
@@ -230,7 +232,7 @@ Used by `sealed_link` revocation propagation (`derived_card_revocation_propagati
     - the links are lost, and derived cards fall back to lapsing at `expires_at`;
     - the `dup_tag` history is lost, and the template key restarts from the next period.
 
-    The operator performs notary genesis again (`notary_lifecycle.md` Phase 0), and the identity log records it.
+    The operator performs notary genesis again (`notary_lifecycle.md` Phase 0). That produces a new `K_id`, so it produces a new notary card with its own identity log. The old card's log ends, because no key that could extend it survives.
 
 **No on-chain anchor.** On-chain anchoring is deliberately not used for blobs. In v1 the enclave can't authenticate chain reads, and a key that never exists outside live replicas makes anchoring unnecessary for rollback protection: any replica that can read a blob learned the current version from a live peer. An optional EAS audit anchor per version may be added for public timing evidence. It is not required for correctness.
 

@@ -35,6 +35,9 @@ fn pins(cfg: &Value) -> CardPins {
         app_certification_root: cfg["appCertificationRoot"].as_str().unwrap().into(),
         login_service_root: cfg["loginServiceCertificationRoot"].as_str().unwrap().into(),
         max_chain_depth: cfg.get("maxChainDepth").and_then(Value::as_u64).unwrap_or(64) as usize,
+        list_cards: vec![],
+        list_holder_key: vec![],
+        list_press_key: vec![],
     }
 }
 

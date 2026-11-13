@@ -87,7 +87,7 @@ notary/
 | `lists` | governance lists: pins, algorithm L, version floors, no regression | runtime §12; lifecycle A.5; objects §34 |
 | `transforms` | output checks, k-suppression, clamping, rounding, buckets | runtime §11 |
 | `close` | quorum close, recomputation, cosignatures, notarization, `counted_inputs` | replication §5; lifecycle Phase 6–7; objects §27 |
-| `joblog` | job-log and identity-log records, anchor gating | objects §28; host §9 |
+| `joblog` | job-log and identity-log records, anchor gating; identity-log `seq` 0 `opened` at countersign, jobs gated on its anchor (E26) | objects §28; host §9; lifecycle step 9 |
 | `replication` | handoff (algorithm P, P1–P5), upgrades and migration epochs, `input_ack` quorum, heartbeats, re-replication, epochs | replication §2–§7; objects §29–§30 |
 | `derive` | `dup_tag`, D1–D4, the two-round offer, the issuance pool, anonymity sets, batched release | propagation §1, §3, §4 |
 | `propagation` | `expiry_only`, `sealed_link` links, the watch loop, successor rule, 820/920, timing defenses | propagation §5–§7; objects §32 |
@@ -449,7 +449,7 @@ Not ported: EAS annotations, non-compliance reporting, login and DNS.
 | 5.5 (partial) | Host service on nitropack: config, KV and storage keys/retention, host receipts, job intake, announcement/status, input ingress with receipts, enclave protocol (framing, socket transport, session), enclave-request dispatcher (publish/pin exact bytes, anchor, chain submit unchanged, deliver, peer relay, need_replica, alerts, fetch), never-filtered snapshots, monitoring, operator routes, peer relay, OHTTP gateway and router | `notary/host/src/**`, `notary/host/server/**` | `pnpm test` in `notary/host` (69 tests against a **mock enclave**: `src/enclave/mock.ts`); `pnpm run typecheck:server` (route files); the built server answers over real HTTP (direct routes 403 `NH_DIRECT_FORBIDDEN`) |
 | 5.5 | Relay registration of the notary host as a third destination kind | `relay/src/utils/oblivious_targets.ts` (`kind`) | `relay/tests/unit/oblivious-targets.test.ts` (3 tests) |
 | 5.5 | Deploy files (not run) | `notary/deploy/{docker-compose.yml,docker-compose.sim.yml,Dockerfile.host,eif/,README.md}` | none: need the runtime (5.3) and AWS (CP8) |
-| 5.4 | Algorithm E, key exposure | `verifier/src/notary/exposure.ts` | verifier `test/notary/exposure.test.ts` (14 tests: gap, fork, prev link, signatures, wrong card, malformed `pcr0_to`, earliest vulnerable retirement, boundary at `t_x`) |
+| 5.4 | Algorithm E, key exposure | `verifier/src/notary/exposure.ts` | verifier `test/notary/exposure.test.ts` (15 tests; since batch 2, `seq` 0 must be the `opened` record naming the genesis attestation (E26): gap, fork, prev link, signatures, wrong card, malformed `pcr0_to`, earliest vulnerable retirement, boundary at `t_x`) |
 | 5.4 | Stage 4 step 5a (`expires_at`); `RevocationStatus.reason` | `verifier/src/stages/stage4.ts`, `types.ts` | verifier `test/stages/stage4.test.ts` (6 new tests; erratum E15 for the future-expiry reading) |
 | 5.4 | `VerifierConfig.notary`; optional `RpcProvider.getGovernanceKeyset` / `getNotaryLogAnchors`; `NOTARY_CODES` | `verifier/src/types.ts`, `CardVerifier.ts`, `notary/types.ts` | compile-checked; exercised by the RPC provider tests |
 | 5.4 | `getGovernanceKeyset`, `getNotaryLogAnchors` (EAS client-side filtering) | `verifier-rpc-provider/src/{index,notaryAnchors}.ts` | `verifier-rpc-provider/test/notary.test.ts` (8 tests with mock contract and mock EAS reader; real chain in Phase 7) |
@@ -482,6 +482,14 @@ Not ported: EAS annotations, non-compliance reporting, login and DNS.
 | 5.3a | §7.5 mechanisms 2–3: CI regeneration and coverage | `notary/scripts/check-card-vectors.sh`; `integration_tests/run.sh` notary steps | a planted stale vector fails the check (exit 1); clean tree passes |
 | 5.3a | Enclave card oracle: evidence, whole-policy snapshots, per-card fallback, CID checks | `notary-broker/src/cards_oracle.rs` (`SnapshotOracle`, `CardPins`); used by `notary-runtime` | `cargo test -p notary-broker --test cards_oracle` (all 58 cases via snapshots, via fetches and via evidence; forged evidence refused) |
 | 5.3a | Snapshot fields Stage 2/4 need (E30) | `notary/host/src/chain/snapshots.ts` | host `pnpm test` 69 passed |
+
+| E31 | Algorithm R (lifecycle A.7): policy at `policy_state_cid`, requester; TypeScript reference | `verifier/src/notary/policy.ts` (`readPolicy`, `requesterAllowed`) | generator writes `notary/vectors/cards/policy_cases.json` (21 cases) |
+| E31 | Algorithm R, Rust | `notary-cards/src/policy.rs`; `SnapshotOracle::{policy, requester_allowed}` | `cargo test -p notary-cards --test policy_conformance` (agrees on all 21); in `check-card-vectors.sh` |
+| E31 | List histories over `fetch` (runtime §12): press signatures, `prev_log_root`, holder intent signer (E33), pinned list-card keys | `notary-cards/src/lists_read.rs`; `SnapshotOracle::list_history`; runtime pins file | `cargo test -p notary-broker --test list_reads` (genuine card accepted by L; 4 tamperings refused; unpinned card never read) |
+| E32 | `single_operator_quorums` in `list_approval`, rule E | `verifier/src/notary/{types,lists}.ts`; `notary-types/src/objects.rs`; `notary-broker/src/lists.rs` | `vectors/lists/cases.json` now 20 cases (6 new), Rust and TypeScript agree (`lists.rs`, vectors-tools `lists.test.ts`) |
+| E32 | Single-operator detection, N warning | `verifier/src/notary/{quorum,notarization}.ts` | verifier `test/notary/quorum.test.ts` (5); attestation-ts notarization test expects `SINGLE_OPERATOR_QUORUM` for its one-card job |
+| E32 | Wallet W7 refusal, consent flag and disclosure | `wallet-sdk/.../src/notary/{verifyJob,consent}.ts` | wallet `verifyJob.test.ts` "single-operator quorums" (4) |
+| E34 | Single-operator enforcement in verifiers, not enclaves | `verifier/src/notary/notarization.ts` (`singleOperatorRefusedSinceMs`, `NOT_SINGLE_OPERATOR_REFUSED`); broker check removed | attestation-ts notarization test (boundary); `broker.rs::enclaves_do_not_enforce_the_single_operator_switch` |
 
 Attestation vectors: `NOTARY_WRITE_VECTORS=1 cargo test -p notary-attest --test att_codes` writes `notary/vectors/attestation/cases.json`.
 

@@ -6,6 +6,8 @@
 **Architecture:** `ARCHITECTURE.md` ADR-013 · **Runtime:** `object_specs/notary_runtime.md` · **Processes:** `process_specs/notary_lifecycle.md`, `notary_replication_and_recovery.md`, `derived_card_revocation_propagation.md`
 **Amended 2026-11-12:** §8 snapshot entries carry head-event history and `sub_card_doc_cid`; per-card fetch shapes defined; policy, requester and list-card reads use per-card fetches. Source: `plans/notary-spec-wording-e31.md`, approved by David 2026-11-12.
 
+**Amended 2026-11-12 (batch 2):** §4 adds `ENCLAVE_ENDPOINTS`, `NOTARY_ADMIN_TOKEN`, `NOTARY_RELAY_TARGET_ID` and `NOTARY_PUBLIC_BASE_URL`, and `K_host` is a 32-byte seed; §5 genesis routes use the admin token; §9 anchor encoding; §14 adds `NH_UNAUTHORIZED` (E18, E3, E16). Source: `plans/notary-spec-wording-batch2.md`, approved by David 2026-11-12.
+
 > **Terminology.** The notary host is a **nitropack** application, built on the same server framework as the press (which `press.md` calls "Nitro"). It runs on the parent EC2 instance of one or more **AWS Nitro Enclaves** enclaves, which run the notary runtime. See `ARCHITECTURE.md`, terminology note.
 
 ---
@@ -84,7 +86,7 @@ All configuration is through environment variables.
 | Variable | Required | Description |
 |---|---|---|
 | `NOTARY_CARD_ADDRESSES` | Yes | Comma-separated notary card addresses this operator serves |
-| `NOTARY_HOST_MLDSA44_PRIVATE_KEY` | Yes | `K_host`, for host receipts. Its public key must equal `operator_host_pubkey` on each notary card. |
+| `NOTARY_HOST_MLDSA44_PRIVATE_KEY` | Yes | `K_host`, for host receipts, as a 32-byte ML-DSA-44 seed (base64url). Its public key must equal `operator_host_pubkey` on each notary card. |
 | `NOTARY_OHTTP_PRIVATE_KEY` | Yes | X25519 HPKE key for the gateway (§6) |
 | `NOTARY_GAS_WALLET_PRIVATE_KEY` | Yes | Pays gas for derived-card writes and EAS anchors |
 | `ARBITRUM_RPC_URL`, `EXPECTED_CHAIN_ID`, `REGISTRY_CONTRACT_ADDRESS` | Yes | As in `press.md §3.2` |
@@ -92,6 +94,10 @@ All configuration is through environment variables.
 | `IPFS_PROVIDER` and provider variables | Yes | As in `press.md §3.2` |
 | `EXTERNAL_KV_URL` | Yes | Redis, for durable host state (§7) |
 | `ENCLAVE_CIDS` | Yes | vsock context IDs of local enclaves |
+| `ENCLAVE_ENDPOINTS` | Yes | How to reach each `ENCLAVE_CIDS` entry, in the same order: the vsock proxy address in production, a local socket in the simulator |
+| `NOTARY_ADMIN_TOKEN` | Yes | Bearer token for the operator-authenticated routes (§5). Compared in constant time. |
+| `NOTARY_RELAY_TARGET_ID` | Yes | The `target_id` registered with the relay, put in announcement `transport` hints |
+| `NOTARY_PUBLIC_BASE_URL` | Yes | This host's public URL, put in announcement `transport` hints |
 | `PEER_HOSTS` | No | URLs of other operators' hosts, for cross-operator replicas (§11) |
 | `SNAPSHOT_REFRESH_SECONDS` | No | Default 30 |
 | `REATTEST_INTERVAL_SECONDS` | No | Default 21600 (6 hours) |
@@ -109,8 +115,8 @@ All configuration is through environment variables.
 | `POST` | `/jobs/{job_hash}/inputs` | Oblivious | Body is a `SealedInput` (`protocol-objects.md §24`). Stores it, signs a `HostReceipt`, forwards it to a local enclave, and returns `{ host_receipt, receipt_sealed }`. |
 | `POST` | `/jobs` | Direct, from the job requester | Body: `{ job, program_cid }`. The host fetches the program and sends `create_job`. Returns `{ job_hash, status }`. |
 | `GET` | `/jobs/{job_hash}/status` | Direct | Public status only: state, epoch, live replica count, job-log head CID |
-| `POST` | `/genesis` | Direct, operator-authenticated | Starts notary genesis (`notary_lifecycle.md` Phase 0) and returns the genesis request and attestation |
-| `POST` | `/genesis/countersign` | Direct, operator-authenticated | Passes the policy holder's notary card offer to the enclave and returns the countersigned offer |
+| `POST` | `/genesis` | Direct, `NOTARY_ADMIN_TOKEN` | Starts notary genesis (`notary_lifecycle.md` Phase 0) and returns the genesis request and attestation |
+| `POST` | `/genesis/countersign` | Direct, `NOTARY_ADMIN_TOKEN` | Passes the policy holder's notary card offer to the enclave and returns the countersigned offer |
 | `POST` | `/peer` | Direct, from peer hosts | Relays peer messages (handoff, `input_ack`, cosignatures, heartbeats) to the named local instance |
 | `GET` | `/health` | Direct | Liveness, plus the number of attested enclaves |
 
@@ -169,7 +175,7 @@ The host stores only ciphertexts, receipts and public objects. It never stores a
   - state blobs.
 
   Each object is pinned as the exact bytes the enclave produced, using the `raw` codec for public notary objects (`protocol-objects.md`, notary conventions).
-- **Anchoring.** For every record of an anchored kind, the host submits an EAS attestation `{ job_hash, seq, record_cid }` under the notary schema from the gas wallet, then returns the transaction receipt to the enclave (`anchor_receipt`). The enclave signs nothing further in that log until it sees the receipt.
+- **Anchoring.** For every record of an anchored kind, the host submits an EAS attestation `(job_hash, seq, record_cid)`, encoded as in `protocol-objects.md §28`, under the notary schema from the gas wallet, then returns the transaction receipt to the enclave (`anchor_receipt`). The enclave signs nothing further in that log until it sees the receipt.
 
 ---
 
@@ -224,6 +230,7 @@ Heartbeats themselves stay between enclaves and are never published.
 | `NH_ENCLAVE_UNAVAILABLE` | No local enclave holds the job; retry |
 | `NH_INPUT_TOO_LARGE` | `SealedInput` larger than 256 KiB |
 | `NH_STORAGE_FAILED` | The ciphertext couldn't be stored; no receipt is issued |
+| `NH_UNAUTHORIZED` | An operator-authenticated route was called without a valid token (HTTP 401) |
 | Enclave codes | Passed through unchanged (`notary_runtime.md §16`) |
 
 ---

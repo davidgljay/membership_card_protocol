@@ -94,9 +94,16 @@ const run = async (w: World, c: NotarizationConfig = cfg) => verifyNotarization(
 const outcome = async (w: World, c?: NotarizationConfig) => { const r = await run(w, c); return r.valid ? "valid" : r.code; };
 
 describe("algorithm N (notary_lifecycle.md A.4) with real simulator attestations", () => {
-  it("accepts a good notarization: no warnings, output and counts returned", async () => {
+  it("a single-operator notarization closed at or after governance retired the allowance is rejected; earlier stays valid with a warning (E34)", async () => {
+    const at = T(CLOSED_AT);
+    expect(await outcome(world(), { ...cfg, singleOperatorRefusedSinceMs: at })).toBe("NOT_SINGLE_OPERATOR_REFUSED");
+    const earlier = await run(world(), { ...cfg, singleOperatorRefusedSinceMs: at + 1 });
+    expect(earlier.valid).toBe(true);
+    if (earlier.valid) expect(earlier.warnings).toContain("SINGLE_OPERATOR_QUORUM");
+  });
+  it("accepts a good notarization: output and counts returned; its one-card replica set is a single-operator quorum (L4)", async () => {
     const r = await run(world());
-    expect(r).toMatchObject({ valid: true, accepted: 42, rejected: 4, final_epoch: 0, suppressed: false, output: { abstain: 3, no: 12, yes: 27 }, warnings: [] });
+    expect(r).toMatchObject({ valid: true, accepted: 42, rejected: 4, final_epoch: 0, suppressed: false, output: { abstain: 3, no: 12, yes: 27 }, warnings: ["SINGLE_OPERATOR_QUORUM"] });
     if (r.valid) expect(r.chain_state_age_seconds).toBe(3597);
   });
 

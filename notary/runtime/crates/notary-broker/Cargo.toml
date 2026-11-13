@@ -18,5 +18,6 @@ regex = { version = "1", default-features = false, features = ["std", "unicode-p
 
 [dev-dependencies]
 wat = "1.228"
+aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
 notary-attest = { path = "../notary-attest", features = ["test-pki"] }
 notary-sim = { path = "../../../sim" }

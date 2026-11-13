@@ -150,7 +150,7 @@ The exception to deliberation periods is also recorded in `mandate.md`, Off-Chai
 
 ## Retiring Single-Operator Quorums
 
-While few operators are active, jobs may be served by replicas of a single operator: a bootstrap allowance, disclosed to contributors and verifiers (`specs/process_specs/notary_lifecycle.md` L4). Once enough independent operators are active for communities to form multi-operator replica sets, the body retires the allowance. It sets `single_operator_quorums: "refused"` on the program allowlist's `list_approval` by a standard (quorum) update, with the usual deliberation period and a decision record. Wallets and runtimes then refuse new single-operator jobs. Jobs already running are unaffected. The body may restore `"allowed"` the same way.
+While few operators are active, jobs may be served by replicas of a single operator: a bootstrap allowance, disclosed to contributors and verifiers (`specs/process_specs/notary_lifecycle.md` L4). Once enough independent operators are active for communities to form multi-operator replica sets, the body retires the allowance. It sets `single_operator_quorums: "refused"` on the program allowlist's `list_approval` by a standard (quorum) update, with the usual deliberation period and a decision record. Wallets then refuse new single-operator jobs, and verifiers reject single-operator notarizations closed after the change. Notarizations closed earlier stay valid, with a warning. The body may restore `"allowed"` the same way.
 
 ---
 

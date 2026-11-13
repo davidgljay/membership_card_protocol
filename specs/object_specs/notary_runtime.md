@@ -6,6 +6,8 @@
 **Architecture:** `ARCHITECTURE.md` ADR-013 · **Processes:** `process_specs/notary_lifecycle.md`, `notary_replication_and_recovery.md`, `derived_card_revocation_propagation.md` · **Objects:** `protocol-objects.md` §20–§34 · **Design record:** `plans/notary-design-decisions.md` §2.3, §2.4
 **Amended 2026-11-12:** §9 `create_job` reads the policy with algorithm R through `fetch`; `genesis_ready` adds `request` and `notary_card`. §12 pins list-card public keys and reads list history through `fetch`. §16 adds `CLOSE_NOT_DUE`. Source: `plans/notary-spec-wording-e31.md`, approved by David 2026-11-12.
 
+**Amended 2026-11-12 (E35):** §16 adds `IDENTITY_LOG_PENDING`. Approved by David 2026-11-12.
+
 > **Terminology.** This spec describes software that runs inside **AWS Nitro Enclaves**, called "the enclave". "NSM" is the enclave's security module, which issues the **enclave attestation** (the AWS Nitro Enclaves attestation document). This software is unrelated to nitropack, the web framework the host uses. See `ARCHITECTURE.md`, terminology note.
 
 ---
@@ -405,6 +407,7 @@ The host can't read enclave memory in any case. Zeroization limits what a later 
 | `ATT_*` | Verifier modules and algorithm V | `notary_lifecycle.md` Appendix A.1 |
 | `LIST_VERSION_REGRESSION` | §12 | A host supplied an older governance list version; refused and alerted |
 | `CLOSE_NOT_DUE` | §9 `close_chunk` | Chain time or the attested time is still before `closes_at`; nothing closed, and the host retries later (`notary_replication_and_recovery.md` §5) |
+| `IDENTITY_LOG_PENDING` | §9 `create_job` | The notary card's identity-log `seq` 0 isn't anchored yet (`notary_lifecycle.md` step 9); nothing opened, and the host anchors it and retries |
 | `LIST_APPROVAL_*` | §12 | A list version isn't validly approved by members (`notary_lifecycle.md` Appendix A.5); refused, and the last verified version is kept |
 | `LINT_WEAK_GRANULARITY`, `LINT_NO_SNAPSHOT_POLICY` | `notary-lint` | Warnings |
 

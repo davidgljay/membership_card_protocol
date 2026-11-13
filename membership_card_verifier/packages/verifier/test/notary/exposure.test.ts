@@ -11,6 +11,7 @@ const sign = (n: number, u: object) => ({ public_key: pub(n), signature: b64uEnc
 const CARD = cardPointer(key(1).publicKey);
 const pcr = (n: number) => new Uint8Array(48).fill(n);
 const T = (s: string) => Date.parse(s);
+const GEN = "bafkreigenesisattestation";
 
 const store = new Map<string, Uint8Array>();
 function record(seq: number, body: object, prev: string | undefined, o: { kind?: string; signer?: number; instSigner?: number; job?: string } = {}) {
@@ -30,50 +31,58 @@ const vuln = (n: number, at: string) => runtime(n, { retire_reason: "vulnerable"
 function reads(anchors: { seq: number; record_cid: string }[]): ExposureReads {
   return { anchors: async () => anchors.map((a) => ({ ...a, timestamp: 0 })), fetch: async (c) => store.get(c) ?? null };
 }
-const lineage = (anchors: { seq: number; record_cid: string }[]) => keyLineage({ card: CARD, kIdPubkey: pub(1), genesisPcr0: pcr(1), reads: reads(anchors) });
+const lineage = (anchors: { seq: number; record_cid: string }[]) => keyLineage({ card: CARD, kIdPubkey: pub(1), genesisPcr0: pcr(1), genesisAttestation: GEN, reads: reads(anchors) });
 
 describe("algorithm E (notary_lifecycle.md A.6)", () => {
-  const r0 = record(0, handoff(2), undefined);
-  const r1 = record(1, handoff(3), r0);
-  const good = [{ seq: 0, record_cid: r0 }, { seq: 1, record_cid: r1 }];
+  const opened = (o: { signer?: number; instSigner?: number; job?: string } = {}) => record(0, { attestations: [GEN] }, undefined, { kind: "opened", ...o });
+  const r0 = opened();
+  const r1 = record(1, handoff(2), r0);
+  const r2 = record(2, handoff(3), r1);
+  const good = [{ seq: 0, record_cid: r0 }, { seq: 1, record_cid: r1 }, { seq: 2, record_cid: r2 }];
 
-  it("lineage = genesis PCR0 plus pcr0_to of every identity-scope handoff; a card with no handoff has only the genesis runtime", async () => {
+  it("lineage = genesis PCR0 plus pcr0_to of every identity-scope handoff; a card with only its opened record has only the genesis runtime", async () => {
     const l = await lineage(good);
     expect(l.ok && [...l.pcr0s].sort()).toEqual([1, 2, 3].map((n) => b64uEncode(pcr(n))).sort());
-    const none = await lineage([]);
-    expect(none.ok && [...none.pcr0s]).toEqual([b64uEncode(pcr(1))]);
+    const only = await lineage([{ seq: 0, record_cid: r0 }]);
+    expect(only.ok && [...only.pcr0s]).toEqual([b64uEncode(pcr(1))]);
   });
   it("only identity-scope handoffs add to the lineage", async () => {
-    const a = record(0, handoff(9, "job"), undefined);
-    const l = await lineage([{ seq: 0, record_cid: a }]);
+    const a = record(1, handoff(9, "job"), r0);
+    const l = await lineage([{ seq: 0, record_cid: r0 }, { seq: 1, record_cid: a }]);
     expect(l.ok && l.pcr0s.has(b64uEncode(pcr(9)))).toBe(false);
   });
 
   describe("NOTARY_LINEAGE_INCOMPLETE", () => {
     const code = async (a: { seq: number; record_cid: string }[]) => { const l = await lineage(a); return l.ok ? "ok" : l.code; };
-    it("a gap in seq", async () => expect(await code([{ seq: 0, record_cid: r0 }, { seq: 2, record_cid: r1 }])).toBe("NOTARY_LINEAGE_INCOMPLETE"));
+    it("a gap in seq", async () => expect(await code([{ seq: 0, record_cid: r0 }, { seq: 2, record_cid: r2 }])).toBe("NOTARY_LINEAGE_INCOMPLETE"));
+    it("E26: an empty log, or a seq 0 that isn't the opened record naming the genesis attestation", async () => {
+      expect(await code([])).toBe("NOTARY_LINEAGE_INCOMPLETE");
+      expect(await code([{ seq: 0, record_cid: record(0, handoff(2), undefined) }])).toBe("NOTARY_LINEAGE_INCOMPLETE");
+      expect(await code([{ seq: 0, record_cid: record(0, { attestations: ["bafkreiother"] }, undefined, { kind: "opened" }) }])).toBe("NOTARY_LINEAGE_INCOMPLETE");
+      expect(await code([{ seq: 0, record_cid: record(0, { attestations: [GEN, GEN] }, undefined, { kind: "opened" }) }])).toBe("NOTARY_LINEAGE_INCOMPLETE");
+    });
     it("a log that starts above seq 0", async () => expect(await code([{ seq: 1, record_cid: r1 }])).toBe("NOTARY_LINEAGE_INCOMPLETE"));
     it("a fork: two different records anchored for one seq", async () => {
-      const other = record(0, handoff(8), undefined);
+      const other = record(0, { attestations: [GEN] }, undefined, { kind: "opened", instSigner: 8 });
       expect(await code([{ seq: 0, record_cid: r0 }, { seq: 0, record_cid: other }])).toBe("NOTARY_LINEAGE_INCOMPLETE");
     });
     it("the same record anchored twice is not a fork", async () => expect(await code([{ seq: 0, record_cid: r0 }, { seq: 0, record_cid: r0 }])).toBe("ok"));
     it("a broken prev link", async () => {
-      const bad = record(1, handoff(3), "bafkreiwrong");
+      const bad = record(1, handoff(2), "bafkreiwrong");
       expect(await code([{ seq: 0, record_cid: r0 }, { seq: 1, record_cid: bad }])).toBe("NOTARY_LINEAGE_INCOMPLETE");
     });
     it("a record signed by someone other than K_id, or with a bad instance signature", async () => {
-      expect(await code([{ seq: 0, record_cid: record(0, handoff(2), undefined, { signer: 9 }) }])).toBe("NOTARY_LINEAGE_INCOMPLETE");
-      expect(await code([{ seq: 0, record_cid: record(0, handoff(2), undefined, { instSigner: 9 }) }])).toBe("NOTARY_LINEAGE_INCOMPLETE");
+      expect(await code([{ seq: 0, record_cid: opened({ signer: 9 }) }])).toBe("NOTARY_LINEAGE_INCOMPLETE");
+      expect(await code([{ seq: 0, record_cid: opened({ instSigner: 9 }) }])).toBe("NOTARY_LINEAGE_INCOMPLETE");
     });
     it("a record for another card, or unavailable, or not matching its CID", async () => {
-      expect(await code([{ seq: 0, record_cid: record(0, handoff(2), undefined, { job: cardPointer(key(5).publicKey) }) }])).toBe("NOTARY_LINEAGE_INCOMPLETE");
+      expect(await code([{ seq: 0, record_cid: opened({ job: cardPointer(key(5).publicKey) }) }])).toBe("NOTARY_LINEAGE_INCOMPLETE");
       expect(await code([{ seq: 0, record_cid: "bafkreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }])).toBe("NOTARY_LINEAGE_INCOMPLETE");
       const swapped = { anchors: async () => [{ seq: 0, record_cid: r0, timestamp: 0 }], fetch: async () => store.get(r1)! };
-      const l = await keyLineage({ card: CARD, kIdPubkey: pub(1), genesisPcr0: pcr(1), reads: swapped });
+      const l = await keyLineage({ card: CARD, kIdPubkey: pub(1), genesisPcr0: pcr(1), genesisAttestation: GEN, reads: swapped });
       expect(l.ok).toBe(false);
     });
-    it("a malformed pcr0_to", async () => expect(await code([{ seq: 0, record_cid: record(0, { scope: "identity", pcr0_to: "AAAA" }, undefined) }])).toBe("NOTARY_LINEAGE_INCOMPLETE"));
+    it("a malformed pcr0_to", async () => expect(await code([{ seq: 0, record_cid: r0 }, { seq: 1, record_cid: record(1, { scope: "identity", pcr0_to: "AAAA" }, r0) }])).toBe("NOTARY_LINEAGE_INCOMPLETE"));
   });
 
   describe("exposure time and judgement", () => {
@@ -95,13 +104,13 @@ describe("algorithm E (notary_lifecycle.md A.6)", () => {
 
   it("makeKeyExposureRead ties the steps together; an unknown card or a broken log is lineage_incomplete", async () => {
     const accepted = [vuln(2, "2026-03-01T00:00:00Z")];
-    const read = makeKeyExposureRead({ reads: reads(good), accepted, card: async (p) => (p === CARD ? { kIdPubkey: pub(1), genesisPcr0: pcr(1) } : null) });
+    const read = makeKeyExposureRead({ reads: reads(good), accepted, card: async (p) => (p === CARD ? { kIdPubkey: pub(1), genesisPcr0: pcr(1), genesisAttestation: GEN } : null) });
     expect(await read(CARD, T("2026-04-01T00:00:00Z"))).toBe("exposed");
     expect(await read(CARD, T("2026-02-01T00:00:00Z"))).toBe("later");
     expect(await read("unknown", 0)).toBe("lineage_incomplete");
-    const broken = makeKeyExposureRead({ reads: reads([{ seq: 1, record_cid: r1 }]), accepted, card: async () => ({ kIdPubkey: pub(1), genesisPcr0: pcr(1) }) });
+    const broken = makeKeyExposureRead({ reads: reads([{ seq: 1, record_cid: r1 }]), accepted, card: async () => ({ kIdPubkey: pub(1), genesisPcr0: pcr(1), genesisAttestation: GEN }) });
     expect(await broken(CARD, 0)).toBe("lineage_incomplete");
-    const clean = makeKeyExposureRead({ reads: reads(good), accepted: [runtime(2)], card: async () => ({ kIdPubkey: pub(1), genesisPcr0: pcr(1) }) });
+    const clean = makeKeyExposureRead({ reads: reads(good), accepted: [runtime(2)], card: async () => ({ kIdPubkey: pub(1), genesisPcr0: pcr(1), genesisAttestation: GEN }) });
     expect(await clean(CARD, T("2030-01-01T00:00:00Z"))).toBe("none");
   });
 });

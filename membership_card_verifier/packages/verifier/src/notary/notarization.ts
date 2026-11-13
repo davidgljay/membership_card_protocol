@@ -13,6 +13,7 @@
  * Job-log note: a log record whose signatures do not verify ends the walk and is reported as `JOB_LOG_GAP`
  * (the spec makes N11 findings warnings, not rejections).
  */
+import { singleOperatorQuorum } from "./quorum.js";
 import { sha256 } from "@noble/hashes/sha256";
 import { ml_dsa44 } from "@noble/post-quantum/ml-dsa.js";
 import {
@@ -31,7 +32,7 @@ export interface NotarizationReads {
   /** The policy's `notary` section and `approved_notaries` at a state, and whether its chain reaches a trusted root. */
   policyAt(policyId: string, stateCid: string): Promise<{ notary: NotarySection; approvedNotaries: string[]; chainValid: boolean } | null>;
   /** The notary card: its K_id, chain validity, and the earliest 8xx/9xx revocation's effective time (ms), if any. */
-  notaryCard(pointer: string): Promise<{ recipientPubkey: string; chainValid: boolean; revokedAtMs?: number } | null>;
+  notaryCard(pointer: string): Promise<{ recipientPubkey: string; chainValid: boolean; revokedAtMs?: number; /** for the SINGLE_OPERATOR_QUORUM warning (L4) */ operatorCard?: string } | null>;
   /** A block on the verifier's own chain view. */
   block(number: number): Promise<{ hash: string; timestampMs: number } | null>;
   /** Algorithm E (A.6) for a notary card at chain time `tMs`. */
@@ -44,9 +45,14 @@ export interface NotarizationConfig {
   attest: AttestConfig;
   modules: AttestationVerifier[];
   acceptedRuntimes: AcceptedRuntime[];
+  /**
+   * `refused_since` (lifecycle A.4, §34): the on-chain time (ms) of the earliest program-allowlist version from which
+   * `single_operator_quorums` has been "refused" without interruption. Absent while the bootstrap allowance stands.
+   */
+  singleOperatorRefusedSinceMs?: number;
 }
 
-export type NotarizationWarning = "runtime_retired_vulnerable" | "notary_key_exposed_later" | "JOB_LOG_GAP" | "JOB_LOG_FORK" | "EPOCH_TOTAL_LOSS";
+export type NotarizationWarning = "runtime_retired_vulnerable" | "notary_key_exposed_later" | "JOB_LOG_GAP" | "JOB_LOG_FORK" | "EPOCH_TOTAL_LOSS" | "SINGLE_OPERATOR_QUORUM";
 
 export type NotarizationVerificationResult =
   | { valid: true; job_hash: string; notary_card: string; final_epoch: number; accepted: number; rejected: number; dropped_after_acceptance: number;
@@ -259,6 +265,15 @@ export async function verifyNotarization(notarizationCid: string, reads: Notariz
     if (a.timestamp > closedAt || !rec) continue;
     if (rec.kind === "epoch_started" && typeof (rec.body as { epoch?: number })["epoch"] === "number" && (rec.body as { epoch: number }).epoch > n.final_epoch)
       return fail("NOT_EPOCH_SUPERSEDED", "a higher epoch was anchored before closed_at");
+  }
+  // L4: a single-operator quorum can count contributors that operator invented (warning, not a rejection)
+  const replicaSet = (job["replica_set"] as { notary_card: string; instances: number }[] | undefined) ?? [];
+  const operators = new Map<string, string | undefined>();
+  for (const r of replicaSet) operators.set(r.notary_card, (await reads.notaryCard(r.notary_card))?.operatorCard);
+  if (singleOperatorQuorum(replicaSet, (c) => operators.get(c)).single) {
+    if (cfg.singleOperatorRefusedSinceMs !== undefined && closedAt >= cfg.singleOperatorRefusedSinceMs)
+      return fail("NOT_SINGLE_OPERATOR_REFUSED", "single-operator quorum closed after governance retired the allowance");
+    addWarning("SINGLE_OPERATOR_QUORUM");
   }
   return {
     valid: true, job_hash: n.job_hash, notary_card: n.notary_card, final_epoch: n.final_epoch, accepted: n.accepted, rejected: n.rejected,

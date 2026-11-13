@@ -8,18 +8,18 @@ import { b64uDecode, verifyListApproval } from "@membership-card-protocol/verifi
 import type { GovernanceKeyset, ListVersion } from "@membership-card-protocol/verifier/notary";
 
 const file = JSON.parse(readFileSync(new URL("../../vectors/lists/cases.json", import.meta.url), "utf8")) as {
-  cases: { id: string; list: "accepted_runtimes"; list_card: string; keyset: { keys: string[]; quorum: number; version: number; key_scheme: 0 | 1 };
-    history: { value: unknown[]; approval_text: string | null }[]; expect: { ok: true; list_version: number } | { ok: false; code: string } }[];
+  cases: { id: string; list: "accepted_runtimes" | "program_allowlist"; list_card: string; keyset: { keys: string[]; quorum: number; version: number; key_scheme: 0 | 1 };
+    history: { value: unknown[]; approval_text: string | null }[]; expect: { ok: true; list_version: number; single_operator_quorums: string } | { ok: false; code: string } }[];
 };
 
 describe("algorithm L: Rust and TypeScript agree", () => {
-  it("has the full case set", () => expect(file.cases.length).toBeGreaterThanOrEqual(14));
+  it("has the full case set", () => expect(file.cases.length).toBeGreaterThanOrEqual(20));
   for (const c of file.cases) {
     it(c.id, () => {
       const keyset: GovernanceKeyset = { ...c.keyset, keys: c.keyset.keys.map((k) => b64uDecode(k)) };
       const history: ListVersion[] = c.history.map((h) => ({ value: h.value, approvalText: h.approval_text ?? undefined }));
       const r = verifyListApproval({ list: c.list, listCard: c.list_card, history, keyset });
-      expect(r.ok ? { ok: true, list_version: r.listVersion } : { ok: false, code: r.code }).toEqual(c.expect);
+      expect(r.ok ? { ok: true, list_version: r.listVersion, single_operator_quorums: r.singleOperatorQuorums } : { ok: false, code: r.code }).toEqual(c.expect);
     });
   }
 });

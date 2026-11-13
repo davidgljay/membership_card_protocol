@@ -4,6 +4,8 @@
 **Date:** 2026-06-14  
 **Status:** In Review  
 **Amended 2026-11-12 (notaries):** §34 `list_approval` gains `single_operator_quorums` (program allowlist only), and rule E keeps it unchanged in emergency updates. Source: `plans/notary-spec-wording-e31.md`, approved by David 2026-11-12.
+
+**Amended 2026-11-12 (notaries, batch 2):** notary conventions reject unknown fields (E2); §20 notary card gains `genesis_request`, and the genesis request is pinned (E17); §24 receipt nonce and aad (E7); §27 Merkle root of the empty set, raw-byte sort, `counted_inputs` format, raw-digest cosignatures (E1, E14, E6); §28 EAS schema types and how anchors are found (E3, E16), and identity-log `seq` 0 is `opened` (E26); §34 what members sign (E6, E12). Source: `plans/notary-spec-wording-batch2.md`, approved by David 2026-11-12.
 **Amended 2026-11-11 (notaries, ADR-013):**
 - §1 gains the optional `expires_at` field.
 - §2 gains `approved_notaries`, the `notary` section (§2.1) and derived-card template policies (§2.2).
@@ -1222,6 +1224,7 @@ Proves to the login router that a wallet asking to be registered is a certified 
 Rules that apply to every notary object:
 
 - **Serialization.** Canonical RFC 8785 JSON. Absent optional fields are omitted, never `null`.
+- **Unknown fields.** A reader rejects a notary object (§21–§34) that has a field its `type` version doesn't define. A new field means a new `type` version. Card documents, including the notary card (§20), follow the CardDocument rules instead.
 - **Hash.** `H(x) = SHA-256(RFC 8785 JSON of x)`, encoded base64url. A public notary object is pinned to IPFS as its raw canonical bytes (CIDv1, `raw` codec, sha2-256), so its CID's digest equals `H(object)`.
 - **Domain separation.** Every signed notary object has a `type` field naming the object and its version (e.g. `"notary.job.v1"`). One key signs several object kinds, so verifiers reject an object whose `type` isn't the one they expect.
 - **Signatures.** Each is a `SignatureEntry` over the canonical JSON of the object without that signature field, unless a section says otherwise. The signer's address is `keccak256(public_key)` and must equal the card pointer the object names.
@@ -1256,6 +1259,7 @@ Every notary card has `policy_id` = **`NotaryCardPolicy`**, a single governance-
 {
   "chain_pubkey":         "<base64url — K_chain, secp256r1 x||y, 64 bytes>",
   "genesis_attestation":  "<cid — enclave attestation, purpose 0x01 (§33)>",
+  "genesis_request":      "<cid — the pinned genesis request>",
   "issuer_card":          "<card-pointer — the notary policy this card serves>",
   "operator_card":        "<card-pointer — the operator's own card>",
   "operator_host_pubkey": "<base64url — K_host, ML-DSA-44, 1312 bytes>",
@@ -1273,8 +1277,9 @@ Every notary card has `policy_id` = **`NotaryCardPolicy`**, a single governance-
 | `chain_pubkey` | `base64url` | Yes | immutable | `K_chain`. For a template policy, the same key is registered by `AuthorizePress(T, <notary card address>, chain_pubkey, keccak256(K_id))`. |
 | `platform` | `text` | Yes | immutable | `"aws-nitro-enclaves"` or `"simulator"` (accepted only by verifiers configured for the simulator) |
 | `genesis_attestation` | `cid` | Yes | immutable | Purpose `0x01` (§33). Binds `keccak256(K_id)`, `SHA-256(chain_pubkey)` and the genesis request below. Verifiers of derived cards check it against the accepted-runtime list as of the card's `issued_at`. |
+| `genesis_request` | `cid` | Yes | immutable | The genesis request below, pinned with the `raw` codec. Later verifiers fetch it to recompute the genesis attestation's nonce (`notary_lifecycle.md` A.3). |
 
-**Genesis request.** The operator sends this to the policy holder before the notary card is issued. `H(genesis request)` is the genesis attestation's `nonce`, so the attestation can't be reused to bind someone else's operator card or host key. The random `nonce` field makes every request, and so every attestation, unique.
+**Genesis request.** The operator sends this to the policy holder before the notary card is issued. `H(genesis request)` is the genesis attestation's `nonce`, so the attestation can't be reused to bind someone else's operator card or host key. The random `nonce` field makes every request, and so every attestation, unique. The enclave pins it (`notary_runtime.md §9`, `genesis_ready`), and the notary card names it in `genesis_request`.
 
 ```json
 {
@@ -1459,7 +1464,7 @@ pt   = RFC 8785 JSON of the NotaryInput (§23) or NotaryCountersign (§23.1)
 
 - **Size.** At most 256 KiB.
 - **Identity.** `input_hash = H(SealedInput)` identifies the input in receipts and in the input commitment.
-- **Response.** The host answers through the outer envelope with `{ host_receipt, receipt_sealed }`. `receipt_sealed` is the ValidationReceipt (§26), encrypted with ChaCha20-Poly1305 under `Export("card-notary-receipt-v1", 32)` from the **inner** HPKE context, so the host can't read it.
+- **Response.** The host answers through the outer envelope with `{ host_receipt, receipt_sealed }`. `receipt_sealed` is the ValidationReceipt (§26), encrypted with ChaCha20-Poly1305 under `Export("card-notary-receipt-v1", 32)` from the **inner** HPKE context, so the host can't read it. The nonce is 12 zero bytes, which is safe because the key is used once per HPKE context. The aad is the RFC 8785 JSON of `{ "input_hash", "job_hash", "type": "notary.validation_receipt.sealed.v1" }`.
 - **Cross-language test vectors** for the X-Wing suite are required (`notary_runtime.md`).
 
 ---
@@ -1531,7 +1536,7 @@ A receipt never names the contributor's card. If a contributor shares it, it sho
 - `K_id` of the closing replica (`notary_signature`)
 - at least q replicas' `K_inst` (`cosignatures`), where q = ⌊N/2⌋ + 1
 
-**Serialized for signing:** Define the **body** as the notarization without `cosignatures` and `notary_signature`. Each cosignature is over `H(body)`. `notary_signature` covers everything except `notary_signature`, cosignatures included.
+**Serialized for signing:** Define the **body** as the notarization without `cosignatures` and `notary_signature`. Each cosignature is over the 32 raw digest bytes of `H(body)`, not their base64url text. `notary_signature` covers everything except `notary_signature`, cosignatures included.
 
 The signed result of a `statement` job. Anyone can verify it from CIDs and chain data alone (`card_verifier.md`, notarization verification).
 
@@ -1573,8 +1578,8 @@ The signed result of a `statement` job. Anyone can verify it from CIDs and chain
 | `final_epoch` | `integer` | Yes | |
 | `attestation` | `cid` | Yes | |
 | `chain_state` | object | Yes | Host-supplied chain state the enclave closed on. Verifiers check it against the chain. |
-| `input_commitment` | `base64url` | Yes | Merkle root over the sorted counted `input_hash` values. Leaf = `SHA-256(0x00 ‖ input_hash)`, node = `SHA-256(0x01 ‖ left ‖ right)`, and an odd node is promoted unchanged. |
-| `counted_inputs` | `cid` | Yes | The sorted leaf list, so contributors can check inclusion |
+| `input_commitment` | `base64url` | Yes | Merkle root over the sorted counted `input_hash` values, sorted by their raw bytes. Leaf = `SHA-256(0x00 ‖ input_hash)`, node = `SHA-256(0x01 ‖ left ‖ right)`, and an odd node is promoted unchanged. The root of an empty list is `SHA-256("")` (the RFC 6962 convention). |
+| `counted_inputs` | `cid` | Yes | The counted `input_hash` values, in the same order as for `input_commitment`, as an RFC 8785 JSON array of base64url strings, pinned with the `raw` codec. Contributors use it to check inclusion. |
 | `accepted` | `integer` | Yes | Distinct contributors counted |
 | `rejected` | `integer` | Yes | Inputs rejected in any epoch, including those excluded when re-checked at close |
 | `dropped_after_acceptance` | `integer` | Yes | Accepted inputs whose ciphertext was not supplied at close. Attributable to the operator through receipts. |
@@ -1591,7 +1596,7 @@ The signed result of a `statement` job. Anyone can verify it from CIDs and chain
 
 ## 28. JobLogRecord
 
-**Stored on:** IPFS. Each record of an anchored kind is also anchored by an EAS attestation on Arbitrum One (ADR-008), with schema `{ job_hash, seq, record_cid }` and indexed by `job_hash`.
+**Stored on:** IPFS. Each record of an anchored kind is also anchored by an EAS attestation on Arbitrum One (ADR-008), with schema `bytes32 job_hash, uint64 seq, string record_cid`. `job_hash` is the record's `job_hash` field as its raw 32 bytes. For an identity log, that is the notary card address. EAS doesn't index attestation data, so readers find a log's anchors by filtering the schema's attestations on `job_hash`, either themselves or through an EAS indexer. A missing anchor shows up as a `seq` gap.
 **Signed by:** `K_id` (`notary_signature`) and `K_inst` (`instance_signature`) of the job's leader replica
 **Serialized for signing:** Canonical RFC 8785 JSON of all fields except both signatures
 
@@ -1612,7 +1617,7 @@ The public, hash-chained history of a job. An enclave refuses to sign record `se
 **Anchored kinds:** `opened`, `epoch_started`, `handoff`, `replica_lost`, `notarized`, `issued`, `aborted`.
 
 **Bodies:**
-- `opened`: `{ "attestations": [cid] }`
+- `opened`: `{ "attestations": [cid] }`. In an identity log, this is `seq` 0 and holds exactly the notary card's `genesis_attestation`.
 - `epoch_started`: `{ "epoch", "epoch_reason" }`. `epoch_reason` is one of `"key_period"`, `"total_loss"`, `"runtime_migration"` or `"key_exposure"` (`notary_replication_and_recovery.md` §7).
 - `handoff`: a HandoffRecord (§29)
 - `replica_lost`: `{ "instance" }`
@@ -1819,10 +1824,14 @@ Each list card also has a field **`list_approval`**, replaced on every update. I
 }
 ```
 
-- **What is signed.** Each member signs `H(JCS(list_approval without "signatures"))` with their governance key, using the keyset's `key_scheme`: ECDSA secp256r1 (raw 64-byte `r‖s`) for scheme 0, ML-DSA-44 for scheme 1. These are the same HSM-held keys members use for on-chain actions (`registry_contract.md §3.6`).
+- **What is signed.** Each member signs the 32 raw digest bytes of `H(JCS(list_approval without "signatures"))`, not their base64url text, with their governance key, using the keyset's `key_scheme`:
+  - scheme 0, ECDSA secp256r1 (raw 64-byte `r‖s`): the 32 bytes are the ECDSA message hash and aren't hashed again. That equals ECDSA-SHA256 over the canonical JSON, and it is what an HSM that signs a digest produces.
+  - scheme 1, ML-DSA-44: the 32 bytes are the message.
+
+  The governance script shows each member the change from the previous list before they sign. These are the same HSM-held keys members use for on-chain actions (`registry_contract.md §3.6`).
 - **Thresholds.** `kind: "standard"` needs signatures from at least `GovernanceKeysets[PressRegistryBody].quorum` distinct keys (4 of 5 today). `kind: "emergency_retirement"` needs at least **2** (`EMERGENCY_RETIREMENT_THRESHOLD`, a protocol constant) and is valid only for a removal-only change (rule E below).
 - **Rule E (removal only).** Compared with the previous list, an emergency update has the same entries in the same order, and (for the program allowlist) the same `single_operator_quorums` value. Entries are matched by `pcr0` or `program_cid`. Every changed entry differs only by `retire_reason` becoming `"vulnerable"` and `retired_at` being added or moved earlier, and at least one entry changes. Anything else, including reversing an emergency retirement, needs `"standard"`.
-- **`single_operator_quorums`** *(program allowlist only; added 2026-11-12)*. Whether jobs whose quorum one operator can reach alone (`notary_lifecycle.md` L4) may run. Absent means `"allowed"`, the bootstrap allowance for early deployment. When enough operators are active, the body sets it to `"refused"` by a standard update. An emergency update must carry the same value as the version it follows (rule E). Readers take the value from the verified head.
+- **`single_operator_quorums`** *(program allowlist only; added 2026-11-12)*. Whether jobs whose quorum one operator can reach alone (`notary_lifecycle.md` L4) may run. Absent means `"allowed"`, the bootstrap allowance for early deployment. When enough operators are active, the body sets it to `"refused"` by a standard update. An emergency update must carry the same value as the version it follows (rule E). Readers take the value from the verified head. Wallets then refuse new single-operator jobs (W7), and verifiers reject single-operator notarizations closed at or after the change (algorithm N). Enclaves don't check, because they could only read notary cards from host-supplied data (`notary_lifecycle.md` L4, Appendix A.4).
 - **Verification.** Algorithm L (`notary_lifecycle.md` Appendix A.5) verifies the approval of a list's head version. If the head is an emergency update, it also verifies the earlier versions back to the most recent standard one, so two members can't use an emergency update to approve a list that never reached the quorum.
 - **Key rotation.** An approval is valid only under the keyset version it names, and verifiers accept only the **current** version. After `RotateGovernanceKeys`, the body re-approves the unchanged head with a `"standard"` update under the new keyset. Members can sign it in advance, because they know the next version number. Until it is published, verifiers fail closed.
 
@@ -1917,7 +1926,7 @@ Objects marked **RFC 8785-signed** use canonical RFC 8785 JSON per Appendix A of
 | DomainBindingAttestation | IPFS (in login service card's `domain_binding`) | RFC 8785-signed by the full-domain DNS admin card (all except `admin_signature`) |
 | LoginServiceMetadata | HTTPS (`/.well-known/membership-login`) | RFC 8785-signed by the server card (`metadata` only) |
 | Notary card | IPFS | As CardDocument; `holder_signature` by `K_id` in the enclave |
-| Genesis request | In transit (operator → policy holder) | Not signed; `H(genesis request)` is the genesis attestation's nonce |
+| Genesis request | IPFS (`raw`), named by the notary card's `genesis_request` | Not signed; `H(genesis request)` is the genesis attestation's nonce |
 | NotaryJob | IPFS | RFC 8785-signed by the requester card (all except `requester_signature`); `job_hash` = SHA-256 of the complete object |
 | JobAnnouncement | Notary host + IPFS | RFC 8785-signed by `K_id` (all except `notary_signature`) |
 | NotaryInput, NotaryCountersign | Inside HPKE only | NotaryInput: RFC 8785-signed by the contributor sub-card (all except `contributor_signature`). Countersign: `CardDocument` `holder_signature` rules. |

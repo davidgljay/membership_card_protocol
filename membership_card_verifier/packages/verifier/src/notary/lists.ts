@@ -35,7 +35,7 @@ export interface ListVersion {
 }
 
 export type ListResult =
-  | { ok: true; list: unknown[]; listVersion: number }
+  | { ok: true; list: unknown[]; listVersion: number; /** Program allowlist only (§34): whether single-operator quorums may run. */ singleOperatorQuorums: "allowed" | "refused" }
   | { ok: false; code: ListCode };
 
 export type ListCode =
@@ -93,6 +93,8 @@ function parseApproval(text: string | undefined, list: "accepted_runtimes" | "pr
     if (a.list !== list || a.list_card !== listCard) return { code: "LIST_APPROVAL_MALFORMED" };
     if (!Array.isArray(a.signatures) || !Number.isInteger(a.list_version) || a.list_version < 1 || !["standard", "emergency_retirement"].includes(a.kind))
       return { code: "LIST_APPROVAL_MALFORMED" };
+    if (a.single_operator_quorums !== undefined && (list !== "program_allowlist" || !["allowed", "refused"].includes(a.single_operator_quorums)))
+      return { code: "LIST_APPROVAL_MALFORMED" };
     return { approval: a };
   } catch (e) {
     if (e instanceof NotaryFormatError) return { code: "LIST_APPROVAL_MALFORMED" };
@@ -113,13 +115,14 @@ export function verifyListApproval(o: {
   const field = o.list === "accepted_runtimes" ? "pcr0" : "program_cid";
   const { keyset: K, history } = o;
   let headVersion = 0;
+  let headSwitch: "allowed" | "refused" = "allowed";
   for (let idx = history.length - 1; idx >= 0; idx--) {
     const ver = history[idx]!, prev = idx > 0 ? history[idx - 1] : undefined;
     // 1
     const parsed = parseApproval(ver.approvalText, o.list, o.listCard);
     if ("code" in parsed) return { ok: false, code: parsed.code };
     const a = parsed.approval;
-    if (idx === history.length - 1) headVersion = a.list_version;
+    if (idx === history.length - 1) { headVersion = a.list_version; headSwitch = a.single_operator_quorums ?? "allowed"; }
     // 2
     try {
       if (a.list_hash !== H(ver.value)) return { ok: false, code: "LIST_APPROVAL_HASH_MISMATCH" };
@@ -142,9 +145,12 @@ export function verifyListApproval(o: {
     }
     const need = a.kind === "standard" ? K.quorum : EMERGENCY_RETIREMENT_THRESHOLD;
     if (signers.size < need) return { ok: false, code: "LIST_APPROVAL_THRESHOLD" };
-    if (a.kind === "standard") return { ok: true, list: history[history.length - 1]!.value, listVersion: headVersion };
-    // 5: emergency: removal-only against the previous version, then verify that version too
+    if (a.kind === "standard") return { ok: true, list: history[history.length - 1]!.value, listVersion: headVersion, singleOperatorQuorums: headSwitch };
+    // 5: emergency: removal-only against the previous version (same entries, same single_operator_quorums), then verify that version too
     if (!prev || !isRemovalOnly(prev.value, ver.value, field)) return { ok: false, code: "LIST_APPROVAL_NOT_REMOVAL_ONLY" };
+    const prevParsed = parseApproval(prev.approvalText, o.list, o.listCard);
+    if (!("code" in prevParsed) && (prevParsed.approval.single_operator_quorums ?? "allowed") !== (a.single_operator_quorums ?? "allowed"))
+      return { ok: false, code: "LIST_APPROVAL_NOT_REMOVAL_ONLY" };
   }
   return { ok: false, code: "LIST_APPROVAL_MISSING" }; // ran out of history without reaching a standard version
 }

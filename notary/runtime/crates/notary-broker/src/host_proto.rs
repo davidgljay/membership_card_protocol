@@ -145,7 +145,7 @@ impl Broker {
                 None
             }
             "genesis" => Some(self.on_genesis(io, &req_id, msg)),
-            "countersign_notary_card" => Some(self.on_countersign(&req_id, msg)),
+            "countersign_notary_card" => Some(self.on_countersign(io, &req_id, msg)),
             "create_job" => Some(self.on_create_job(io, &req_id, msg)),
             "submit_input" => Some(self.on_submit_input(io, &req_id, msg)),
             "close_chunk" => self.on_close_chunk(io, &req_id, msg),
@@ -197,6 +197,10 @@ impl Broker {
     }
 
     fn card_for_scope(&self, scope: &str) -> Option<String> {
+        // an identity log's scope is the notary card address itself
+        if self.keys.identity(scope).is_some() {
+            return Some(scope.to_string());
+        }
         let hash: [u8; 32] = b64u::decode_len(scope, 32).ok()?.try_into().ok()?;
         self.jobs.get(&hash).map(|j| j.card.clone())
     }
@@ -235,10 +239,13 @@ impl Broker {
     }
 
     /// Lifecycle step 6 (check G2): the offer must name this enclave's own K_id, K_chain and genesis attestation.
-    fn on_countersign(&mut self, req_id: &str, msg: &Value) -> Value {
+    /// Then step 9 (erratum E26): the identity log's `seq` 0 is an `opened` record naming the genesis attestation.
+    /// It is written here, the enclave's last genesis step, because the enclave isn't told when the card is
+    /// registered; the record doesn't depend on registration. Jobs wait for its anchor (`create_job`).
+    fn on_countersign(&mut self, io: &mut dyn HostIo, req_id: &str, msg: &Value) -> Value {
         let Some(mut offer) = msg.get("offer").cloned() else { return error(req_id, "MISSING_FIELD", "offer is required") };
-        let att = offer.get("genesis_attestation").and_then(Value::as_str).unwrap_or_default();
-        let Some(card) = self.genesis.get(att).cloned() else { return error(req_id, "NOT_GENESIS_MISMATCH", "unknown genesis attestation") };
+        let att = offer.get("genesis_attestation").and_then(Value::as_str).unwrap_or_default().to_string();
+        let Some(card) = self.genesis.get(&att).cloned() else { return error(req_id, "NOT_GENESIS_MISMATCH", "unknown genesis attestation") };
         let Some(ident) = self.keys.identity(&card) else { return error(req_id, "NOT_GENESIS_MISMATCH", "identity not held") };
         let id_ok = offer.get("recipient_pubkey").and_then(Value::as_str) == Some(&b64u::encode(ident.id.public_key()));
         let chain_ok = offer.get("chain_pubkey").and_then(Value::as_str) == Some(&b64u::encode(&ident.chain.public_key_xy()));
@@ -247,6 +254,12 @@ impl Broker {
         }
         let Ok(bytes) = jcs::canonical(&offer) else { return error(req_id, "NOT_GENESIS_MISMATCH", "offer is not canonical JSON") };
         offer["holder_signature"] = json!(b64u::encode(&ident.id.sign(&bytes)));
+        if self.logs.head(&card).is_none() {
+            let at = self.now_iso();
+            let ident = self.keys.identity(&card).expect("checked above");
+            let recs = self.logs.append(&card, true, "opened", json!({ "attestations": [att] }), &at, &Signers { id: &ident.id, inst: self.keys.inst() });
+            self.emit_records(io, recs);
+        }
         json!({ "kind": "countersigned", "req_id": req_id, "offer": offer })
     }
 }

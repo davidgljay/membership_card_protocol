@@ -195,6 +195,8 @@ obj! {
         pub list_version: u64,
         #[serde(default, skip_serializing_if = "is_none")] pub prev_list_hash: Option<String>,
         pub signatures: Vec<ListSignature>,
+        /// Program allowlist only; absent means "allowed" (§34, 2026-11-12).
+        #[serde(default, skip_serializing_if = "is_none")] pub single_operator_quorums: Option<String>,
         #[serde(rename = "type")] pub type_: String,
     }
 }

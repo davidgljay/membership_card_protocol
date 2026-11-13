@@ -9,9 +9,8 @@
 //!
 //! Trusted roots and the app-certification / login-service roots are pinned in the image (E29).
 //!
-//! The policy read (W3/W4/W10) and the governance list histories (§12) are **not implemented here yet**: how the enclave
-//! reads and trusts a policy card and a list card's version history is open (erratum E31). Until it is answered,
-//! `policy` and `list_history` fail closed, so no job opens with this oracle.
+//! The policy and requester reads use algorithm R (lifecycle Appendix A.7) and the list histories use
+//! `notary_cards::lists_read` (runtime §12): all over vsock `fetch`, with no network connection.
 use crate::env::{CardOracle, HostIo, PolicyView};
 use crate::lists::ListVersion;
 use notary_cards::{check_contributor, CardEntry, CardSource, ContributorConfig, ContributorResult, SubCardEntry};
@@ -21,11 +20,24 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone)]
+pub struct ListCardPin {
+    pub address: String,
+    pub public_key: Vec<u8>,
+    /// `accepted_runtimes` or `program_allowlist`.
+    pub field: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct CardPins {
     pub trusted_roots: Vec<String>,
     pub app_certification_root: String,
     pub login_service_root: String,
     pub max_chain_depth: usize,
+    /// The two governance list cards (runtime §12, as amended 2026-11-12).
+    pub list_cards: Vec<ListCardPin>,
+    /// Keys allowed to sign list updates: the list holder (intent) and the PressRegistryBody press.
+    pub list_holder_key: Vec<u8>,
+    pub list_press_key: Vec<u8>,
 }
 
 #[derive(Default)]
@@ -38,11 +50,13 @@ struct Snapshots {
 pub struct SnapshotOracle {
     pins: CardPins,
     snap: Snapshots,
+    /// policy_id → policy address, from the last algorithm R read (for R5's `is_holder`).
+    policy_addresses: BTreeMap<String, String>,
 }
 
 impl SnapshotOracle {
     pub fn new(pins: CardPins) -> Self {
-        Self { pins, snap: Snapshots::default() }
+        Self { pins, snap: Snapshots::default(), policy_addresses: BTreeMap::new() }
     }
 }
 
@@ -93,13 +107,31 @@ impl CardSource for Source<'_> {
     }
 }
 
+impl SnapshotOracle {
+    fn roots(&self) -> notary_cards::stages::Roots<'_> {
+        notary_cards::stages::Roots {
+            trusted: &self.pins.trusted_roots,
+            app_certification: &self.pins.app_certification_root,
+            login_service: &self.pins.login_service_root,
+            max_depth: self.pins.max_chain_depth,
+        }
+    }
+}
+
 impl CardOracle for SnapshotOracle {
-    fn policy(&mut self, _io: &mut dyn HostIo, _policy_id: &str, _state_cid: &str) -> Result<PolicyView, &'static str> {
-        Err("JOB_POLICY_UNTRUSTED") // erratum E31: fail closed until the policy-read path is specified
+    fn policy(&mut self, io: &mut dyn HostIo, policy_id: &str, state_cid: &str, now_ms: i64) -> Result<PolicyView, &'static str> {
+        let src = Source { io: RefCell::new(io), evidence: BTreeMap::new(), snap: &self.snap };
+        let roots = self.roots();
+        // R4 (replica cards approved) is checked by the broker against `approved_notaries` (W10).
+        let r = notary_cards::policy::read_policy(&src, policy_id, state_cid, &[], &roots, now_ms)?;
+        self.policy_addresses.insert(policy_id.to_string(), r.policy_address);
+        Ok(PolicyView { notary: r.notary, approved_notaries: r.approved_notaries })
     }
 
-    fn requester_allowed(&mut self, _io: &mut dyn HostIo, _job: &Value, _predicate: &Value) -> bool {
-        false // needs the requester's chain, read like a policy (E31)
+    fn requester_allowed(&mut self, io: &mut dyn HostIo, job: &Value, predicate: &Value, now_ms: i64) -> bool {
+        let Some(addr) = job.get("policy_id").and_then(Value::as_str).and_then(|p| self.policy_addresses.get(p)).cloned() else { return false };
+        let src = Source { io: RefCell::new(io), evidence: BTreeMap::new(), snap: &self.snap };
+        notary_cards::policy::requester_allowed(&src, job, predicate, &addr, &self.roots(), now_ms)
     }
 
     fn contributor(&mut self, io: &mut dyn HostIo, input: &Value, notary: &Value, params: &Value, now_ms: i64) -> Result<[u8; 32], &'static str> {
@@ -129,8 +161,18 @@ impl CardOracle for SnapshotOracle {
         }
     }
 
-    fn list_history(&mut self, _io: &mut dyn HostIo, _list_card: &str) -> Option<Vec<ListVersion>> {
-        None // erratum E31: the list card's version history read path is open
+    fn list_history(&mut self, io: &mut dyn HostIo, list_card: &str) -> Option<Vec<ListVersion>> {
+        let pin = self.pins.list_cards.iter().find(|p| p.address == list_card)?.clone();
+        let src = Source { io: RefCell::new(io), evidence: BTreeMap::new(), snap: &self.snap };
+        let pins = notary_cards::lists_read::ListCardPins {
+            address: &pin.address,
+            public_key: &pin.public_key,
+            field: &pin.field,
+            holder_key: &self.pins.list_holder_key,
+            press_key: &self.pins.list_press_key,
+        };
+        let versions = notary_cards::lists_read::read_list_history(&src, &pins)?;
+        Some(versions.into_iter().map(|(value, approval_text)| ListVersion { value, approval_text }).collect())
     }
 
     fn on_snapshot(&mut self, policy: &str, msg: &Value) {

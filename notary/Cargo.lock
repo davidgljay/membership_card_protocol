@@ -748,6 +748,7 @@ dependencies = [
 name = "notary-broker"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "notary-admission",
  "notary-attest",
  "notary-cards",
