@@ -506,6 +506,9 @@ Not ported: EAS annotations, non-compliance reporting, login and DNS.
 | 5.7 follow-up | Q9 verified `ipfs:` object cache | `notary-broker/src/cards_oracle.rs` (`IpfsCache`) | `cards_oracle.rs::verified_ipfs_objects_are_cached_between_inputs` |
 | 5.7 follow-up | Q3 B3 retry in the wallet | `wallet-sdk/.../submit.ts` (`submitNotaryInputWithRetry`) | wallet `submit.test.ts` (2 tests); the e2e driver |
 
+| 5.7 follow-up | §7.5 mechanism 4: differential fuzzing (not gating) | `verifier/scripts/fuzz-notary-conformance.ts`; `notary-cards/tests/fuzz.rs`; `.github/workflows/notary-fuzz.yml` | 3,600 mutants over seeds 1–3: 0 disagreements (about 4% unreadable by the port); runs nightly |
+| 5.7 follow-up | Worker wall-clock kill (runtime §8, E23) | `notary-runtime/src/process_workers.rs` | `notary-runtime/tests/wall_clock.rs` |
+
 Attestation vectors: `NOTARY_WRITE_VECTORS=1 cargo test -p notary-attest --test att_codes` writes `notary/vectors/attestation/cases.json`.
 
 Regenerate and check vectors: `pnpm run gen` / `pnpm run check` in `notary/vectors-tools`; Rust-produced vectors: `NOTARY_WRITE_VECTORS=1 cargo test -p notary-crypto`.

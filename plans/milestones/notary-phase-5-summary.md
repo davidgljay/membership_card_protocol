@@ -50,12 +50,11 @@ Steps 5.0–5.7 of the implementation plan. The specs were approved at CP3, so P
 
 **Requirements with no test** (the gaps):
 
-- **The worker wall-clock kill** (runtime §8; reported as `trap`, E23). `process_workers.rs:90` implements it. The code is in the binary crate, so no integration test reaches it. Add a library seam or a unit test with a spinning program.
-- **Worker sandbox on x86_64.** Verified on Linux arm64 only (E27).
+- **Worker sandbox on x86_64.** Verified on Linux arm64 only (E27). On arm64 the whole workspace, including the sandbox and wall-clock tests, passes in a `rust:1.96` container (88 tests).
+- **Differential fuzzing** (§7.5 mechanism 4) is built after the review (`fuzz-notary-conformance.ts`, `notary-fuzz.yml`, nightly, not gating); 3,600 mutants gave no disagreement.
 - **`DERIVE_*`, `HANDOFF_*`.** Phase 6 (6.3, 6.4); no code and no test yet, as planned.
 - **Propagation, state blob, epoch restart, multi-replica close.** Phase 6.
 - **Host re-attestation** (`REATTEST_INTERVAL_SECONDS` is validated and unused). Phase 6.3.
-- **Nightly differential fuzzing** (§7.5, mechanism 4). Not built; not gating.
 - **Real AWS attestation document.** None tested (Phase 8).
 - **Host `fetch` kinds `press_auth:` and `events:`.** The host answers `null`; nothing in the sim stack uses them.
 

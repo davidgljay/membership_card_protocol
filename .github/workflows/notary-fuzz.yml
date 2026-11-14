@@ -1,0 +1,43 @@
+name: Notary differential fuzzing
+
+# Code-plan §7.5, mechanism 4. Not gating: it runs nightly and on demand, and a failure means the Rust port
+# (notary-cards) and the TypeScript verifier disagree on a mutated card world. Each disagreement, once understood,
+# becomes a committed case in membership_card_verifier/packages/verifier/scripts/gen-notary-conformance.ts.
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: 'Seed (default: the run number)'
+        required: false
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build the verifier
+        working-directory: membership_card_verifier/packages/verifier
+        run: pnpm install --frozen-lockfile && pnpm run build
+      - name: Mutate the cases and judge them with the verifier
+        working-directory: membership_card_verifier/packages/verifier
+        run: node --experimental-strip-types scripts/fuzz-notary-conformance.ts --seed "${{ github.event.inputs.seed || github.run_number }}" --count 3000 --out "$RUNNER_TEMP/fuzz.json"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.0
+      - name: Judge them with notary-cards
+        working-directory: notary
+        run: NOTARY_FUZZ_FILE="$RUNNER_TEMP/fuzz.json" cargo test -p notary-cards --test fuzz -- --nocapture
+      - name: Keep the mutants when they disagree
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-mutants
+          path: ${{ runner.temp }}/fuzz.json
