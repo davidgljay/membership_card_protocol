@@ -12,12 +12,6 @@ path = "src/lib.rs"
 [dependencies]
 notary-guest = { path = "../../guest", features = ["program"] }
 
-[profile.release]
-opt-level = "s"
-lto = true
-panic = "abort"
-codegen-units = 1
-
 [dev-dependencies]
 notary-types = { path = "../../runtime/crates/notary-types" }
 serde_json.workspace = true

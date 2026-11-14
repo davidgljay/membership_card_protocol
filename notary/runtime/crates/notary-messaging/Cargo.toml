@@ -1,0 +1,16 @@
+[package]
+name = "notary-messaging"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+description = "Notary output messages (messaging_protocol.md §24, ADR-007): one routing-envelope blob per recipient sub-card, encrypted to its ML-KEM-768 key exactly as the App SDK's fan-out does (app-sdk/src/messaging/fanout.ts), inside a message envelope signed by K_id."
+
+[dependencies]
+notary-types = { path = "../notary-types" }
+notary-crypto = { path = "../notary-crypto" }
+ml-kem = { version = "=0.3.4", features = ["getrandom"] }
+hkdf = "0.13"
+sha3_12 = { package = "sha3", version = "0.12" }
+aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
+getrandom = "0.4"
+serde_json.workspace = true

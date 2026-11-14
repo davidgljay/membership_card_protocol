@@ -148,6 +148,9 @@ importers:
       '@hpke/hybridkem-x-wing':
         specifier: 0.7.1
         version: 0.7.1
+      '@membership-card-protocol/app-sdk':
+        specifier: file:../../app-sdk/packages/app-sdk
+        version: file:../app-sdk/packages/app-sdk
       '@membership-card-protocol/verifier':
         specifier: file:../../membership_card_verifier/packages/verifier
         version: file:../membership_card_verifier/packages/verifier

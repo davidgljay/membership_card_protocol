@@ -672,6 +672,7 @@ dependencies = [
  "hybrid-array",
  "kem",
  "module-lattice",
+ "pkcs8",
  "rand_core",
  "sha3 0.12.0",
  "shake",
@@ -822,6 +823,20 @@ dependencies = [
  "notary-types",
  "serde_json",
  "wat",
+]
+
+[[package]]
+name = "notary-messaging"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "getrandom",
+ "hkdf",
+ "ml-kem",
+ "notary-crypto",
+ "notary-types",
+ "serde_json",
+ "sha3 0.12.0",
 ]
 
 [[package]]
