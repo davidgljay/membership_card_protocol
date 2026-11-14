@@ -283,6 +283,16 @@ Goal: one end-to-end path running in the simulator: a job is announced with an a
   - **Context needed**: `notary-code-plan.md`; Phase 5 summary
   - **Done when**: every question has an answer recorded.
 
+- [ ] **6.0a Contributor-policy hardening** *(added 2026-11-13 from David's question; `notary-questions-5.7.md` Q11, items 1 and 2)*
+  - **What**: Narrow what a hostile host can do around who may contribute. Two changes, small and local to the notary objects and the broker. Do them first in Phase 6, so 6.1's notarization carries the new field from the start.
+    1. **Record what was checked.** Add an optional `contributor_policies: [{ policy_id, state_cid, snapshot_block }]` to the notarization (`protocol-objects.md §27`). The broker fills it from the policies it held snapshots for when it closed. Verifiers (algorithm N) re-check each entry against the chain and warn on a mismatch; the wallet's inclusion and consent views show it.
+    2. **Close the set.** Policy creation (`notary-lint`) and admission require `contributor_predicate` to reduce to a finite list of `issued_under_template` policies (literal or through parameter references); `LINT_NO_SNAPSHOT_POLICY` becomes an admission refusal for jobs that publish a result to others, and stays a warning where the participation disclosure applies (decide in 6.0). The enclave refuses the per-card `fetch` fallback for a contributor's own card outside those snapshots.
+  - **Not in this step**: signed registry-state commitments (Q11 item 3). That changes the press and registry and is a protocol proposal for after Phase 7, alongside the L4/L5 review.
+  - **Who**: Claude (Sonnet)
+  - **Context needed**: `notary-questions-5.7.md` Q11; `protocol-objects.md §27`; `notary_lifecycle.md` A.4 and Appendix B; `notary_runtime.md §6, §9`; `notary-broker/src/{close,cards_oracle}.rs`; `notary/lint`
+  - **Needs David first (spec text, 6.0)**: approval of the §27 field, the N warning code, the admission rule and its error code.
+  - **Done when**: a notarization lists the policies and states checked; algorithm N flags a mismatch; a job whose predicate cannot be reduced to a policy set is refused (or warned, as decided); a contributor outside the set cannot be admitted through the fetch fallback; and the cross-language vectors cover all of it.
+
 - [ ] **6.1 Aggregation template**
   - **What**: Build the `aggregate` template and policy, the one-shot job mode, the input commitment, and receipt inclusion checks. Build `notary-messaging` (ADR-007 encryption in Rust) for private `statement` outputs *(added at CP4)*.
   - **Who**: Claude

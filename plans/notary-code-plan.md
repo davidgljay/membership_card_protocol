@@ -515,6 +515,12 @@ Regenerate and check vectors: `pnpm run gen` / `pnpm run check` in `notary/vecto
 
 ---
 
+## 8.4 Phase 6 addition (2026-11-13): contributor-policy hardening
+
+Step **6.0a** (implementation plan; `notary-questions-5.7.md` Q11 items 1 and 2). Touches `notary-types` and `verifier/notary` (`contributor_policies` on the notarization), `notary-broker/src/close.rs` (fills it) and `cards_oracle.rs` (no per-card fallback for a contributor's own card outside the snapshotted policies), `verifier/src/notary/notarization.ts` (algorithm N check), `notary-admission` and `notary/lint` (the closed-set rule), and the wallet's consent and inclusion views. Vectors in `notary/vectors/objects/` and `cards/`. Spec approval comes first.
+
+---
+
 ## 9. Amendments to the implementation plan (approved at CP4 and applied)
 
 1. **Add 5.3a, "Card checks in Rust" (`notary-cards`), using Opus.** *Approved 2026-11-12.* It is large and security-critical (§6, risk 1; §7.5).
