@@ -5,6 +5,8 @@
 **Status:** In Review  
 **Amended 2026-11-12 (notaries):** §34 `list_approval` gains `single_operator_quorums` (program allowlist only), and rule E keeps it unchanged in emergency updates. Source: `plans/notary-spec-wording-e31.md`, approved by David 2026-11-12.
 
+**Amended 2026-11-13 (notaries, 5.7 review):** §28 `at` is the enclave's attested time, not chain time (Q1). Source: `plans/notary-questions-5.7.md`, David approved 2026-11-13 (`plans/notary-questions-5.7.md`).
+
 **Amended 2026-11-12 (notaries, batch 2):** notary conventions reject unknown fields (E2); §20 notary card gains `genesis_request`, and the genesis request is pinned (E17); §24 receipt nonce and aad (E7); §27 Merkle root of the empty set, raw-byte sort, `counted_inputs` format, raw-digest cosignatures (E1, E14, E6); §28 EAS schema types and how anchors are found (E3, E16), and identity-log `seq` 0 is `opened` (E26); §34 what members sign (E6, E12). Source: `plans/notary-spec-wording-batch2.md`, approved by David 2026-11-12.
 **Amended 2026-11-11 (notaries, ADR-013):**
 - §1 gains the optional `expires_at` field.
@@ -1610,7 +1612,7 @@ The public, hash-chained history of a job. An enclave refuses to sign record `se
 | `prev` | `cid` | If `seq` > 0 | |
 | `kind` | `text` | Yes | `opened`, `epoch_started`, `handoff`, `replica_lost`, `replicated`, `closed`, `notarized`, `issued`, `aborted` |
 | `body` | object | Yes | Per kind, listed below |
-| `at` | `timestamp` | Yes | Chain time |
+| `at` | `timestamp` | Yes | The enclave's attested time when it signed the record. Not chain time: the enclave's chain view is hash-linked headers from the host, and the attested clock is AWS-signed (assumption T9). No verifier decision reads `at`. |
 | `instance` | `base64url` | Yes | `SHA-256(K_inst)` |
 | `notary_signature`, `instance_signature` | SignatureEntry | Yes | |
 

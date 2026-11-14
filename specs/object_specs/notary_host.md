@@ -6,6 +6,8 @@
 **Architecture:** `ARCHITECTURE.md` ADR-013 · **Runtime:** `object_specs/notary_runtime.md` · **Processes:** `process_specs/notary_lifecycle.md`, `notary_replication_and_recovery.md`, `derived_card_revocation_propagation.md`
 **Amended 2026-11-12:** §8 snapshot entries carry head-event history and `sub_card_doc_cid`; per-card fetch shapes defined; policy, requester and list-card reads use per-card fetches. Source: `plans/notary-spec-wording-e31.md`, approved by David 2026-11-12.
 
+**Amended 2026-11-13 (5.7 review):** §4 `NOTARY_CARD_ADDRESSES` is optional and genesis cards are served automatically (Q4); §4 `CHAIN_PROVIDER`, `SIM_CHAIN_URL` and the start-up refusal; §14 `NOT_REACHABLE`, `ENCLAVE_ERROR` (Q5, Q6). Source: `plans/notary-questions-5.7.md`, David approved 2026-11-13 (`plans/notary-questions-5.7.md`).
+
 **Amended 2026-11-12 (batch 2):** §4 adds `ENCLAVE_ENDPOINTS`, `NOTARY_ADMIN_TOKEN`, `NOTARY_RELAY_TARGET_ID` and `NOTARY_PUBLIC_BASE_URL`, and `K_host` is a 32-byte seed; §5 genesis routes use the admin token; §9 anchor encoding; §14 adds `NH_UNAUTHORIZED` (E18, E3, E16). Source: `plans/notary-spec-wording-batch2.md`, approved by David 2026-11-12.
 
 > **Terminology.** The notary host is a **nitropack** application, built on the same server framework as the press (which `press.md` calls "Nitro"). It runs on the parent EC2 instance of one or more **AWS Nitro Enclaves** enclaves, which run the notary runtime. See `ARCHITECTURE.md`, terminology note.
@@ -85,7 +87,7 @@ All configuration is through environment variables.
 
 | Variable | Required | Description |
 |---|---|---|
-| `NOTARY_CARD_ADDRESSES` | Yes | Comma-separated notary card addresses this operator serves |
+| `NOTARY_CARD_ADDRESSES` | No | Comma-separated notary card addresses this operator serves, for cards created elsewhere or before this host started. A card created through `POST /genesis` on this host is served at once and remembered in the host's storage, so no card address is needed to run genesis for the first time and no restart follows. |
 | `NOTARY_HOST_MLDSA44_PRIVATE_KEY` | Yes | `K_host`, for host receipts, as a 32-byte ML-DSA-44 seed (base64url). Its public key must equal `operator_host_pubkey` on each notary card. |
 | `NOTARY_OHTTP_PRIVATE_KEY` | Yes | X25519 HPKE key for the gateway (§6) |
 | `NOTARY_GAS_WALLET_PRIVATE_KEY` | Yes | Pays gas for derived-card writes and EAS anchors |
@@ -102,6 +104,7 @@ All configuration is through environment variables.
 | `SNAPSHOT_REFRESH_SECONDS` | No | Default 30 |
 | `REATTEST_INTERVAL_SECONDS` | No | Default 21600 (6 hours) |
 | `ALERT_WEBHOOK_URL` | No | Operator alerting |
+| `CHAIN_PROVIDER`, `SIM_CHAIN_URL` | No | `CHAIN_PROVIDER` is `rpc` (default) or `sim`. `sim` and `SIM_CHAIN_URL` select the simulated chain, EAS and IPFS and are for the simulator stack only. Until the production chain, EAS, gas-wallet and Kubo clients exist (Phase 7) the host **refuses to start** with `CHAIN_PROVIDER=rpc` or `IPFS_PROVIDER=kubo`, and with a `memory:` `EXTERNAL_KV_URL` unless `CHAIN_PROVIDER=sim`. It never falls back to in-memory services. A host running simulated components says so in a warning at start-up. |
 
 ---
 
@@ -115,7 +118,7 @@ All configuration is through environment variables.
 | `POST` | `/jobs/{job_hash}/inputs` | Oblivious | Body is a `SealedInput` (`protocol-objects.md §24`). Stores it, signs a `HostReceipt`, forwards it to a local enclave, and returns `{ host_receipt, receipt_sealed }`. |
 | `POST` | `/jobs` | Direct, from the job requester | Body: `{ job, program_cid }`. The host fetches the program and sends `create_job`. Returns `{ job_hash, status }`. |
 | `GET` | `/jobs/{job_hash}/status` | Direct | Public status only: state, epoch, live replica count, job-log head CID |
-| `POST` | `/genesis` | Direct, `NOTARY_ADMIN_TOKEN` | Starts notary genesis (`notary_lifecycle.md` Phase 0) and returns the genesis request and attestation |
+| `POST` | `/genesis` | Direct, `NOTARY_ADMIN_TOKEN` | Starts notary genesis (`notary_lifecycle.md` Phase 0) and returns the genesis request and attestation. The host then serves the new notary card (§4). |
 | `POST` | `/genesis/countersign` | Direct, `NOTARY_ADMIN_TOKEN` | Passes the policy holder's notary card offer to the enclave and returns the countersigned offer |
 | `POST` | `/peer` | Direct, from peer hosts | Relays peer messages (handoff, `input_ack`, cosignatures, heartbeats) to the named local instance |
 | `GET` | `/health` | Direct | Liveness, plus the number of attested enclaves |
@@ -231,6 +234,8 @@ Heartbeats themselves stay between enclaves and are never published.
 | `NH_INPUT_TOO_LARGE` | `SealedInput` larger than 256 KiB |
 | `NH_STORAGE_FAILED` | The ciphertext couldn't be stored; no receipt is issued |
 | `NH_UNAUTHORIZED` | An operator-authenticated route was called without a valid token (HTTP 401) |
+| `NOT_REACHABLE` | A request through the gateway named a route that isn't an oblivious route (HTTP 404) |
+| `ENCLAVE_ERROR` | The enclave answered with an error that carried no code |
 | Enclave codes | Passed through unchanged (`notary_runtime.md §16`) |
 
 ---

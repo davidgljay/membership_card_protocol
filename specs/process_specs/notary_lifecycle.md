@@ -6,6 +6,8 @@
 **Architecture:** `ARCHITECTURE.md` ADR-013 · **Objects:** `protocol-objects.md` §2.1, §2.2, §20–§34 · **Design record:** `plans/notary-design-decisions.md` (approved at CP2)
 **Amended 2026-11-12:** new Appendix A.7, algorithm R (policy and requester reads, over vsock only); step 17 and W3–W5 point to it. L4 and T7 restated (a single-operator quorum can count forged contributors), with a consent disclosure (step 25), the `SINGLE_OPERATOR_QUORUM` warning in N, and the governance switch in W7 (`JOB_SINGLE_OPERATOR_REFUSED`) and in N (`NOT_SINGLE_OPERATOR_REFUSED`); enclaves don't enforce it (E34). Source: `plans/notary-spec-wording-e31.md`, approved by David 2026-11-12.
 
+**Amended 2026-11-13 (5.7 review):** Appendix B, B3: no wait for headers; the wallet retries (Q3). Source: `plans/notary-questions-5.7.md`, David approved 2026-11-13 (`plans/notary-questions-5.7.md`).
+
 **Amended 2026-11-12 (batch 2):** step 5 offer includes `genesis_request`, and A.3 step 0 lets later verifiers recompute the nonce (E17); step 9 writes identity-log `seq` 0 as `opened`, and A.6 requires it (E26); A.1 step 10, W13 and N6 say which bound fields aren't compared (E10, E13); W10 says how `issuer_card` names the policy (E11). Source: `plans/notary-spec-wording-batch2.md`, approved by David 2026-11-12.
 
 > **Terminology.** "The enclave" means an AWS Nitro Enclaves enclave. "Enclave attestation" means the AWS Nitro Enclaves attestation document, which is not the App Attest / Play Integrity attestation of `subcards.md`. "nitropack" is the web framework the notary host runs on. See the terminology note in `ARCHITECTURE.md`.
@@ -456,7 +458,7 @@ Registry reads are unverified in the enclave (L4). Wallets check R2–R4 with th
 |---|---|---|
 | B1 | HPKE-open with `K_job,epoch`, using the `info` and `aad` in `protocol-objects.md §24` | `INPUT_UNDECRYPTABLE` (plain error to the host; no receipt possible) |
 | B2 | `NotaryInput` `type` is right and `job_hash` matches | `INPUT_MALFORMED`, `INPUT_WRONG_JOB` |
-| B3 | `chain_ref` is on the accepted header chain (wait up to 60 s for headers). The newest `chain_ref` becomes the floor for chain state. | `INPUT_CHAIN_REF_UNKNOWN`, `INPUT_CHAIN_REF_MISMATCH` |
+| B3 | `chain_ref` is on the accepted header chain. The enclave doesn't wait for headers: a block it hasn't been sent yet is `INPUT_CHAIN_REF_UNKNOWN` at once, which costs no state, and the wallet retries after a short delay (the host streams headers about once a second). The newest accepted `chain_ref` becomes the floor for chain state. | `INPUT_CHAIN_REF_UNKNOWN`, `INPUT_CHAIN_REF_MISMATCH` |
 | B4 | `chain_ref` time ≥ `opens_at`, and < `closes_at` (aggregate) | `INPUT_TOO_EARLY`, `INPUT_LATE` |
 | B5 | The signer is a valid sub-card with `"notary_input"` capability (`protocol-objects.md §16` checks) | `INPUT_SIGNER_INVALID` |
 | B6 | `keccak256(contributor_card_pubkey) == contributor_card ==` the sub-card's `holder_primary_card` | `INPUT_BINDING_MISMATCH` |

@@ -6,6 +6,8 @@
 **Architecture:** `ARCHITECTURE.md` ADR-013 · **Processes:** `process_specs/notary_lifecycle.md`, `notary_replication_and_recovery.md`, `derived_card_revocation_propagation.md` · **Objects:** `protocol-objects.md` §20–§34 · **Design record:** `plans/notary-design-decisions.md` §2.3, §2.4
 **Amended 2026-11-12:** §9 `create_job` reads the policy with algorithm R through `fetch`; `genesis_ready` adds `request` and `notary_card`. §12 pins list-card public keys and reads list history through `fetch`. §16 adds `CLOSE_NOT_DUE`. Source: `plans/notary-spec-wording-e31.md`, approved by David 2026-11-12.
 
+**Amended 2026-11-13 (5.7 review):** §13 the first header (Q7); §15 `mlock` wording (Q10); §16 adds `ADM_RUNTIME_FULL` and the codes the broker already used (Q2, Q6). Source: `plans/notary-questions-5.7.md`, David approved 2026-11-13 (`plans/notary-questions-5.7.md`).
+
 **Amended 2026-11-12 (E35):** §16 adds `IDENTITY_LOG_PENDING`. Approved by David 2026-11-12.
 
 > **Terminology.** This spec describes software that runs inside **AWS Nitro Enclaves**, called "the enclave". "NSM" is the enclave's security module, which issues the **enclave attestation** (the AWS Nitro Enclaves attestation document). This software is unrelated to nitropack, the web framework the host uses. See `ARCHITECTURE.md`, terminology note.
@@ -92,7 +94,7 @@ Code lives in `notary/runtime/` (Rust, std, a separate workspace from `contracts
   - workers have memory and CPU rlimits.
 
   An interpreter escape therefore lands in a process with no keys, no NSM, no network, and only its own job's payloads.
-- **Shared and dedicated.** In `shared` mode a runtime holds workers for up to 256 jobs, all running allowlisted programs. In `dedicated` mode it admits exactly one job and refuses `create_job` for any other (`ADM_DEDICATED_REQUIRED`). The mode is bound into every job attestation (`protocol-objects.md §33`, `isolation`).
+- **Shared and dedicated.** In `shared` mode a runtime holds workers for up to 256 jobs, all running allowlisted programs. In `dedicated` mode it admits exactly one job and refuses `create_job` for any other (`ADM_DEDICATED_REQUIRED`). A `shared` runtime refuses a 257th live job (`ADM_RUNTIME_FULL`). The mode is bound into every job attestation (`protocol-objects.md §33`, `isolation`).
 - **No JIT.** Programs run in **wasmi**, an interpreter, not a JIT compiler, to avoid compiler bugs that could break out of the sandbox.
 
 ---
@@ -355,6 +357,8 @@ The runtime needs the accepted-runtime list (for handoff check P2) and the progr
 | Registry state (card heads, `PressAuthorizations`, sub-card `active` flags) | Policy snapshots and updates; per-card fetches only where disclosed | **No.** Recorded through `chain_state` in every notarization. This is limit L4. |
 | Time for close | Header timestamp **and** NSM attestation timestamp | Headers: hash linkage only. NSM time: AWS-signed. |
 
+**The first header (limit L4).** The first header the broker accepts after boot is the chain's anchor and is trusted without a parent. The broker accepts it only if its timestamp is within 10 minutes of the attested time; the host must therefore start the stream near the chain head. Every later header must link by parent hash to one already accepted. A host can still choose which real or invented chain an enclave follows from that point, so chain time stays advisory, which is why close also needs the attested time and verifiers check `chain_state` against the real chain. Pinning a checkpoint block in the image is left to the Phase 8 security review.
+
 **Freshness floor.** The broker never uses chain state older than the newest `chain_ref` it has accepted from an input. Each wallet's own recent block therefore limits how far back a host can push it.
 
 ---
@@ -377,7 +381,7 @@ These are provisional until the capacity benchmark (implementation step 5.6).
 
 ## 15. Zeroization
 
-Every secret and every decrypted payload lives in a buffer that is locked into memory (`mlock`) and zeroized when dropped (the Rust `zeroize` crate).
+Every secret and every decrypted payload lives in a buffer that is zeroized when dropped (the Rust `zeroize` crate) and locked into memory (`mlock`) where the platform allows it. An enclave has no swap, so locking is defence in depth there; where `mlock` is refused the buffer is still zeroized. Phase 8 confirms that `mlock` works inside the enclave.
 
 | Material | Erased when |
 |---|---|
@@ -407,6 +411,12 @@ The host can't read enclave memory in any case. Zeroization limits what a later 
 | `ATT_*` | Verifier modules and algorithm V | `notary_lifecycle.md` Appendix A.1 |
 | `LIST_VERSION_REGRESSION` | §12 | A host supplied an older governance list version; refused and alerted |
 | `CLOSE_NOT_DUE` | §9 `close_chunk` | Chain time or the attested time is still before `closes_at`; nothing closed, and the host retries later (`notary_replication_and_recovery.md` §5) |
+| `ADM_RUNTIME_FULL` | §9 `create_job` | A `shared` runtime already holds 256 live jobs (§3, §14); nothing opened, and the host starts or uses another enclave |
+| `NH_UNSUPPORTED` | §9 `create_job` | The job needs a feature this runtime build doesn't have yet (epoch restarts, per-input jobs, card output, replica sets larger than one). Temporary: removed as those features land. |
+| `ATT_UNAVAILABLE` | §9 | The attestation backend or attested clock failed; nothing was signed |
+| `JOB_KEY_EXISTS` | §9 `create_job` | A key already exists for this (job, epoch) |
+| `NH_MALFORMED`, `MISSING_FIELD`, `JSON_NOT_CANONICAL`, `NH_UNKNOWN_KIND` | §9 | A host message is malformed, lacks a field, isn't canonical JSON, or has an unknown `kind` |
+| `CLOSE_FAILED` | §9 `close_chunk` | The close computation failed internally (nothing was released) |
 | `IDENTITY_LOG_PENDING` | §9 `create_job` | The notary card's identity-log `seq` 0 isn't anchored yet (`notary_lifecycle.md` step 9); nothing opened, and the host anchors it and retries |
 | `LIST_APPROVAL_*` | §12 | A list version isn't validly approved by members (`notary_lifecycle.md` Appendix A.5); refused, and the last verified version is kept |
 | `LINT_WEAK_GRANULARITY`, `LINT_NO_SNAPSHOT_POLICY` | `notary-lint` | Warnings |
