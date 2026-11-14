@@ -8,7 +8,7 @@ import { CipherSuite, HkdfSha256 } from "@hpke/core";
 import { Chacha20Poly1305 } from "@hpke/chacha20poly1305";
 import { XWing } from "@hpke/hybridkem-x-wing";
 import { b64uDecode, b64uEncode, canonicalNotary, withoutFields } from "@membership-card-protocol/verifier/notary";
-import { checkReceipts, receiptAad, sealInput, sealReceipt, sealedInputInfoAad, submitNotaryInput } from "../../src/notary/submit.js";
+import { checkReceipts, receiptAad, sealInput, sealReceipt, sealedInputInfoAad, submitNotaryInput, submitNotaryInputWithRetry } from "../../src/notary/submit.js";
 import type { HostReceipt, NotaryInput, SealedInput, ValidationReceipt } from "../../src/notary/types.js";
 
 const VEC = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "..", "notary", "vectors");
@@ -122,6 +122,24 @@ describe("submitNotaryInput (wallet_sdk.md §7b.4)", () => {
   it("reports the notary's reject reason for a rejected input", async () => {
     const r = await submitNotaryInput({ ...base((s) => respond(s, { vOver: { status: "rejected", reject_reason: "INPUT_NOT_ELIGIBLE" } })) });
     expect(r).toMatchObject({ submitted: false, code: "INPUT_NOT_ELIGIBLE" });
+  });
+  it("retries while the notary does not know the chain_ref yet (B3), then reports success", async () => {
+    let n = 0;
+    const waits: number[] = [];
+    const send = (s: never) => respond(s, n++ < 2 ? { vOver: { status: "rejected", reject_reason: "INPUT_CHAIN_REF_UNKNOWN" } } : undefined);
+    const r = await submitNotaryInputWithRetry({ ...base(send as never) }, { delayMs: 5, sleep: async (ms) => { waits.push(ms); } });
+    expect(r.submitted).toBe(true);
+    expect(waits).toEqual([5, 5]);
+  });
+  it("gives up after the attempts, and does not retry any other rejection", async () => {
+    let n = 0;
+    const always = await submitNotaryInputWithRetry({ ...base((s) => { n++; return respond(s, { vOver: { status: "rejected", reject_reason: "INPUT_CHAIN_REF_UNKNOWN" } }); }) }, { attempts: 3, sleep: async () => {} });
+    expect(always).toMatchObject({ submitted: false, code: "INPUT_CHAIN_REF_UNKNOWN" });
+    expect(n).toBe(3);
+    n = 0;
+    const other = await submitNotaryInputWithRetry({ ...base((s) => { n++; return respond(s, { vOver: { status: "rejected", reject_reason: "INPUT_NOT_ELIGIBLE" } }); }) }, { sleep: async () => {} });
+    expect(other).toMatchObject({ code: "INPUT_NOT_ELIGIBLE" });
+    expect(n).toBe(1);
   });
   it("checkReceipts binds epoch and job", () => {
     const ih = "x";

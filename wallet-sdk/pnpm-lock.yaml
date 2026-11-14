@@ -10,21 +10,9 @@ importers:
 
   packages/wallet-sdk:
     dependencies:
-      '@hpke/chacha20poly1305':
-        specifier: ^1.8.1
-        version: 1.8.1
-      '@hpke/core':
-        specifier: ^1.10.1
-        version: 1.10.1
-      '@hpke/hybridkem-x-wing':
-        specifier: 0.7.1
-        version: 0.7.1
       '@membership-card-protocol/app-sdk':
         specifier: file:../../../app-sdk/packages/app-sdk
         version: file:../app-sdk/packages/app-sdk
-      '@membership-card-protocol/notary-attestation':
-        specifier: file:../../../notary/attestation-ts
-        version: file:../notary/attestation-ts
       '@membership-card-protocol/verifier':
         specifier: file:../../../membership_card_verifier/packages/verifier
         version: file:../membership_card_verifier/packages/verifier
@@ -38,6 +26,18 @@ importers:
         specifier: ^0.5.4
         version: 0.5.4
     devDependencies:
+      '@hpke/chacha20poly1305':
+        specifier: ^1.8.1
+        version: 1.8.1
+      '@hpke/core':
+        specifier: ^1.10.1
+        version: 1.10.1
+      '@hpke/hybridkem-x-wing':
+        specifier: 0.7.1
+        version: 0.7.1
+      '@membership-card-protocol/notary-attestation':
+        specifier: file:../../../notary/attestation-ts
+        version: file:../notary/attestation-ts
       '@membership-card-protocol/sdk-providers-rn':
         specifier: file:../../../sdk-providers-rn/packages/sdk-providers-rn
         version: file:../sdk-providers-rn/packages/sdk-providers-rn(react-native@0.86.0(@babel/core@7.29.7)(react@19.2.7))(react@19.2.7)

@@ -2,7 +2,7 @@
   "name": "@membership-card-protocol/wallet-sdk",
   "version": "0.0.1",
   "type": "module",
-  "description": "Wallet SDK for the Card Protocol \u2014 wallet-side, key-custody holder functionality: wallet setup, keyring, backup/recovery, sub-card authorization, and card offer review/countersign/acceptance. Depends on @membership-card-protocol/app-sdk.",
+  "description": "Wallet SDK for the Card Protocol — wallet-side, key-custody holder functionality: wallet setup, keyring, backup/recovery, sub-card authorization, and card offer review/countersign/acceptance. Depends on @membership-card-protocol/app-sdk.",
   "repository": {
     "type": "git",
     "url": "https://github.com/davidgljay/membership_card_protocol.git",
@@ -48,13 +48,13 @@
     "@membership-card-protocol/verifier": "file:../../../membership_card_verifier/packages/verifier",
     "@noble/ciphers": "^1.0.0",
     "@noble/hashes": "^1.7.2",
-    "@noble/post-quantum": "^0.5.4",
-    "@membership-card-protocol/notary-attestation": "file:../../../notary/attestation-ts",
-    "@hpke/core": "^1.10.1",
-    "@hpke/chacha20poly1305": "^1.8.1",
-    "@hpke/hybridkem-x-wing": "0.7.1"
+    "@noble/post-quantum": "^0.5.4"
   },
   "devDependencies": {
+    "@hpke/chacha20poly1305": "^1.8.1",
+    "@hpke/core": "^1.10.1",
+    "@hpke/hybridkem-x-wing": "0.7.1",
+    "@membership-card-protocol/notary-attestation": "file:../../../notary/attestation-ts",
     "@membership-card-protocol/sdk-providers-rn": "file:../../../sdk-providers-rn/packages/sdk-providers-rn",
     "@membership-card-protocol/sdk-providers-web": "file:../../../sdk-providers-web/packages/sdk-providers-web",
     "@types/node": "^22.0.0",
@@ -66,5 +66,26 @@
     "prettier": "^3.3.0",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"
-  }
+  },
+  "peerDependencies": {
+    "@membership-card-protocol/notary-attestation": "^0.0.1",
+    "@hpke/core": "^1.10.1",
+    "@hpke/chacha20poly1305": "^1.8.1",
+    "@hpke/hybridkem-x-wing": "0.7.1"
+  },
+  "peerDependenciesMeta": {
+    "@membership-card-protocol/notary-attestation": {
+      "optional": true
+    },
+    "@hpke/core": {
+      "optional": true
+    },
+    "@hpke/chacha20poly1305": {
+      "optional": true
+    },
+    "@hpke/hybridkem-x-wing": {
+      "optional": true
+    }
+  },
+  "//peer": "Optional peers, needed only by the ./notary subpath (notarized jobs); the core entry point imports none of them. Local builds and tests get them from devDependencies."
 }

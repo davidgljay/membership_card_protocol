@@ -1,0 +1,65 @@
+name: Wallet SDK CI
+
+# The wallet SDK reaches its sibling packages through file: links, so a clean checkout has to build them first, in
+# dependency order (the same chain notary/deploy/build-ts-deps.sh builds in images). Before this job nothing built or
+# tested the wallet SDK from a clean checkout (notary phase 5.7, Q8).
+on:
+  push:
+    paths:
+      - 'wallet-sdk/**'
+      - 'app-sdk/**'
+      - 'membership_card_verifier/packages/verifier/**'
+      - 'notary/attestation-ts/**'
+      - 'sdk-providers-rn/**'
+      - 'sdk-providers-web/**'
+      - '.github/workflows/wallet-sdk-ci.yml'
+  pull_request:
+    paths:
+      - 'wallet-sdk/**'
+      - 'app-sdk/**'
+      - 'membership_card_verifier/packages/verifier/**'
+      - 'notary/attestation-ts/**'
+      - 'sdk-providers-rn/**'
+      - 'sdk-providers-web/**'
+      - '.github/workflows/wallet-sdk-ci.yml'
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build the file: dependencies, in order
+        run: |
+          set -e
+          build() { (cd "$1" && pnpm install --frozen-lockfile && pnpm run build); }
+          build membership_card_verifier/packages/verifier
+          build app-sdk/packages/app-sdk
+          build sdk-providers-rn/packages/sdk-providers-rn
+          build sdk-providers-web/packages/sdk-providers-web
+          # notary/ is one pnpm workspace (its host and e2e packages depend on the wallet SDK, so install only attestation-ts)
+          (cd notary && pnpm install --frozen-lockfile --filter "@membership-card-protocol/notary-attestation..." && pnpm --filter @membership-card-protocol/notary-attestation run build)
+
+      - name: Install
+        working-directory: wallet-sdk
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        working-directory: wallet-sdk/packages/wallet-sdk
+        run: pnpm run typecheck
+
+      - name: Build
+        working-directory: wallet-sdk/packages/wallet-sdk
+        run: pnpm run build
+
+      - name: Test
+        working-directory: wallet-sdk/packages/wallet-sdk
+        run: pnpm test

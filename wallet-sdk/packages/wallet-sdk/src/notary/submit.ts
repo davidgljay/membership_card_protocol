@@ -128,3 +128,19 @@ export async function submitNotaryInput(o: SubmitOptions): Promise<SubmitResult>
   if (validation.status === "rejected") return { submitted: false, code: validation.reject_reason ?? "INPUT_REJECTED", reason: "the notary rejected the input" };
   return { submitted: true, inputHash, hostReceipt: resp.host_receipt, validationReceipt: validation };
 }
+
+/**
+ * Submits, and retries while the notary says `INPUT_CHAIN_REF_UNKNOWN` (lifecycle Appendix B, B3). The enclave does not
+ * wait for a header it has not been sent; the host streams headers about once a second, so a short delay is enough.
+ * Every attempt builds and persists its input again, so the wallet's stored copy is the one last sent.
+ */
+export async function submitNotaryInputWithRetry(o: SubmitOptions, retry: { attempts?: number; delayMs?: number; sleep?: (ms: number) => Promise<void> } = {}): Promise<SubmitResult> {
+  const attempts = retry.attempts ?? 20, delayMs = retry.delayMs ?? 1000;
+  const sleep = retry.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  let r = await submitNotaryInput(o);
+  for (let i = 1; i < attempts && !r.submitted && r.code === "INPUT_CHAIN_REF_UNKNOWN"; i++) {
+    await sleep(delayMs);
+    r = await submitNotaryInput(o);
+  }
+  return r;
+}
