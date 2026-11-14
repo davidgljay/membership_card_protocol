@@ -38,8 +38,8 @@ export function simChain(baseUrl: string) {
   const feed: ChainFeed = {
     headersAfter: async (n) => ((await get(`/headers?after=${n}`)) ?? []) as Awaited<ReturnType<ChainFeed["headersAfter"]>>,
     async registry(policy) {
-      const r = (await get(`/registry/events?policy=${encodeURIComponent(policy)}`)) as Awaited<ReturnType<ChainFeed["registry"]>> | null;
-      return r ?? { events: [], subcards: [], block: 0 };
+      const r = (await get(`/registry/events?policy=${encodeURIComponent(policy)}`)) as (Awaited<ReturnType<ChainFeed["registry"]>> & { policy_head?: string | null }) | null;
+      return r ? { events: r.events, subcards: r.subcards, block: r.block, policyHead: r.policy_head ?? null } : { events: [], subcards: [], block: 0 };
     },
   };
   /** Job intake's policy read (a courtesy check: the enclave runs algorithm R itself). */

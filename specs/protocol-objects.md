@@ -5,6 +5,8 @@
 **Status:** In Review  
 **Amended 2026-11-12 (notaries):** §34 `list_approval` gains `single_operator_quorums` (program allowlist only), and rule E keeps it unchanged in emergency updates. Source: `plans/notary-spec-wording-e31.md`, approved by David 2026-11-12.
 
+**Amended 2026-11-14 (notaries, 6.0a):** §27 `contributor_policies` (the policies and states a notarization counted). David approved 2026-11-14 (`plans/notary-questions-phase-6.md`, Q2).
+
 **Amended 2026-11-13 (notaries, 5.7 review):** §28 `at` is the enclave's attested time, not chain time (Q1). Source: `plans/notary-questions-5.7.md`, David approved 2026-11-13 (`plans/notary-questions-5.7.md`).
 
 **Amended 2026-11-12 (notaries, batch 2):** notary conventions reject unknown fields (E2); §20 notary card gains `genesis_request`, and the genesis request is pinned (E17); §24 receipt nonce and aad (E7); §27 Merkle root of the empty set, raw-byte sort, `counted_inputs` format, raw-digest cosignatures (E1, E14, E6); §28 EAS schema types and how anchors are found (E3, E16), and identity-log `seq` 0 is `opened` (E26); §34 what members sign (E6, E12). Source: `plans/notary-spec-wording-batch2.md`, approved by David 2026-11-12.
@@ -1550,6 +1552,7 @@ The signed result of a `statement` job. Anyone can verify it from CIDs and chain
   "close_quorum":             2,
   "closed_at":                "<ISO 8601 — equals chain_state.block_timestamp>",
   "cosignatures":             [ { "attestation": "<cid>", "instance_signature": { "public_key": "<base64url — K_inst>", "signature": "<base64url>" } } ],
+  "contributor_policies":     [ { "policy_id": "<cid>", "snapshot_block": 0, "state_cid": "<cid>" } ],
   "counted_inputs":           "<cid — sorted list of counted input_hash values>",
   "dropped_after_acceptance": 0,
   "final_epoch":              0,
@@ -1581,6 +1584,7 @@ The signed result of a `statement` job. Anyone can verify it from CIDs and chain
 | `attestation` | `cid` | Yes | |
 | `chain_state` | object | Yes | Host-supplied chain state the enclave closed on. Verifiers check it against the chain. |
 | `input_commitment` | `base64url` | Yes | Merkle root over the sorted counted `input_hash` values, sorted by their raw bytes. Leaf = `SHA-256(0x00 ‖ input_hash)`, node = `SHA-256(0x01 ‖ left ‖ right)`, and an odd node is promoted unchanged. The root of an empty list is `SHA-256("")` (the RFC 6962 convention). |
+| `contributor_policies` | array | Yes | The policies whose cards were counted, and the state each was read at: `[{ "policy_id": cid, "snapshot_block": integer, "state_cid": cid }]`, sorted by `policy_id`. It lists exactly the policies the policy's `contributor_predicate` names (see `notary_runtime.md §6`, A12), with parameter references resolved from the job's `parameters`. `snapshot_block` is the block of the newest snapshot or update the enclave applied for that policy before it closed. `state_cid` is the policy card's head the snapshot was built against. Verifiers compare the set (`NOT_CONTRIBUTOR_POLICIES_MISMATCH`) and read each state from the chain (warning `NOTARIZATION_CONTRIBUTOR_POLICIES_UNVERIFIED`). |
 | `counted_inputs` | `cid` | Yes | The counted `input_hash` values, in the same order as for `input_commitment`, as an RFC 8785 JSON array of base64url strings, pinned with the `raw` codec. Contributors use it to check inclusion. |
 | `accepted` | `integer` | Yes | Distinct contributors counted |
 | `rejected` | `integer` | Yes | Inputs rejected in any epoch, including those excluded when re-checked at close |

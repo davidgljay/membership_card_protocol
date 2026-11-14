@@ -5,7 +5,7 @@
  */
 import type { AllowlistedProgram, FieldDefinition, NotarySection } from "@membership-card-protocol/verifier/notary";
 import type { NotaryJob } from "./types.js";
-import { SINGLE_OPERATOR_DISCLOSURE } from "@membership-card-protocol/verifier/notary";
+import { SINGLE_OPERATOR_DISCLOSURE, contributorPolicySet } from "@membership-card-protocol/verifier/notary";
 
 export interface NotaryConsent {
   collects: FieldDefinition[];
@@ -19,6 +19,8 @@ export interface NotaryConsent {
   disclosures: string[];
   /** L4: one operator's replicas reach the quorum (a disclosed bootstrap allowance). */
   singleOperatorQuorum: boolean;
+  /** 6.0a: the policies whose cards can contribute (the closed set, parameters resolved); `null` if the policy's predicate is open, which an enclave refuses. */
+  contributorPolicies: string[] | null;
   /** Shown only inside a box labelled as the requester's own words. */
   requesterText?: string;
 }
@@ -76,6 +78,7 @@ export function buildConsent(o: {
     ...(job.ends_at ? { endsAt: job.ends_at } : {}),
     disclosures,
     singleOperatorQuorum: o.singleOperatorQuorum,
+    contributorPolicies: contributorPolicySet(notary.contributor_predicate, (job.parameters ?? {}) as Record<string, unknown>),
     ...(job.requester_text !== undefined ? { requesterText: job.requester_text } : {}),
   };
 }

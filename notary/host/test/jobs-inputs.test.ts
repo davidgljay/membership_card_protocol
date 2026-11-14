@@ -160,3 +160,15 @@ describe("POST /jobs/{hash}/inputs (notary_host.md §5–§7; protocol-objects.m
     expect(await code(handleSubmitInput(h.ctx, JOB_HASH, sealed))).toBe("NH_ENCLAVE_UNAVAILABLE");
   });
 });
+
+describe("announcement gating on snapshots (6.0a)", () => {
+  it("with the gate on, the announcement waits until the job's contributor snapshots were sent", async () => {
+    const h = await harness();
+    h.ctx.gateOnSnapshots = true;
+    h.ctx.policies = { notary: async () => ({ notary: { contributor_predicate: { issued_under_template: "bafkreipolx" } } as never, approvedNotaries: [] }) } as never;
+    await h.ctx.jobs.put({ job, jobHash: JOB_HASH, programCid: "p", announcement: { ok: true }, epoch: 0, replicas: [], state: "open", logHead: null });
+    await expect(handleGetAnnouncement(h.ctx, JOB_HASH)).rejects.toMatchObject({ code: "NH_JOB_UNKNOWN" });
+    h.ctx.snapshotsSent.add("bafkreipolx");
+    expect(await handleGetAnnouncement(h.ctx, JOB_HASH)).toEqual({ ok: true });
+  });
+});

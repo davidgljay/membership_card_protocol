@@ -64,7 +64,7 @@ function world(o: {
   const instKeys: Record<string, number> = { closer: 7, cosig_1: 8, cosig_2: 9, cosig_1_wrong_instance: 8, cosig_1_stranger_id: 8 };
   const body: Record<string, any> = {
     accepted: 42, attestation: docCid(o.closerDoc ?? "closer"), chain_state: { block_hash: b64uEncode(sha256(te.encode("blk"))), block_number: 123999, block_timestamp: CLOSED_AT, state_root: b64uEncode(sha256(te.encode("root"))) },
-    close_quorum: 2, closed_at: CLOSED_AT, counted_inputs: COUNTED_CID, dropped_after_acceptance: 0, final_epoch: 0, input_commitment: COMMIT, job_cid: JOB_CID, job_hash: spec.job_hash,
+    close_quorum: 2, closed_at: CLOSED_AT, contributor_policies: [{ policy_id: "x", snapshot_block: 123998, state_cid: cidOfBytes(te.encode("x-state")) }], counted_inputs: COUNTED_CID, dropped_after_acceptance: 0, final_epoch: 0, input_commitment: COMMIT, job_cid: JOB_CID, job_hash: spec.job_hash,
     job_log_head: r1.cid, notary_card: NOTARY_CARD, output: { public: { abstain: 3, no: 12, yes: 27 } }, output_hash: H({ abstain: 3, no: 12, yes: 27 }),
     platform: "simulator", policy_id: job["policy_id"], policy_state_cid: job["policy_state_cid"], program_cid: spec.program_cid, rejected: 4, suppressed: false, type: "notary.notarization.v1",
   };
@@ -85,6 +85,7 @@ function world(o: {
     block: async (n) => (n === 123999 ? { hash: body["chain_state"].block_hash, timestampMs: T(CLOSED_AT) } : null),
     keyExposure: async () => "none",
     anchors: async () => anchors,
+    contributorPolicyState: async () => true,
     ...o.reads,
   };
   return { notarization, cid, anchors, reads };
@@ -216,6 +217,23 @@ describe("algorithm N (notary_lifecycle.md A.4) with real simulator attestations
     expect(await outcome(world({ cosigs: ["closer", "cosig_1"] }))).toBe("valid"); // exactly q = 2
   });
   // N13
+  it("N14 NOT_CONTRIBUTOR_POLICIES_MISMATCH: the listed set must be the set the predicate names; N14a warns when a state can't be confirmed (6.0a)", async () => {
+    expect(await outcome(world({ patch: (n) => { n["contributor_policies"] = [{ policy_id: "y", snapshot_block: 1, state_cid: cidOfBytes(te.encode("x-state")) }]; } }))).toBe("NOT_CONTRIBUTOR_POLICIES_MISMATCH");
+    expect(await outcome(world({ patch: (n) => { n["contributor_policies"] = []; } }))).toBe("NOT_CONTRIBUTOR_POLICIES_MISMATCH");
+    const two = [{ policy_id: "x", snapshot_block: 1, state_cid: cidOfBytes(te.encode("x-state")) }, { policy_id: "x", snapshot_block: 1, state_cid: cidOfBytes(te.encode("x-state")) }];
+    expect(await outcome(world({ patch: (n) => { n["contributor_policies"] = two; } }))).toBe("NOT_CONTRIBUTOR_POLICIES_MISMATCH");
+    // an open predicate can have no valid listing
+    const open = { ...notary, contributor_predicate: { chain_includes: "x" } } as NotarySection;
+    expect(await outcome(world({ policy: { notary: open } }))).toBe("NOT_CONTRIBUTOR_POLICIES_MISMATCH");
+    // the state can't be confirmed: still valid, with the warning
+    for (const reads of [{ contributorPolicyState: async () => false }, { contributorPolicyState: undefined }, { contributorPolicyState: async () => { throw new Error("rpc"); } }]) {
+      const r = await run(world({ reads: reads as never }));
+      expect(r.valid).toBe(true);
+      if (r.valid) expect(r.warnings).toContain("NOTARIZATION_CONTRIBUTOR_POLICIES_UNVERIFIED");
+    }
+    const ok = await run(world());
+    if (ok.valid) expect(ok.warnings).not.toContain("NOTARIZATION_CONTRIBUTOR_POLICIES_UNVERIFIED");
+  });
   it("N13 NOT_EPOCH_SUPERSEDED: a higher epoch anchored before closed_at; after closed_at is fine", async () => {
     const early = (log: { cid: string }[]) => { void log; const r = logRecord(3, "epoch_started", { epoch: 1, epoch_reason: "key_period" }); return [{ seq: 3, record_cid: r.cid, timestamp: T("2026-11-19T10:00:02Z") }]; };
     expect(await outcome(world({ extraAnchors: early }))).toBe("NOT_EPOCH_SUPERSEDED");

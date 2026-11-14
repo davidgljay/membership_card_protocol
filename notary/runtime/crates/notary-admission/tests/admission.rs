@@ -234,8 +234,25 @@ fn lint_warnings_match_runtime_section_6() {
     assert!(lint_warnings(&p).is_empty());
     p["output_schema"] = json!([{ "name": "count", "type": "integer", "required": true }]);
     p["privacy"]["k_min"] = json!(5);
-    p["contributor_predicate"] = json!({ "is_holder": true });
-    assert_eq!(lint_warnings(&p), vec!["LINT_WEAK_GRANULARITY", "LINT_NO_SNAPSHOT_POLICY"]);
+    assert_eq!(lint_warnings(&p), vec!["LINT_WEAK_GRANULARITY"]);
     p["privacy"]["k_min"] = json!(10);
-    assert_eq!(lint_warnings(&p), vec!["LINT_NO_SNAPSHOT_POLICY"]);
+    assert!(lint_warnings(&p).is_empty());
+}
+
+/// A12 (6.0a): the contributor predicate must restrict contributors to a finite list of policies.
+#[test]
+fn a12_the_contributor_set_must_be_closed() {
+    let b = M::default().bytes();
+    let mut p = policy_for(&b, "dedicated");
+    for open in [json!({ "is_holder": true }), json!({ "none_of": [{ "issued_under_template": "bafkreitest" }] }), json!({ "any_of": [{ "issued_under_template": "a" }, { "chain_includes": "x" }] }), json!({ "any_of": [] })] {
+        p["contributor_predicate"] = open;
+        assert_eq!(code(&b, &p, &ctx()), "ADM_CONTRIBUTOR_SET_OPEN");
+    }
+    p.as_object_mut().unwrap().remove("contributor_predicate");
+    assert_eq!(code(&b, &p, &ctx()), "ADM_CONTRIBUTOR_SET_OPEN");
+    for closed in [json!({ "issued_under_template": { "param": "source" } }), json!({ "any_of": [{ "issued_under_template": "a" }, { "issued_under_template": "b" }] }),
+                   json!({ "all_of": [{ "issued_under_template": "a" }, { "chain_includes": "x" }] })] {
+        p["contributor_predicate"] = closed;
+        assert_eq!(code(&b, &p, &ctx()), "OK");
+    }
 }

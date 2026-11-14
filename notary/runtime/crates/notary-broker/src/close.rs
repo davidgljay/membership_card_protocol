@@ -127,6 +127,18 @@ impl Broker {
             }
         };
 
+        // 6.0a: the policies counted, and the state each was read at (protocol-objects.md §27)
+        let job = &self.jobs[hash];
+        let predicate = job.notary.get("contributor_predicate").cloned().unwrap_or(Value::Null);
+        let policies = notary_types::policy_set::policy_set(&predicate, &job.job["parameters"]).ok_or(("CLOSE_FAILED", "the contributor predicate names no closed policy set".to_string()))?;
+        let mut contributor_policies = vec![];
+        for p in &policies {
+            let Some((state_cid, snapshot_block)) = self.oracle.contributor_policy_state(p) else {
+                return Err(("CLOSE_FAILED", format!("no snapshot of contributor policy {p}; the host sends one before close")));
+            };
+            contributor_policies.push(json!({ "policy_id": p, "snapshot_block": snapshot_block, "state_cid": state_cid }));
+        }
+
         // step 41: the notarization
         let job = &self.jobs[hash];
         let header = self.chain.newest_header().expect("chain_ok").clone();
@@ -142,6 +154,7 @@ impl Broker {
             "chain_state": { "block_hash": b64u::encode(&header.hash), "block_number": header.number, "block_timestamp": closed_at, "state_root": b64u::encode(&header.state_root) },
             "close_quorum": job.q,
             "closed_at": closed_at,
+            "contributor_policies": contributor_policies,
             "counted_inputs": counted_cid,
             "dropped_after_acceptance": dropped,
             "final_epoch": final_epoch,

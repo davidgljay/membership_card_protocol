@@ -75,6 +75,13 @@ impl CardOracle for Oracle {
     fn list_history(&mut self, _: &mut dyn HostIo, card: &str) -> Option<Vec<ListVersion>> {
         Some(if card == "runtimes" { self.lists.0.clone() } else { self.lists.1.clone() })
     }
+    fn contributor_policy_state(&self, policy: &str) -> Option<(String, u64)> {
+        (policy == "bafkreisource").then(|| ("bafkreisourcestate".to_string(), 7))
+    }
+    fn contributor_from_snapshot(&self, master: &str, _: &str, policies: &[String]) -> bool {
+        // cards starting with '9' stand for a card the host supplied outside any snapshot
+        policies == ["bafkreisource"] && !master.starts_with('9')
+    }
     fn on_snapshot(&mut self, _: &str, _: &Value) {}
     fn on_updates(&mut self, _: &str, _: &Value) {}
 }
@@ -573,6 +580,8 @@ fn b2_b3_b4_and_b11_rejections() {
     let mut extra = good(&"1".repeat(64));
     extra["surprise"] = json!(1);
     assert_eq!(reason(&mut w, &seal_raw(&o, 0, &extra)), "INPUT_MALFORMED");
+    // 6.0a: a contributor whose own card isn't in a snapshot of the job's contributor policies is refused
+    assert_eq!(reason(&mut w, &seal_input(&o, 0, &"9".repeat(64), "yes", 0, r)), "INPUT_CARD_UNTRUSTED");
     // B3: a known block hash with the wrong number
     let wrong_number = seal_input(&o, 0, &"1".repeat(64), "yes", 0, (r.0, r.1 + 1));
     assert_eq!(reason(&mut w, &wrong_number), "INPUT_CHAIN_REF_MISMATCH");
@@ -634,6 +643,8 @@ fn close_needs_both_clocks_and_produces_a_verifiable_notarization() {
     assert_eq!(n["input_commitment"], b64u::encode(&merkle::input_commitment(&counted).unwrap()));
     assert_eq!(n["output_hash"], jcs::h(&json!({ "no": 1, "yes": 2 })).unwrap());
     assert_eq!(n["closed_at"], n["chain_state"]["block_timestamp"]);
+    // 6.0a: the policies counted and the state each was read at
+    assert_eq!(n["contributor_policies"], json!([{ "policy_id": "bafkreisource", "snapshot_block": 7, "state_cid": "bafkreisourcestate" }]));
     let publishes: Vec<&Value> = out.iter().filter(|m| m["kind"] == "publish").collect();
     assert!(publishes.len() >= 3, "counted_inputs, notarization and the notarized record are published");
     // keys are erased only once the `notarized` record is anchored

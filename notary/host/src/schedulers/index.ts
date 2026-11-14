@@ -26,9 +26,10 @@ export interface SchedulerState {
   sentPolicies: Map<string, number>;
   /** Jobs with a close in flight. */
   closing: Set<string>;
+  snapshotting: boolean;
 }
 
-export const newSchedulerState = (): SchedulerState => ({ newestHeader: 0, chainTimeMs: 0, sentPolicies: new Map(), closing: new Set() });
+export const newSchedulerState = (): SchedulerState => ({ newestHeader: 0, chainTimeMs: 0, sentPolicies: new Map(), closing: new Set(), snapshotting: false });
 
 export async function headersTick(ctx: HostContext, feed: ChainFeed, st: SchedulerState): Promise<void> {
   const hs = await feed.headersAfter(st.newestHeader);
@@ -77,7 +78,18 @@ async function liveJobs(ctx: HostContext) {
   return out;
 }
 
-export async function snapshotsTick(ctx: HostContext, feed: ChainFeed, st: SchedulerState): Promise<void> {
+/**
+ * `onlyNew`: send a first snapshot for policies not sent yet and nothing else. The host runs this every second, so a
+ * new job's contributor policies reach the enclave before wallets get the announcement's first inputs in (6.0a: the
+ * enclave reads a contributor's own cards only from snapshots).
+ */
+export async function snapshotsTick(ctx: HostContext, feed: ChainFeed, st: SchedulerState, onlyNew = false): Promise<void> {
+  if (st.snapshotting) return; // the two timers share one run at a time
+  st.snapshotting = true;
+  try { await runSnapshots(ctx, feed, st, onlyNew); } finally { st.snapshotting = false; }
+}
+
+async function runSnapshots(ctx: HostContext, feed: ChainFeed, st: SchedulerState, onlyNew: boolean): Promise<void> {
   const policies = new Set<string>();
   for (const j of await liveJobs(ctx)) {
     const job = j.job as { policy_id: string; policy_state_cid: string };
@@ -85,6 +97,7 @@ export async function snapshotsTick(ctx: HostContext, feed: ChainFeed, st: Sched
     for (const x of relevantPolicies(job, p?.notary)) policies.add(x);
   }
   for (const policy of policies) {
+    if (onlyNew && st.sentPolicies.has(policy)) continue;
     const r = await feed.registry(policy);
     const heads = new Map<string, Uint8Array>();
     for (const e of r.events) { if (!heads.has(e.headCid)) { const b = await ctx.ipfs.fetch(e.headCid); if (b) heads.set(e.headCid, b); } }
@@ -92,7 +105,7 @@ export async function snapshotsTick(ctx: HostContext, feed: ChainFeed, st: Sched
     for (const s of ctx.sessions.values()) {
       if (s.closed) continue;
       if (since === undefined) {
-        const snap = buildSnapshot(policy, r.events, r.subcards, heads, r.block);
+        const snap = buildSnapshot(policy, r.events, r.subcards, heads, r.block, r.policyHead);
         await ctx.snapshots.put(policy, snap);
         try { await s.call("policy_snapshot", { ...snap }); } catch { continue; }
       } else {
@@ -101,6 +114,7 @@ export async function snapshotsTick(ctx: HostContext, feed: ChainFeed, st: Sched
       }
     }
     st.sentPolicies.set(policy, r.block);
+    if ([...ctx.sessions.values()].some((s) => !s.closed)) ctx.snapshotsSent.add(policy);
   }
 }
 
@@ -140,6 +154,7 @@ export function startSchedulers(ctx: HostContext, feed: ChainFeed, o: { headerMs
   const timers = [
     setInterval(guard(() => headersTick(ctx, feed, st)), o.headerMs ?? 1000),
     setInterval(guard(() => snapshotsTick(ctx, feed, st)), o.snapshotSeconds * 1000),
+    setInterval(guard(() => snapshotsTick(ctx, feed, st, true)), o.headerMs ?? 1000),
     setInterval(guard(() => closeTick(ctx, st)), o.closeMs ?? 2000),
   ];
   return () => timers.forEach(clearInterval);

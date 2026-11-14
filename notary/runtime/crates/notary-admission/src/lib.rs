@@ -3,7 +3,7 @@
 //! The runtime runs `admit` when it loads a program for a job, **before** generating any job key. `notary-lint`
 //! runs the same checks at policy creation (lifecycle Phase 1, step 11), plus `lint_warnings`.
 //!
-//! Checks run in the order A1–A11. The policy-level refusals of deferred features (`ADM_DP_UNSUPPORTED`,
+//! Checks run in the order A1–A12. The policy-level refusals of deferred features (`ADM_DP_UNSUPPORTED`,
 //! `ADM_FEATURE_UNSUPPORTED`, runtime §11 and §16) run first: they need no program bytes.
 use notary_types::{formats, jcs};
 use serde_json::Value;
@@ -148,7 +148,7 @@ fn is_abi_signature(ty: &FuncType, params: usize, results: usize) -> bool {
         && ty.params().iter().chain(ty.results()).all(|t| *t == ValType::I32)
 }
 
-/// Algorithm A: A1–A11 (runtime §6). `notary` is the policy's `notary` section.
+/// Algorithm A: A1–A12 (runtime §6). `notary` is the policy's `notary` section.
 pub fn admit(program: &[u8], notary: &Value, ctx: &RuntimeContext<'_>) -> Result<Admitted, AdmissionError> {
     check_deferred_features(notary)?;
 
@@ -343,6 +343,11 @@ pub fn admit(program: &[u8], notary: &Value, ctx: &RuntimeContext<'_>) -> Result
         _ => return Err(AdmissionError::new("ADM_DEDICATED_REQUIRED", "isolation must be shared or dedicated")),
     };
 
+    // A12: the contributor predicate restricts contributors to a finite list of policies (6.0a)
+    if !notary.get("contributor_predicate").is_some_and(notary_types::policy_set::is_closed) {
+        return Err(AdmissionError::new("ADM_CONTRIBUTOR_SET_OPEN", "contributor_predicate must restrict contributors to a finite list of issued_under_template policies"));
+    }
+
     Ok(Admitted { program_hash, limits, isolation })
 }
 
@@ -357,16 +362,6 @@ pub fn lint_warnings(notary: &Value) -> Vec<&'static str> {
     });
     if weak && k_min < 10 {
         w.push("LINT_WEAK_GRANULARITY");
-    }
-    fn names_policy(v: &Value) -> bool {
-        match v {
-            Value::Object(m) => m.contains_key("issued_under_template") || m.values().any(names_policy),
-            Value::Array(a) => a.iter().any(names_policy),
-            _ => false,
-        }
-    }
-    if !notary.get("contributor_predicate").is_some_and(names_policy) {
-        w.push("LINT_NO_SNAPSHOT_POLICY");
     }
     w
 }

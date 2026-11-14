@@ -339,3 +339,9 @@ Summary: [notary-phase-5-summary.md](notary-phase-5-summary.md). Errata and ques
 **Q4 done (2026-11-13):** the host serves cards created through `/genesis` (no config, no restart). Open: Q7, Q8. Host tests 79; `run-local.sh` and `run-compose.sh` pass.
 
 **Q7 and Q8 done (2026-11-13).** Q7: first header within 10 minutes of the attested time (runtime §13 amended). Q8: wallet SDK peers made optional; `.github/workflows/wallet-sdk-ci.yml` added (not yet run on GitHub). Rust 86 passed; host 79; wallet SDK 237 + 1 todo; both e2e runs pass. Every Q1–Q10 item is closed.
+
+## 6.0a done (2026-11-14)
+
+Phase 6 questions answered ("OK to all"), 6.0 and 6.0a ticked. Built: the closed contributor set (A12, `ADM_CONTRIBUTOR_SET_OPEN`, lint error), `contributor_policies` on the notarization (both languages, vectors), algorithm N step 14 and warning, the broker's snapshot-only rule for a contributor's own cards, and the host side (`policy_head_cid`, early snapshots, announcement gating). Tests: Rust 91, host 82, verifier 276, attestation 93, wallet SDK 238 + 1 todo, vector tools 43; both e2e runs pass (the notarization carries the policy and no unverified-state warning).
+
+**For David's review:** two consequences of the approved Q2 wording that weren't in it: the snapshot message carries `policy_head_cid`, and the host serves a job's announcement only after its snapshots were sent (runtime §9, host §8 amended and marked). **Not regenerated:** the capacity benchmark's world file (`notary/runtime/benches/capacity`) needs `bench-world.ts` rerun before the next benchmark. The wallet's participation disclosure stays in `consent.ts` but can no longer apply to an admitted job.

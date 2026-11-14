@@ -14,6 +14,7 @@
  * (the spec makes N11 findings warnings, not rejections).
  */
 import { singleOperatorQuorum } from "./quorum.js";
+import { contributorPolicySet } from "./policySet.js";
 import { sha256 } from "@noble/hashes/sha256";
 import { ml_dsa44 } from "@noble/post-quantum/ml-dsa.js";
 import {
@@ -39,6 +40,11 @@ export interface NotarizationReads {
   keyExposure(pointer: string, tMs: number): Promise<"none" | "exposed" | "later" | "lineage_incomplete">;
   /** EAS anchors under the notary schema for a scope (`getNotaryLogAnchors`). */
   anchors(scopeId: string): Promise<{ seq: number; record_cid: string; timestamp: number }[]>;
+  /**
+   * Is `stateCid` a head of the contributor policy's card at or before `block` on the chain (N14a)? Optional: without it
+   * the check can't be made and the warning `NOTARIZATION_CONTRIBUTOR_POLICIES_UNVERIFIED` is returned.
+   */
+  contributorPolicyState?(policyId: string, stateCid: string, block: number): Promise<boolean>;
 }
 
 export interface NotarizationConfig {
@@ -52,7 +58,7 @@ export interface NotarizationConfig {
   singleOperatorRefusedSinceMs?: number;
 }
 
-export type NotarizationWarning = "runtime_retired_vulnerable" | "notary_key_exposed_later" | "JOB_LOG_GAP" | "JOB_LOG_FORK" | "EPOCH_TOTAL_LOSS" | "SINGLE_OPERATOR_QUORUM";
+export type NotarizationWarning = "runtime_retired_vulnerable" | "notary_key_exposed_later" | "JOB_LOG_GAP" | "JOB_LOG_FORK" | "EPOCH_TOTAL_LOSS" | "SINGLE_OPERATOR_QUORUM" | "NOTARIZATION_CONTRIBUTOR_POLICIES_UNVERIFIED";
 
 export type NotarizationVerificationResult =
   | { valid: true; job_hash: string; notary_card: string; final_epoch: number; accepted: number; rejected: number; dropped_after_acceptance: number;
@@ -265,6 +271,17 @@ export async function verifyNotarization(notarizationCid: string, reads: Notariz
     if (a.timestamp > closedAt || !rec) continue;
     if (rec.kind === "epoch_started" && typeof (rec.body as { epoch?: number })["epoch"] === "number" && (rec.body as { epoch: number }).epoch > n.final_epoch)
       return fail("NOT_EPOCH_SUPERSEDED", "a higher epoch was anchored before closed_at");
+  }
+  // ---- N14: the policies counted are exactly the ones the predicate names ----
+  const expectedPolicies = contributorPolicySet(policy.notary.contributor_predicate, (job["parameters"] ?? {}) as Record<string, unknown>);
+  const listed = n.contributor_policies;
+  if (!expectedPolicies || listed.length !== expectedPolicies.length || listed.some((e, i) => e.policy_id !== expectedPolicies[i]))
+    return fail("NOT_CONTRIBUTOR_POLICIES_MISMATCH", "contributor_policies is not the set the policy's predicate names");
+  // N14a: each state is a head of its policy at or before snapshot_block (a chain-state judgement: a warning)
+  for (const e of listed) {
+    let ok = false;
+    try { ok = reads.contributorPolicyState ? await reads.contributorPolicyState(e.policy_id, e.state_cid, e.snapshot_block) : false; } catch { ok = false; }
+    if (!ok) { addWarning("NOTARIZATION_CONTRIBUTOR_POLICIES_UNVERIFIED"); break; }
   }
   // L4: a single-operator quorum can count contributors that operator invented (warning, not a rejection)
   const replicaSet = (job["replica_set"] as { notary_card: string; instances: number }[] | undefined) ?? [];

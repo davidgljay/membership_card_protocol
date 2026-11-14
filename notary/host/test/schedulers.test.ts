@@ -95,3 +95,17 @@ describe("schedulers (notary_host.md §8; replication §5)", () => {
     expect(h.enclave.received.filter((m) => m.kind === "close_chunk")).toHaveLength(2);
   });
 });
+
+describe("snapshots for a new job (6.0a)", () => {
+  it("a first snapshot goes out as soon as a job needs the policy; the refresh sends nothing new for a policy already sent", async () => {
+    const h = await harness();
+    await openJob(h);
+    const st = newSchedulerState();
+    const f = feed([], []);
+    await snapshotsTick(h.ctx, f, st, true);
+    const first = h.enclave.received.filter((m) => m.kind === "policy_snapshot").length;
+    await snapshotsTick(h.ctx, f, st, true);
+    expect(h.enclave.received.filter((m) => m.kind === "policy_snapshot")).toHaveLength(first);
+    expect(st.snapshotting).toBe(false);
+  });
+});

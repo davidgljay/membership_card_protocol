@@ -8,6 +8,8 @@
 
 **Amended 2026-11-13 (5.7 review):** Appendix B, B3: no wait for headers; the wallet retries (Q3). Source: `plans/notary-questions-5.7.md`, David approved 2026-11-13 (`plans/notary-questions-5.7.md`).
 
+**Amended 2026-11-14 (6.0a):** Appendix A.4 steps 14 and 14a (`contributor_policies`), `NOT_CONTRIBUTOR_POLICIES_MISMATCH` and the warning `NOTARIZATION_CONTRIBUTOR_POLICIES_UNVERIFIED`. David approved 2026-11-14 (`plans/notary-questions-phase-6.md`, Q2).
+
 **Amended 2026-11-12 (batch 2):** step 5 offer includes `genesis_request`, and A.3 step 0 lets later verifiers recompute the nonce (E17); step 9 writes identity-log `seq` 0 as `opened`, and A.6 requires it (E26); A.1 step 10, W13 and N6 say which bound fields aren't compared (E10, E13); W10 says how `issuer_card` names the policy (E11). Source: `plans/notary-spec-wording-batch2.md`, approved by David 2026-11-12.
 
 > **Terminology.** "The enclave" means an AWS Nitro Enclaves enclave. "Enclave attestation" means the AWS Nitro Enclaves attestation document, which is not the App Attest / Play Integrity attestation of `subcards.md`. "nitropack" is the web framework the notary host runs on. See the terminology note in `ARCHITECTURE.md`.
@@ -269,6 +271,7 @@ Each step names its **actor**, what it takes and produces, and how failure is ha
 | `JOB_REQUESTER_NOT_PERMITTED`, `JOB_PARAMETERS_OUT_OF_BOUNDS`, `JOB_NOTARY_NOT_APPROVED`, `JOB_KEM_UNSUPPORTED`, `JOB_PROGRAM_NOT_ALLOWLISTED` | W | The job isn't allowed by the policy or the wallet | Reject |
 | `JOB_CLOSED` | W | Past `closes_at` / `ends_at` | Reject |
 | `JOB_SINGLE_OPERATOR_REFUSED` | W (step 7) | One operator's replicas reach the quorum, and governance has retired single-operator quorums (`protocol-objects.md §34`) | Reject; the requester re-issues the job with replicas from several operators |
+| `NOT_CONTRIBUTOR_POLICIES_MISMATCH` | N (step 14) | The notarization's `contributor_policies` isn't the set the policy's predicate names | Verifier rejects |
 | `NOT_SINGLE_OPERATOR_REFUSED` | N (result) | A single-operator notarization closed at or after the time governance retired single-operator quorums | Verifier rejects |
 | `NOTARY_LINEAGE_INCOMPLETE` | E | The notary card's identity log has a gap or fork, so its key lineage can't be established | Reject the item; the operator investigates the missing anchor |
 | `JOB_NOTARY_KEY_EXPOSED` | W (step 10a) | A replica's notary card key has lived in a runtime retired as `"vulnerable"` (algorithm E) | Reject; the operator must redo genesis and the policy holder reissue |
@@ -398,6 +401,8 @@ Uses CIDs and chain data only, so anyone can run it. Also specified as a verifie
 11. Walk the job log to `seq` 0, checking signatures and the EAS anchors of anchored kinds → warnings `JOB_LOG_GAP` / `JOB_LOG_FORK`.
 12. There are at least `close_quorum` cosignatures (= ⌊N/2⌋ + 1) from distinct instances. Each attestation passes **V** as in step 6 with `id_key_hash` set to its replica's own notary card (any card in `replica_set`), and each signature verifies over `H(body)` → `NOT_QUORUM_INSUFFICIENT`.
 13. No `epoch_started` record for a higher epoch was anchored before `closed_at` → `NOT_EPOCH_SUPERSEDED`.
+14. `contributor_policies` lists exactly the policies the policy's `contributor_predicate` names at `policy_state_cid`, with parameter references resolved from `job.parameters` (the set defined in `notary_runtime.md §6`, A12), sorted, with no duplicates → `NOT_CONTRIBUTOR_POLICIES_MISMATCH`.
+    - 14a. For each entry, `state_cid` is a head of that policy card at or before `snapshot_block` on the verifier's chain view. When it isn't, or the verifier can't read it → warning `NOTARIZATION_CONTRIBUTOR_POLICIES_UNVERIFIED` (a chain-state judgement, like the chain-state age: limit L4).
 
 **Result:** valid, or the first reject code. Warnings are returned with the result: `runtime_retired_vulnerable`, `notary_key_exposed_later`, the chain-state age, `JOB_LOG_GAP` / `JOB_LOG_FORK`, any `total_loss` epochs, and `SINGLE_OPERATOR_QUORUM` when the replicas whose notary cards share one `operator_card` number at least `close_quorum` (L4: the count may include contributors that operator invented). A single-operator notarization whose `closed_at` is at or after `refused_since` is **rejected** with `NOT_SINGLE_OPERATOR_REFUSED`. `refused_since` is the on-chain time of the earliest program-allowlist version from which `single_operator_quorums` has been `"refused"` without interruption (`protocol-objects.md §34`).
 

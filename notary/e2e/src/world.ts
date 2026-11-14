@@ -53,6 +53,8 @@ export interface ChainWrites {
   pin(bytes: Uint8Array): Promise<string>;
   registerCard(c: { address: string; policy: string; press: string; head_cid: string }): Promise<unknown>;
   registerSub(s: { master_card: string; sub_card: string; sub_card_doc_cid: string; active: boolean }): Promise<unknown>;
+  /** Records which card is a policy's own card (the registry's `RegisterPolicy`), so a snapshot can name the policy's head. */
+  registerPolicy(policy_id: string, address: string): Promise<unknown>;
 }
 
 export function httpChain(base: string): ChainWrites & { get<T>(path: string): Promise<T>; bytes(cid: string): Promise<Uint8Array | null> } {
@@ -61,6 +63,7 @@ export function httpChain(base: string): ChainWrites & { get<T>(path: string): P
     async pin(bytes) { const r = await fetch(`${base}/ipfs`, { method: "PUT", body: bytes }); return ((await r.json()) as { cid: string }).cid; },
     registerCard: (c) => post("/registry/card", c),
     registerSub: (s) => post("/registry/subcard", s),
+    registerPolicy: (policy_id, address) => post("/registry/policy", { policy_id, address }),
     async get<T>(path: string) { const r = await fetch(`${base}${path}`); if (!r.ok) throw new Error(`${path}: ${r.status}`); return (await r.json()) as T; },
     async bytes(cid: string) { const r = await fetch(`${base}/ipfs/${cid}`); return r.ok ? new Uint8Array(await r.arrayBuffer()) : null; },
   };
@@ -70,7 +73,7 @@ export function httpChain(base: string): ChainWrites & { get<T>(path: string): P
 
 export const K = {
   root: key("root"), appRoot: key("app-root"), loginRoot: key("login-root"),
-  chapter: key("chapter"), app: key("app"), policy: key("policy"), requester: key("requester"), operator: key("operator"),
+  chapter: key("chapter"), app: key("app"), policy: key("policy"), sourcePolicy: key("source-policy-card"), requester: key("requester"), operator: key("operator"),
   listRuntimes: key("list-runtimes"), listPrograms: key("list-programs"), listHolder: key("list-holder"), press: key("press"),
   host: key("host"),
 };
@@ -159,6 +162,9 @@ export async function registerWorld(c: ChainWrites, nContributors: number) {
   // the policy: plain document at policy_id, encrypted genesis in the registry
   await c.pin(canonicalNotary(policyGenesis));
   const policyGenesisCid = await reg(K.policy, IDS.metaPolicy, policyGenesis, "policy-genesis");
+  // the contributors' policy has a card of its own (its head is what a snapshot records, 6.0a)
+  await reg(K.sourcePolicy, IDS.metaPolicy, { type: "policy", name: "source policy", policy_id: IDS.sourcePolicy }, "source-policy-card");
+  await c.registerPolicy(IDS.sourcePolicy, K.sourcePolicy.addr);
   // contributors, each with a notary_input signing sub-card
   for (let i = 0; i < nContributors; i++) {
     const { card: m, sub: s } = contributor(i);

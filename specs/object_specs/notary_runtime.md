@@ -6,6 +6,10 @@
 **Architecture:** `ARCHITECTURE.md` ADR-013 · **Processes:** `process_specs/notary_lifecycle.md`, `notary_replication_and_recovery.md`, `derived_card_revocation_propagation.md` · **Objects:** `protocol-objects.md` §20–§34 · **Design record:** `plans/notary-design-decisions.md` §2.3, §2.4
 **Amended 2026-11-12:** §9 `create_job` reads the policy with algorithm R through `fetch`; `genesis_ready` adds `request` and `notary_card`. §12 pins list-card public keys and reads list history through `fetch`. §16 adds `CLOSE_NOT_DUE`. Source: `plans/notary-spec-wording-e31.md`, approved by David 2026-11-12.
 
+**Amended 2026-11-14 (6.0a, second part):** §9 `policy_snapshot` gains `policy_head_cid`. A consequence of the approved Q2 wording, found while implementing it; **for David's review** (`plans/notary-questions-phase-6.md`, Q2).
+
+**Amended 2026-11-14 (6.0a):** §6 A12 and `ADM_CONTRIBUTOR_SET_OPEN` (replacing `LINT_NO_SNAPSHOT_POLICY`); §9 `fetch`: a contributor's own card must come from a snapshot. David approved 2026-11-14 (`plans/notary-questions-phase-6.md`, Q2).
+
 **Amended 2026-11-13 (5.7 review):** §13 the first header (Q7); §15 `mlock` wording (Q10); §16 adds `ADM_RUNTIME_FULL` and the codes the broker already used (Q2, Q6). Source: `plans/notary-questions-5.7.md`, David approved 2026-11-13 (`plans/notary-questions-5.7.md`).
 
 **Amended 2026-11-12 (E35):** §16 adds `IDENTITY_LOG_PENDING`. Approved by David 2026-11-12.
@@ -199,12 +203,13 @@ The runtime runs algorithm A when it loads a program for a job, and `notary-lint
 | A9 | Custom section `"notary.abi"` is exactly the UTF-8 bytes `notary_v1`. Custom section `"notary.output_schema"` is UTF-8 RFC 8785 JSON equal, byte for byte, to the canonical form of the policy's `output_schema`. Each appears once. Other custom sections, including `"name"`, are ignored but count toward A2. | `ADM_SCHEMA_MISMATCH` |
 | A10 | The policy's `limits`, if set, are within the runtime ceilings (§14) | `ADM_LIMITS_EXCEED_CEILING` |
 | A11 | If `isolation` is `"shared"`, `program_cid` is on the runtime's verified allowlist (§12): accepted now and not retired. If `"dedicated"`, the runtime holds no other job. | `ADM_NOT_ALLOWLISTED_FOR_SHARED`, `ADM_DEDICATED_REQUIRED` |
+| A12 | `contributor_predicate` is **closed**: a card can satisfy it only by being issued under one of a finite list of policies. Defined over the predicate tree: an `issued_under_template` leaf (a literal, or a parameter reference) is closed; `any_of` is closed if it is non-empty and every child is closed; `all_of` is closed if at least one child is closed; everything else, including `none_of` and every other leaf, is not. The **policy set** is the union of the closed leaves, with parameter references resolved from the job's `parameters`. The notarization lists it (`protocol-objects.md §27`, `contributor_policies`). | `ADM_CONTRIBUTOR_SET_OPEN` |
 
 The ceilings in A2, A5, A7 and A10 are provisional until the capacity benchmark (implementation step 5.6). Changes are recorded as spec errata.
 
 **Lint warnings** (non-fatal, `notary-lint` only):
 - `LINT_WEAK_GRANULARITY`: an integer output field has neither `round_to` nor `buckets`, and `k_min < 10`.
-- `LINT_NO_SNAPSHOT_POLICY`: the `contributor_predicate` names no policy that can be snapshotted, so contributors will see the participation disclosure (`notary_lifecycle.md` step 31).
+(`LINT_NO_SNAPSHOT_POLICY` was retired on 2026-11-14: a predicate that names no policy is now refused by A12.)
 
 ---
 
@@ -254,7 +259,7 @@ The transport is vsock, using the framing in §8. **Everything from the host is 
 | `hello` | `challenge` | Generates `K_inst` on first boot and attests (purpose `0x03`) | `hello_ack { inst_pubkey, attestation }` |
 | `chain_headers` | `[{ number, header_rlp }]` | Hashes each header with keccak and checks it links by parent hash to the newest accepted header. Ignores older headers. | `chain_ack { newest }` |
 | `fetch_result` | `req_id`, `bytes` or `not_found` | Answers an enclave `fetch`. IPFS objects are checked against their CID. | — |
-| `policy_snapshot` | `policy_address`, `entries[]`, `subcards[]`, `heads[]`, `at_block` | Replaces the local snapshot for that policy | `snapshot_ack` |
+| `policy_snapshot` | `policy_address`, `entries[]`, `subcards[]`, `heads[]`, `at_block`, optional `policy_head_cid` | Replaces the local snapshot for that policy. `policy_head_cid` is the policy card's head the snapshot was built against; with `at_block` (raised by later `policy_updates`) it is what the enclave records in the notarization's `contributor_policies`. A policy without one can't be listed, and a close that needs it waits. | `snapshot_ack` |
 | `policy_updates` | `policy_address`, `updates[]` (each `CardHeadUpdated` with the new head's bytes) | Applies the updates to the snapshot and runs the `sealed_link` watch loop (`derived_card_revocation_propagation.md` §6) | — |
 | `genesis` | genesis request | Generates `K_id` and `K_chain` and attests (purpose `0x01`) | `genesis_ready { id_pubkey, chain_pubkey, attestation, request, notary_card }`. `request` is the completed genesis request whose hash is the attestation `nonce`; the enclave also `publish`es it, so the notary card can carry its CID (`genesis_request`, E17). `notary_card` is `keccak256(K_id)`. |
 | `countersign_notary_card` | offer | Runs check G2 against its own keys, then signs `holder_signature` | `countersigned` |
@@ -270,7 +275,7 @@ The transport is vsock, using the framing in §8. **Everything from the host is 
 
 | `kind` | Fields | Host action |
 |---|---|---|
-| `fetch` | `req_id`, `what` | `what` is one of `policy_snapshot:<policy>`, `policy_updates:<policy,since_block>`, `ipfs:<cid>`, `card_head:<address>`, `press_auth:<policy,press>`, `subcard:<address>`, `events:<filter>`. **Per-card kinds are used only** for ancestors outside snapshotted policies, and for the disclosed fallback. |
+| `fetch` | `req_id`, `what` | `what` is one of `policy_snapshot:<policy>`, `policy_updates:<policy,since_block>`, `ipfs:<cid>`, `card_head:<address>`, `press_auth:<policy,press>`, `subcard:<address>`, `events:<filter>`. **Per-card kinds are used only** for ancestors of a contributor's chain outside snapshotted policies. A contributor's own master card and signing sub-card must be present in a snapshot of one of the job's contributor policies, or the input is `INPUT_CARD_UNTRUSTED`. |
 | `publish` | `object`, `pin` | Pins to IPFS and serves the object (announcements, notarizations, `counted_inputs`, job-log records, derived cards, state blobs) |
 | `announce` | the signed announcement | Serves it at `GET /jobs/{job_hash}/announcement` |
 | `chain_submit` | `op`, `payload`, `signature` | Submits `RegisterCard` or `BatchUpdateCardHeads` from the gas wallet |
@@ -419,7 +424,8 @@ The host can't read enclave memory in any case. Zeroization limits what a later 
 | `CLOSE_FAILED` | §9 `close_chunk` | The close computation failed internally (nothing was released) |
 | `IDENTITY_LOG_PENDING` | §9 `create_job` | The notary card's identity-log `seq` 0 isn't anchored yet (`notary_lifecycle.md` step 9); nothing opened, and the host anchors it and retries |
 | `LIST_APPROVAL_*` | §12 | A list version isn't validly approved by members (`notary_lifecycle.md` Appendix A.5); refused, and the last verified version is kept |
-| `LINT_WEAK_GRANULARITY`, `LINT_NO_SNAPSHOT_POLICY` | `notary-lint` | Warnings |
+| `LINT_WEAK_GRANULARITY` | `notary-lint` | Warning |
+| `ADM_CONTRIBUTOR_SET_OPEN` | A12 | The contributor predicate doesn't restrict contributors to a finite list of policies (`notary-lint` reports it as an error) |
 
 ---
 

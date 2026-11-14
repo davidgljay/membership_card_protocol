@@ -15,6 +15,7 @@ import type { HostContext } from "../context.js";
 import type { EnclaveSession } from "../enclave/transport.js";
 import { EnclaveError } from "../enclave/transport.js";
 import { pinExact } from "../ipfs/index.js";
+import { relevantPolicies } from "../schedulers/index.js";
 import type { StoredJob } from "../storage/index.js";
 
 export function liveSession(ctx: HostContext, preferred?: string[]): EnclaveSession {
@@ -81,6 +82,11 @@ function instanceIdOf(ctx: HostContext, session: EnclaveSession): string[] {
 export async function handleGetAnnouncement(ctx: HostContext, jobHash: string): Promise<unknown> {
   const j = await ctx.jobs.get(jobHash);
   if (!j || j.announcement === null) throw new HostError("NH_JOB_UNKNOWN", "no such job on this host", 404);
+  if (ctx.gateOnSnapshots) {
+    const job = j.job as { policy_id: string; policy_state_cid: string };
+    const notary = (await ctx.policies.notary(job.policy_id, job.policy_state_cid))?.notary;
+    if (!relevantPolicies(j.job, notary).every((p) => ctx.snapshotsSent.has(p))) throw new HostError("NH_JOB_UNKNOWN", "the job is not ready yet: its contributor snapshots are still being sent", 404);
+  }
   return j.announcement;
 }
 

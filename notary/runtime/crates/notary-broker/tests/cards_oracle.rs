@@ -151,3 +151,35 @@ fn verified_ipfs_objects_are_cached_between_inputs() {
     let nr = notary_types::formats::parse_timestamp(r["config"]["nowIso"].as_str().unwrap()).unwrap();
     assert_eq!(o.contributor(&mut host_r, &r["input"], &json!({ "contributor_predicate": r["predicate"] }), &r["parameters"], nr), Err("INPUT_CARD_REVOKED"));
 }
+
+/// 6.0a: the oracle remembers which policy delivered each card, and the state each policy snapshot was built against.
+#[test]
+fn snapshots_record_their_policy_state_and_where_each_card_came_from() {
+    let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../vectors/cards/cases.json");
+    let file: Value = serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap();
+    let c = &file["cases"][0];
+    let mut o = SnapshotOracle::new(pins(&c["config"]));
+    assert_eq!(o.contributor_policy_state("pol"), None, "nothing before a snapshot");
+    let mut snap = snapshot_of(&c["world"]);
+    snap["policy_head_cid"] = json!("bafkreipolicyhead");
+    snap["at_block"] = json!(40);
+    o.on_snapshot("pol", &snap);
+    assert_eq!(o.contributor_policy_state("pol"), Some(("bafkreipolicyhead".to_string(), 40)));
+    // an update raises the block, never lowers it
+    let card = c["world"]["cards"].as_object().unwrap().keys().next().unwrap().clone();
+    let head = c["world"]["cards"][&card]["log_head_cid"].as_str().unwrap().to_string();
+    o.on_updates("pol", &json!({ "updates": [{ "card_address": card, "head_cid": head, "timestamp": "2026-01-01T00:00:00.000Z", "block": 45 }] }));
+    assert_eq!(o.contributor_policy_state("pol").unwrap().1, 45);
+    o.on_updates("pol", &json!({ "updates": [{ "card_address": card, "head_cid": head, "timestamp": "2026-01-01T00:00:00.000Z", "block": 3 }] }));
+    assert_eq!(o.contributor_policy_state("pol").unwrap().1, 45);
+    // a snapshot with no policy head is no state at all
+    let mut headless = SnapshotOracle::new(pins(&c["config"]));
+    headless.on_snapshot("headless", &snapshot_of(&c["world"]));
+    assert_eq!(headless.contributor_policy_state("headless"), None);
+    // which cards came from which policy's snapshot
+    let sub = c["world"]["subcards"].as_object().unwrap().keys().next().unwrap().clone();
+    assert!(o.contributor_from_snapshot(&card, &sub, &["pol".to_string()]));
+    assert!(!o.contributor_from_snapshot(&card, &sub, &["other".to_string()]), "the snapshot belongs to another policy");
+    assert!(!o.contributor_from_snapshot("00".repeat(32).as_str(), &sub, &["pol".to_string()]), "a card the host never snapshotted");
+    assert!(!SnapshotOracle::new(pins(&c["config"])).contributor_from_snapshot(&card, &sub, &["pol".to_string()]), "no snapshot, only the per-card fallback");
+}

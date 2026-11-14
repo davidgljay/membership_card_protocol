@@ -96,6 +96,7 @@ function build() {
   const nUnsigned = {
     accepted: 42, attestation: cid("att-close"), chain_state: { block_hash: b("blk2"), block_number: 123999, block_timestamp: "2026-11-19T10:00:03Z", state_root: b("root") },
     close_quorum: 2, closed_at: "2026-11-19T10:00:03Z",
+    contributor_policies: [{ policy_id: policyId, snapshot_block: 123998, state_cid: cid("source-policy-state") }],
     cosignatures: [{ attestation: cid("att-c1"), instance_signature: sign(7, { body: "placeholder-1" }) }, { attestation: cid("att-c2"), instance_signature: sign(8, { body: "placeholder-2" }) }],
     counted_inputs: cid("counted"), dropped_after_acceptance: 0, final_epoch: 0, input_commitment: b("commit"), job_cid: cid("job"), job_hash: jobHash,
     job_log_head: cid("log-head"), notary_card: card(1), output: { public: { abstain: 3, no: 12, yes: 27 } }, output_hash: b("out"),

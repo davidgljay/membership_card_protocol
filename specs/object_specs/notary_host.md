@@ -6,6 +6,8 @@
 **Architecture:** `ARCHITECTURE.md` ADR-013 · **Runtime:** `object_specs/notary_runtime.md` · **Processes:** `process_specs/notary_lifecycle.md`, `notary_replication_and_recovery.md`, `derived_card_revocation_propagation.md`
 **Amended 2026-11-12:** §8 snapshot entries carry head-event history and `sub_card_doc_cid`; per-card fetch shapes defined; policy, requester and list-card reads use per-card fetches. Source: `plans/notary-spec-wording-e31.md`, approved by David 2026-11-12.
 
+**Amended 2026-11-14 (6.0a):** §8 `policy_head_cid`; snapshots go out when a job is created and gate its announcement. A consequence of the approved Q2 wording, found while implementing it; **for David's review** (`plans/notary-questions-phase-6.md`, Q2).
+
 **Amended 2026-11-13 (5.7 review):** §4 `NOTARY_CARD_ADDRESSES` is optional and genesis cards are served automatically (Q4); §4 `CHAIN_PROVIDER`, `SIM_CHAIN_URL` and the start-up refusal; §14 `NOT_REACHABLE`, `ENCLAVE_ERROR` (Q5, Q6). Source: `plans/notary-questions-5.7.md`, David approved 2026-11-13 (`plans/notary-questions-5.7.md`).
 
 **Amended 2026-11-12 (batch 2):** §4 adds `ENCLAVE_ENDPOINTS`, `NOTARY_ADMIN_TOKEN`, `NOTARY_RELAY_TARGET_ID` and `NOTARY_PUBLIC_BASE_URL`, and `K_host` is a 32-byte seed; §5 genesis routes use the admin token; §9 anchor encoding; §14 adds `NH_UNAUTHORIZED` (E18, E3, E16). Source: `plans/notary-spec-wording-batch2.md`, approved by David 2026-11-12.
@@ -162,7 +164,7 @@ The host stores only ciphertexts, receipts and public objects. It never stores a
   - the `SubCardRegistrations` entries whose master card is in the set, each with `master_card`, `sub_card`, `sub_card_doc_cid` and `active`;
   - the IPFS bytes of each current head.
 
-  It is sent as `policy_snapshot`, then `policy_updates` every `SNAPSHOT_REFRESH_SECONDS`. `policy_updates` entries also carry `timestamp`.
+  The snapshot names the policy card's current head (`policy_head_cid`). A job's snapshots are sent as soon as the job exists, and the host serves the job's announcement only after every snapshot has reached the enclaves, so that no input can arrive before the enclave can read its contributor's own cards (`notary_runtime.md §9`, `fetch`). It is sent as `policy_snapshot`, then `policy_updates` every `SNAPSHOT_REFRESH_SECONDS`. `policy_updates` entries also carry `timestamp`.
 - **Never filtered.** The host must send **every** update under the policy. It is never told which cards matter, and must not filter. That is what keeps the source card hidden (`derived_card_revocation_propagation.md` §2).
 - **Per-card fetches.** These are answered for ancestors outside snapshotted policies, for the disclosed fallback, for policy and requester reads (algorithm R; jobs are public), and for list cards. The host can log them; they reveal issuers, policies and requesters, not contributors. Shapes: `card_head:<address>` → RFC 8785 JSON `{ "head_cid", "events": [{ "cid", "timestamp" }] }`; `subcard:<address>` → `{ "master_card_address", "sub_card_doc_cid", "active" }`.
 - **List cards.** The runtime reads the two governance list cards through per-card fetches (`notary_runtime.md` §12) and verifies them against its pinned keys, including each version's member `list_approval` (algorithm L).

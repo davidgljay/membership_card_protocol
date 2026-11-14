@@ -104,6 +104,14 @@ export function notarizationReads(chain: Chain, notary: { card: string; kId: str
     async block(n) { try { const b = await chain.get<{ hash: string; timestamp: number }>(`/block/${n}`); return { hash: Buffer.from(b.hash.slice(2), "hex").toString("base64url"), timestampMs: b.timestamp * 1000 }; } catch { return null; } },
     keyExposure: exposure,
     anchors: (scope) => chain.get(`/eas/${scope}`),
+    // N14a: the state is a head of the policy's own card at or before the snapshot block. Simulated registry read: the
+    // policy's card address is the one the world registered with `registerPolicy`.
+    async contributorPolicyState(policyId, stateCid, block) {
+      if (policyId !== IDS.sourcePolicy) return false;
+      const card = await chain.get<{ events: { cid: string; timestamp: string }[] }>(`/registry/card/${K.sourcePolicy.addr}`);
+      const b = await chain.get<{ timestamp: number }>(`/block/${block}`);
+      return card.events.some((e) => e.cid === stateCid && Date.parse(e.timestamp) <= b.timestamp * 1000);
+    },
   };
 }
 

@@ -187,6 +187,13 @@ describe("consent model (wallet_sdk.md §7b.3)", () => {
     const d = buildConsent({ job: baseAnn.job, notary: notarySection, allowlisted: allowlist[0], notaries: [], operatorCards: {}, platform: "simulator" });
     expect(d.disclosures).not.toContain(PARTICIPATION_DISCLOSURE);
   });
+  it("the consent model names the policies whose cards can contribute, or null for an open predicate (6.0a)", async () => {
+    const { buildConsent } = await import("../../src/notary/consent.js");
+    const mk = (pred: unknown, parameters?: Record<string, unknown>) => buildConsent({ job: { ...baseAnn.job, ...(parameters ? { parameters } : {}) }, notary: { ...notarySection, contributor_predicate: pred as never }, allowlisted: allowlist[0], notaries: [], operatorCards: {}, platform: "simulator" });
+    expect(mk({ issued_under_template: "bafkreia" }).contributorPolicies).toEqual(["bafkreia"]);
+    expect(mk({ any_of: [{ issued_under_template: "bafkreib" }, { issued_under_template: { param: "p" } }] }, { p: "bafkreia" }).contributorPolicies).toEqual(["bafkreia", "bafkreib"]);
+    expect(mk({ card_field_matches: { field: "x" } }).contributorPolicies).toBeNull();
+  });
   it("derived-card jobs show the revocation-propagation disclosures (propagation §8)", async () => {
     const { buildConsent } = await import("../../src/notary/consent.js");
     const notary: NotarySection = { ...notarySection, output_action: "card", mode: "per_input", derived_card: { min_anonymity_set: 10 }, revocation_propagation: { mode: "sealed_link" } };

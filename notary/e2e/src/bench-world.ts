@@ -18,6 +18,7 @@ const writes = {
   pin: async (b: Uint8Array) => chain.pin(b),
   registerCard: async (c: Parameters<typeof chain.registerCard>[0]) => chain.registerCard(c),
   registerSub: async (s: Parameters<typeof chain.registerSub>[0]) => chain.registerSub(s),
+  registerPolicy: async (id: string, address: string) => { chain.policyCards.set(id, address); },
 };
 const t0 = Date.now();
 await registerWorld(writes, n);
@@ -26,7 +27,7 @@ const world = chain.world();
 // the whole-policy snapshot a host would send for the contributors' template policy (notary_host.md §8)
 const entries = Object.entries(world.cards).filter(([, c]) => c.policy_address === IDS.sourcePolicy).map(([address, c]) => ({ address, head_cid: c.log_head_cid, last_press: c.last_press_address, events: c.events }));
 const snapshot = {
-  policy_address: IDS.sourcePolicy, at_block: chain.blocks.length, entries,
+  policy_address: IDS.sourcePolicy, at_block: chain.blocks.length, policy_head_cid: chain.card(K.sourcePolicy.addr)?.head_cid, entries,
   subcards: Object.entries(world.subcards).map(([sub, s]) => ({ master_card: s.master_card_address, sub_card: sub, sub_card_doc_cid: s.sub_card_doc_cid, active: s.active })),
   // `heads` (the head bytes) are filled in by the benchmark from `world.ipfs`
 };

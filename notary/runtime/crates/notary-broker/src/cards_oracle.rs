@@ -42,6 +42,12 @@ pub struct CardPins {
 
 #[derive(Default)]
 struct Snapshots {
+    /// policy → (head of the policy card the snapshot was built against, newest block applied)
+    policy_state: BTreeMap<String, (String, u64)>,
+    /// card address → the policy whose snapshot or update delivered it
+    card_policy: BTreeMap<String, String>,
+    /// sub-card address → the policy whose snapshot delivered its registration
+    subcard_policy: BTreeMap<String, String>,
     cards: BTreeMap<String, CardEntry>,
     subcards: BTreeMap<String, SubCardEntry>,
     heads: BTreeMap<String, Vec<u8>>,
@@ -230,11 +236,14 @@ impl CardOracle for SnapshotOracle {
     }
 
     fn on_snapshot(&mut self, policy: &str, msg: &Value) {
-        let _ = policy;
+        let block = msg.get("at_block").and_then(Value::as_u64).unwrap_or(0);
+        let head = msg.get("policy_head_cid").and_then(Value::as_str).unwrap_or_default().to_string();
+        self.snap.policy_state.insert(policy.into(), (head, block));
         for e in msg.get("entries").and_then(Value::as_array).into_iter().flatten() {
             let (Some(a), Some(h)) = (e.get("address").and_then(Value::as_str), e.get("head_cid").and_then(Value::as_str)) else { continue };
             let events = e.get("events").map(events_of).unwrap_or_default();
             self.snap.cards.insert(a.into(), CardEntry { log_head_cid: h.into(), events });
+            self.snap.card_policy.insert(a.into(), policy.into());
         }
         for s in msg.get("subcards").and_then(Value::as_array).into_iter().flatten() {
             let (Some(m), Some(sub), Some(cid), Some(active)) = (
@@ -246,6 +255,7 @@ impl CardOracle for SnapshotOracle {
                 continue;
             };
             self.snap.subcards.insert(sub.into(), SubCardEntry { master_card_address: m.into(), sub_card_doc_cid: cid.into(), active });
+            self.snap.subcard_policy.insert(sub.into(), policy.into());
         }
         for h in msg.get("heads").and_then(Value::as_array).into_iter().flatten() {
             let (Some(cid), Some(b)) = (h.get("cid").and_then(Value::as_str), h.get("bytes").and_then(Value::as_str)) else { continue };
@@ -255,11 +265,24 @@ impl CardOracle for SnapshotOracle {
         }
     }
 
-    fn on_updates(&mut self, _policy: &str, msg: &Value) {
+    fn contributor_policy_state(&self, policy: &str) -> Option<(String, u64)> {
+        self.snap.policy_state.get(policy).filter(|(head, _)| !head.is_empty()).cloned()
+    }
+
+    fn contributor_from_snapshot(&self, master_card: &str, sub_card: &str, policies: &[String]) -> bool {
+        let from = |m: &BTreeMap<String, String>, k: &str| m.get(k).is_some_and(|p| policies.contains(p));
+        from(&self.snap.card_policy, master_card) && from(&self.snap.subcard_policy, sub_card)
+    }
+
+    fn on_updates(&mut self, policy: &str, msg: &Value) {
         for u in msg.get("updates").and_then(Value::as_array).into_iter().flatten() {
             let (Some(a), Some(h), Some(ts)) = (u.get("card_address").and_then(Value::as_str), u.get("head_cid").and_then(Value::as_str), u.get("timestamp").and_then(Value::as_str)) else {
                 continue;
             };
+            self.snap.card_policy.insert(a.into(), policy.into());
+            if let (Some(b), Some(st)) = (u.get("block").and_then(Value::as_u64), self.snap.policy_state.get_mut(policy)) {
+                st.1 = st.1.max(b);
+            }
             let entry = self.snap.cards.entry(a.into()).or_insert_with(|| CardEntry { log_head_cid: h.into(), events: vec![] });
             entry.log_head_cid = h.into();
             if !entry.events.iter().any(|e| e.cid == h) {

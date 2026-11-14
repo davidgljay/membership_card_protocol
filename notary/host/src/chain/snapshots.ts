@@ -24,13 +24,15 @@ export interface SubCardEvent { masterCard: string; subCard: string; subCardDocC
 export interface Snapshot {
   policy_address: string;
   at_block: number;
+  /** The policy card's head the snapshot was built against (runtime §9; recorded in the notarization's `contributor_policies`). */
+  policy_head_cid?: string;
   entries: { address: string; head_cid: string; last_press: string; events: { cid: string; timestamp: string }[] }[];
   subcards: { master_card: string; sub_card: string; sub_card_doc_cid: string; active: boolean }[];
   heads: { cid: string; bytes: string }[];
 }
 
 /** Builds the snapshot for one policy from the registry's events: all cards, in address order. */
-export function buildSnapshot(policy: string, events: RegistryEvent[], subcards: SubCardEvent[], heads: Map<string, Uint8Array>, atBlock: number): Snapshot {
+export function buildSnapshot(policy: string, events: RegistryEvent[], subcards: SubCardEvent[], heads: Map<string, Uint8Array>, atBlock: number, policyHead?: string | null): Snapshot {
   const cur = new Map<string, { head: string; press: string; block: number; events: { cid: string; timestamp: string }[] }>();
   for (const e of [...events].filter((x) => x.policyAddress === policy && x.block <= atBlock).sort((a, b) => a.block - b.block)) {
     const prev = cur.get(e.cardAddress)?.events ?? [];
@@ -40,7 +42,7 @@ export function buildSnapshot(policy: string, events: RegistryEvent[], subcards:
   const subs = new Map<string, SubCardEvent>();
   for (const s of [...subcards].filter((x) => x.block <= atBlock).sort((a, b) => a.block - b.block)) subs.set(`${s.masterCard}:${s.subCard}`, s);
   return {
-    policy_address: policy, at_block: atBlock,
+    policy_address: policy, at_block: atBlock, ...(policyHead ? { policy_head_cid: policyHead } : {}),
     entries: addrs.map((a) => ({ address: a, head_cid: cur.get(a)!.head, last_press: cur.get(a)!.press, events: cur.get(a)!.events })),
     subcards: [...subs.values()].filter((s) => cur.has(s.masterCard)).map((s) => ({ master_card: s.masterCard, sub_card: s.subCard, sub_card_doc_cid: s.subCardDocCid, active: s.active })),
     heads: addrs.map((a) => ({ cid: cur.get(a)!.head, bytes: Buffer.from(heads.get(cur.get(a)!.head) ?? new Uint8Array()).toString("base64url") })),

@@ -26,6 +26,7 @@ obj! { pub struct Transport { pub key_config_url: String, pub relay_target_id: S
 obj! { pub struct ChainRef { pub block_hash: String, pub block_number: u64 } }
 obj! { pub struct EvidenceItem { pub bytes: String, pub cid: String } }
 obj! { pub struct ChainState { pub block_hash: String, pub block_number: u64, pub block_timestamp: String, pub state_root: String } }
+obj! { pub struct ContributorPolicy { pub policy_id: String, pub snapshot_block: u64, pub state_cid: String } }
 obj! { pub struct Cosignature { pub attestation: String, pub instance_signature: SignatureEntry } }
 obj! { pub struct ChainHead { pub block_hash: String, pub block_number: u64 } }
 obj! { pub struct PeerJob { pub epoch: u64, pub job_hash: String, pub state_version: u64 } }
@@ -121,7 +122,7 @@ obj! {
     /// §27 Notarization
     pub struct Notarization {
         pub accepted: u64, pub attestation: String, pub chain_state: ChainState, pub close_quorum: u32,
-        pub closed_at: String, pub cosignatures: Vec<Cosignature>, pub counted_inputs: String,
+        pub closed_at: String, pub contributor_policies: Vec<ContributorPolicy>, pub cosignatures: Vec<Cosignature>, pub counted_inputs: String,
         pub dropped_after_acceptance: u64, pub final_epoch: u64, pub input_commitment: String, pub job_cid: String,
         pub job_hash: String, pub job_log_head: String, pub notary_card: String, pub notary_signature: SignatureEntry,
         pub output: Value, pub output_hash: String, pub platform: String, pub policy_id: String,

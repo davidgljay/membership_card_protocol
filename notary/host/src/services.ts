@@ -47,5 +47,5 @@ export interface ChainFeed {
   /** Headers after block `n`, oldest first: `header_rlp` base64url, `timestamp` in seconds. */
   headersAfter(n: number): Promise<{ number: number; header_rlp: string; timestamp: number }[]>;
   /** Every `CardRegistered` / `CardHeadUpdated` under `policy`, every sub-card registration, and the newest block. */
-  registry(policy: string): Promise<{ events: import("./chain/snapshots.js").RegistryEvent[]; subcards: import("./chain/snapshots.js").SubCardEvent[]; block: number }>;
+  registry(policy: string): Promise<{ events: import("./chain/snapshots.js").RegistryEvent[]; subcards: import("./chain/snapshots.js").SubCardEvent[]; block: number; /** the policy card's current head, when the registry knows it */ policyHead?: string | null }>;
 }

@@ -283,7 +283,7 @@ Goal: one end-to-end path running in the simulator: a job is announced with an a
   - **Context needed**: `notary-code-plan.md`; Phase 5 summary
   - **Done when**: every question has an answer recorded.
 
-- [ ] **6.0a Contributor-policy hardening** *(added 2026-11-13 from David's question; `notary-questions-5.7.md` Q11, items 1 and 2)*
+- [x] **6.0a Contributor-policy hardening** *(added 2026-11-13 from David's question; `notary-questions-5.7.md` Q11, items 1 and 2)*
   - **What**: Narrow what a hostile host can do around who may contribute. Two changes, small and local to the notary objects and the broker. Do them first in Phase 6, so 6.1's notarization carries the new field from the start.
     1. **Record what was checked.** Add an optional `contributor_policies: [{ policy_id, state_cid, snapshot_block }]` to the notarization (`protocol-objects.md §27`). The broker fills it from the policies it held snapshots for when it closed. Verifiers (algorithm N) re-check each entry against the chain and warn on a mismatch; the wallet's inclusion and consent views show it.
     2. **Close the set.** Policy creation (`notary-lint`) and admission require `contributor_predicate` to reduce to a finite list of `issued_under_template` policies (literal or through parameter references); `LINT_NO_SNAPSHOT_POLICY` becomes an admission refusal for jobs that publish a result to others, and stays a warning where the participation disclosure applies (decide in 6.0). The enclave refuses the per-card `fetch` fallback for a contributor's own card outside those snapshots.

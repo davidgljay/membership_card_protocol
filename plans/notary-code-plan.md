@@ -509,6 +509,9 @@ Not ported: EAS annotations, non-compliance reporting, login and DNS.
 | 5.7 follow-up | §7.5 mechanism 4: differential fuzzing (not gating) | `verifier/scripts/fuzz-notary-conformance.ts`; `notary-cards/tests/fuzz.rs`; `.github/workflows/notary-fuzz.yml` | 3,600 mutants over seeds 1–3: 0 disagreements (about 4% unreadable by the port); runs nightly |
 | 5.7 follow-up | Worker wall-clock kill (runtime §8, E23) | `notary-runtime/src/process_workers.rs` | `notary-runtime/tests/wall_clock.rs` |
 
+| 6.0a | A12 closed contributor set; `contributor_policies` in the notarization; algorithm N step 14/14a | `notary-types/src/policy_set.rs` and `verifier/src/notary/policySet.ts` (shared vectors `notary/vectors/policy_set/cases.json`); `notary-admission` (`ADM_CONTRIBUTOR_SET_OPEN`); `notary-broker/src/{close,inputs,cards_oracle}.rs`; `verifier/src/notary/notarization.ts` | `cargo test -p notary-types policy_set`, verifier `policySet.test.ts` (18), admission `a12_the_contributor_set_must_be_closed`, broker `broker.rs` (close lists the policies; `INPUT_CARD_UNTRUSTED` outside a snapshot), `cards_oracle.rs::snapshots_record_their_policy_state_…`, attestation-ts `N14` test, wallet consent test |
+| 6.0a | Host: `policy_head_cid` in snapshots; first snapshot at job creation; announcement gated on the snapshots | `notary/host/src/{chain/snapshots,schedulers/index,handlers/jobs,context}.ts`; `e2e/src/sim-chain.ts` (`/registry/policy`) | host `services.test.ts`, `schedulers.test.ts`, `jobs-inputs.test.ts`; both e2e runs |
+
 Attestation vectors: `NOTARY_WRITE_VECTORS=1 cargo test -p notary-attest --test att_codes` writes `notary/vectors/attestation/cases.json`.
 
 Regenerate and check vectors: `pnpm run gen` / `pnpm run check` in `notary/vectors-tools`; Rust-produced vectors: `NOTARY_WRITE_VECTORS=1 cargo test -p notary-crypto`.

@@ -23,6 +23,11 @@ export interface HostDeps {
   /** Live enclave sessions, keyed by vsock CID (or simulator id). */
   sessions: Map<string, EnclaveSession>;
   now?: () => number;
+  /**
+   * Serve a job's announcement only after the snapshots of its contributor policies have reached the enclaves (6.0a: the
+   * enclave reads a contributor's own cards only from snapshots, so an input sent earlier would be refused).
+   */
+  gateOnSnapshots?: boolean;
 }
 
 export interface HostContext extends HostDeps {
@@ -39,6 +44,8 @@ export interface HostContext extends HostDeps {
   /** Objects the enclaves asked the host to serve (announcements, notarizations, counted_inputs, records), by CID. */
   served: Map<string, Uint8Array>;
   /** Notary cards this host serves: `NOTARY_CARD_ADDRESSES` plus every card created through `/genesis` on this host (kept in the KV). */
+  /** Policies whose first snapshot every live enclave has received (set by the snapshot scheduler). */
+  snapshotsSent: Set<string>;
   cards: { all(): string[]; add(card: string): Promise<void>; load(): Promise<void> };
 }
 
@@ -57,7 +64,7 @@ export function createContext(d: HostDeps): HostContext {
   return {
     ...d, now: d.now ?? Date.now, keys: hostKeys(d.config.NOTARY_HOST_MLDSA44_SEED),
     jobs: jobStore(d.kv), inputs: inputStore(d.kv), receipts: receiptStore(d.kv), logs: logStore(d.kv), snapshots: snapshotStore(d.kv), blobs: blobStore(d.kv),
-    instances: new Map(), served: new Map(), cards: cardSet(d),
+    instances: new Map(), served: new Map(), snapshotsSent: new Set(), cards: cardSet(d),
   };
 }
 

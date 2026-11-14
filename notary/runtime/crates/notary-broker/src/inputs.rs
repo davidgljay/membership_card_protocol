@@ -10,7 +10,7 @@
 //! Step 5.3 scope: a single replica (`acks` = 1). Quorum acknowledgment across replicas is step 6.3.
 use crate::{env::HostIo, host_proto::{error, Broker}, jobs::State};
 use notary_crypto::{sealed_input_info_aad, seal_receipt};
-use notary_types::{b64u, jcs, objects};
+use notary_types::{b64u, formats, jcs, objects};
 use serde_json::{json, Value};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,6 +127,13 @@ impl Broker {
             Ok(r) => r,
             Err(c) => return reject(c, rev),
         };
+        // 6.0a (runtime §9, `fetch`): the contributor's own master card and signing sub-card must come from a snapshot
+        // of one of the job's contributor policies, never from the per-card fallback.
+        let policies = notary_types::policy_set::policy_set(notary.get("contributor_predicate").unwrap_or(&Value::Null), &params).unwrap_or_default();
+        let sub_pk = b64u::decode(&typed.contributor_signature.public_key).unwrap_or_default();
+        if !self.oracle.contributor_from_snapshot(&typed.contributor_card, &formats::card_pointer(&sub_pk), &policies) {
+            return reject("INPUT_CARD_UNTRUSTED", rev);
+        }
         // B9
         if crate::params::check(&typed.payload, notary.get("input_schema")).is_err() {
             return reject("INPUT_SCHEMA_INVALID", rev);

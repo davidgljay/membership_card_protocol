@@ -94,9 +94,11 @@ export interface GenesisRequest {
 export interface ChainState { block_hash: Base64Url; block_number: number; block_timestamp: Timestamp; state_root: Base64Url }
 export interface Cosignature { attestation: Cid; instance_signature: SignatureEntry }
 
+export interface ContributorPolicy { policy_id: Cid; snapshot_block: number; state_cid: Cid }
+
 export interface Notarization {
   accepted: number; attestation: Cid; chain_state: ChainState; close_quorum: number; closed_at: Timestamp;
-  cosignatures: Cosignature[]; counted_inputs: Cid; dropped_after_acceptance: number; final_epoch: number;
+  contributor_policies: ContributorPolicy[]; cosignatures: Cosignature[]; counted_inputs: Cid; dropped_after_acceptance: number; final_epoch: number;
   input_commitment: Base64Url; job_cid: Cid; job_hash: Base64Url; job_log_head: Cid; notary_card: CardPointer;
   notary_signature: SignatureEntry; output: { public: unknown } | { recipients: CardPointer[] };
   output_hash: Base64Url; platform: string; policy_id: Cid; policy_state_cid: Cid; program_cid: Cid;
@@ -164,7 +166,7 @@ export const OBJECT_FIELDS: Record<string, FieldSpec> = {
     optional: ["derived_offer", "reject_reason"],
   },
   "notary.notarization.v1": {
-    required: ["accepted", "attestation", "chain_state", "close_quorum", "closed_at", "cosignatures", "counted_inputs", "dropped_after_acceptance", "final_epoch", "input_commitment", "job_cid", "job_hash", "job_log_head", "notary_card", "notary_signature", "output", "output_hash", "platform", "policy_id", "policy_state_cid", "program_cid", "rejected", "suppressed", "type"],
+    required: ["accepted", "attestation", "chain_state", "close_quorum", "closed_at", "contributor_policies", "cosignatures", "counted_inputs", "dropped_after_acceptance", "final_epoch", "input_commitment", "job_cid", "job_hash", "job_log_head", "notary_card", "notary_signature", "output", "output_hash", "platform", "policy_id", "policy_state_cid", "program_cid", "rejected", "suppressed", "type"],
   },
   "notary.job_log.v1": { required: ["at", "body", "instance", "instance_signature", "job_hash", "kind", "notary_signature", "seq", "type"], optional: ["prev"] },
   "notary.identity_log.v1": { required: ["at", "body", "instance", "instance_signature", "job_hash", "kind", "notary_signature", "seq", "type"], optional: ["prev"] },

@@ -1,0 +1,255 @@
+{
+ "about": "The contributor policy set (notary_runtime.md \u00a76 A12). Checked by notary-types (Rust) and verifier/notary policySet.ts (TypeScript). Hand-written.",
+ "cases": [
+  {
+   "id": "literal leaf",
+   "predicate": {
+    "issued_under_template": "bafkreiA"
+   },
+   "parameters": {},
+   "closed": true,
+   "policy_set": [
+    "bafkreiA"
+   ]
+  },
+  {
+   "id": "param leaf",
+   "predicate": {
+    "issued_under_template": {
+     "param": "p"
+    }
+   },
+   "parameters": {
+    "p": "bafkreiB"
+   },
+   "closed": true,
+   "policy_set": [
+    "bafkreiB"
+   ]
+  },
+  {
+   "id": "param leaf, parameter missing",
+   "predicate": {
+    "issued_under_template": {
+     "param": "p"
+    }
+   },
+   "parameters": {},
+   "closed": true,
+   "policy_set": null
+  },
+  {
+   "id": "param leaf, parameter not text",
+   "predicate": {
+    "issued_under_template": {
+     "param": "p"
+    }
+   },
+   "parameters": {
+    "p": 5
+   },
+   "closed": true,
+   "policy_set": null
+  },
+  {
+   "id": "any_of three",
+   "predicate": {
+    "any_of": [
+     {
+      "issued_under_template": "bafkreiC"
+     },
+     {
+      "issued_under_template": "bafkreiA"
+     },
+     {
+      "issued_under_template": {
+       "param": "p"
+      }
+     }
+    ]
+   },
+   "parameters": {
+    "p": "bafkreiB"
+   },
+   "closed": true,
+   "policy_set": [
+    "bafkreiA",
+    "bafkreiB",
+    "bafkreiC"
+   ]
+  },
+  {
+   "id": "any_of with a duplicate",
+   "predicate": {
+    "any_of": [
+     {
+      "issued_under_template": "bafkreiA"
+     },
+     {
+      "issued_under_template": "bafkreiA"
+     }
+    ]
+   },
+   "parameters": {},
+   "closed": true,
+   "policy_set": [
+    "bafkreiA"
+   ]
+  },
+  {
+   "id": "any_of with an open child",
+   "predicate": {
+    "any_of": [
+     {
+      "issued_under_template": "bafkreiA"
+     },
+     {
+      "chain_includes": "x"
+     }
+    ]
+   },
+   "parameters": {},
+   "closed": false,
+   "policy_set": null
+  },
+  {
+   "id": "any_of empty",
+   "predicate": {
+    "any_of": []
+   },
+   "parameters": {},
+   "closed": false,
+   "policy_set": null
+  },
+  {
+   "id": "all_of: one closed child restricts",
+   "predicate": {
+    "all_of": [
+     {
+      "issued_under_template": "bafkreiA"
+     },
+     {
+      "card_field_matches": {
+       "template": "t",
+       "field": "f",
+       "regex": "^x$"
+      }
+     }
+    ]
+   },
+   "parameters": {},
+   "closed": true,
+   "policy_set": [
+    "bafkreiA"
+   ]
+  },
+  {
+   "id": "all_of: no closed child",
+   "predicate": {
+    "all_of": [
+     {
+      "chain_includes": "x"
+     }
+    ]
+   },
+   "parameters": {},
+   "closed": false,
+   "policy_set": null
+  },
+  {
+   "id": "all_of empty",
+   "predicate": {
+    "all_of": []
+   },
+   "parameters": {},
+   "closed": false,
+   "policy_set": null
+  },
+  {
+   "id": "all_of with two closed children",
+   "predicate": {
+    "all_of": [
+     {
+      "issued_under_template": "bafkreiA"
+     },
+     {
+      "issued_under_template": "bafkreiB"
+     }
+    ]
+   },
+   "parameters": {},
+   "closed": true,
+   "policy_set": [
+    "bafkreiA",
+    "bafkreiB"
+   ]
+  },
+  {
+   "id": "none_of is open",
+   "predicate": {
+    "none_of": [
+     {
+      "issued_under_template": "bafkreiA"
+     }
+    ]
+   },
+   "parameters": {},
+   "closed": false,
+   "policy_set": null
+  },
+  {
+   "id": "another leaf is open",
+   "predicate": {
+    "chain_includes": "x"
+   },
+   "parameters": {},
+   "closed": false,
+   "policy_set": null
+  },
+  {
+   "id": "nested any_of in all_of",
+   "predicate": {
+    "all_of": [
+     {
+      "any_of": [
+       {
+        "issued_under_template": "bafkreiA"
+       },
+       {
+        "issued_under_template": "bafkreiB"
+       }
+      ]
+     },
+     {
+      "chain_includes": "x"
+     }
+    ]
+   },
+   "parameters": {},
+   "closed": true,
+   "policy_set": [
+    "bafkreiA",
+    "bafkreiB"
+   ]
+  },
+  {
+   "id": "literal leaf, value not text",
+   "predicate": {
+    "issued_under_template": 5
+   },
+   "parameters": {},
+   "closed": false,
+   "policy_set": null
+  },
+  {
+   "id": "two keys in one node",
+   "predicate": {
+    "issued_under_template": "bafkreiA",
+    "chain_includes": "x"
+   },
+   "parameters": {},
+   "closed": false,
+   "policy_set": null
+  }
+ ]
+}

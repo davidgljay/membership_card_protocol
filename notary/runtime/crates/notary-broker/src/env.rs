@@ -38,6 +38,12 @@ pub trait CardOracle {
     fn contributor(&mut self, io: &mut dyn HostIo, input: &Value, notary: &Value, params: &Value, now_ms: i64) -> Result<[u8; 32], &'static str>;
     /// The full version history of a governance list card (oldest first), for algorithm L.
     fn list_history(&mut self, io: &mut dyn HostIo, list_card: &str) -> Option<Vec<ListVersion>>;
+    /// The state this runtime holds for a contributor policy: the policy card's head the snapshot was built against and
+    /// the newest block applied (`protocol-objects.md §27`, `contributor_policies`). `None` without a snapshot.
+    fn contributor_policy_state(&self, policy: &str) -> Option<(String, u64)>;
+    /// 6.0a: whether the contributor's master card and signing sub-card come from a snapshot of one of `policies`
+    /// (runtime §9, `fetch`: a contributor's own cards are never read through the per-card fallback).
+    fn contributor_from_snapshot(&self, master_card: &str, sub_card: &str, policies: &[String]) -> bool;
     /// `policy_snapshot` / `policy_updates` from the host (never filtered; host §8).
     fn on_snapshot(&mut self, policy: &str, msg: &Value);
     fn on_updates(&mut self, policy: &str, msg: &Value);

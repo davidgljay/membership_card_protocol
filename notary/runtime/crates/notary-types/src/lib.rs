@@ -12,6 +12,7 @@ pub mod formats;
 pub mod jcs;
 pub mod merkle;
 pub mod objects;
+pub mod policy_set;
 pub mod user_data;
 
 pub use error::NotaryError;

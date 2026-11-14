@@ -27,7 +27,7 @@ describe("policy snapshots and updates are NEVER filtered (notary_host.md §8)",
     expect(Buffer.from(s.heads[0]!.bytes, "base64url")).toEqual(Buffer.from([3]));
   });
   it("the snapshot is a function of the registry and the block only: it takes no list of cards of interest", () => {
-    expect(buildSnapshot.length).toBe(5); // (policy, events, subcards, heads, atBlock): there is no filter parameter
+    expect(buildSnapshot.length).toBe(6); // (policy, events, subcards, heads, atBlock, policyHead): there is no filter parameter
     expect(buildSnapshot(POL, events, [], heads, 10)).toEqual(buildSnapshot(POL, [...events].reverse(), [], heads, 10)); // independent of event order
   });
   it("respects the snapshot block; a card registered later is absent", () => {
@@ -40,6 +40,14 @@ describe("policy snapshots and updates are NEVER filtered (notary_host.md §8)",
   it("updates since a block are every registration and head change under the policy, in order, unfiltered", () => {
     const u = buildUpdates(POL, events, 1, heads);
     expect(u.map((x) => `${x.card_address}:${x.head_cid}:${x.block}`)).toEqual(["c2:h2:2", "c1:h3:5", "c3:h4:6"]);
+  });
+});
+
+describe("snapshot policy head (6.0a)", () => {
+  it("names the policy card's head the snapshot was built against, when the registry knows it", () => {
+    const withHead = buildSnapshot("p", [], [], new Map(), 9, "bafkreipolicyhead");
+    expect(withHead.policy_head_cid).toBe("bafkreipolicyhead");
+    expect("policy_head_cid" in buildSnapshot("p", [], [], new Map(), 9, null)).toBe(false);
   });
 });
 

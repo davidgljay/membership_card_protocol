@@ -17,7 +17,7 @@ fn admitted() -> Admitted {
         String::from_utf8(notary_types::jcs::canonical(&schema).unwrap()).unwrap()
     );
     let b = wat::parse_str(src).unwrap();
-    admit(&b, &json!({ "program_cid": formats::cid_of_bytes(&b), "isolation": "dedicated", "output_schema": schema }), &RuntimeContext::default()).unwrap()
+    admit(&b, &json!({ "program_cid": formats::cid_of_bytes(&b), "isolation": "dedicated", "output_schema": schema, "contributor_predicate": { "issued_under_template": "bafkreisource" } }), &RuntimeContext::default()).unwrap()
 }
 
 #[test]

@@ -109,6 +109,12 @@ impl CardOracle for BenchOracle {
     fn list_history(&mut self, _: &mut dyn HostIo, card: &str) -> Option<Vec<ListVersion>> {
         Some(if card == "runtimes" { self.lists.0.clone() } else { self.lists.1.clone() })
     }
+    fn contributor_policy_state(&self, policy: &str) -> Option<(String, u64)> {
+        self.inner.contributor_policy_state(policy)
+    }
+    fn contributor_from_snapshot(&self, master_card: &str, sub_card: &str, policies: &[String]) -> bool {
+        self.inner.contributor_from_snapshot(master_card, sub_card, policies)
+    }
     fn on_snapshot(&mut self, policy: &str, msg: &Value) {
         self.inner.on_snapshot(policy, msg)
     }
