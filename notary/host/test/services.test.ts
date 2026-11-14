@@ -1,3 +1,4 @@
+import { createContext } from "../src/context.js";
 import { describe, it, expect } from "vitest";
 import { buildSnapshot, buildUpdates } from "../src/chain/snapshots.js";
 import type { RegistryEvent, SubCardEvent } from "../src/chain/snapshots.js";
@@ -73,6 +74,18 @@ describe("operator-authenticated routes, peer relay and health", () => {
     expect(h.enclave.received.find((m) => m.kind === "genesis")!["request"]).toEqual({ nonce: "n" });
     expect(await handleCountersign(h.ctx, `Bearer ${TOKEN}`, { offer: { a: 1 } })).toEqual({ offer: { a: 1 } });
     await expect(handleGenesis(h.ctx, `Bearer ${TOKEN}`, {} as never)).rejects.toMatchObject({ code: "MISSING_FIELD" });
+  });
+  it("a card created through /genesis is served at once and after a restart, with no configuration (Q4)", async () => {
+    const h = await harness({}, { cardAddresses: [] });
+    expect(h.ctx.cards.all()).toEqual([]);
+    await handleGenesis(h.ctx, `Bearer ${TOKEN}`, { request: { nonce: "n" } });
+    const card = "cd".repeat(32);
+    expect(h.ctx.cards.all()).toEqual([card]);
+    // a new context over the same KV and an empty configuration serves it after load()
+    const again = createContext({ ...h.ctx, config: { ...h.ctx.config, NOTARY_CARD_ADDRESSES: [] } });
+    expect(again.cards.all()).toEqual([]);
+    await again.cards.load();
+    expect(again.cards.all()).toEqual([card]);
   });
   it("peer relay forwards signed or sealed bytes to the named local instance only", async () => {
     const h = await harness();

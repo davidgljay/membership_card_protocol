@@ -33,13 +33,19 @@ export const newSchedulerState = (): SchedulerState => ({ newestHeader: 0, chain
 export async function headersTick(ctx: HostContext, feed: ChainFeed, st: SchedulerState): Promise<void> {
   const hs = await feed.headersAfter(st.newestHeader);
   if (hs.length === 0) return;
+  // A header that does not link to the enclave's chain is dropped, so a batch the enclave never received must be sent
+  // again: the cursor moves only when at least one live enclave exists and every live enclave acknowledged the batch
+  // (5.7: it used to move after a failed call, which left a gap that froze that enclave's chain for good). An enclave
+  // that already has the headers ignores the repeat.
+  let delivered = 0;
+  let failed = false;
   for (const s of ctx.sessions.values()) {
     if (s.closed) continue;
-    try { await s.call("chain_headers", { headers: hs.map((h) => ({ number: h.number, header_rlp: h.header_rlp })) }); } catch { /* retried with the next headers */ }
+    try { await s.call("chain_headers", { headers: hs.map((h) => ({ number: h.number, header_rlp: h.header_rlp })) }); delivered++; } catch { failed = true; }
   }
   const last = hs[hs.length - 1]!;
-  st.newestHeader = last.number;
   st.chainTimeMs = last.timestamp * 1000;
+  if (delivered > 0 && !failed) st.newestHeader = last.number;
 }
 
 /** Policies a job depends on (notary_host.md §8). */

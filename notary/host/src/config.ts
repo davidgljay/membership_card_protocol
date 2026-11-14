@@ -54,7 +54,7 @@ export function loadConfig(env: Env): HostConfig {
     const v = env[k]; if (v === undefined || v === "") return dflt;
     const n = Number(v); if (!Number.isInteger(n) || n <= 0) { problems.push(`${k} must be a positive integer`); return dflt; } return n;
   };
-  const cards = list("NOTARY_CARD_ADDRESSES");
+  const cards = list("NOTARY_CARD_ADDRESSES", false);
   for (const c of cards) if (!/^[0-9a-f]{64}$/.test(c)) problems.push(`NOTARY_CARD_ADDRESSES: ${c} is not 64 lowercase hex characters`);
   const gas = req("NOTARY_GAS_WALLET_PRIVATE_KEY");
   if (gas && !/^(0x)?[0-9a-fA-F]{64}$/.test(gas)) problems.push("NOTARY_GAS_WALLET_PRIVATE_KEY must be 32 bytes of hex");

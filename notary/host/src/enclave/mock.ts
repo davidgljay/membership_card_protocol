@@ -51,7 +51,7 @@ export class MockEnclave implements EnclaveTransport {
         const r = this.script.submitInput?.(m) ?? { input_hash: "MOCK_INPUT_HASH", receipt_sealed: "TU9DS19SRUNFSVBU" };
         return "error" in r ? reply({ kind: "error", code: r.error, message: "mock enclave rejected the input" }) : reply({ kind: "input_result", ...r });
       }
-      case "genesis": return reply({ kind: "genesis_ready", id_pubkey: "TU9DS19JRA", chain_pubkey: "TU9DS19DSEFJTg", attestation: "TU9DS19BVFQ" });
+      case "genesis": return reply({ kind: "genesis_ready", id_pubkey: "TU9DS19JRA", chain_pubkey: "TU9DS19DSEFJTg", attestation: "TU9DS19BVFQ", notary_card: "cd".repeat(32) });
       case "countersign_notary_card": return reply({ kind: "countersigned", offer: (m as { offer?: unknown }).offer });
       case "abort_job": return reply({ kind: "job_log_record", record: {} });
       case "close_chunk": {

@@ -29,7 +29,15 @@ bash e2e/run-local.sh      # as processes: node >= 22, `pnpm -C host build`, `ca
 bash e2e/run-compose.sh    # in docker-compose (deploy/docker-compose.sim.yml)
 ```
 
-The host is restarted once, between genesis and the job. `NOTARY_CARD_ADDRESSES` is static configuration (`notary_host.md` §4), and the card only exists after genesis.
+**Shortcuts in `src/reads.ts` (Phase 7 adapter work, not product code).** The read adapters stand where the `CardVerifier`-backed adapters will stand, and take three shortcuts. None of them is imported by product code.
+
+- W5 `satisfies` always returns true. The test policy has no requester predicate.
+- Algorithm E is given the simulator's known PCR0 as the genesis PCR0, not one parsed from the genesis attestation.
+- The notarization reads report `chainValid: true` for the policy and the notary card.
+
+The driver submits with `submitNotaryInputWithRetry`, which retries `INPUT_CHAIN_REF_UNKNOWN`: the enclave does not wait for a header it has not been sent (lifecycle B3, amended 2026-11-13).
+
+The host is not restarted: it serves the card it creates through `/genesis` (`notary_host.md` §4).
 
 **Test values only.** Every key in `sim.env`, every key in `world.ts` and the test root in `fixtures/pins.json` are public test values.
 

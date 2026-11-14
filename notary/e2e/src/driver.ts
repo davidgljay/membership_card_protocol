@@ -17,7 +17,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { ml_dsa44 } from "@noble/post-quantum/ml-dsa.js";
 import { simulator } from "@membership-card-protocol/notary-attestation";
 import { verifyGenesis, verifyNotarization, b64uDecode, b64uEncode, canonicalNotary, cidOfBytes, withoutFields, H, GENESIS_MAX_AGE_HOLDER_MS } from "@membership-card-protocol/verifier/notary";
-import { verifyNotaryJob, submitNotaryInput } from "@membership-card-protocol/wallet-sdk/notary";
+import { verifyNotaryJob, submitNotaryInputWithRetry } from "@membership-card-protocol/wallet-sdk/notary";
 import { canonicalize } from "@membership-card-protocol/verifier";
 import { K, IDS, POLICY_ID, PROGRAM_CID, contributor, encrypt, httpChain, registerWorld, approveNotary, signBytes, PRESS_ADDR } from "./world.ts";
 import { verifiedLists, walletReads, notarizationReads, ohttp } from "./reads.ts";
@@ -86,8 +86,7 @@ async function setup() {
   // step 8: the policy holder approves the card
   const stateCid = await approveNotary(chain, policyGenesisCid, card);
   writeFileSync(STATE, JSON.stringify({ card, kId: g["id_pubkey"], genesisAttestation: attCid, stateCid, hostPub: b64uEncode(hostPub) }, null, 2));
-  log(`setup done; restart the host with NOTARY_CARD_ADDRESSES=${card}`);
-  console.log(`NOTARY_CARD_ADDRESSES=${card}`);
+  log(`setup done; the host serves ${card} (created through /genesis)`);
 }
 
 async function job() {
@@ -124,7 +123,7 @@ async function job() {
     const { card: m, sub: s } = contributor(i);
     const blocks = await chain.get<{ number: number; hash: string }[]>("/headers?after=0");
     const ref = blocks[Math.max(0, blocks.length - 3)]!; // a block the host has already streamed
-    const r = await submitNotaryInput({
+    const r = await submitNotaryInputWithRetry({
       job: { jobHash, epoch: a.epoch, jobPublicKey: a.job_public_key, quorum: 1, notaryCard: st.card, notaryIdPubkey: st.kId, operatorHostPubkey: st.hostPub },
       async buildSignedInput() {
         const input = { chain_ref: { block_hash: b64uEncode(Buffer.from(ref.hash.slice(2), "hex")), block_number: ref.number }, contributor_card: m.addr, contributor_card_pubkey: m.b64,

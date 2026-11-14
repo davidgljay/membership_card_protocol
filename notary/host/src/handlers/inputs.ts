@@ -32,7 +32,7 @@ export async function handleSubmitInput(ctx: HostContext, jobHash: string, body:
   try { await ctx.inputs.put(jobHash, sealed.epoch, inputHash, { sealedInput: sealed, receivedAt }); }
   catch { await ctx.monitor.alert("error", "storage_failure"); throw new HostError("NH_STORAGE_FAILED", "the ciphertext could not be stored; no receipt issued", 503); }
   // 2. the host receipt: proof the operator received the ciphertext
-  const notaryCard = ctx.config.NOTARY_CARD_ADDRESSES.find((c) => (job.job as { replica_set: { notary_card: string }[] }).replica_set.some((r) => r.notary_card === c)) ?? ctx.config.NOTARY_CARD_ADDRESSES[0]!;
+  const notaryCard = ctx.cards.all().find((c) => (job.job as { replica_set: { notary_card: string }[] }).replica_set.some((r) => r.notary_card === c)) ?? ctx.cards.all()[0]!;
   const host_receipt = signHostReceipt(ctx.keys, { epoch: sealed.epoch, input_hash: inputHash, job_hash: jobHash, notary_card: notaryCard, received_at: receivedAt, type: "notary.host_receipt.v1" });
   await ctx.receipts.put(inputHash, host_receipt);
   // 3. forward to the enclave holding the job

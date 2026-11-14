@@ -32,6 +32,22 @@ describe("schedulers (notary_host.md §8; replication §5)", () => {
     expect(st.chainTimeMs).toBe(101_000);
   });
 
+  it("headers: a batch the enclave did not acknowledge is sent again, never skipped (a gap would freeze its chain)", async () => {
+    const h = await harness();
+    const st = newSchedulerState();
+    const f = feed([{ number: 1, header_rlp: "AA", timestamp: 100 }, { number: 2, header_rlp: "AB", timestamp: 101 }]);
+    h.enclave.silent = true;
+    await headersTick(h.ctx, f, st);
+    expect(st.newestHeader).toBe(0);
+    h.enclave.silent = false;
+    await headersTick(h.ctx, f, st);
+    await headersTick(h.ctx, f, st);
+    const sent = h.enclave.received.filter((m) => m.kind === "chain_headers");
+    expect(sent).toHaveLength(2);
+    expect(sent[1]!["headers"]).toEqual([{ number: 1, header_rlp: "AA" }, { number: 2, header_rlp: "AB" }]);
+    expect(st.newestHeader).toBe(2);
+  });
+
   it("snapshots: a whole-policy snapshot first, then unfiltered updates, for each policy a live job depends on", async () => {
     const h = await harness();
     h.svc.policies.set(job["policy_id"], { notary: { contributor_predicate: { issued_under_template: "bafkreisrc" } } as never, approvedNotaries: [] });

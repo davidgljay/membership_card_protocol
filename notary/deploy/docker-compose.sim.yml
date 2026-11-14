@@ -21,7 +21,6 @@ services:
       ENCLAVE_CIDS: sim-1
       ENCLAVE_ENDPOINTS: "sim-1=enclave-sim:7001"
       NOTARY_PUBLIC_BASE_URL: http://host:3000
-      NOTARY_CARD_ADDRESSES: ${NOTARY_CARD_ADDRESSES:-0000000000000000000000000000000000000000000000000000000000000000}
     ports: ["3000:3000"]
     depends_on: [redis, enclave-sim, sim-chain]
   driver:

@@ -22,7 +22,7 @@ describe("host configuration (notary_host.md §4)", () => {
     try { loadConfig({}); throw new Error("should have thrown"); } catch (e) {
       expect(e).toBeInstanceOf(ConfigError);
       const p = (e as ConfigError).problems.join("\n");
-      for (const k of ["NOTARY_CARD_ADDRESSES", "NOTARY_HOST_MLDSA44_PRIVATE_KEY", "NOTARY_OHTTP_PRIVATE_KEY", "NOTARY_GAS_WALLET_PRIVATE_KEY", "ARBITRUM_RPC_URL", "REGISTRY_CONTRACT_ADDRESS",
+      for (const k of ["NOTARY_HOST_MLDSA44_PRIVATE_KEY", "NOTARY_OHTTP_PRIVATE_KEY", "NOTARY_GAS_WALLET_PRIVATE_KEY", "ARBITRUM_RPC_URL", "REGISTRY_CONTRACT_ADDRESS",
         "EAS_CONTRACT_ADDRESS", "NOTARY_EAS_SCHEMA_UID", "IPFS_PROVIDER", "EXTERNAL_KV_URL", "ENCLAVE_CIDS", "NOTARY_ADMIN_TOKEN"]) expect(p, k).toContain(k);
     }
   });

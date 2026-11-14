@@ -3,7 +3,8 @@
  * (the vsock proxy in production, the simulator's socket locally), and says `hello` to learn each instance id.
  *
  * Production implementations of the chain, EAS and IPFS (Kubo) services are Phase 7 (the integration stack), so
- * they are `notImplemented` here and the host refuses to start with them unless `IPFS_PROVIDER=mock`.
+ * the host refuses to start with `CHAIN_PROVIDER=rpc` or `IPFS_PROVIDER=kubo` (`src/providers.ts`). It starts only
+ * against the simulated stack, and says so in a warning.
  */
 import { sha256 } from "@noble/hashes/sha256";
 import { b64uEncode } from "@membership-card-protocol/wallet-sdk/notary-types";
@@ -16,6 +17,7 @@ import { createMockIpfs } from "../../src/ipfs/index.js";
 import { webhookMonitor } from "../../src/monitoring/index.js";
 import { memoryServices } from "../../src/testing.js";
 import { simChain } from "../../src/sim/index.js";
+import { providerProblems, simulatedComponents } from "../../src/providers.js";
 import { startSchedulers } from "../../src/schedulers/index.js";
 import type { KvStore } from "../../src/kv.js";
 import redisDriver from "unstorage/drivers/redis";
@@ -31,6 +33,11 @@ export const getStartupError = () => startupError;
 export default defineNitroPlugin(async () => {
   try {
     const config = loadConfig(process.env);
+    // 5.7: never fall back to the in-memory test services (they would fake anchors and pin nothing)
+    const refused = providerProblems(config);
+    if (refused.length > 0) throw new Error(`refusing to start: ${refused.join(" ")}`);
+    const simulated = simulatedComponents(config);
+    if (simulated.length > 0) console.warn(`[notary-host] WARNING: simulated components, not for production: ${simulated.join("; ")}`);
     const storage = useStorage();
     storage.mount("notary", config.EXTERNAL_KV_URL.startsWith("memory:") ? memoryDriver() : redisDriver({ url: config.EXTERNAL_KV_URL }));
     const s = useStorage("notary");
@@ -39,11 +46,11 @@ export default defineNitroPlugin(async () => {
       getKeys: async (p) => s.getKeys(p),
     };
     const mem = memoryServices();
-    const sim = config.CHAIN_PROVIDER === "sim" ? simChain(config.SIM_CHAIN_URL!) : null;
+    const sim = simChain(config.SIM_CHAIN_URL!); // providerProblems() above guarantees CHAIN_PROVIDER=sim
     const post = async (url: string, body: unknown) => { await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }); };
     const c = createContext({
-      config, kv, ipfs: config.IPFS_PROVIDER === "sim" ? sim!.ipfs : config.IPFS_PROVIDER === "mock" ? createMockIpfs() : mem.ipfs,
-      eas: sim?.eas ?? mem.eas, chain: sim?.chain ?? mem.chain, submitter: sim?.submitter ?? mem.submitter, policies: sim?.policies ?? mem.policies,
+      config, kv, ipfs: config.IPFS_PROVIDER === "sim" ? sim.ipfs : createMockIpfs(),
+      eas: sim.eas, chain: sim.chain, submitter: sim.submitter, policies: sim.policies,
       peers: { send: async (url, body) => post(`${url.replace(/\/$/, "")}/peer`, body) }, delivery: mem.delivery, replicas: mem.replicas,
       monitor: webhookMonitor(config.ALERT_WEBHOOK_URL, post), sessions: new Map(),
     });
@@ -60,8 +67,9 @@ export default defineNitroPlugin(async () => {
       c.instances.set(b64uEncode(sha256(Buffer.from(String(hello["inst_pubkey"]), "base64url"))), session);
       c.sessions.set(ep.cid, session);
     }
+    await c.cards.load();
     ctx = c;
     // the chain feed: the simulated chain here; the Phase 7 RPC feed in production
-    if (sim) startSchedulers(c, sim.feed, { snapshotSeconds: config.SNAPSHOT_REFRESH_SECONDS });
+    startSchedulers(c, sim.feed, { snapshotSeconds: config.SNAPSHOT_REFRESH_SECONDS });
   } catch (e) { startupError = (e as Error).message; console.error(`[notary-host] startup failed: ${startupError}`); }
 });

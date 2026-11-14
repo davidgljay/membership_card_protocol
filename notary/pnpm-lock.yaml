@@ -38,6 +38,15 @@ importers:
 
   e2e:
     dependencies:
+      '@hpke/chacha20poly1305':
+        specifier: ^1.8.1
+        version: 1.8.1
+      '@hpke/core':
+        specifier: ^1.10.1
+        version: 1.10.1
+      '@hpke/hybridkem-x-wing':
+        specifier: 0.7.1
+        version: 0.7.1
       '@membership-card-protocol/notary-attestation':
         specifier: workspace:*
         version: link:../attestation-ts
@@ -46,7 +55,7 @@ importers:
         version: file:../membership_card_verifier/packages/verifier
       '@membership-card-protocol/wallet-sdk':
         specifier: file:../../wallet-sdk/packages/wallet-sdk
-        version: file:../wallet-sdk/packages/wallet-sdk
+        version: file:../wallet-sdk/packages/wallet-sdk(@hpke/chacha20poly1305@1.8.1)(@hpke/core@1.10.1)(@hpke/hybridkem-x-wing@0.7.1)(@membership-card-protocol/notary-attestation@attestation-ts)
       '@noble/ciphers':
         specifier: ^1.0.0
         version: 1.3.0
@@ -78,12 +87,21 @@ importers:
 
   host:
     dependencies:
+      '@hpke/chacha20poly1305':
+        specifier: ^1.8.1
+        version: 1.8.1
+      '@hpke/core':
+        specifier: ^1.10.1
+        version: 1.10.1
+      '@hpke/hybridkem-x-wing':
+        specifier: 0.7.1
+        version: 0.7.1
       '@membership-card-protocol/verifier':
         specifier: file:../../membership_card_verifier/packages/verifier
         version: file:../membership_card_verifier/packages/verifier
       '@membership-card-protocol/wallet-sdk':
         specifier: file:../../wallet-sdk/packages/wallet-sdk
-        version: file:../wallet-sdk/packages/wallet-sdk
+        version: file:../wallet-sdk/packages/wallet-sdk(@hpke/chacha20poly1305@1.8.1)(@hpke/core@1.10.1)(@hpke/hybridkem-x-wing@0.7.1)(@membership-card-protocol/notary-attestation@attestation-ts)
       '@noble/ciphers':
         specifier: ^1.0.0
         version: 1.3.0
@@ -391,10 +409,6 @@ packages:
     resolution: {directory: ../app-sdk/packages/app-sdk, type: directory}
     engines: {node: '>=22'}
 
-  '@membership-card-protocol/notary-attestation@file:attestation-ts':
-    resolution: {directory: attestation-ts, type: directory}
-    engines: {node: '>=22'}
-
   '@membership-card-protocol/verifier-ipfs-provider@file:../membership_card_verifier/packages/verifier-ipfs-provider':
     resolution: {directory: ../membership_card_verifier/packages/verifier-ipfs-provider, type: directory}
     engines: {node: '>=22'}
@@ -411,6 +425,20 @@ packages:
   '@membership-card-protocol/wallet-sdk@file:../wallet-sdk/packages/wallet-sdk':
     resolution: {directory: ../wallet-sdk/packages/wallet-sdk, type: directory}
     engines: {node: '>=22'}
+    peerDependencies:
+      '@hpke/chacha20poly1305': ^1.8.1
+      '@hpke/core': ^1.10.1
+      '@hpke/hybridkem-x-wing': 0.7.1
+      '@membership-card-protocol/notary-attestation': ^0.0.1
+    peerDependenciesMeta:
+      '@hpke/chacha20poly1305':
+        optional: true
+      '@hpke/core':
+        optional: true
+      '@hpke/hybridkem-x-wing':
+        optional: true
+      '@membership-card-protocol/notary-attestation':
+        optional: true
 
   '@noble/ciphers@1.3.0':
     resolution: {integrity: sha512-2I0gnIVPtfnMw9ee9h1dJG7tp81+8Ob3OJb3Mv37rx5L40/b0i7djjCVvGOVqc9AEIQyvyu1i6ypKdFw8R8gQw==}
@@ -2288,14 +2316,6 @@ snapshots:
     transitivePeerDependencies:
       - '@web3-storage/w3up-client'
 
-  '@membership-card-protocol/notary-attestation@file:attestation-ts':
-    dependencies:
-      '@membership-card-protocol/verifier': file:../membership_card_verifier/packages/verifier
-      '@noble/curves': 1.9.7
-      '@noble/hashes': 1.8.0
-      '@peculiar/asn1-schema': 2.11.1
-      '@peculiar/asn1-x509': 2.11.1
-
   '@membership-card-protocol/verifier-ipfs-provider@file:../membership_card_verifier/packages/verifier-ipfs-provider': {}
 
   '@membership-card-protocol/verifier@file:../membership_card_verifier/packages/verifier':
@@ -2304,17 +2324,18 @@ snapshots:
       '@noble/hashes': 1.8.0
       '@noble/post-quantum': 0.5.4
 
-  '@membership-card-protocol/wallet-sdk@file:../wallet-sdk/packages/wallet-sdk':
+  '@membership-card-protocol/wallet-sdk@file:../wallet-sdk/packages/wallet-sdk(@hpke/chacha20poly1305@1.8.1)(@hpke/core@1.10.1)(@hpke/hybridkem-x-wing@0.7.1)(@membership-card-protocol/notary-attestation@attestation-ts)':
     dependencies:
-      '@hpke/chacha20poly1305': 1.8.1
-      '@hpke/core': 1.10.1
-      '@hpke/hybridkem-x-wing': 0.7.1
       '@membership-card-protocol/app-sdk': file:../app-sdk/packages/app-sdk
-      '@membership-card-protocol/notary-attestation': file:attestation-ts
       '@membership-card-protocol/verifier': file:../membership_card_verifier/packages/verifier
       '@noble/ciphers': 1.3.0
       '@noble/hashes': 1.8.0
       '@noble/post-quantum': 0.5.4
+    optionalDependencies:
+      '@hpke/chacha20poly1305': 1.8.1
+      '@hpke/core': 1.10.1
+      '@hpke/hybridkem-x-wing': 0.7.1
+      '@membership-card-protocol/notary-attestation': link:attestation-ts
     transitivePeerDependencies:
       - '@web3-storage/w3up-client'
 

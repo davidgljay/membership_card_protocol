@@ -20,13 +20,7 @@ sleep 1
 target/debug/notary-runtime --mode broker --listen tcp:127.0.0.1:7001 --attest sim:tcp:127.0.0.1:7100 --pins e2e/fixtures/pins.json >"$LOGS/runtime.log" 2>&1 & pids+=($!)
 sleep 1
 
-start_host() {
-  PORT=3000 NOTARY_CARD_ADDRESSES=$1 node host/.output/server/index.mjs >>"$LOGS/host.log" 2>&1 & HOST_PID=$!
-  pids+=($HOST_PID)
-}
-start_host "$(printf '0%.0s' {1..64})"
+# no NOTARY_CARD_ADDRESSES: the host serves the card it creates through /genesis
+PORT=3000 node host/.output/server/index.mjs >>"$LOGS/host.log" 2>&1 & pids+=($!)
 node --experimental-strip-types e2e/src/driver.ts --phase setup | tee "$LOGS/setup.log"
-CARD=$(grep '^NOTARY_CARD_ADDRESSES=' "$LOGS/setup.log" | cut -d= -f2)
-kill "$HOST_PID"; sleep 1
-start_host "$CARD"
 node --experimental-strip-types e2e/src/driver.ts --phase job | tee "$LOGS/job.log"

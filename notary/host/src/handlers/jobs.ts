@@ -40,7 +40,7 @@ export async function handleCreateJob(ctx: HostContext, body: { job?: unknown; p
   const n = job.replica_set.reduce((a, r) => a + r.instances, 0);
   if (job.replica_set.length === 0 || !(Math.floor(n / 2) + 1 <= job.min_live && job.min_live <= n)) return bad("JOB_MALFORMED", "min_live must satisfy q <= min_live <= N");
   // this operator must serve at least one replica card
-  const local = job.replica_set.filter((r) => ctx.config.NOTARY_CARD_ADDRESSES.includes(r.notary_card));
+  const local = job.replica_set.filter((r) => ctx.cards.all().includes(r.notary_card));
   if (local.length === 0) return bad("JOB_NOTARY_NOT_APPROVED", "none of this job's replica_set cards is served by this operator");
   // policy
   const policy = await ctx.policies.notary(job.policy_id, job.policy_state_cid);
