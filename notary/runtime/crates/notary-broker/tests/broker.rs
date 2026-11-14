@@ -172,6 +172,10 @@ fn world(isolation: &str, replacement: &str, k_min: u64) -> World {
 }
 
 fn world_ext(isolation: &str, replacement: &str, k_min: u64, refuse_single_operator: bool) -> World {
+    world_full(isolation, replacement, k_min, refuse_single_operator, None)
+}
+
+fn world_full(isolation: &str, replacement: &str, k_min: u64, refuse_single_operator: bool, max_inputs: Option<u64>) -> World {
     let enclave = FakeEnclave::start_tcp("127.0.0.1:0", EnclaveConfig { pcr0_seed: 0x42, debug: false, clock_ms: Some(T0 as u64) }).unwrap();
     let program = tally_program(&output_schema());
     let program_cid = formats::cid_of_bytes(&program);
@@ -183,6 +187,10 @@ fn world_ext(isolation: &str, replacement: &str, k_min: u64, refuse_single_opera
         "output_recipients": { "cards": [], "job_requester": false, "public": true }, "output_schema": output_schema(),
         "platform": "simulator", "privacy": { "k_min": k_min }, "program_cid": program_cid, "retention": "none",
     });
+    let mut policy = policy;
+    if let Some(m) = max_inputs {
+        policy["limits"] = json!({ "max_inputs": m });
+    }
     let revoked = Arc::new(Mutex::new(BTreeSet::new()));
     let oracle = Oracle { policy, approved: vec![], revoked: revoked.clone(), lists: (rt, progs) };
     let addr = enclave.addr.clone();
@@ -246,9 +254,13 @@ fn push_header(w: &mut World, ts_ms: i64) -> ([u8; 32], u64) {
 }
 
 fn job_for(w: &World, requester: &MlDsaKey, nonce: u8) -> Value {
+    job_n(w, requester, nonce, 1)
+}
+
+fn job_n(w: &World, requester: &MlDsaKey, nonce: u8, instances: u32) -> Value {
     let mut job = json!({ "closes_at": formats::format_timestamp(CLOSES), "created_at": formats::format_timestamp(T0), "kem": "x-wing-draft-06",
-        "min_live": 1, "nonce": b64u::encode(&[nonce; 16]), "opens_at": formats::format_timestamp(OPENS), "parameters": {},
-        "policy_id": "bafkreipolicy", "policy_state_cid": "bafkreistate", "replica_set": [{ "instances": 1, "notary_card": w.card }],
+        "min_live": instances, "nonce": b64u::encode(&[nonce; 16]), "opens_at": formats::format_timestamp(OPENS), "parameters": {},
+        "policy_id": "bafkreipolicy", "policy_state_cid": "bafkreistate", "replica_set": [{ "instances": instances, "notary_card": w.card }],
         "requester_card": formats::card_pointer(requester.public_key()), "requester_pubkey": b64u::encode(requester.public_key()), "type": "notary.job.v1" });
     job["requester_signature"] = requester.sign_object(&job, "requester_signature").unwrap();
     job
@@ -304,8 +316,13 @@ fn seal_input(o: &Opened, epoch: u64, card: &str, choice: &str, revision: u64, c
     let input = json!({ "chain_ref": { "block_hash": b64u::encode(&chain_ref.0), "block_number": chain_ref.1 }, "contributor_card": card,
         "contributor_card_pubkey": "AA", "contributor_signature": { "public_key": "AA", "signature": "AA" }, "evidence": [],
         "job_hash": b64u::encode(&o.job_hash), "payload": { "choice": choice }, "revision": revision, "signed_at": "2027-01-15T00:10:00.000Z", "type": "notary.input.v1" });
+    seal_raw(o, epoch, &input)
+}
+
+/// Seals an arbitrary (possibly malformed) `NotaryInput` plaintext to the job key.
+fn seal_raw(o: &Opened, epoch: u64, input: &Value) -> Submission {
     let (info, aad) = sealed_input_info_aad(&o.job_hash, epoch);
-    let s = xwing_seal(&o.job_pk, &info, &aad, &jcs::canonical(&input).unwrap()).unwrap();
+    let s = xwing_seal(&o.job_pk, &info, &aad, &jcs::canonical(input).unwrap()).unwrap();
     let sealed = json!({ "ct": b64u::encode(&s.ct), "enc": b64u::encode(&s.enc), "epoch": epoch, "job_hash": b64u::encode(&o.job_hash), "kem": "x-wing-draft-06", "type": "notary.sealed_input.v1" });
     Submission { input_hash: jcs::h(&sealed).unwrap(), sealed, receipt_key: s.receipt_key }
 }
@@ -460,6 +477,112 @@ fn inputs_receipts_and_checks() {
     // B1: not sealed to this job's key → plain error, no receipt
     let other = Opened { job_hash: o.job_hash, job_pk: notary_crypto::XWingKey::generate().public_key().to_vec() };
     assert_eq!(submit(&mut w, &seal_input(&other, 0, &"4".repeat(64), "yes", 0, r)), Err("INPUT_UNDECRYPTABLE".into()));
+}
+
+/// Step 5.7: a job that needs q > 1 replicas is refused until the quorum paths exist (6.3); before this check the
+/// enclave keyed it and issued receipts with `acks` 1 under q = 2.
+#[test]
+fn multi_replica_jobs_are_refused_until_step_6_3() {
+    let mut w = world("dedicated", "latest_wins", 1);
+    push_header(&mut w, T0);
+    let job = job_n(&w, &MlDsaKey::generate(), 1, 2);
+    w.broker.handle(&mut w.host, &json!({ "kind": "create_job", "req_id": "c", "job": job, "program": b64u::encode(&w.program), "transport": {} }));
+    let out = w.host.take();
+    assert_eq!(find(&out, "error").expect("refused")["code"], "NH_UNSUPPORTED");
+    assert!(find(&out, "job_keyed").is_none(), "no key for a job this enclave cannot back");
+}
+
+/// Runtime §13 (limit L4): the first header anchors the chain only if its timestamp is near the attested time.
+#[test]
+fn the_first_header_must_be_near_the_attested_time() {
+    let mut w = world("dedicated", "latest_wins", 1);
+    let ack = |w: &mut World, ts_ms: i64, number: u64| {
+        let rlp = encode_test_header([0u8; 32], number, (ts_ms / 1000) as u64);
+        w.broker.handle(&mut w.host, &json!({ "kind": "chain_headers", "req_id": "h", "headers": [{ "number": number, "header_rlp": b64u::encode(&rlp) }] }));
+        find(&w.host.take(), "chain_ack").unwrap()["newest"].as_u64().unwrap()
+    };
+    assert_eq!(ack(&mut w, T0 + 24 * 3_600_000, 500), 0, "a header a day ahead of the attested clock is not an anchor");
+    assert_eq!(ack(&mut w, T0 - 24 * 3_600_000, 400), 0, "nor one a day behind");
+    assert_eq!(ack(&mut w, T0 + 60_000, 100), 100, "one within ten minutes is");
+}
+
+/// Runtime §3 and §14: a shared runtime holds at most 256 live jobs (limit lowered here to 1). A finished job frees a slot.
+#[test]
+fn a_shared_runtime_refuses_jobs_beyond_its_ceiling() {
+    let mut w = world("shared", "latest_wins", 1);
+    w.broker.set_max_live_jobs_for_tests(1);
+    push_header(&mut w, T0);
+    let requester = MlDsaKey::generate();
+    let job1 = job_for(&w, &requester, 1);
+    let first = create_and_open(&mut w, &job1);
+    let second = job_for(&w, &requester, 2);
+    let create = |w: &mut World| {
+        w.broker.handle(&mut w.host, &json!({ "kind": "create_job", "req_id": "c2", "job": second, "program": b64u::encode(&w.program), "transport": {} }));
+        w.host.take()
+    };
+    assert_eq!(find(&create(&mut w), "job_rejected").expect("refused")["code"], "ADM_RUNTIME_FULL");
+    w.broker.handle(&mut w.host, &json!({ "kind": "abort_job", "req_id": "ab", "job_hash": b64u::encode(&first.job_hash), "reason": "test" }));
+    w.host.take();
+    assert!(find(&create(&mut w), "job_keyed").is_some());
+}
+
+/// Runtime §3/§14 and A11: a dedicated enclave holds one job at a time. Finished jobs no longer count, so the
+/// enclave serves a second dedicated job once the first has ended (5.7: it used to count every job it had ever held).
+#[test]
+fn a_dedicated_enclave_takes_a_new_job_once_the_old_one_has_ended() {
+    let mut w = world("dedicated", "latest_wins", 1);
+    push_header(&mut w, T0);
+    let requester = MlDsaKey::generate();
+    let job1 = job_for(&w, &requester, 1);
+    let first = create_and_open(&mut w, &job1);
+    let second = job_for(&w, &requester, 2);
+    let create = |w: &mut World, job: &Value| {
+        w.broker.handle(&mut w.host, &json!({ "kind": "create_job", "req_id": "c2", "job": job, "program": b64u::encode(&w.program), "transport": {} }));
+        w.host.take()
+    };
+    let out = create(&mut w, &second);
+    assert_eq!(find(&out, "job_rejected").expect("refused while the first job is live")["code"], "ADM_DEDICATED_REQUIRED");
+    w.broker.handle(&mut w.host, &json!({ "kind": "abort_job", "req_id": "ab", "job_hash": b64u::encode(&first.job_hash), "reason": "test" }));
+    w.host.take();
+    let out = create(&mut w, &second);
+    assert!(find(&out, "job_keyed").is_some(), "admitted once the first job has ended: {out:?}");
+}
+
+/// Appendix B: the checks the main test doesn't reach: B2 (wrong job, malformed), B3 (block number mismatch),
+/// B4 (too late) and B11 (capacity). Added in the 5.7 review: these four codes had no test.
+#[test]
+fn b2_b3_b4_and_b11_rejections() {
+    let mut w = world_full("dedicated", "reject_duplicates", 1, false, Some(1));
+    push_header(&mut w, T0);
+    let job = job_for(&w, &MlDsaKey::generate(), 1);
+    let o = create_and_open(&mut w, &job);
+    let r = push_header(&mut w, OPENS + 1000);
+    let late = push_header(&mut w, CLOSES + 1000);
+    let reason = |w: &mut World, s: &Submission| submit(w, s).unwrap()["reject_reason"].as_str().unwrap().to_string();
+
+    let good = |card: &str| json!({ "chain_ref": { "block_hash": b64u::encode(&r.0), "block_number": r.1 }, "contributor_card": card, "contributor_card_pubkey": "AA",
+        "contributor_signature": { "public_key": "AA", "signature": "AA" }, "evidence": [], "job_hash": b64u::encode(&o.job_hash), "payload": { "choice": "yes" },
+        "revision": 0, "signed_at": "2027-01-15T00:10:00.000Z", "type": "notary.input.v1" });
+    // B2: the plaintext names another job; the type is wrong; an unknown field (E2)
+    let mut other_job = good(&"1".repeat(64));
+    other_job["job_hash"] = json!(b64u::encode(&[9u8; 32]));
+    assert_eq!(reason(&mut w, &seal_raw(&o, 0, &other_job)), "INPUT_WRONG_JOB");
+    let mut bad_type = good(&"1".repeat(64));
+    bad_type["type"] = json!("notary.job.v1");
+    assert_eq!(reason(&mut w, &seal_raw(&o, 0, &bad_type)), "INPUT_MALFORMED");
+    let mut extra = good(&"1".repeat(64));
+    extra["surprise"] = json!(1);
+    assert_eq!(reason(&mut w, &seal_raw(&o, 0, &extra)), "INPUT_MALFORMED");
+    // B3: a known block hash with the wrong number
+    let wrong_number = seal_input(&o, 0, &"1".repeat(64), "yes", 0, (r.0, r.1 + 1));
+    assert_eq!(reason(&mut w, &wrong_number), "INPUT_CHAIN_REF_MISMATCH");
+    // B4: the chain_ref block is at or after closes_at
+    assert_eq!(reason(&mut w, &seal_input(&o, 0, &"1".repeat(64), "yes", 0, late)), "INPUT_LATE");
+    // B11: max_inputs is 1. The first contributor fits; a second does not; the first can still resubmit.
+    let first = seal_raw(&o, 0, &good(&"1".repeat(64)));
+    assert_eq!(submit(&mut w, &first).unwrap()["status"], "accepted");
+    assert_eq!(reason(&mut w, &seal_raw(&o, 0, &good(&"2".repeat(64)))), "INPUT_CAPACITY");
+    assert_eq!(submit(&mut w, &first).unwrap()["status"], "accepted");
 }
 
 #[test]

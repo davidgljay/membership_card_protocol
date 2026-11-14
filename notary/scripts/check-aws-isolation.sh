@@ -19,6 +19,14 @@ while IFS= read -r f; do
 done < <(grep -rIliE "$TERMS" "${ROOTS[@]}" --include='*.rs' --include='*.ts' --include='*.toml' --include='*.json' --include='*.sh' \
            --exclude-dir=node_modules --exclude-dir=target --exclude-dir=dist --exclude-dir=.vitest 2>/dev/null || true)
 
+# Production runtime code (outside notary-attest and test directories) must not name the AWS module either: it talks to
+# the platform-neutral `AttestationBackend` / `AttestationVerifier` and to `sim`. (Added in the 5.7 review: the format
+# terms above can't see a call such as `notary_attest::aws::verify_envelope`.)
+if grep -rInE 'attest::aws|aws::(verify|build|AwsVerifier)' notary/runtime notary/sim/src notary/host/src --include='*.rs' --include='*.ts' \
+     --exclude-dir=node_modules --exclude-dir=target --exclude-dir=tests --exclude-dir=notary-attest | grep -v 'notary/sim/src/lib.rs'; then
+  echo "G5 violation: production code names the AWS verifier module (use AttestationVerifier / sim)"; fail=1
+fi
+
 # bare "Nitro" in notary docs/sources (nitropack / nitro-devnode / Nitro-based words allowed)
 if grep -rInE '\bNitro\b' notary --include='*.md' --include='*.rs' --include='*.ts' --exclude-dir=node_modules --exclude-dir=target --exclude-dir=dist \
      | grep -viE 'AWS Nitro Enclaves|nitropack|nitro-devnode|Nitro Attestation PKI' | grep -v 'check-aws-isolation.sh'; then

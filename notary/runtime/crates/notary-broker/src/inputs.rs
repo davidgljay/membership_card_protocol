@@ -50,6 +50,7 @@ impl Broker {
         let Ok(input_hash) = jcs::h(&sealed) else { return error(req_id, "INPUT_MALFORMED", "not notary JSON") };
         let Some(opened) = self.open_sealed(&hash, &typed) else { return error(req_id, "INPUT_UNDECRYPTABLE", "B1: cannot open with the job key") };
 
+        let Ok(processed_at) = self.now_iso() else { return error(req_id, "ATT_UNAVAILABLE", "the attested clock is unavailable") };
         let verdict = self.check_input(io, &hash, opened.plaintext.expose(), &input_hash, typed.epoch, false);
         let job = self.jobs.get_mut(&hash).expect("present");
         let (status, reject_reason, revision) = match verdict {
@@ -68,7 +69,7 @@ impl Broker {
         let Some(ident) = self.keys.identity(&card) else { return error(req_id, "NOTARY_KEY_EXPOSED", "identity unusable") };
         let mut receipt = json!({
             "acks": 1, "epoch": epoch, "input_hash": input_hash, "instance": self.keys.instance_id(), "job_hash": scope,
-            "processed_at": self.now_iso(), "revision": revision, "status": status, "type": objects::types::VALIDATION_RECEIPT,
+            "processed_at": processed_at, "revision": revision, "status": status, "type": objects::types::VALIDATION_RECEIPT,
         });
         if let Some(r) = reject_reason {
             receipt["reject_reason"] = json!(r);

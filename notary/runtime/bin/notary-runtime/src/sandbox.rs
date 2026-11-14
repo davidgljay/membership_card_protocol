@@ -80,5 +80,6 @@ pub fn enter(_l: &WorkerLimits) -> Result<(), String> {
     if std::env::var("NOTARY_REQUIRE_SANDBOX").is_ok() {
         return Err("worker isolation needs Linux (seccomp, UIDs, rlimits)".into());
     }
+    eprintln!("warning: worker isolation (seccomp, UIDs, rlimits) is not available on this platform; development only");
     Ok(())
 }

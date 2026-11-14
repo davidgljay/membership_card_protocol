@@ -102,6 +102,11 @@ impl Broker {
         if typed.replica_set.is_empty() || typed.replica_set.iter().any(|r| r.instances < 1) || !(q <= typed.min_live && typed.min_live <= n) {
             return Err(e("JOB_MALFORMED", "replica_set and min_live must satisfy q <= min_live <= N"));
         }
+        // Step 5.3 is a single replica. The quorum paths (input acks, cosigned close, handoff) arrive in step 6.3; until
+        // then an enclave that keyed a job needing q > 1 would issue receipts it cannot back and close without a quorum.
+        if n != 1 {
+            return Err(e("NH_UNSUPPORTED", "multi-replica jobs arrive in step 6.3"));
+        }
         let ts = |s: &str| formats::parse_timestamp(s).map_err(|_| e("JOB_MALFORMED", "bad timestamp"));
         let opens_ms = ts(&typed.opens_at)?;
         // step 17: this enclave's notary card must be in replica_set
@@ -165,10 +170,16 @@ impl Broker {
         // Algorithm A. No job key exists before this returns Ok.
         let allowlist = self.lists.allowlist().unwrap_or_default();
         let attested_now = self.attested_now_ms().map_err(|m| ("ATT_UNAVAILABLE", m))?;
-        let admitted = admit(&program, &notary, &RuntimeContext { allowlist: Some(&allowlist), now_ms: attested_now, held_jobs: self.jobs.len() })
+        let admitted = admit(&program, &notary, &RuntimeContext { allowlist: Some(&allowlist), now_ms: attested_now, held_jobs: self.jobs.values().filter(|j| !matches!(j.state, State::Finalized | State::Aborted)).count() })
             .map_err(|a| (a.code, a.detail))?;
         if self.jobs.values().any(|j| j.admitted.isolation == Isolation::Dedicated && !matches!(j.state, State::Finalized | State::Aborted)) {
             return Err(e("ADM_DEDICATED_REQUIRED", "this runtime holds a dedicated job"));
+        }
+
+        // runtime §3, §14: a shared runtime holds at most 256 live jobs
+        let live = self.jobs.values().filter(|j| !matches!(j.state, State::Finalized | State::Aborted)).count();
+        if live >= self.max_live_jobs {
+            return Err(e("ADM_RUNTIME_FULL", "this runtime already holds the maximum number of live jobs"));
         }
 
         // K_job,0 and the purpose-0x02 attestation (§33)
@@ -252,7 +263,7 @@ impl Broker {
         let pk = self.keys.job_key(hash, j.epoch)?.public_key().to_vec();
         let ident = self.keys.identity(&j.card)?;
         let mut ann = json!({
-            "attestations": [j.attestation_cid], "epoch": j.epoch, "issued_at": self.now_iso(), "job": j.job,
+            "attestations": [j.attestation_cid], "epoch": j.epoch, "issued_at": self.now_iso().ok()?, "job": j.job,
             "job_public_key": b64u::encode(&pk), "transport": j.transport, "type": objects::types::ANNOUNCEMENT,
         });
         ann["notary_signature"] = ident.id.sign_object(&ann, "notary_signature").ok()?;

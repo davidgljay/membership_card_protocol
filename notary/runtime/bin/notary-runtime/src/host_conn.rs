@@ -88,7 +88,7 @@ fn platform(args: &[String], root: &[u8]) -> Result<Platform, String> {
     };
     // Read this image's own PCR0 from a boot attestation, verified against the pinned root.
     let doc = backend.attest(notary_types::user_data::UserData { purpose: 0x03, ..Default::default() }.encode(), None, [0u8; 32]).map_err(|e| e.to_string())?;
-    let env = notary_attest::aws::verify_envelope(&doc, root).map_err(|c| c.code().to_string())?;
+    let env = notary_attest::AttestationVerifier::verify_envelope(&notary_attest::sim::SimVerifier, &doc, root).map_err(|c| c.code().to_string())?;
     let clock_addr = spec.trim_start_matches("sim:tcp:").to_string();
     let clock = notary_attest::sim::SimulatorBackend::new(notary_attest::sim::SimAddr::Tcp(clock_addr));
     Ok(Platform { attest: backend, attested_time_ms: Box::new(move || clock.attested_time_ms().map_err(|e| e.to_string())), pcr0: env.measurement })

@@ -52,11 +52,17 @@ pub struct SnapshotOracle {
     snap: Snapshots,
     /// policy_id → policy address, from the last algorithm R read (for R5's `is_holder`).
     policy_addresses: BTreeMap<String, String>,
+    cache: RefCell<IpfsCache>,
 }
 
 impl SnapshotOracle {
+    /// Number of verified IPFS objects held for reuse across inputs.
+    pub fn cached_objects(&self) -> usize {
+        self.cache.borrow().len()
+    }
+
     pub fn new(pins: CardPins) -> Self {
-        Self { pins, snap: Snapshots::default(), policy_addresses: BTreeMap::new() }
+        Self { pins, snap: Snapshots::default(), policy_addresses: BTreeMap::new(), cache: RefCell::new(IpfsCache::default()) }
     }
 }
 
@@ -72,7 +78,50 @@ fn checked(cid: &str, bytes: Vec<u8>) -> Option<Vec<u8>> {
     (formats::cid_of_bytes(&bytes) == cid).then_some(bytes)
 }
 
+/// Verified IPFS objects, kept between inputs (5.7, Q9). An object is stored only after its bytes hash to its CID,
+/// and a CID names exactly one byte string, so a cached object can't be stale or wrong. `card_head:` and `subcard:`
+/// answers are registry state that changes (revocation), so they are never cached. Bounded; the oldest entries go first.
+#[derive(Default)]
+pub struct IpfsCache {
+    map: BTreeMap<String, Vec<u8>>,
+    order: std::collections::VecDeque<String>,
+    bytes: usize,
+}
+
+impl IpfsCache {
+    pub const MAX_BYTES: usize = 64 * 1024 * 1024;
+
+    pub fn get(&self, cid: &str) -> Option<&Vec<u8>> {
+        self.map.get(cid)
+    }
+
+    /// Call only with bytes already checked against `cid`.
+    pub fn put(&mut self, cid: &str, bytes: &[u8], max: usize) {
+        if bytes.len() > max / 4 || self.map.contains_key(cid) {
+            return;
+        }
+        while self.bytes + bytes.len() > max {
+            let Some(old) = self.order.pop_front() else { break };
+            if let Some(b) = self.map.remove(&old) {
+                self.bytes -= b.len();
+            }
+        }
+        self.bytes += bytes.len();
+        self.order.push_back(cid.to_string());
+        self.map.insert(cid.to_string(), bytes.to_vec());
+    }
+
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+}
+
 struct Source<'a> {
+    cache: &'a RefCell<IpfsCache>,
     io: RefCell<&'a mut dyn HostIo>,
     evidence: BTreeMap<String, Vec<u8>>,
     snap: &'a Snapshots,
@@ -103,7 +152,12 @@ impl CardSource for Source<'_> {
         if let Some(b) = self.evidence.get(cid).or_else(|| self.snap.heads.get(cid)) {
             return Some(b.clone());
         }
-        checked(cid, self.io.borrow_mut().fetch(&format!("ipfs:{cid}"))?)
+        if let Some(b) = self.cache.borrow().get(cid) {
+            return Some(b.clone());
+        }
+        let bytes = checked(cid, self.io.borrow_mut().fetch(&format!("ipfs:{cid}"))?)?;
+        self.cache.borrow_mut().put(cid, &bytes, IpfsCache::MAX_BYTES);
+        Some(bytes)
     }
 }
 
@@ -120,7 +174,7 @@ impl SnapshotOracle {
 
 impl CardOracle for SnapshotOracle {
     fn policy(&mut self, io: &mut dyn HostIo, policy_id: &str, state_cid: &str, now_ms: i64) -> Result<PolicyView, &'static str> {
-        let src = Source { io: RefCell::new(io), evidence: BTreeMap::new(), snap: &self.snap };
+        let src = Source { cache: &self.cache, io: RefCell::new(io), evidence: BTreeMap::new(), snap: &self.snap };
         let roots = self.roots();
         // R4 (replica cards approved) is checked by the broker against `approved_notaries` (W10).
         let r = notary_cards::policy::read_policy(&src, policy_id, state_cid, &[], &roots, now_ms)?;
@@ -130,7 +184,7 @@ impl CardOracle for SnapshotOracle {
 
     fn requester_allowed(&mut self, io: &mut dyn HostIo, job: &Value, predicate: &Value, now_ms: i64) -> bool {
         let Some(addr) = job.get("policy_id").and_then(Value::as_str).and_then(|p| self.policy_addresses.get(p)).cloned() else { return false };
-        let src = Source { io: RefCell::new(io), evidence: BTreeMap::new(), snap: &self.snap };
+        let src = Source { cache: &self.cache, io: RefCell::new(io), evidence: BTreeMap::new(), snap: &self.snap };
         notary_cards::policy::requester_allowed(&src, job, predicate, &addr, &self.roots(), now_ms)
     }
 
@@ -145,7 +199,7 @@ impl CardOracle for SnapshotOracle {
                 Some((cid.to_string(), checked(cid, b64u::decode(e.get("bytes")?.as_str()?).ok()?)?))
             })
             .collect();
-        let src = Source { io: RefCell::new(io), evidence, snap: &self.snap };
+        let src = Source { cache: &self.cache, io: RefCell::new(io), evidence, snap: &self.snap };
         let empty = Map::new();
         let cfg = ContributorConfig {
             trusted_roots: &self.pins.trusted_roots,
@@ -163,7 +217,7 @@ impl CardOracle for SnapshotOracle {
 
     fn list_history(&mut self, io: &mut dyn HostIo, list_card: &str) -> Option<Vec<ListVersion>> {
         let pin = self.pins.list_cards.iter().find(|p| p.address == list_card)?.clone();
-        let src = Source { io: RefCell::new(io), evidence: BTreeMap::new(), snap: &self.snap };
+        let src = Source { cache: &self.cache, io: RefCell::new(io), evidence: BTreeMap::new(), snap: &self.snap };
         let pins = notary_cards::lists_read::ListCardPins {
             address: &pin.address,
             public_key: &pin.public_key,

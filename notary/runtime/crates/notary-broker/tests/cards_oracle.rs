@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 
 struct WorldHost {
     world: Value,
+    ipfs_fetches: usize,
 }
 
 impl HostIo for WorldHost {
@@ -18,7 +19,10 @@ impl HostIo for WorldHost {
         let (kind, arg) = what.split_once(':')?;
         let w = &self.world;
         match kind {
-            "ipfs" => b64u::decode(w["ipfs"][arg].as_str()?).ok(),
+            "ipfs" => {
+                self.ipfs_fetches += 1;
+                b64u::decode(w["ipfs"][arg].as_str()?).ok()
+            }
             "card_head" => {
                 let c = w["cards"].get(arg)?;
                 Some(serde_json::to_vec(&json!({ "head_cid": c["log_head_cid"], "events": c["events"] })).unwrap())
@@ -88,17 +92,17 @@ fn oracle_matches_typescript_via_snapshots_and_via_fetches() {
         // (a) snapshots
         let mut a = SnapshotOracle::new(pins(&c["config"]));
         a.on_snapshot("p", &snapshot_of(&c["world"]));
-        let mut host = WorldHost { world: c["world"].clone() };
+        let mut host = WorldHost { world: c["world"].clone(), ipfs_fetches: 0 };
         let got_a = verdict(a.contributor(&mut host, &c["input"], &notary, &c["parameters"], now));
         // (b) per-card fetches, no snapshot
         let mut b = SnapshotOracle::new(pins(&c["config"]));
-        let mut host_b = WorldHost { world: c["world"].clone() };
+        let mut host_b = WorldHost { world: c["world"].clone(), ipfs_fetches: 0 };
         let got_b = verdict(b.contributor(&mut host_b, &c["input"], &notary, &c["parameters"], now));
         // (c) documents only from the input's evidence
         let evidence = Value::Array(c["world"]["ipfs"].as_object().unwrap().iter().map(|(cid, b)| json!({ "cid": cid, "bytes": b })).collect());
         let input_c = with_evidence(&c["input"], evidence);
         let mut o_c = SnapshotOracle::new(pins(&c["config"]));
-        let mut host_c = WorldHost { world: json!({ "cards": c["world"]["cards"], "subcards": c["world"]["subcards"], "ipfs": {} }) };
+        let mut host_c = WorldHost { world: json!({ "cards": c["world"]["cards"], "subcards": c["world"]["subcards"], "ipfs": {} }), ipfs_fetches: 0 };
         let got_c = verdict(o_c.contributor(&mut host_c, &input_c, &notary, &c["parameters"], now));
         if got_a != expect || got_b != expect || got_c != expect {
             bad.push(format!("{}: expect {expect} / snapshots {got_a} / fetches {got_b} / evidence {got_c}", c["id"]));
@@ -118,10 +122,32 @@ fn forged_evidence_is_ignored() {
     let forged = Value::Array(c["world"]["ipfs"].as_object().unwrap().keys().map(|cid| json!({ "cid": cid, "bytes": b64u::encode(b"forged") })).collect());
     let input = with_evidence(&c["input"], forged);
     let mut o = SnapshotOracle::new(pins(&c["config"]));
-    let mut host = WorldHost { world: json!({ "cards": c["world"]["cards"], "subcards": c["world"]["subcards"], "ipfs": {} }) };
+    let mut host = WorldHost { world: json!({ "cards": c["world"]["cards"], "subcards": c["world"]["subcards"], "ipfs": {} }), ipfs_fetches: 0 };
     assert_eq!(o.contributor(&mut host, &input, &json!({ "contributor_predicate": c["predicate"] }), &c["parameters"], now), Err("INPUT_SIGNER_INVALID"));
     // the same input with genuine evidence passes, so the refusal above is the forgery's doing
     let genuine = Value::Array(c["world"]["ipfs"].as_object().unwrap().iter().map(|(cid, b)| json!({ "cid": cid, "bytes": b })).collect());
     let mut o2 = SnapshotOracle::new(pins(&c["config"]));
     assert!(o2.contributor(&mut host, &with_evidence(&c["input"], genuine), &json!({ "contributor_predicate": c["predicate"] }), &c["parameters"], now).is_ok());
+}
+
+/// 5.7, Q9: verified IPFS objects are reused across inputs, and registry state (`card_head:`, `subcard:`) is never cached.
+#[test]
+fn verified_ipfs_objects_are_cached_between_inputs() {
+    let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../vectors/cards/cases.json");
+    let file: Value = serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap();
+    let c = &file["cases"][0];
+    let now = notary_types::formats::parse_timestamp(c["config"]["nowIso"].as_str().unwrap()).unwrap();
+    let notary = json!({ "contributor_predicate": c["predicate"] });
+    let mut o = SnapshotOracle::new(pins(&c["config"]));
+    let mut host = WorldHost { world: c["world"].clone(), ipfs_fetches: 0 };
+    assert!(o.contributor(&mut host, &c["input"], &notary, &c["parameters"], now).is_ok());
+    let first = host.ipfs_fetches;
+    assert!(first > 0 && o.cached_objects() > 0);
+    assert!(o.contributor(&mut host, &c["input"], &notary, &c["parameters"], now).is_ok());
+    assert_eq!(host.ipfs_fetches, first, "the second input fetched no IPFS object again");
+    // registry state is read fresh: the same oracle, now holding cached objects, still sees a revocation
+    let r = file["cases"].as_array().unwrap().iter().find(|x| x["id"] == "b7_master_revoked_8xx").unwrap();
+    let mut host_r = WorldHost { world: r["world"].clone(), ipfs_fetches: 0 };
+    let nr = notary_types::formats::parse_timestamp(r["config"]["nowIso"].as_str().unwrap()).unwrap();
+    assert_eq!(o.contributor(&mut host_r, &r["input"], &json!({ "contributor_predicate": r["predicate"] }), &r["parameters"], nr), Err("INPUT_CARD_REVOKED"));
 }

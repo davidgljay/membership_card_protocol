@@ -112,12 +112,21 @@ pub struct HeaderChain {
 
 const KEEP: usize = 100_000;
 
+/// How far the first header's timestamp may be from the attested time (runtime §13).
+pub const ANCHOR_MARGIN_MS: i64 = 10 * 60 * 1000;
+
 impl HeaderChain {
     /// Accepts headers that link to the chain (or anchor an empty one). Returns the newest block number.
-    pub fn accept(&mut self, headers: &[Vec<u8>]) -> u64 {
+    pub fn accept(&mut self, headers: &[Vec<u8>], attested_now_ms: Option<i64>) -> u64 {
         for rlp in headers {
             let Some(h) = decode_header(rlp) else { continue };
-            let links = self.by_hash.is_empty() || self.by_hash.contains_key(&h.parent);
+            // The first header is the chain's anchor. It is trusted only if its timestamp is near the attested time
+            // (runtime §13, limit L4); every later header must link to one already accepted.
+            let links = if self.by_hash.is_empty() {
+                attested_now_ms.is_some_and(|now| (h.timestamp as i64 * 1000 - now).abs() <= ANCHOR_MARGIN_MS)
+            } else {
+                self.by_hash.contains_key(&h.parent)
+            };
             if !links || self.by_hash.contains_key(&h.hash) {
                 continue;
             }

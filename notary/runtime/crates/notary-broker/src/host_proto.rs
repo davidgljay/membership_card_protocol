@@ -24,6 +24,8 @@ pub struct Broker {
     pub(crate) platform: Platform,
     /// Genesis attestations made here: CID → (card, nonce), for countersign check G2.
     pub(crate) genesis: BTreeMap<String, String>,
+    /// Live jobs a `shared` runtime holds (runtime §3, §14: 256).
+    pub(crate) max_live_jobs: usize,
 }
 
 pub fn error(req_id: &str, code: &str, message: impl Into<String>) -> Value {
@@ -42,6 +44,7 @@ impl Broker {
             workers,
             platform,
             genesis: BTreeMap::new(),
+            max_live_jobs: 256,
         }
     }
 
@@ -60,6 +63,10 @@ impl Broker {
     }
 
     /// Replaces the card oracle (tests: the oracle needs the notary card created by genesis on this broker).
+    pub fn set_max_live_jobs_for_tests(&mut self, n: usize) {
+        self.max_live_jobs = n;
+    }
+
     pub fn set_oracle_for_tests(&mut self, oracle: Box<dyn CardOracle>) {
         self.oracle = oracle;
     }
@@ -74,8 +81,9 @@ impl Broker {
     }
 
     /// The timestamp written into objects: the attested clock.
-    pub(crate) fn now_iso(&self) -> String {
-        formats::format_timestamp(self.attested_now_ms().unwrap_or(0))
+    /// Fails when the clock does, rather than writing a made-up time (5.7, Q1).
+    pub(crate) fn now_iso(&self) -> Result<String, &'static str> {
+        self.attested_now_ms().map(formats::format_timestamp).map_err(|_| "ATT_UNAVAILABLE")
     }
 
     /// Requests an attestation and returns `(document bytes, CID)`.
@@ -100,7 +108,7 @@ impl Broker {
     }
 
     pub(crate) fn append_log(&mut self, io: &mut dyn HostIo, scope: &str, card: &str, kind: &str, body: Value) -> Result<(), &'static str> {
-        let at = self.now_iso();
+        let at = self.now_iso()?;
         let id = self.keys.identity(card).ok_or("NOTARY_KEY_EXPOSED")?;
         let recs = self.logs.append(scope, false, kind, body, &at, &Signers { id: &id.id, inst: self.keys.inst() });
         self.emit_records(io, recs);
@@ -182,7 +190,7 @@ impl Broker {
             .flatten()
             .filter_map(|h| h.get("header_rlp").and_then(Value::as_str).and_then(|s| b64u::decode(s).ok()))
             .collect();
-        let newest = self.chain.accept(&headers);
+        let newest = self.chain.accept(&headers, self.attested_now_ms().ok());
         json!({ "kind": "chain_ack", "req_id": req_id, "newest": newest })
     }
 
@@ -255,7 +263,7 @@ impl Broker {
         let Ok(bytes) = jcs::canonical(&offer) else { return error(req_id, "NOT_GENESIS_MISMATCH", "offer is not canonical JSON") };
         offer["holder_signature"] = json!(b64u::encode(&ident.id.sign(&bytes)));
         if self.logs.head(&card).is_none() {
-            let at = self.now_iso();
+            let Ok(at) = self.now_iso() else { return error(req_id, "ATT_UNAVAILABLE", "the attested clock is unavailable") };
             let ident = self.keys.identity(&card).expect("checked above");
             let recs = self.logs.append(&card, true, "opened", json!({ "attestations": [att] }), &at, &Signers { id: &ident.id, inst: self.keys.inst() });
             self.emit_records(io, recs);
