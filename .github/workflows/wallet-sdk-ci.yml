@@ -42,6 +42,7 @@ jobs:
           set -e
           build() { (cd "$1" && pnpm install --frozen-lockfile && pnpm run build); }
           build membership_card_verifier/packages/verifier
+          build membership_card_verifier/packages/verifier-ipfs-provider
           build app-sdk/packages/app-sdk
           build sdk-providers-rn/packages/sdk-providers-rn
           build sdk-providers-web/packages/sdk-providers-web
