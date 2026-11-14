@@ -241,6 +241,14 @@ export async function verifyNotarization(notarizationCid: string, reads: Notariz
   if (n.suppressed !== suppressedExpected || (n.suppressed && outVal !== undefined && H(outVal) !== H({ insufficient_participation: true })))
     return fail("NOT_SUPPRESSION_INVALID", "suppressed does not equal accepted < k_min, or the suppressed output is not the fixed value");
   // ---- N10 ----
+  {
+    // the output's shape follows the policy: `{ public }` for a public policy, `{ recipients }` naming exactly its cards otherwise
+    const pub = policy.notary.output_recipients?.public ?? true;
+    const recipients = (n.output as { recipients?: string[] }).recipients;
+    const shapeOk = pub ? outVal !== undefined && recipients === undefined
+      : outVal === undefined && Array.isArray(recipients) && JSON.stringify([...recipients].sort()) === JSON.stringify([...(policy.notary.output_recipients?.cards ?? [])].sort());
+    if (!shapeOk) return fail("NOT_OUTPUT_INVALID", "the output's shape does not follow output_recipients");
+  }
   if (outVal !== undefined) {
     const okOut = n.suppressed ? H(outVal) === H({ insufficient_participation: true }) : publicOutputValid(outVal, policy.notary.output_schema);
     if (!okOut || H(outVal) !== n.output_hash) return fail("NOT_OUTPUT_INVALID", "public output does not satisfy output_schema and its transforms, or output_hash differs");

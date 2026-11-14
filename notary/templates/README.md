@@ -15,10 +15,10 @@ Each template is a crate with `src/lib.rs` (the logic, testable natively through
 ## Building
 
 ```bash
-templates/build.sh aggregate            # writes templates/dist/aggregate.wasm
+templates/build.sh aggregate            # writes templates/modules/aggregate.wasm
 templates/build.sh aggregate --check    # CI: the committed module equals a fresh build
 ```
 
-The build uses the pinned toolchain (`rust-toolchain.toml`), path remapping and fixed linker flags, then `normalize/` re-encodes the module canonically and keeps only the two exports a `notary_v1` module may have. Two builds in different directories give identical bytes. The committed modules are in `dist/`; the program CID is `cidOfBytes(module)`, which the tests compute.
+The build uses the pinned toolchain (`rust-toolchain.toml`), path remapping and fixed linker flags, then `normalize/` re-encodes the module canonically and keeps only the two exports a `notary_v1` module may have. Two builds in different directories give identical bytes. The committed modules are in `modules/`; the program CID is `cidOfBytes(module)`, which the tests compute.
 
 Allowlist publication (the governance program list, §34) is a governance action in step 7.1 and needs CP7.

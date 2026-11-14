@@ -8,6 +8,7 @@ COPY runtime runtime
 COPY sim sim
 COPY lint lint
 COPY guest guest
+COPY templates templates
 # the pinned AWS Nitro Enclaves root is compiled into notary-attest (include_bytes!)
 COPY deploy/aws deploy/aws
 RUN cargo build --release -p notary-runtime -p notary-sim --bin notary-runtime --bin fake-enclave

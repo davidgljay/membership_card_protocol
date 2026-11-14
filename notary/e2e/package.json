@@ -14,6 +14,7 @@
     "@hpke/chacha20poly1305": "^1.8.1",
     "@hpke/core": "^1.10.1",
     "@hpke/hybridkem-x-wing": "0.7.1",
+    "@membership-card-protocol/app-sdk": "file:../../app-sdk/packages/app-sdk",
     "@membership-card-protocol/notary-attestation": "workspace:*",
     "@membership-card-protocol/verifier": "file:../../membership_card_verifier/packages/verifier",
     "@membership-card-protocol/wallet-sdk": "file:../../wallet-sdk/packages/wallet-sdk",

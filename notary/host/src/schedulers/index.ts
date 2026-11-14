@@ -140,6 +140,10 @@ export async function closeTick(ctx: HostContext, st: SchedulerState): Promise<v
         const bytes = canonicalNotary(reply["notarization"]);
         ctx.served.set(cidOfBytes(bytes), bytes);
         await ctx.ipfs.pin(bytes);
+        // private outputs (6.1): the enclave's `notary_output` routing envelopes go out through message routing
+        for (const envelope of Array.isArray(reply["outputs"]) ? reply["outputs"] : []) {
+          try { await ctx.delivery.deliver(envelope); } catch { await ctx.monitor.alert("warn", "delivery_failed"); }
+        }
       }
     } catch (e) {
       if (!(e instanceof EnclaveError && e.code === "CLOSE_NOT_DUE")) await ctx.monitor.alert("warn", "close_failed");

@@ -31,6 +31,8 @@ export interface BuildJobOptions {
   endsAt?: string;
   keyPeriod?: string;
   requesterText?: string;
+  /** Private output: each recipient's ML-DSA-44 public key by card pointer, exactly the policy's `output_recipients.cards`. */
+  outputRecipientKeys?: Record<string, Uint8Array>;
   createdAt: string;
   /** 16 random bytes. */
   nonce: Uint8Array;
@@ -71,9 +73,11 @@ async function buildNotaryJobUnchecked(o: BuildJobOptions): Promise<BuiltJob> {
     if (parseTimestamp(o.endsAt!) > opens + 366 * 86_400_000) bad("ends_at is more than a year after opens_at");
   }
   parseTimestamp(o.createdAt);
+  for (const [pointer, key] of Object.entries(o.outputRecipientKeys ?? {})) if (cardPointer(key) !== pointer) bad(`output_recipient_keys: the key for ${pointer} does not hash to it`);
   const unsigned: Record<string, unknown> = {
     ...(aggregate ? { closes_at: o.closesAt } : { ends_at: o.endsAt, key_period: o.keyPeriod }),
     created_at: o.createdAt, kem: "x-wing-draft-06", min_live: minLive, nonce: b64uEncode(o.nonce), opens_at: o.opensAt,
+    ...(o.outputRecipientKeys ? { output_recipient_keys: Object.fromEntries(Object.entries(o.outputRecipientKeys).sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, v]) => [k, b64uEncode(v)])) } : {}),
     parameters: o.parameters ?? {}, policy_id: o.policyId, policy_state_cid: o.policyStateCid,
     replica_set: o.replicaSet.map((r) => ({ instances: r.instances, notary_card: r.notary_card })),
     requester_card: cardPointer(o.requester.publicKey), requester_pubkey: b64uEncode(o.requester.publicKey),

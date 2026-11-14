@@ -51,7 +51,7 @@ export default defineNitroPlugin(async () => {
     const c = createContext({
       config, kv, ipfs: config.IPFS_PROVIDER === "sim" ? sim.ipfs : createMockIpfs(),
       eas: sim.eas, chain: sim.chain, submitter: sim.submitter, policies: sim.policies,
-      peers: { send: async (url, body) => post(`${url.replace(/\/$/, "")}/peer`, body) }, delivery: mem.delivery, replicas: mem.replicas,
+      peers: { send: async (url, body) => post(`${url.replace(/\/$/, "")}/peer`, body) }, delivery: sim.delivery, replicas: mem.replicas,
       monitor: webhookMonitor(config.ALERT_WEBHOOK_URL, post), sessions: new Map(), gateOnSnapshots: true,
     });
     for (const ep of config.ENCLAVE_ENDPOINTS) {

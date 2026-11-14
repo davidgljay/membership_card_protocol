@@ -112,6 +112,15 @@ export async function verifyNotaryJob(o: VerifyJobOptions): Promise<VerifyJobRes
     return bad("JOB_REQUESTER_NOT_PERMITTED", "requester does not satisfy job_requester_predicate");
   // W6
   if (!parametersWithinBounds(job.parameters, notary.parameter_bounds)) return bad("JOB_PARAMETERS_OUT_OF_BOUNDS", "parameters outside parameter_bounds");
+  // W6a (6.1): private output recipients and their keys
+  {
+    const listed = [...(notary.output_recipients?.cards ?? [])].sort();
+    const keys = job.output_recipient_keys ?? {};
+    const given = Object.keys(keys).sort();
+    const keyOk = given.every((p) => { try { return cardPointer(b64uDecode(keys[p]!, 1312)) === p; } catch { return false; } });
+    if (listed.length !== given.length || listed.some((p, i) => p !== given[i]) || !keyOk)
+      return bad("JOB_RECIPIENT_KEYS_INVALID", "output_recipient_keys must be exactly the policy's recipient cards, each key hashing to its pointer");
+  }
   // W7
   const n = job.replica_set.reduce((a, r) => a + r.instances, 0);
   const q = Math.floor(n / 2) + 1;

@@ -11,7 +11,7 @@
 //!
 //! The policy and requester reads use algorithm R (lifecycle Appendix A.7) and the list histories use
 //! `notary_cards::lists_read` (runtime §12): all over vsock `fetch`, with no network connection.
-use crate::env::{CardOracle, HostIo, PolicyView};
+use crate::env::{CardOracle, HostIo, PolicyView, RecipientTarget};
 use crate::lists::ListVersion;
 use notary_cards::{check_contributor, CardEntry, CardSource, ContributorConfig, ContributorResult, SubCardEntry};
 use notary_types::{b64u, formats};
@@ -219,6 +219,27 @@ impl CardOracle for SnapshotOracle {
             ContributorResult::Ok { root_key_hash, .. } => Ok(root_key_hash),
             ContributorResult::Err { code, .. } => Err(code),
         }
+    }
+
+    fn recipient_targets(&mut self, io: &mut dyn HostIo, master_pubkey: &[u8]) -> Result<Vec<RecipientTarget>, &'static str> {
+        use notary_cards::support::{address_of, b64_lenient, content_key, decrypt_card_head};
+        let src = Source { cache: &self.cache, io: RefCell::new(io), evidence: BTreeMap::new(), snap: &self.snap };
+        let roots = self.roots();
+        let address = address_of(master_pubkey);
+        let entry = src.card(&address).ok_or("RECIPIENT_UNREADABLE")?;
+        let head = decrypt_card_head(&src, &entry.log_head_cid, &content_key(master_pubkey)).ok_or("RECIPIENT_UNREADABLE")?;
+        let mut out = vec![];
+        for key in head.get("active_subcards").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str) {
+            let sub_pk = b64_lenient(key);
+            // the sub-card must verify, and be this recipient's own (its holder signature is by the recipient's master key)
+            let Ok(s2) = notary_cards::stages::stage2(&src, &sub_pk, &roots) else { continue };
+            if address_of(&s2.master_pubkey) != address {
+                continue;
+            }
+            let Some(kem) = s2.sub_doc.get("kem_pubkey").and_then(Value::as_str).map(b64_lenient).filter(|k| k.len() == notary_messaging::KEM_PUBLIC_KEY_LEN) else { continue };
+            out.push(RecipientTarget { sub_card: address_of(&sub_pk), kem_public_key: kem });
+        }
+        Ok(out)
     }
 
     fn list_history(&mut self, io: &mut dyn HostIo, list_card: &str) -> Option<Vec<ListVersion>> {

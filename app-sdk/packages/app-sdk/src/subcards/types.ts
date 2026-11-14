@@ -17,6 +17,8 @@ export interface SubCardDocumentFields {
   app_card_pubkey: string;
   capabilities: string[];
   recipient_pubkey: string;
+  /** ML-KEM-768 public key (1184 bytes, base64url) for end-to-end messages to this sub-card; required to receive `notary_output` (protocol-objects.md §16). */
+  kem_pubkey?: string;
   issued_at: string;
   valid_until?: string;
   attestation_level: 'T1' | 'T2' | 'S1';

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds a template to a notary_v1 module (code-plan §7.4: reproducible, checked by CI).
-#   templates/build.sh aggregate            -> templates/dist/aggregate.wasm and its CID in templates/dist/aggregate.cid
+#   templates/build.sh aggregate            -> templates/modules/aggregate.wasm and its CID in templates/modules/aggregate.cid
 #   templates/build.sh aggregate --check    -> fails if the committed module differs from a fresh build
 # Linker flags give admission what it needs (runtime §6): one memory exported as "memory" with a declared maximum, no
 # start function, and exactly two exports (`memory`, `run`).
@@ -13,12 +13,12 @@ RUSTFLAGS="--remap-path-prefix=$PWD=/notary --remap-path-prefix=${CARGO_HOME:-$H
 linked=target/wasm32-unknown-unknown/release/notary_template_${name}.wasm
 built=target/wasm32-unknown-unknown/release/notary_template_${name}.normalized.wasm
 cargo run -q -p notary-template-normalize --release -- "$linked" "$built"
-mkdir -p templates/dist
+mkdir -p templates/modules
 if [ "$mode" = "--check" ]; then
-  cmp -s "$built" "templates/dist/$name.wasm" || { echo "stale: templates/dist/$name.wasm" >&2; exit 1; }
+  cmp -s "$built" "templates/modules/$name.wasm" || { echo "stale: templates/modules/$name.wasm" >&2; exit 1; }
   echo "$name: the committed module is what the source builds"
 else
-  cp "$built" "templates/dist/$name.wasm"
-  echo "$(sha256sum "templates/dist/$name.wasm" 2>/dev/null || shasum -a 256 "templates/dist/$name.wasm")" > "templates/dist/$name.sha256"
-  echo "wrote templates/dist/$name.wasm"
+  cp "$built" "templates/modules/$name.wasm"
+  echo "$(sha256sum "templates/modules/$name.wasm" 2>/dev/null || shasum -a 256 "templates/modules/$name.wasm")" > "templates/modules/$name.sha256"
+  echo "wrote templates/modules/$name.wasm"
 fi

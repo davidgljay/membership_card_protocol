@@ -10,6 +10,8 @@ COPY notary/attestation-ts notary/attestation-ts
 COPY wallet-sdk/packages/wallet-sdk wallet-sdk/packages/wallet-sdk
 COPY notary/deploy/build-ts-deps.sh /build-ts-deps.sh
 RUN sh /build-ts-deps.sh
+COPY notary/templates/modules notary/templates/modules
+COPY notary/templates/aggregate/policy.json notary/templates/aggregate/policy.json
 COPY notary/e2e notary/e2e
 RUN cd notary && printf '{"name":"notary-e2e-workspace","private":true}\n' > package.json && printf 'packages:\n  - "attestation-ts"\n  - "e2e"\n' > pnpm-workspace.yaml \
  && pnpm install --frozen-lockfile=false

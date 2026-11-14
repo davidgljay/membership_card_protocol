@@ -6,6 +6,8 @@
 **Architecture:** `ARCHITECTURE.md` ADR-013 · **Processes:** `process_specs/notary_lifecycle.md`, `notary_replication_and_recovery.md`, `derived_card_revocation_propagation.md` · **Objects:** `protocol-objects.md` §20–§34 · **Design record:** `plans/notary-design-decisions.md` §2.3, §2.4
 **Amended 2026-11-12:** §9 `create_job` reads the policy with algorithm R through `fetch`; `genesis_ready` adds `request` and `notary_card`. §12 pins list-card public keys and reads list history through `fetch`. §16 adds `CLOSE_NOT_DUE`. Source: `plans/notary-spec-wording-e31.md`, approved by David 2026-11-12.
 
+**Amended 2026-11-14 (6.1):** §4 ML-KEM-768 for `notary_output`; `create_job` answers `JOB_RECIPIENT_KEYS_INVALID`; `job_closed.outputs[]` carries the routing envelopes. David approved 2026-11-14 (`plans/notary-questions-phase-6.md`, Q4; the KEM key's home chosen in the 6.1 session).
+
 **Amended 2026-11-14 (6.0a, second part):** §9 `policy_snapshot` gains `policy_head_cid`. A consequence of the approved Q2 wording, found while implementing it; **for David's review** (`plans/notary-questions-phase-6.md`, Q2).
 
 **Amended 2026-11-14 (6.0a):** §6 A12 and `ADM_CONTRIBUTOR_SET_OPEN` (replacing `LINT_NO_SNAPSHOT_POLICY`); §9 `fetch`: a contributor's own card must come from a snapshot. David approved 2026-11-14 (`plans/notary-questions-phase-6.md`, Q2).
@@ -132,7 +134,8 @@ An exposed key is never handed on (P5).
   - X-Wing draft-06 HPKE (the `hpke` crate with the `mlkem` feature, the `x-wing` crate at draft 06; **not** `rxwing`, which implements draft 11).
   - ChaCha20-Poly1305, SHA-256, SHA3-256, keccak256, and HKDF-SHA256 / HKDF-SHA3-256.
   - secp256r1 ECDSA for chain payloads.
-  - AES-256-GCM, to decrypt card content (ADR-006).
+  - AES-256-GCM, to decrypt card content (ADR-006) and to encrypt `notary_output` messages.
+  - ML-KEM-768 (FIPS 203, the RustCrypto `ml-kem` crate, pinned) and HKDF-SHA3-256, for `notary_output` messages (`notary-messaging`; the App SDK's fan-out construction).
 - **Constant time.** All secret-dependent operations use constant-time implementations.
 - **Randomness.** Comes from the NSM's random source, mixed into the kernel's RNG at boot.
 
@@ -420,6 +423,7 @@ The host can't read enclave memory in any case. Zeroization limits what a later 
 | `NH_UNSUPPORTED` | §9 `create_job` | The job needs a feature this runtime build doesn't have yet (epoch restarts, per-input jobs, card output, replica sets larger than one). Temporary: removed as those features land. |
 | `ATT_UNAVAILABLE` | §9 | The attestation backend or attested clock failed; nothing was signed |
 | `JOB_KEY_EXISTS` | §9 `create_job` | A key already exists for this (job, epoch) |
+| `JOB_RECIPIENT_KEYS_INVALID` | §9 `create_job` | `output_recipient_keys` doesn't name exactly the policy's recipient cards, or a key doesn't hash to its pointer (`notary_lifecycle.md` step 17 and W6a) |
 | `NH_MALFORMED`, `MISSING_FIELD`, `JSON_NOT_CANONICAL`, `NH_UNKNOWN_KIND` | §9 | A host message is malformed, lacks a field, isn't canonical JSON, or has an unknown `kind` |
 | `CLOSE_FAILED` | §9 `close_chunk` | The close computation failed internally (nothing was released) |
 | `IDENTITY_LOG_PENDING` | §9 `create_job` | The notary card's identity-log `seq` 0 isn't anchored yet (`notary_lifecycle.md` step 9); nothing opened, and the host anchors it and retries |

@@ -109,6 +109,9 @@ impl CardOracle for BenchOracle {
     fn list_history(&mut self, _: &mut dyn HostIo, card: &str) -> Option<Vec<ListVersion>> {
         Some(if card == "runtimes" { self.lists.0.clone() } else { self.lists.1.clone() })
     }
+    fn recipient_targets(&mut self, io: &mut dyn HostIo, master_pubkey: &[u8]) -> Result<Vec<notary_broker::env::RecipientTarget>, &'static str> {
+        self.inner.recipient_targets(io, master_pubkey)
+    }
     fn contributor_policy_state(&self, policy: &str) -> Option<(String, u64)> {
         self.inner.contributor_policy_state(policy)
     }

@@ -41,6 +41,8 @@ export interface RequestSubCardOptions {
   /** Platform attestation assertion scoped to `hash(recipient_pubkey)` — required when `attestationLevel` is `'T2'`, omitted for `'T1'`. Obtaining this from the platform's attestation service (App Attest / Play Integrity) is the caller's responsibility; this module only carries it through. */
   attestationProof?: Uint8Array;
   validUntil?: string;
+  /** The sub-card's ML-KEM-768 public key. Include it for a sub-card that receives encrypted messages, including a notary's private output; the matching decapsulation key stays in the device's secure storage. */
+  kemPublicKey?: Uint8Array;
   /** Defaults to now. */
   issuedAt?: string;
 }
@@ -70,6 +72,7 @@ export async function requestSubCard(options: RequestSubCardOptions): Promise<Re
     app_card_pubkey: bytesToBase64Url(options.appCard.publicKey),
     capabilities: options.capabilities,
     recipient_pubkey: bytesToBase64Url(subCardPublicKey),
+    ...(options.kemPublicKey ? { kem_pubkey: bytesToBase64Url(options.kemPublicKey) } : {}),
     issued_at: options.issuedAt ?? new Date().toISOString(),
     attestation_level: options.attestationLevel,
     ...(options.validUntil ? { valid_until: options.validUntil } : {}),

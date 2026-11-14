@@ -151,7 +151,7 @@ export const OBJECT_FIELDS: Record<string, FieldSpec> = {
   "notary.genesis_request.v1": { required: ["chain_pubkey", "id_pubkey", "nonce", "operator_card", "operator_host_pubkey", "platform", "policy_id", "requested_at", "type"] },
   "notary.job.v1": {
     required: ["created_at", "kem", "min_live", "nonce", "opens_at", "parameters", "policy_id", "policy_state_cid", "replica_set", "requester_card", "requester_pubkey", "requester_signature", "type"],
-    optional: ["closes_at", "ends_at", "key_period", "requester_text"],
+    optional: ["closes_at", "ends_at", "key_period", "output_recipient_keys", "requester_text"],
   },
   "notary.announcement.v1": {
     required: ["attestations", "epoch", "issued_at", "job", "job_public_key", "notary_signature", "transport", "type"],

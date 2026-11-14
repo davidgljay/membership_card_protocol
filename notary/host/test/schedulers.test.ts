@@ -109,3 +109,15 @@ describe("snapshots for a new job (6.0a)", () => {
     expect(st.snapshotting).toBe(false);
   });
 });
+
+describe("private outputs (6.1)", () => {
+  it("the routing envelopes in job_closed are delivered; a failed delivery alerts and does not stop the others", async () => {
+    const envs = [{ to: "r", subcard_hash: "s1", payload: "AA" }, { to: "r", subcard_hash: "s2", payload: "AB" }];
+    const h = await harness({ closeChunk: () => ({ notarization: { ok: 1 }, outputs: envs }) });
+    await openJob(h);
+    const st = newSchedulerState();
+    st.chainTimeMs = CLOSES_MS;
+    await closeTick(h.ctx, st);
+    expect(h.svc.delivered).toEqual(envs);
+  });
+});

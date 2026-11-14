@@ -754,6 +754,7 @@ dependencies = [
  "notary-attest",
  "notary-cards",
  "notary-crypto",
+ "notary-messaging",
  "notary-sim",
  "notary-types",
  "notary-worker",

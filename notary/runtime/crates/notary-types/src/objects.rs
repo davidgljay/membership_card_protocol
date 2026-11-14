@@ -51,6 +51,7 @@ obj! {
         #[serde(default, skip_serializing_if = "is_none")] pub ends_at: Option<String>,
         #[serde(default, skip_serializing_if = "is_none")] pub key_period: Option<String>,
         pub kem: String, pub min_live: u32, pub nonce: String, pub opens_at: String, pub parameters: Value,
+        #[serde(default, skip_serializing_if = "is_none")] pub output_recipient_keys: Option<std::collections::BTreeMap<String, String>>,
         pub policy_id: String, pub policy_state_cid: String, pub replica_set: Vec<ReplicaSetEntry>,
         pub requester_card: String, pub requester_pubkey: String, pub requester_signature: SignatureEntry,
         #[serde(default, skip_serializing_if = "is_none")] pub requester_text: Option<String>,

@@ -12,6 +12,7 @@
  *   GET  /registry/card/:address     → { head_cid, events: [{ cid, timestamp }], policy, press }
  *   POST /registry/subcard           { master_card, sub_card, sub_card_doc_cid, active }
  *   GET  /registry/subcard/:address  → { master_card_address, sub_card_doc_cid, active }
+ *   POST /deliver                    a routing envelope the host delivered   GET /delivered → all of them
  *   POST /registry/policy            { policy_id, address }  (the policy's own card)
  *   GET  /registry/events?policy=P   → { events: RegistryEvent[], subcards: SubCardEvent[], block, policy_head }
  *   GET  /headers?after=N            → [{ number, hash, header_rlp, timestamp }]   GET /block/:number → one header
@@ -39,6 +40,8 @@ export function createSimChain(o: { blockMs?: number; startMs?: number } = {}) {
   const subs: SubEvent[] = [];
   const anchors = new Map<string, { seq: number; record_cid: string; timestamp: number; block: number; tx_hash: string }[]>();
   const txs: unknown[] = [];
+  /** `notary_output` routing envelopes the host delivered (step 6.1) */
+  const delivered: unknown[] = [];
   /** policy id → the address of the policy's own card (stands for the registry's `RegisterPolicy`) */
   const policyCards = new Map<string, string>();
   let lastTs = 0;
@@ -61,7 +64,7 @@ export function createSimChain(o: { blockMs?: number; startMs?: number } = {}) {
   timer.unref();
 
   const api = {
-    ipfs, blocks, events, subs, anchors, txs, mine, policyCards,
+    ipfs, blocks, events, subs, anchors, txs, mine, policyCards, delivered,
     pin(bytes: Uint8Array) { const cid = cidOfBytes(bytes); ipfs.set(cid, bytes); return cid; },
     registerCard(c: { address: string; policy: string; press: string; head_cid: string }) {
       const b = mine();
@@ -142,6 +145,8 @@ export function serveSimChain(chain: SimChain, port: number, host = "0.0.0.0") {
         return send(res, 200, { events: chain.events.filter((e) => e.policyAddress === policy), subcards: chain.subs, block: chain.blocks.length, policy_head: addr ? chain.card(addr)?.head_cid ?? null : null });
       }
       if (m === "POST" && p[0] === "registry" && p[1] === "policy") { const b = JSON.parse((await body(req)).toString()) as { policy_id: string; address: string }; chain.policyCards.set(b.policy_id, b.address); return send(res, 200, { ok: true }); }
+      if (m === "POST" && p[0] === "deliver") { chain.delivered.push(JSON.parse((await body(req)).toString())); return send(res, 200, { ok: true }); }
+      if (m === "GET" && p[0] === "delivered") return send(res, 200, chain.delivered);
       if (m === "GET" && p[0] === "world") return send(res, 200, chain.world());
       if (m === "GET" && p[0] === "headers") { const after = Number(url.searchParams.get("after") ?? 0); return send(res, 200, chain.blocks.filter((b) => b.number > after)); }
       if (m === "GET" && p[0] === "block" && p[1]) { const b = chain.blocks[Number(p[1]) - 1]; return b ? send(res, 200, b) : send(res, 404, { error: "not found" }); }

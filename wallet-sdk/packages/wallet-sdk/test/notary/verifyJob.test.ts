@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { sha256 } from "@noble/hashes/sha256";
 import { ml_dsa44 } from "@noble/post-quantum/ml-dsa.js";
 import { simulator, awsNitroEnclaves, awsNitroRootG1Der } from "@membership-card-protocol/notary-attestation";
-import { b64uDecode, b64uEncode, canonicalNotary, cidOfBytes, withoutFields } from "@membership-card-protocol/verifier/notary";
+import { b64uDecode, b64uEncode, canonicalNotary, cardPointer, cidOfBytes, withoutFields } from "@membership-card-protocol/verifier/notary";
 import type { AcceptedRuntime, AllowlistedProgram, NotarySection } from "@membership-card-protocol/verifier/notary";
 import { verifyNotaryJob } from "../../src/notary/verifyJob.js";
 import type { NotaryChainReads, PolicyRead, VerifyJobOptions } from "../../src/notary/verifyJob.js";
@@ -95,6 +95,19 @@ describe("algorithm W (wallet_sdk.md §7b.2) with real simulator attestations", 
   it("G2: parameters outside parameter_bounds → JOB_PARAMETERS_OUT_OF_BOUNDS", async () => {
     const job = requesterSigned({ parameters: { question: "" } });
     expect(await code(opts({ announcement: announcement(job) }))).toBe("JOB_PARAMETERS_OUT_OF_BOUNDS");
+  });
+
+  it("W6a: private recipients need their keys in the job, each hashing to its pointer → JOB_RECIPIENT_KEYS_INVALID (6.1)", async () => {
+    const recipientKey = new Uint8Array(1312).fill(7);
+    const pointer = cardPointer(recipientKey);
+    const priv: NotarySection = { ...notarySection, output_recipients: { cards: [pointer], job_requester: false, public: false } };
+    const withPolicy = (job: NotaryJob) => opts({ announcement: announcement(job), reads: reads({}, { notary: priv }) });
+    expect(await code(withPolicy(requesterSigned({})))).toBe("JOB_RECIPIENT_KEYS_INVALID"); // no keys
+    expect(await code(withPolicy(requesterSigned({ output_recipient_keys: { [pointer]: b64uEncode(new Uint8Array(1312).fill(8)) } })))).toBe("JOB_RECIPIENT_KEYS_INVALID"); // wrong key
+    expect(await code(withPolicy(requesterSigned({ output_recipient_keys: { [pointer]: b64uEncode(recipientKey), ["a".repeat(64)]: b64uEncode(recipientKey) } })))).toBe("JOB_RECIPIENT_KEYS_INVALID"); // extra
+    expect(await code(withPolicy(requesterSigned({ output_recipient_keys: { [pointer]: b64uEncode(recipientKey) } })))).not.toBe("JOB_RECIPIENT_KEYS_INVALID");
+    // a public job names no recipient keys
+    expect(await code(opts({ announcement: announcement(requesterSigned({ output_recipient_keys: { [pointer]: b64uEncode(recipientKey) } })) }))).toBe("JOB_RECIPIENT_KEYS_INVALID");
   });
 
   // ---- remaining W steps ----

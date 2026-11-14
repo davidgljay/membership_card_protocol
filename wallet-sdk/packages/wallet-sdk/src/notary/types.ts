@@ -24,6 +24,8 @@ export interface NotaryJob {
   nonce: Base64Url;
   opens_at: Timestamp;
   parameters: Record<string, unknown>;
+  /** 6.1: each private-output recipient's ML-DSA-44 public key, by card pointer (protocol-objects.md §21). */
+  output_recipient_keys?: Record<string, Base64Url>;
   policy_id: Cid;
   policy_state_cid: Cid;
   replica_set: ReplicaSetEntry[];

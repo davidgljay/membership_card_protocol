@@ -95,6 +95,19 @@ describe('requestSubCard', () => {
     expect(result.document.valid_until).toBe('2027-01-01T00:00:00.000Z');
   });
 
+  it('includes kem_pubkey, covered by app_signature, when a KEM key is supplied (notary private outputs)', async () => {
+    const secureKeyProvider = makeFakeSecureKeyProvider();
+    const appCard = makeFakeAppCard();
+    const holder = mlDsa44GenerateKeypair();
+    const kem = new Uint8Array(1184).fill(5);
+    const base = { secureKeyProvider, subCardKeyId: 'k', appCard, holderPrimaryCard: keccak256(holder.publicKey), holderPrimaryCardPubkey: holder.publicKey, capabilities: [], attestationLevel: 'T1' as const, issuedAt: '2027-01-01T00:00:00.000Z' };
+    const withKem = await requestSubCard({ ...base, kemPublicKey: kem });
+    expect(withKem.document.kem_pubkey).toBe(bytesToBase64Url(kem));
+    const without = await requestSubCard(base);
+    expect(without.document.kem_pubkey).toBeUndefined();
+    expect(withKem.document.app_signature).not.toBe(without.document.app_signature);
+  });
+
   it('throws if attestationLevel is T2 without an attestationProof', async () => {
     const secureKeyProvider = makeFakeSecureKeyProvider();
     const appCard = makeFakeAppCard();

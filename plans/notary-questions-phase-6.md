@@ -185,3 +185,11 @@ Implementation plan: [notary-implementation-plan.md](notary-implementation-plan.
 3. 6.3 (Opus): the peer envelope, the multi-broker harness, handoff P1–P5, heartbeats, quorum acks and close, re-replication, upgrades and exposure epochs.
 4. Stop for CP7 before 6.4a; then 6.4 and 6.5 (Opus), then the 6.6 review and `milestones/notary-phase-6-summary.md`.
 5. After each step: run its tests, report actual results, update code-plan §8.3, and tick only when "Done when" holds.
+
+---
+
+## Decisions made during 6.1 (2026-11-14)
+
+- **Q4's recipient key home (asked and answered by David):** the recipients' ML-KEM-768 keys live in a new optional `SubCardDocument.kem_pubkey` (`protocol-objects.md §16`), read by the enclave from the verified sub-card document, plus `NotaryJob.output_recipient_keys` for each recipient's master public key (§21). The original Q4 text assumed the sub-card keys could be read from the card; they can't (`active_subcards` lists ML-DSA keys only, and `message_routing.md` says the KEM key is "derived from the registered public key via HKDF", which can't produce a KEM public key). Specs amended; the second reading of `message_routing.md` §Sender-Side Fan-out (the KEM key is *resolved separately*) is now: from `kem_pubkey`.
+- **Q3 (templates):** 6.1 builds `aggregate` as a histogram. Its schema (with clamps and cell suppression below 5) is fixed in the module, so a community chooses who contributes, `k_min` and the edges. The vote template (slots) is 6.2.
+- **Not asked, for your review:** `notarization.output` for a private job is `{ recipients }` and algorithm N step 10 now checks that the shape follows `output_recipients` (lifecycle A.4 amended). The wallet SDK gained `kemPublicKey` on `requestSubCard`; the wallet's device registration doesn't generate or pass one yet.

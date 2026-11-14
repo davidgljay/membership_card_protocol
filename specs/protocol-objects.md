@@ -5,6 +5,8 @@
 **Status:** In Review  
 **Amended 2026-11-12 (notaries):** §34 `list_approval` gains `single_operator_quorums` (program allowlist only), and rule E keeps it unchanged in emergency updates. Source: `plans/notary-spec-wording-e31.md`, approved by David 2026-11-12.
 
+**Amended 2026-11-14 (notaries, 6.1):** §16 SubCardDocument gains optional `kem_pubkey`; §21 NotaryJob gains `output_recipient_keys`. David approved 2026-11-14 (`plans/notary-questions-phase-6.md`, Q4; the KEM key's home chosen in the 6.1 session).
+
 **Amended 2026-11-14 (notaries, 6.0a):** §27 `contributor_policies` (the policies and states a notarization counted). David approved 2026-11-14 (`plans/notary-questions-phase-6.md`, Q2).
 
 **Amended 2026-11-13 (notaries, 5.7 review):** §28 `at` is the enclave's attested time, not chain time (Q1). Source: `plans/notary-questions-5.7.md`, David approved 2026-11-13 (`plans/notary-questions-5.7.md`).
@@ -1049,6 +1051,7 @@ The genesis document for a sub-card — a device-bound, app-specific credential 
     }
   ],
   "recipient_pubkey":           "<base64url — sub-card ML-DSA-44 public key, 1312 bytes raw>",
+  "kem_pubkey":                 "<base64url — sub-card ML-KEM-768 public key, 1184 bytes raw; optional>",
   "dns_path_scope":             "<regex string — optional; present only when holder_primary_card is a DNS admin card>",
   "issued_at":                  "<ISO 8601 timestamp>",
   "valid_until":                "<ISO 8601 timestamp — optional; absent means no expiry>",
@@ -1068,6 +1071,7 @@ The genesis document for a sub-card — a device-bound, app-specific credential 
 | `capabilities` | `array of text` | Yes | Whitelist of message type strings this sub-card may sign (e.g. `["auth_response", "exchange_offer"]`). An empty array is valid but non-functional. |
 | `limitations` | `array of objects` | No | Additional constraints on statements this sub-card may sign, beyond the `capabilities` whitelist, expressed using the protocol's existing predicate/`field_requirements` grammar (`card_protocol_spec.md` §The Field Type System, §The Predicate System) rather than a new vocabulary. Absent means no additional limitations. Each entry has an optional `applies_to` (array of message type strings this entry constrains; absent means it applies to all message types in `capabilities`) and `field_requirements` (array of `{ "field": "<dot-path into the signed message payload>", "regex": "<pattern>" }` pairs — the same shape used elsewhere for `card-pointer`/`cid` field validation, here evaluated against the payload of the statement being signed rather than a referenced card's fields). Combinators (`any_of`/`all_of`/`none_of`) may wrap multiple `limitations` entries the same way they wrap predicate leaves elsewhere. Covered by both `app_signature` and `holder_signature`, like `capabilities`. See `subcards.md §Limitations` for worked examples and the stateless-evaluation caveat (count-based rate limits are out of scope for this mechanism — see that section). |
 | `recipient_pubkey` | `base64url` | Yes | ML-DSA-44 public key generated in device hardware-backed secure storage; 1312 bytes raw |
+| `kem_pubkey` | `base64url` | No | ML-KEM-768 public key (1184 bytes raw) for end-to-end messages to this sub-card. **Required for a sub-card that receives messages**, including `notary_output` (`messaging_protocol.md §24`). The matching decapsulation key lives in the same device secure storage as the `recipient_pubkey` key. A sender, including a notary enclave, encrypts to this key and reads it only from a verified SubCardDocument, so a relaying host can't substitute one: both signatures cover the field. A sub-card with no `kem_pubkey` can't receive encrypted messages. |
 | `issued_at` | `timestamp` | Yes | Set by the app at document assembly time |
 | `valid_until` | `timestamp` | No | Optional expiry; verifiers must reject signatures from expired sub-cards |
 | `attestation_level` | `text` | Yes | `"T2"` (full app attestation; default and required), `"T1"` (hardware-backed key storage only; permitted only if the governing policy explicitly accepts it), or `"S1"` (server key; permitted **only** for server cards — login-service-branch `app_card` equal to `holder_primary_card`). See `subcards.md §Attestation Tiers`. |
@@ -1326,6 +1330,7 @@ Every notary card has `policy_id` = **`NotaryCardPolicy`**, a single governance-
   "requester_card":      "<card-pointer>",
   "requester_pubkey":    "<base64url — ML-DSA-44, 1312 bytes>",
   "requester_signature": { "public_key": "<base64url>", "signature": "<base64url>" },
+  "output_recipient_keys": { "<card pointer>": "<base64url — ML-DSA-44 public key of that card, 1312 bytes raw>" },
   "requester_text":      "<optional — shown only as labelled requester text>",
   "type":                "notary.job.v1"
 }
@@ -1346,6 +1351,7 @@ Every notary card has `policy_id` = **`NotaryCardPolicy`**, a single governance-
 | `closes_at` | `timestamp` | Aggregate | The job finalizes only when chain time **and** the enclave's hardware clock are both ≥ `closes_at` |
 | `key_period` | duration | Per-input | Interval at which the job key rotates; each rotation starts a new epoch |
 | `ends_at` | `timestamp` | Per-input | At most one year after `opens_at` |
+| `output_recipient_keys` | object | If `notary.output_recipients.cards` is non-empty | Maps each listed recipient card pointer to that card's ML-DSA-44 public key. The key is what lets the enclave read the recipient's card, find its sub-cards and encrypt to their `kem_pubkey`. `keccak256(key)` MUST equal the pointer, so the key is self-authenticating and the host can't substitute one. Exactly the policy's `output_recipients.cards`, no others. Absent otherwise. |
 | `requester_text` | `text` | No | At most 1,000 characters. Never part of the consent content. |
 | `created_at` | `timestamp` | Yes | |
 | `nonce` | `base64url` | Yes | 16 random bytes |

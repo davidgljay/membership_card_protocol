@@ -155,6 +155,16 @@ impl Broker {
                 return Err(e("JOB_REQUESTER_NOT_PERMITTED", "requester does not satisfy job_requester_predicate"));
             }
         }
+        // W6a (6.1): private output recipients and their keys
+        {
+            let listed: std::collections::BTreeSet<&str> = notary.pointer("/output_recipients/cards").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect();
+            let given = typed.output_recipient_keys.as_ref();
+            let given_set: std::collections::BTreeSet<&str> = given.into_iter().flat_map(|m| m.keys().map(String::as_str)).collect();
+            let keys_ok = given.is_none_or(|m| m.iter().all(|(p, k)| b64u::decode_len(k, notary_crypto::MLDSA44_PUBLIC_KEY_LEN).is_ok_and(|pk| &formats::card_pointer(&pk) == p)));
+            if listed != given_set || !keys_ok {
+                return Err(e("JOB_RECIPIENT_KEYS_INVALID", "output_recipient_keys must be exactly the policy's recipient cards, each key hashing to its pointer"));
+            }
+        }
         // W6
         crate::params::check(&typed.parameters, notary.get("parameter_bounds")).map_err(|m| ("JOB_PARAMETERS_OUT_OF_BOUNDS", m))?;
         // W8: not closed (chain time; the attested clock if no header has arrived yet)

@@ -12,6 +12,7 @@ notary-attest = { path = "../notary-attest" }
 notary-admission = { path = "../notary-admission" }
 notary-worker = { path = "../notary-worker" }
 notary-cards = { path = "../notary-cards" }
+notary-messaging = { path = "../notary-messaging" }
 serde_json.workspace = true
 sha2.workspace = true
 regex = { version = "1", default-features = false, features = ["std", "unicode-perl"] }

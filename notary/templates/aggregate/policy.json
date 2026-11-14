@@ -1,5 +1,5 @@
 {
-  "about": "The aggregate template policy (protocol-objects.md \u00a72.1). A community copies the `notary` section into its policy card and replaces the placeholders: the contributor predicate (the member policy), `program_cid` (the template's CID, see dist/), and the input bounds.",
+  "about": "The aggregate template policy (protocol-objects.md \u00a72.1). A community copies the `notary` section into its policy card and replaces the placeholders: the contributor predicate (the member policy), `program_cid` (the template's CID, see modules/), and the input bounds.",
   "notary": {
     "contributor_predicate": {
       "issued_under_template": "<member policy CID>"
@@ -198,7 +198,7 @@
     "privacy": {
       "k_min": 10
     },
-    "program_cid": "<CID of dist/aggregate.wasm>",
+    "program_cid": "<CID of modules/aggregate.wasm>",
     "retention": "none"
   }
 }

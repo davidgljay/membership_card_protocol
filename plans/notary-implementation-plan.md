@@ -293,7 +293,7 @@ Goal: one end-to-end path running in the simulator: a job is announced with an a
   - **Needs David first (spec text, 6.0)**: approval of the §27 field, the N warning code, the admission rule and its error code.
   - **Done when**: a notarization lists the policies and states checked; algorithm N flags a mismatch; a job whose predicate cannot be reduced to a policy set is refused (or warned, as decided); a contributor outside the set cannot be admitted through the fetch fallback; and the cross-language vectors cover all of it.
 
-- [ ] **6.1 Aggregation template**
+- [x] **6.1 Aggregation template**
   - **What**: Build the `aggregate` template and policy, the one-shot job mode, the input commitment, and receipt inclusion checks. Build `notary-messaging` (ADR-007 encryption in Rust) for private `statement` outputs *(added at CP4)*.
   - **Who**: Claude
   - **Context needed**: `notary_lifecycle.md` (aggregation); `notary_runtime.md`

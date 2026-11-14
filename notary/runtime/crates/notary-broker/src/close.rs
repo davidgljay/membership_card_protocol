@@ -147,7 +147,10 @@ impl Broker {
         let counted_cid = formats::cid_of_bytes(&counted_bytes);
         let (scope, card) = (job.job_hash_b64.clone(), job.card.clone());
         let log_head = self.logs.head(&scope).map(|(_, cid)| cid).ok_or(("CLOSE_FAILED", "job log has no head".to_string()))?;
-        let output = json!({ "public": value });
+        // private output (6.1): the notarization names the recipients; the value goes to each as a `notary_output` message
+        let public = job.notary.pointer("/output_recipients/public").and_then(Value::as_bool).unwrap_or(true);
+        let recipients: Vec<String> = job.notary.pointer("/output_recipients/cards").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(String::from).collect();
+        let output = if public { json!({ "public": value }) } else { json!({ "recipients": recipients }) };
         let mut n = json!({
             "accepted": accepted,
             "attestation": job.attestation_cid,
@@ -182,6 +185,24 @@ impl Broker {
         n["notary_signature"] = ident.id.sign_object(&n, "notary_signature").map_err(|_| ("CLOSE_FAILED", String::new()))?;
         let n_bytes = jcs::canonical(&n).expect("notary JSON");
         let n_cid = formats::cid_of_bytes(&n_bytes);
+        // Build every message before anything is finalized: if a recipient can't be reached the close fails and can be retried.
+        let mut outputs: Vec<Value> = vec![];
+        if !public {
+            let keys = self.jobs[hash].job.get("output_recipient_keys").cloned().unwrap_or(Value::Null);
+            let signer_card = card.clone();
+            for pointer in &recipients {
+                let pk = keys.get(pointer).and_then(Value::as_str).and_then(|k| b64u::decode(k).ok()).ok_or(("CLOSE_FAILED", format!("no key for recipient {pointer}")))?;
+                let targets = self.oracle.recipient_targets(io, &pk).map_err(|c| ("CLOSE_FAILED", format!("recipient {pointer}: {c}")))?;
+                if targets.is_empty() {
+                    return Err(("CLOSE_FAILED", format!("recipient {pointer} has no sub-card with a kem_pubkey")));
+                }
+                let payload = notary_messaging::output_payload(&scope, &n_cid, &value, n["output_hash"].as_str().unwrap_or_default(), std::slice::from_ref(pointer), &signer_card, &closed_at);
+                let ident = self.keys.identity(&signer_card).ok_or(("NOTARY_KEY_EXPOSED", String::new()))?;
+                let envelope = notary_messaging::sign_envelope(payload, &ident.id).map_err(|_| ("CLOSE_FAILED", "message payload".to_string()))?;
+                let subs: Vec<(String, Vec<u8>)> = targets.into_iter().map(|t| (t.sub_card, t.kem_public_key)).collect();
+                outputs.extend(notary_messaging::routing_envelopes(&envelope, pointer, &subs).map_err(|_| ("CLOSE_FAILED", "message encryption".to_string()))?);
+            }
+        }
         self.publish(io, &counted_bytes);
         self.publish(io, &n_bytes);
         let input_commitment = n["input_commitment"].clone();
@@ -190,6 +211,6 @@ impl Broker {
         self.append_log(io, &scope, &card, "notarized", json!({ "notarization": n_cid, "accepted": accepted, "rejected": n["rejected"], "input_commitment": input_commitment }))
             .map_err(|c| (c, String::new()))?;
         let record = self.logs.head(&scope).map(|(seq, cid)| json!({ "seq": seq, "cid": cid })).unwrap_or(Value::Null);
-        Ok(json!({ "kind": "job_closed", "notarization": n, "record": record, "outputs": [] }))
+        Ok(json!({ "kind": "job_closed", "notarization": n, "record": record, "outputs": outputs }))
     }
 }

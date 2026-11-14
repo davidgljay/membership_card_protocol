@@ -27,6 +27,14 @@ pub struct PolicyView {
     pub approved_notaries: Vec<String>,
 }
 
+/// A sub-card a private output can be sent to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecipientTarget {
+    /// `keccak256(sub-card ML-DSA public key)`, the routing `subcard_hash`.
+    pub sub_card: String,
+    pub kem_public_key: Vec<u8>,
+}
+
 pub trait CardOracle {
     /// W3/W4: `Err("JOB_POLICY_UNTRUSTED" | "JOB_POLICY_CHANGED")`.
     /// `now_ms` is chain time, for the policy chain's revocation check (algorithm R, R3).
@@ -36,6 +44,11 @@ pub trait CardOracle {
     /// B5–B8 on a decrypted `NotaryInput`. Returns the contributor's root-key hash for dedupe (B10).
     /// `now_ms` is chain time (newest verified header), for `valid_until` and revocation dates.
     fn contributor(&mut self, io: &mut dyn HostIo, input: &Value, notary: &Value, params: &Value, now_ms: i64) -> Result<[u8; 32], &'static str>;
+    /// 6.1, private outputs: the sub-cards of a recipient card, each with its verified ML-KEM-768 public key. `master_pubkey` is
+    /// the recipient's ML-DSA-44 key from the signed job (`keccak256` of it is the card pointer). Each sub-card is verified as a
+    /// contributor's signing sub-card is (SubCardDocument signatures, active flag, app-card chain); a sub-card with no
+    /// `kem_pubkey` is left out. `Err` if the card can't be read.
+    fn recipient_targets(&mut self, io: &mut dyn HostIo, master_pubkey: &[u8]) -> Result<Vec<RecipientTarget>, &'static str>;
     /// The full version history of a governance list card (oldest first), for algorithm L.
     fn list_history(&mut self, io: &mut dyn HostIo, list_card: &str) -> Option<Vec<ListVersion>>;
     /// The state this runtime holds for a contributor policy: the policy card's head the snapshot was built against and

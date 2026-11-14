@@ -8,6 +8,8 @@
 
 **Amended 2026-11-13 (5.7 review):** Appendix B, B3: no wait for headers; the wallet retries (Q3). Source: `plans/notary-questions-5.7.md`, David approved 2026-11-13 (`plans/notary-questions-5.7.md`).
 
+**Amended 2026-11-14 (6.1):** W step 6a and `JOB_RECIPIENT_KEYS_INVALID`; step 43 private outputs. David approved 2026-11-14 (`plans/notary-questions-phase-6.md`, Q4; the KEM key's home chosen in the 6.1 session).
+
 **Amended 2026-11-14 (6.0a):** Appendix A.4 steps 14 and 14a (`contributor_policies`), `NOT_CONTRIBUTOR_POLICIES_MISMATCH` and the warning `NOTARIZATION_CONTRIBUTOR_POLICIES_UNVERIFIED`. David approved 2026-11-14 (`plans/notary-questions-phase-6.md`, Q2).
 
 **Amended 2026-11-12 (batch 2):** step 5 offer includes `genesis_request`, and A.3 step 0 lets later verifiers recompute the nonce (E17); step 9 writes identity-log `seq` 0 as `opened`, and A.6 requires it (E26); A.1 step 10, W13 and N6 say which bound fields aren't compared (E10, E13); W10 says how `issuer_card` names the policy (E11). Source: `plans/notary-spec-wording-batch2.md`, approved by David 2026-11-12.
@@ -213,7 +215,7 @@ Each step names its **actor**, what it takes and produces, and how failure is ha
 42. **Job leader enclave.** Writes the `notarized` job-log record. The host anchors it with EAS.
 43. **Output routing** (`statement` jobs). The policy decides, never the program:
     - **public:** the value is in `notarization.output.public`;
-    - **private:** the enclave encrypts the value to each recipient's sub-card keys as a `notary_output` card message signed by `K_id` (`message_routing.md` §Sender-Side Fan-out). The host relays the ciphertexts.
+    - **private:** for each recipient the enclave reads the recipient's card through `fetch` (the head is decrypted with the content key derived from the job's `output_recipient_keys` entry), takes each sub-card in `active_subcards`, verifies the sub-card as it would a contributor's signing sub-card (SubCardDocument signatures and app-card chain), and encrypts a `notary_output` message to its `kem_pubkey`. The message is signed by `K_id` (`message_routing.md` §Sender-Side Fan-out). The close answer lists the routing envelopes in `outputs`, and the host delivers them. A recipient with no sub-card that has a `kem_pubkey` can't be sent to; the close then fails (`CLOSE_FAILED`) rather than finish without delivering. The host can show the enclave an older `active_subcards` list (limit L4): at worst a removed device still receives the message.
 44. **Every replica.** Once it sees the `notarized` record, it erases `K_job`, the dedupe index, and every buffer.
 45. **Contributors.** Each wallet checks that its latest accepted `input_hash` is in `counted_inputs`, and that the Merkle root matches `input_commitment`.
     - *Failure:* missing. The contributor holds a host receipt and a validation receipt with `acks ≥ q`, which attribute the drop to the operator.
@@ -269,6 +271,7 @@ Each step names its **actor**, what it takes and produces, and how failure is ha
 | `JOB_SIGNATURE_INVALID`, `JOB_MALFORMED` | W | The job is invalid | Reject |
 | `JOB_POLICY_UNTRUSTED`, `JOB_POLICY_CHANGED` | W | Policy chain invalid, or `notary` / `approved_notaries` changed since the job was signed | Reject; the requester re-issues the job |
 | `JOB_REQUESTER_NOT_PERMITTED`, `JOB_PARAMETERS_OUT_OF_BOUNDS`, `JOB_NOTARY_NOT_APPROVED`, `JOB_KEM_UNSUPPORTED`, `JOB_PROGRAM_NOT_ALLOWLISTED` | W | The job isn't allowed by the policy or the wallet | Reject |
+| `JOB_RECIPIENT_KEYS_INVALID` | W (step 6a), job checks | `output_recipient_keys` doesn't match `output_recipients.cards`, or a key doesn't hash to its pointer | Reject; the requester re-issues the job |
 | `JOB_CLOSED` | W | Past `closes_at` / `ends_at` | Reject |
 | `JOB_SINGLE_OPERATOR_REFUSED` | W (step 7) | One operator's replicas reach the quorum, and governance has retired single-operator quorums (`protocol-objects.md §34`) | Reject; the requester re-issues the job with replicas from several operators |
 | `NOT_CONTRIBUTOR_POLICIES_MISMATCH` | N (step 14) | The notarization's `contributor_policies` isn't the set the policy's predicate names | Verifier rejects |
@@ -365,6 +368,7 @@ The wallet uses its **own** chain reads, never data from the notary host. Config
 4. `policy_state_cid` is the current head or in its history, and `notary` and `approved_notaries` are unchanged at the current head → `JOB_POLICY_CHANGED`. (Algorithm R, step R2.)
 5. The requester satisfies `job_requester_predicate` (absent means anyone) → `JOB_REQUESTER_NOT_PERMITTED`. The requester's chain is read as in algorithm R, step R5. `is_holder` holds iff `requester_card` is the policy card's holder (`keccak256` of the policy's `recipient_pubkey`).
 6. `parameters` are within `parameter_bounds` → `JOB_PARAMETERS_OUT_OF_BOUNDS`.
+    - 6a. `output_recipient_keys` names exactly the cards in `output_recipients.cards` (absent when that list is empty), and `keccak256(key)` equals each pointer → `JOB_RECIPIENT_KEYS_INVALID`.
 7. The mode-specific fields are consistent, and q ≤ `min_live` ≤ N → `JOB_MALFORMED`. If the verified program allowlist's `single_operator_quorums` is `"refused"`, the replicas whose notary cards share one `operator_card` number fewer than q → `JOB_SINGLE_OPERATOR_REFUSED`.
 8. Chain time is before `closes_at` / `ends_at` → `JOB_CLOSED`.
 9. `kem` is accepted → `JOB_KEM_UNSUPPORTED`.
@@ -397,7 +401,7 @@ Uses CIDs and chain data only, so anyone can run it. Also specified as a verifie
 7. The block named in `chain_state` exists on the verifier's own chain view with that hash and timestamp, `closed_at` equals its timestamp, and `closed_at ≥ closes_at` → `NOT_CHAIN_MISMATCH`.
 8. `counted_inputs` is sorted, has no duplicates, has `accepted` entries, and its Merkle root equals `input_commitment` → `NOT_COMMITMENT_MISMATCH`.
 9. `suppressed == (accepted < k_min)`, with the fixed output when suppressed → `NOT_SUPPRESSION_INVALID`.
-10. A public output validates against `output_schema` with its transforms, and `output_hash` matches → `NOT_OUTPUT_INVALID`.
+10. The output follows `output_recipients`: `{ public }` for a public policy, and for a private one `{ recipients }` naming exactly the policy's cards. A public output validates against `output_schema` with its transforms, and `output_hash` matches → `NOT_OUTPUT_INVALID`.
 11. Walk the job log to `seq` 0, checking signatures and the EAS anchors of anchored kinds → warnings `JOB_LOG_GAP` / `JOB_LOG_FORK`.
 12. There are at least `close_quorum` cosignatures (= ⌊N/2⌋ + 1) from distinct instances. Each attestation passes **V** as in step 6 with `id_key_hash` set to its replica's own notary card (any card in `replica_set`), and each signature verifies over `H(body)` → `NOT_QUORUM_INSUFFICIENT`.
 13. No `epoch_started` record for a higher epoch was anchored before `closed_at` → `NOT_EPOCH_SUPERSEDED`.

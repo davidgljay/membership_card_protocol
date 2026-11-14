@@ -57,6 +57,8 @@ struct Oracle {
     approved: Vec<String>,
     revoked: Arc<Mutex<BTreeSet<String>>>,
     lists: (Vec<ListVersion>, Vec<ListVersion>),
+    /// What `recipient_targets` answers (None: the recipient can't be read)
+    targets: Option<Vec<notary_broker::env::RecipientTarget>>,
 }
 impl CardOracle for Oracle {
     fn policy(&mut self, _: &mut dyn HostIo, _: &str, _: &str, _: i64) -> Result<PolicyView, &'static str> {
@@ -74,6 +76,9 @@ impl CardOracle for Oracle {
     }
     fn list_history(&mut self, _: &mut dyn HostIo, card: &str) -> Option<Vec<ListVersion>> {
         Some(if card == "runtimes" { self.lists.0.clone() } else { self.lists.1.clone() })
+    }
+    fn recipient_targets(&mut self, _: &mut dyn HostIo, _: &[u8]) -> Result<Vec<notary_broker::env::RecipientTarget>, &'static str> {
+        self.targets.clone().ok_or("RECIPIENT_UNREADABLE")
     }
     fn contributor_policy_state(&self, policy: &str) -> Option<(String, u64)> {
         (policy == "bafkreisource").then(|| ("bafkreisourcestate".to_string(), 7))
@@ -179,10 +184,10 @@ fn world(isolation: &str, replacement: &str, k_min: u64) -> World {
 }
 
 fn world_ext(isolation: &str, replacement: &str, k_min: u64, refuse_single_operator: bool) -> World {
-    world_full(isolation, replacement, k_min, refuse_single_operator, None)
+    world_full(isolation, replacement, k_min, refuse_single_operator, None, None)
 }
 
-fn world_full(isolation: &str, replacement: &str, k_min: u64, refuse_single_operator: bool, max_inputs: Option<u64>) -> World {
+fn world_full(isolation: &str, replacement: &str, k_min: u64, refuse_single_operator: bool, max_inputs: Option<u64>, tweak: Option<&dyn Fn(&mut Oracle)>) -> World {
     let enclave = FakeEnclave::start_tcp("127.0.0.1:0", EnclaveConfig { pcr0_seed: 0x42, debug: false, clock_ms: Some(T0 as u64) }).unwrap();
     let program = tally_program(&output_schema());
     let program_cid = formats::cid_of_bytes(&program);
@@ -199,7 +204,7 @@ fn world_full(isolation: &str, replacement: &str, k_min: u64, refuse_single_oper
         policy["limits"] = json!({ "max_inputs": m });
     }
     let revoked = Arc::new(Mutex::new(BTreeSet::new()));
-    let oracle = Oracle { policy, approved: vec![], revoked: revoked.clone(), lists: (rt, progs) };
+    let oracle = Oracle { policy, approved: vec![], revoked: revoked.clone(), lists: (rt, progs), targets: None };
     let addr = enclave.addr.clone();
     let clock_backend = backend(&addr);
     let platform = Platform {
@@ -213,6 +218,9 @@ fn world_full(isolation: &str, replacement: &str, k_min: u64, refuse_single_oper
     let card = genesis(&mut w);
     let mut o = oracle;
     o.approved = vec![card.clone()];
+    if let Some(t) = tweak {
+        t(&mut o);
+    }
     w.broker = rebuild(w.broker, o);
     w.card = card;
     w
@@ -265,10 +273,17 @@ fn job_for(w: &World, requester: &MlDsaKey, nonce: u8) -> Value {
 }
 
 fn job_n(w: &World, requester: &MlDsaKey, nonce: u8, instances: u32) -> Value {
+    job_with_keys(w, requester, nonce, instances, None)
+}
+
+fn job_with_keys(w: &World, requester: &MlDsaKey, nonce: u8, instances: u32, recipient_keys: Option<Value>) -> Value {
     let mut job = json!({ "closes_at": formats::format_timestamp(CLOSES), "created_at": formats::format_timestamp(T0), "kem": "x-wing-draft-06",
         "min_live": instances, "nonce": b64u::encode(&[nonce; 16]), "opens_at": formats::format_timestamp(OPENS), "parameters": {},
         "policy_id": "bafkreipolicy", "policy_state_cid": "bafkreistate", "replica_set": [{ "instances": instances, "notary_card": w.card }],
         "requester_card": formats::card_pointer(requester.public_key()), "requester_pubkey": b64u::encode(requester.public_key()), "type": "notary.job.v1" });
+    if let Some(k) = recipient_keys {
+        job["output_recipient_keys"] = k;
+    }
     job["requester_signature"] = requester.sign_object(&job, "requester_signature").unwrap();
     job
 }
@@ -499,6 +514,91 @@ fn multi_replica_jobs_are_refused_until_step_6_3() {
     assert!(find(&out, "job_keyed").is_none(), "no key for a job this enclave cannot back");
 }
 
+/// 6.1, private outputs: the notarization names the recipients, and the value goes to each recipient sub-card as a
+/// `notary_output` message that only that sub-card's ML-KEM key opens and that `K_id` signed.
+#[test]
+fn a_private_output_reaches_only_the_listed_recipients_sub_cards() {
+    let recipient = MlDsaKey::generate();
+    let pointer = formats::card_pointer(recipient.public_key());
+    let seed: [u8; 64] = core::array::from_fn(|i| (i * 3 + 1) as u8);
+    let targets = vec![notary_broker::env::RecipientTarget { sub_card: "ab".repeat(32), kem_public_key: notary_messaging::public_key_from_seed(&seed) }];
+    let (p2, t2) = (pointer.clone(), targets.clone());
+    let tweak = move |o: &mut Oracle| {
+        o.policy["output_recipients"] = json!({ "cards": [p2], "job_requester": false, "public": false });
+        o.targets = Some(t2.clone());
+    };
+    let mut w = world_full("dedicated", "latest_wins", 1, false, None, Some(&tweak));
+    push_header(&mut w, T0);
+    let requester = MlDsaKey::generate();
+    let keys = json!({ pointer.clone(): b64u::encode(recipient.public_key()) });
+
+    // create_job: the keys must be exactly the policy's recipients, each hashing to its pointer
+    let create = |w: &mut World, job: &Value| {
+        w.broker.handle(&mut w.host, &json!({ "kind": "create_job", "req_id": "c", "job": job, "program": b64u::encode(&w.program), "transport": {} }));
+        w.host.take()
+    };
+    for bad in [None, Some(json!({ pointer.clone(): b64u::encode(MlDsaKey::generate().public_key()) })), Some(json!({ pointer.clone(): b64u::encode(recipient.public_key()), "a".repeat(64): b64u::encode(recipient.public_key()) }))] {
+        let j = job_with_keys(&w, &requester, 9, 1, bad);
+        assert_eq!(find(&create(&mut w, &j), "job_rejected").expect("refused")["code"], "JOB_RECIPIENT_KEYS_INVALID");
+    }
+    let job = job_with_keys(&w, &requester, 1, 1, Some(keys));
+    let o = create_and_open(&mut w, &job);
+    let r = push_header(&mut w, OPENS + 1000);
+    for (i, choice) in ["yes", "no", "yes"].iter().enumerate() {
+        assert_eq!(submit(&mut w, &seal_input(&o, 0, &format!("{i}").repeat(64), choice, 0, r)).unwrap()["status"], "accepted");
+    }
+    push_header(&mut w, CLOSES + 5000);
+    w.enclave.set_clock_ms(Some(CLOSES as u64 + 10));
+    w.broker.handle(&mut w.host, &json!({ "kind": "close_chunk", "req_id": "x", "job_hash": b64u::encode(&o.job_hash), "seq": 0, "sealed_inputs": [], "last": true }));
+    // no stored ciphertexts were supplied, so nothing counted and the output is the suppression value; the delivery path is the same
+    let out = w.host.take();
+    let closed = find(&out, "job_closed").unwrap_or_else(|| panic!("{out:?}"));
+    let n = &closed["notarization"];
+    assert_eq!(n["output"], json!({ "recipients": [pointer.clone()] }), "a private notarization carries no value");
+    let outputs = closed["outputs"].as_array().unwrap();
+    assert_eq!(outputs.len(), 1);
+    assert_eq!((outputs[0]["to"].as_str(), outputs[0]["subcard_hash"].as_str()), (Some(pointer.as_str()), Some("ab".repeat(32).as_str())));
+    // the recipient's sub-card opens it; the message is the one the notarization describes, signed by K_id
+    let plain = notary_messaging::open_blob(&b64u::decode(outputs[0]["payload"].as_str().unwrap()).unwrap(), &seed).expect("opens with the sub-card's key");
+    let envelope: Value = serde_json::from_slice(&plain).unwrap();
+    let content = &envelope["payload"]["content"];
+    assert_eq!((envelope["payload"]["type"].as_str(), content["output_hash"].as_str()), (Some("notary_output"), n["output_hash"].as_str()));
+    assert_eq!(content["notarization"].as_str(), Some(formats::cid_of_bytes(&jcs::canonical(n).unwrap()).as_str()));
+    assert_eq!(content["output"], json!({ "insufficient_participation": true }));
+    let sig = &envelope["signatures"][0];
+    assert_eq!(sig["public_key"].as_str(), Some(b64u::encode(&id_pubkey_of(&w)).as_str()));
+    assert!(mldsa_verify(&id_pubkey_of(&w), &jcs::canonical(&envelope["payload"]).unwrap(), &b64u::decode(sig["signature"].as_str().unwrap()).unwrap()));
+    // nobody else can open it
+    let other: [u8; 64] = core::array::from_fn(|i| (i * 5 + 2) as u8);
+    assert!(notary_messaging::open_blob(&b64u::decode(outputs[0]["payload"].as_str().unwrap()).unwrap(), &other).is_err());
+}
+
+/// A recipient that can't be reached or has no sub-card with a `kem_pubkey` fails the close; nothing is finalized.
+#[test]
+fn a_private_close_fails_without_finalizing_when_a_recipient_cannot_be_reached() {
+    let recipient = MlDsaKey::generate();
+    let pointer = formats::card_pointer(recipient.public_key());
+    for targets in [None, Some(vec![])] {
+        let (p2, t2) = (pointer.clone(), targets.clone());
+        let tweak = move |o: &mut Oracle| {
+            o.policy["output_recipients"] = json!({ "cards": [p2], "job_requester": false, "public": false });
+            o.targets = t2.clone();
+        };
+        let mut w = world_full("dedicated", "latest_wins", 1, false, None, Some(&tweak));
+        push_header(&mut w, T0);
+        let job = job_with_keys(&w, &MlDsaKey::generate(), 1, 1, Some(json!({ pointer.clone(): b64u::encode(recipient.public_key()) })));
+        let o = create_and_open(&mut w, &job);
+        push_header(&mut w, CLOSES + 5000);
+        w.enclave.set_clock_ms(Some(CLOSES as u64 + 10));
+        let msg = json!({ "kind": "close_chunk", "req_id": "x", "job_hash": b64u::encode(&o.job_hash), "seq": 0, "sealed_inputs": [], "last": true });
+        w.broker.handle(&mut w.host, &msg);
+        assert_eq!(find(&w.host.take(), "error").expect("the close failed")["code"], "CLOSE_FAILED");
+        // still open: a retry fails the same way, no `notarized` record was written
+        w.broker.handle(&mut w.host, &msg);
+        assert_eq!(find(&w.host.take(), "error").unwrap()["code"], "CLOSE_FAILED");
+    }
+}
+
 /// Runtime §13 (limit L4): the first header anchors the chain only if its timestamp is near the attested time.
 #[test]
 fn the_first_header_must_be_near_the_attested_time() {
@@ -559,7 +659,7 @@ fn a_dedicated_enclave_takes_a_new_job_once_the_old_one_has_ended() {
 /// B4 (too late) and B11 (capacity). Added in the 5.7 review: these four codes had no test.
 #[test]
 fn b2_b3_b4_and_b11_rejections() {
-    let mut w = world_full("dedicated", "reject_duplicates", 1, false, Some(1));
+    let mut w = world_full("dedicated", "reject_duplicates", 1, false, Some(1), None);
     push_header(&mut w, T0);
     let job = job_for(&w, &MlDsaKey::generate(), 1);
     let o = create_and_open(&mut w, &job);

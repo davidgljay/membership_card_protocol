@@ -1,4 +1,4 @@
-//! The committed `aggregate` module (templates/dist/aggregate.wasm) against the runtime: it is admitted (A1–A12) with the
+//! The committed `aggregate` module (templates/modules/aggregate.wasm) against the runtime: it is admitted (A1–A12) with the
 //! template policy, runs under the `notary_v1` engine, and gives the same bytes as the native logic. The build itself is
 //! checked by `templates/build.sh aggregate --check` (CI).
 use notary_admission::{admit, RuntimeContext};
@@ -8,7 +8,7 @@ use notary_worker::{Program, RunLimits};
 use serde_json::{json, Value};
 
 fn module() -> Vec<u8> {
-    std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../dist/aggregate.wasm")).expect("run templates/build.sh aggregate")
+    std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../modules/aggregate.wasm")).expect("run templates/build.sh aggregate")
 }
 
 /// The template policy with its placeholders filled in.

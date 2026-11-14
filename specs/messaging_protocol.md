@@ -3,6 +3,8 @@
 **Version:** 0.1 (draft)  
 **Date:** 2026-05-28  
 **Status:** Draft  
+**Amended 2026-11-14 (notaries, 6.1):** §24: where the enclave gets the recipients' ML-KEM keys. David approved 2026-11-14 (`plans/notary-questions-phase-6.md`, Q4; the KEM key's home chosen in the 6.1 session).
+
 **Amended 2026-11-11 (notaries):** new §24 `notary_output`. The sub-card capability string `"notary_input"` is defined; it authorizes signing a `NotaryInput` (`protocol-objects.md §23`), which is not a message envelope.  
 **Amended 2026-11-08 (card login):** §13 `auth_request` is now a reference to a signed `AuthenticationRequest`; §14 `auth_response` content revised; new §23 `auth_confirmation`; MSG-OQ-8 and MSG-OQ-9 resolved; Summary Table numbering corrected.
 
@@ -631,7 +633,7 @@ A notary's private result, sent to each recipient listed in the notary policy's 
 ```
 
 **Notes.**
-- **Signing and encryption.** Signed by the notary card's enclave-held key (`K_id`), and encrypted inside the enclave to each recipient sub-card (§Sender-Side Fan-out in `message_routing.md`). The notary host only relays it.
+- **Signing and encryption.** Signed by the notary card's enclave-held key (`K_id`), and encrypted inside the enclave to each recipient sub-card (§Sender-Side Fan-out in `message_routing.md`). The ML-KEM-768 key comes from the sub-card's verified `SubCardDocument.kem_pubkey` (`protocol-objects.md §16`); the recipient's master public key comes from the signed job's `output_recipient_keys`. The notary host only relays it.
 - **Recipient checks.** A recipient checks that `output_hash` matches the notarization, and verifies the notarization (`card_verifier.md §6.5`).
 
 **Capability string `"notary_input"`.** Not a message type. A sub-card whose `capabilities` include it may sign `NotaryInput` objects for notary jobs. Wallets add it to their own device sub-card (`wallet_sdk.md §7b.4`).

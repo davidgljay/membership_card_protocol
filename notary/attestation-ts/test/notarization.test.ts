@@ -234,6 +234,15 @@ describe("algorithm N (notary_lifecycle.md A.4) with real simulator attestations
     const ok = await run(world());
     if (ok.valid) expect(ok.warnings).not.toContain("NOTARIZATION_CONTRIBUTOR_POLICIES_UNVERIFIED");
   });
+  it("N10 private outputs: { recipients } naming exactly the policy's cards; the shape must follow output_recipients (6.1)", async () => {
+    const cardsA = ["a".repeat(64)], cardsB = ["b".repeat(64)];
+    const priv = (cards: string[]) => ({ ...notary, output_recipients: { cards, job_requester: false, public: false } }) as NotarySection;
+    const asPrivate = (cards: string[]) => (n: Record<string, any>) => { n["output"] = { recipients: cards }; };
+    expect(await outcome(world({ policy: { notary: priv(cardsA) }, patch: asPrivate(cardsA) }))).toBe("valid");
+    expect(await outcome(world({ policy: { notary: priv(cardsA) }, patch: asPrivate(cardsB) }))).toBe("NOT_OUTPUT_INVALID");
+    expect(await outcome(world({ policy: { notary: priv(cardsA) } }))).toBe("NOT_OUTPUT_INVALID"); // a public value for a private policy
+    expect(await outcome(world({ patch: asPrivate(cardsA) }))).toBe("NOT_OUTPUT_INVALID"); // recipients for a public policy
+  });
   it("N13 NOT_EPOCH_SUPERSEDED: a higher epoch anchored before closed_at; after closed_at is fine", async () => {
     const early = (log: { cid: string }[]) => { void log; const r = logRecord(3, "epoch_started", { epoch: 1, epoch_reason: "key_period" }); return [{ seq: 3, record_cid: r.cid, timestamp: T("2026-11-19T10:00:02Z") }]; };
     expect(await outcome(world({ extraAnchors: early }))).toBe("NOT_EPOCH_SUPERSEDED");

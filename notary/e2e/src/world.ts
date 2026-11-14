@@ -14,6 +14,7 @@ import { sha256 } from "@noble/hashes/sha256";
 import { keccak_256, sha3_256 } from "@noble/hashes/sha3";
 import { hkdf } from "@noble/hashes/hkdf";
 import { canonicalize } from "@membership-card-protocol/verifier";
+import { mlKem768GenerateKeypair } from "@membership-card-protocol/app-sdk";
 import { H, b64uEncode, b64uDecode, canonicalNotary, cidOfBytes, withoutFields } from "@membership-card-protocol/verifier/notary";
 
 const te = new TextEncoder();
@@ -77,11 +78,14 @@ export const K = {
   listRuntimes: key("list-runtimes"), listPrograms: key("list-programs"), listHolder: key("list-holder"), press: key("press"),
   host: key("host"),
 };
+/** The ML-KEM-768 seed of contributor `i`'s sub-card (a device would keep the key in secure storage). */
+export const kemSeed = (i: number) => Uint8Array.from({ length: 64 }, (_, j) => (j * 13 + i * 7 + 1) & 0xff);
+export const kemKeypair = (i: number) => mlKem768GenerateKeypair(kemSeed(i));
 export const contributor = (i: number) => ({ card: key(`member-${i}`), sub: key(`member-${i}-sub`) });
 
 // the committed `aggregate` template module and its policy (templates/aggregate, step 6.1)
 const TEMPLATE = new URL("../../templates/", import.meta.url);
-export const PROGRAM = new Uint8Array(readFileSync(new URL("dist/aggregate.wasm", TEMPLATE)));
+export const PROGRAM = new Uint8Array(readFileSync(new URL("modules/aggregate.wasm", TEMPLATE)));
 const TEMPLATE_POLICY = JSON.parse(readFileSync(new URL("aggregate/policy.json", TEMPLATE), "utf8")).notary as Record<string, unknown>;
 export const PROGRAM_CID = cidOfBytes(PROGRAM);
 export const SIM_PCR0 = b64uEncode(new Uint8Array(48).fill(0x42));
@@ -98,6 +102,8 @@ export const OUTPUT_SCHEMA = TEMPLATE_POLICY["output_schema"];
 const { job_requester_predicate: _anyoneMayRequest, ...TEMPLATE_BODY } = TEMPLATE_POLICY;
 export const NOTARY_SECTION = {
   ...TEMPLATE_BODY, contributor_predicate: { issued_under_template: IDS.sourcePolicy }, platform: "simulator", privacy: { k_min: 3 }, program_cid: PROGRAM_CID,
+  // the result goes privately to contributor 0 (6.1): one message per active sub-card, encrypted to its kem_pubkey
+  output_recipients: { cards: [contributor(0).card.addr], job_requester: false, public: false },
 };
 
 const card = (k: Key, policy: string, ancestry: string[], extra: Record<string, unknown> = {}) => ({
@@ -172,7 +178,7 @@ export async function registerWorld(c: ChainWrites, nContributors: number) {
     const { card: m, sub: s } = contributor(i);
     await reg(m, IDS.sourcePolicy, card(m, IDS.sourcePolicy, [K.chapter.b64, K.root.b64], { active_subcards: [s.b64], member_level: "gold" }), `member-${i}`);
     const unsigned = { app_card: K.app.addr, app_card_pubkey: K.app.b64, attestation_level: "T2", capabilities: ["notary_input"], holder_primary_card: m.addr,
-      holder_primary_card_pubkey: m.b64, issued_at: ISSUED_AT, recipient_pubkey: s.b64, valid_until: "2099-01-01T00:00:00.000Z" };
+      holder_primary_card_pubkey: m.b64, issued_at: ISSUED_AT, kem_pubkey: b64uEncode(kemKeypair(i).publicKey), recipient_pubkey: s.b64, valid_until: "2099-01-01T00:00:00.000Z" };
     const withApp = { ...unsigned, app_signature: signBytes(K.app, canonicalize(unsigned)) };
     const sub = { ...withApp, holder_signature: signBytes(m, canonicalize(withApp)) };
     await c.registerSub({ master_card: m.addr, sub_card: s.addr, sub_card_doc_cid: await c.pin(canonicalNotary(sub)), active: true });

@@ -9,7 +9,7 @@ import { hkdf } from "@noble/hashes/hkdf";
 import { sha3_256 } from "@noble/hashes/sha3";
 import { b64uDecode, canonicalNotary } from "@membership-card-protocol/wallet-sdk/notary-types";
 import type { NotarySection } from "@membership-card-protocol/verifier/notary";
-import type { ChainFeed, ChainReader, ChainSubmitter, EasAnchorer, IpfsService, PolicyReader } from "../services.js";
+import type { ChainFeed, ChainReader, ChainSubmitter, DeliveryClient, EasAnchorer, IpfsService, PolicyReader } from "../services.js";
 
 type Json = Record<string, unknown>;
 
@@ -67,5 +67,7 @@ export function simChain(baseUrl: string) {
       return { notary: doc["notary"] as NotarySection, approvedNotaries: (doc["approved_notaries"] as string[] | undefined) ?? [] };
     },
   };
-  return { ipfs, eas, submitter, chain, feed, policies };
+  /** The simulated message routing: deliveries are recorded on the simulated chain service, where the e2e driver reads them. */
+  const delivery: DeliveryClient = { async deliver(routingEnvelope) { await post("/deliver", routingEnvelope as Json); } };
+  return { ipfs, eas, submitter, chain, feed, policies, delivery };
 }

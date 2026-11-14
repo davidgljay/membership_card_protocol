@@ -19,7 +19,8 @@ import { simulator } from "@membership-card-protocol/notary-attestation";
 import { verifyGenesis, verifyNotarization, b64uDecode, b64uEncode, canonicalNotary, cidOfBytes, withoutFields, H, GENESIS_MAX_AGE_HOLDER_MS } from "@membership-card-protocol/verifier/notary";
 import { verifyNotaryJob, submitNotaryInputWithRetry } from "@membership-card-protocol/wallet-sdk/notary";
 import { canonicalize } from "@membership-card-protocol/verifier";
-import { K, IDS, POLICY_ID, PROGRAM_CID, contributor, encrypt, httpChain, registerWorld, approveNotary, signBytes, PRESS_ADDR } from "./world.ts";
+import { decryptRoutingEnvelope } from "@membership-card-protocol/app-sdk";
+import { K, IDS, POLICY_ID, PROGRAM_CID, contributor, kemKeypair, encrypt, httpChain, registerWorld, approveNotary, signBytes, PRESS_ADDR } from "./world.ts";
 import { verifiedLists, walletReads, notarizationReads, ohttp } from "./reads.ts";
 
 const env = (k: string, d?: string) => { const v = process.env[k] ?? d; if (v === undefined) throw new Error(`${k} is required`); return v; };
@@ -100,7 +101,7 @@ async function job() {
   const closeAfter = Number(env("CLOSE_AFTER_SECONDS", "40"));
   const unsigned = { closes_at: new Date(now + closeAfter * 1000).toISOString(), created_at: new Date(now).toISOString(), kem: "x-wing-draft-06", min_live: 1,
     nonce: b64uEncode(crypto.getRandomValues(new Uint8Array(16))), opens_at: new Date(now).toISOString(), parameters: { edge_1: 5, edge_2: 10 }, policy_id: POLICY_ID,
-    policy_state_cid: st.stateCid, replica_set: [{ instances: 1, notary_card: st.card }], requester_card: K.requester.addr, requester_pubkey: K.requester.b64, type: "notary.job.v1" };
+    output_recipient_keys: { [contributor(0).card.addr]: contributor(0).card.b64 }, policy_state_cid: st.stateCid, replica_set: [{ instances: 1, notary_card: st.card }], requester_card: K.requester.addr, requester_pubkey: K.requester.b64, type: "notary.job.v1" };
   const job = { ...unsigned, requester_signature: { public_key: K.requester.b64, signature: signBytes(K.requester, canonicalNotary(unsigned)) } };
   const created = await host("/jobs", { job, program_cid: PROGRAM_CID });
   const jobHash = String(created["job_hash"]);
@@ -149,7 +150,18 @@ async function job() {
   }, closeAfter + 120);
   const n = JSON.parse(new TextDecoder().decode((await chain.bytes(notarizationCid!))!)) as { output: unknown; accepted: number; suppressed: boolean };
   check(n.accepted === 3 && !n.suppressed, `the notarization counts 3 contributors (accepted=${n.accepted})`);
-  check(JSON.stringify(n.output) === JSON.stringify({ public: { bucket_4: 0, bucket_5: 0, bucket_6: 0, bucket_7: 0, bucket_8: 0, count: 3, sum: 22 } }), `the public output is the template's (count 3, sum 22; the three occupied buckets hold one each, under the cell floor of 5, so they are omitted; empty buckets stay 0) ${JSON.stringify(n.output)}`);
+  check(JSON.stringify(n.output) === JSON.stringify({ recipients: [contributor(0).card.addr] }), `the notarization carries no value, only its recipient: ${JSON.stringify(n.output)}`);
+  // 6.1: the host delivered one message per recipient sub-card; contributor 0's device opens it with the App SDK
+  const delivered = await waitFor("the notary_output message", async () => { const d = await chain.get<{ to: string; subcard_hash: string; payload: string }[]>("/delivered"); return d.length ? d : null; });
+  check(delivered.length === 1 && delivered[0]!.to === contributor(0).card.addr && delivered[0]!.subcard_hash === contributor(0).sub.addr, "the host relayed one routing envelope, addressed to contributor 0's sub-card");
+  const msg = decryptRoutingEnvelope(delivered[0]!, kemKeypair(0).secretKey) as { payload: { type: string; content: { output: unknown; output_hash: string; notarization: string; job_hash: string } }; signatures: { public_key: string; signature: string }[] };
+  check(msg.payload.type === "notary_output" && msg.payload.content.notarization === notarizationCid && msg.payload.content.job_hash === jobHash, "the sub-card opens it: a notary_output for this job and notarization");
+  check(JSON.stringify(msg.payload.content.output) === JSON.stringify({ bucket_4: 0, bucket_5: 0, bucket_6: 0, bucket_7: 0, bucket_8: 0, count: 3, sum: 22 }), `the private result is the template's: ${JSON.stringify(msg.payload.content.output)}`);
+  check(H(msg.payload.content.output) === (n as unknown as { output_hash: string }).output_hash, "its output_hash is the notarization's");
+  check(msg.signatures[0]!.public_key === st.kId && ml_dsa44.verify(b64uDecode(msg.signatures[0]!.signature, 2420), canonicalize(msg.payload), b64uDecode(st.kId, 1312)), "it is signed by the notary card's K_id");
+  let otherOpens = true;
+  try { decryptRoutingEnvelope(delivered[0]!, kemKeypair(1).secretKey); } catch { otherOpens = false; }
+  check(!otherOpens, "another sub-card's key can't open it");
   const res = await verifyNotarization(notarizationCid!, notarizationReads(chain, notary, lists), { attest: attestCfg, modules: [simulator], acceptedRuntimes: lists.acceptedRuntimes });
   check(res.valid, `algorithm N verifies the notarization${res.valid ? ` (warnings: ${(res as { warnings: string[] }).warnings.join(",") || "none"})` : ` (${JSON.stringify(res)})`}`);
   log("END TO END: PASS");
