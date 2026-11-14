@@ -6,6 +6,8 @@
 **Architecture:** `ARCHITECTURE.md` ADR-013 · **Runtime:** `object_specs/notary_runtime.md` · **Processes:** `process_specs/notary_lifecycle.md`, `notary_replication_and_recovery.md`, `derived_card_revocation_propagation.md`
 **Amended 2026-11-12:** §8 snapshot entries carry head-event history and `sub_card_doc_cid`; per-card fetch shapes defined; policy, requester and list-card reads use per-card fetches. Source: `plans/notary-spec-wording-e31.md`, approved by David 2026-11-12.
 
+**Amended 2026-11-14 (6.2):** §5 `POST /jobs/{job_hash}/restart`. A consequence of the approved Phase 6 plan (6.2), not covered by an earlier approval; **for David's review** (`plans/notary-questions-phase-6.md`).
+
 **Amended 2026-11-14 (6.0a):** §8 `policy_head_cid`; snapshots go out when a job is created and gate its announcement. A consequence of the approved Q2 wording, found while implementing it; **for David's review** (`plans/notary-questions-phase-6.md`, Q2).
 
 **Amended 2026-11-13 (5.7 review):** §4 `NOTARY_CARD_ADDRESSES` is optional and genesis cards are served automatically (Q4); §4 `CHAIN_PROVIDER`, `SIM_CHAIN_URL` and the start-up refusal; §14 `NOT_REACHABLE`, `ENCLAVE_ERROR` (Q5, Q6). Source: `plans/notary-questions-5.7.md`, David approved 2026-11-13 (`plans/notary-questions-5.7.md`).
@@ -119,6 +121,7 @@ All configuration is through environment variables.
 | `GET` | `/jobs/{job_hash}/announcement` | Oblivious | The newest `JobAnnouncement` for the highest epoch |
 | `POST` | `/jobs/{job_hash}/inputs` | Oblivious | Body is a `SealedInput` (`protocol-objects.md §24`). Stores it, signs a `HostReceipt`, forwards it to a local enclave, and returns `{ host_receipt, receipt_sealed }`. |
 | `POST` | `/jobs` | Direct, from the job requester | Body: `{ job, program_cid }`. The host fetches the program and sends `create_job`. Returns `{ job_hash, status }`. |
+| `POST` | `/jobs/{job_hash}/restart` | Direct, `NOTARY_ADMIN_TOKEN` | Body `{ reason }` (default `total_loss`). The operator reports that no replica holds the job key. The host sends `create_job` with `restart { prev_epoch, last_log, reason }` (the epoch it holds and its newest job-log record) to a local enclave, stops serving the old announcement, and serves the new epoch's only after the enclave announces it (`notary_replication_and_recovery.md` §7). Returns `{ job_hash, epoch, status }`. |
 | `GET` | `/jobs/{job_hash}/status` | Direct | Public status only: state, epoch, live replica count, job-log head CID |
 | `POST` | `/genesis` | Direct, `NOTARY_ADMIN_TOKEN` | Starts notary genesis (`notary_lifecycle.md` Phase 0) and returns the genesis request and attestation. The host then serves the new notary card (§4). |
 | `POST` | `/genesis/countersign` | Direct, `NOTARY_ADMIN_TOKEN` | Passes the policy holder's notary card offer to the enclave and returns the countersigned offer |

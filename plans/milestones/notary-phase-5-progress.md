@@ -351,3 +351,9 @@ Phase 6 questions answered ("OK to all"), 6.0 and 6.0a ticked. Built: the closed
 The `aggregate` template (committed module, reproducible build, admitted under A1–A12, run end to end and verified by algorithm N), `notary-messaging` (ML-KEM-768 interop with the App SDK both ways) and the private output path (recipient keys in the job, `kem_pubkey` in the sub-card document, `recipient_targets` in the enclave, delivery through the host). Tests: Rust 106, host 83, verifier 276, attestation 94, wallet SDK 239 + 1 todo, vector tools 46, app-sdk 193; both e2e runs pass with the private result opened by a sub-card through the App SDK.
 
 **For David's review:** `kem_pubkey` (§16), `output_recipient_keys` (§21), `JOB_RECIPIENT_KEYS_INVALID`, the N10 shape check, ML-KEM-768 (`ml-kem` 0.3.4, pinned, unaudited: E9) added to the crypto list. **Not done:** the wallet's own device registration does not yet generate a KEM key (only the App SDK option exists); the committed templates are in `notary/templates/modules/` (`dist/` is git-ignored).
+
+## 6.2 done (2026-11-14)
+
+The `vote` and `vote-yna` templates; ballot replacement and the two-clock close under the real runtime; single-replica epoch restart with wallet resubmission, end to end (operator restart, announcement of epoch 1, three wallets resubmit, algorithm N verifies epoch 1). Tests: Rust 123, host 85, wallet SDK 240 + 1 todo, attestation 94, vector tools 46; both e2e runs pass with the restart.
+
+**For David's review:** the restart route and `create_job` restart behaviour (specs marked); restart is `total_loss` only until 6.3.

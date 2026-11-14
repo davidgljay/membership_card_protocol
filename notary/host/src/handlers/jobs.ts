@@ -10,7 +10,7 @@ import { ml_dsa44 } from "@noble/post-quantum/ml-dsa.js";
 import { sha256 } from "@noble/hashes/sha256";
 import { assertNotaryObject, b64uDecode, b64uEncode, canonicalNotary, cardPointer, digestFromCid, H, withoutFields } from "@membership-card-protocol/wallet-sdk/notary-types";
 import type { NotaryJob } from "@membership-card-protocol/wallet-sdk/notary-types";
-import { HostError } from "../context.js";
+import { HostError, requireOperator } from "../context.js";
 import type { HostContext } from "../context.js";
 import type { EnclaveSession } from "../enclave/transport.js";
 import { EnclaveError } from "../enclave/transport.js";
@@ -95,4 +95,37 @@ export async function handleJobStatus(ctx: HostContext, jobHash: string): Promis
   if (!j) throw new HostError("NH_JOB_UNKNOWN", "no such job on this host", 404);
   const live = j.replicas.filter((id) => { const s = ctx.instances.get(id); return s && !s.closed; }).length;
   return { state: j.state, epoch: j.epoch, live_replicas: live, job_log_head: j.logHead };
+}
+
+/**
+ * `POST /jobs/{job_hash}/restart` (operator only; replication §7, steps 25–26). The operator reports that no replica holds
+ * the job key (`total_loss`). The host asks an enclave to move the job to epoch `e + 1`: `create_job` with `restart`
+ * naming the epoch it believes is current and the newest log record it holds. The enclave answers `job_keyed`, writes
+ * `epoch_started` and announces only after that record is anchored; until then the host serves no announcement, so no
+ * wallet can seal to a key that is gone.
+ */
+export async function handleRestartJob(ctx: HostContext, authorization: string | undefined, jobHash: string, body: { reason?: string }): Promise<{ job_hash: string; epoch: number; status: string }> {
+  requireOperator(ctx, authorization);
+  const j = await ctx.jobs.get(jobHash);
+  if (!j) throw new HostError("NH_JOB_UNKNOWN", "no such job on this host", 404);
+  if (j.state === "finalized" || j.state === "ended" || j.state === "aborted") throw new HostError("NH_JOB_CLOSED", "the job is finished", 409);
+  const reason = body?.reason ?? "total_loss";
+  // the newest record the host holds: the enclave publishes `opened` before it answers `create_job`, so it can precede the job record
+  const held = (await ctx.logs.list(jobHash)).reduce<{ seq: number; record_cid: string } | null>((m, e) => (m === null || e.seq > m.seq ? e : m), null);
+  const lastLog = held?.record_cid ?? j.logHead;
+  if (lastLog === null) throw new HostError("NH_JOB_UNKNOWN", "the host holds no job-log record for this job yet", 409);
+  const program = await ctx.ipfs.fetch(j.programCid);
+  if (!program) throw new HostError("JOB_MALFORMED", "program not available from IPFS");
+  const session = liveSession(ctx, j.replicas);
+  let reply;
+  try {
+    reply = await session.call("create_job", {
+      job: j.job, program: b64uEncode(program), restart: { prev_epoch: j.epoch, last_log: lastLog, reason },
+      transport: { key_config_url: `${ctx.config.NOTARY_PUBLIC_BASE_URL.replace(/\/$/, "")}/ohttp/key-config`, relay_target_id: ctx.config.NOTARY_RELAY_TARGET_ID },
+    });
+  } catch (e) { if (e instanceof EnclaveError) throw new HostError(e.code, e.message, e.code === "NH_ENCLAVE_UNAVAILABLE" ? 503 : 400); throw e; }
+  if (reply.kind === "job_rejected") throw new HostError(String(reply["code"]), "the enclave refused the restart");
+  const epoch = Number(reply["epoch"]);
+  await ctx.jobs.put({ ...j, epoch, announcement: null, state: "keyed" });
+  return { job_hash: jobHash, epoch, status: "keyed" };
 }

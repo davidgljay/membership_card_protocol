@@ -1,0 +1,21 @@
+[package]
+name = "notary-template-vote-yna"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+description = "The yes/no/abstain `vote` template program (notary_v1). Integer only."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+notary-guest = { path = "../../guest", features = ["program"] }
+
+[dev-dependencies]
+notary-types = { path = "../../runtime/crates/notary-types" }
+serde_json.workspace = true
+notary-admission = { path = "../../runtime/crates/notary-admission" }
+notary-worker = { path = "../../runtime/crates/notary-worker" }
+notary-broker = { path = "../../runtime/crates/notary-broker" }
+sha2.workspace = true

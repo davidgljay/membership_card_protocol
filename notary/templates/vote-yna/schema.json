@@ -1,0 +1,1 @@
+[{"clamp":[0,100000],"description":"Abstentions","name":"abstain","required":true,"type":"integer"},{"clamp":[0,100000],"description":"No votes","name":"no","required":true,"type":"integer"},{"clamp":[0,100000],"description":"Yes votes","name":"yes","required":true,"type":"integer"}]

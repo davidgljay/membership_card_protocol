@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { ml_dsa44 } from "@noble/post-quantum/ml-dsa.js";
 import { b64uDecode, canonicalNotary, cidOfBytes, H } from "@membership-card-protocol/wallet-sdk/notary-types";
-import { handleCreateJob, handleGetAnnouncement, handleJobStatus } from "../src/handlers/jobs.js";
+import { handleCreateJob, handleGetAnnouncement, handleJobStatus, handleRestartJob } from "../src/handlers/jobs.js";
 import { handleSubmitInput, MAX_SEALED_INPUT } from "../src/handlers/inputs.js";
 import { HostError } from "../src/context.js";
 import { harness, job, JOB_HASH, sealed, flush, PROGRAM, hostPublicKey } from "./helpers.js";
@@ -170,5 +170,40 @@ describe("announcement gating on snapshots (6.0a)", () => {
     await expect(handleGetAnnouncement(h.ctx, JOB_HASH)).rejects.toMatchObject({ code: "NH_JOB_UNKNOWN" });
     h.ctx.snapshotsSent.add("bafkreipolx");
     expect(await handleGetAnnouncement(h.ctx, JOB_HASH)).toEqual({ ok: true });
+  });
+});
+
+describe("POST /jobs/{hash}/restart (replication §7, steps 25–26)", () => {
+  const TOKEN = "t".repeat(40);
+  const put = (h: Awaited<ReturnType<typeof harness>>, over: object = {}) => h.ctx.jobs.put({ job, jobHash: JOB_HASH, programCid: cidOfBytes(PROGRAM), announcement: { ok: true }, epoch: 0, replicas: [], state: "open", logHead: "bafkreihead", ...over } as never);
+
+  it("is operator-only, and refuses an unknown or finished job", async () => {
+    const h = await harness();
+    await put(h);
+    await expect(handleRestartJob(h.ctx, "Bearer nope", JOB_HASH, {})).rejects.toMatchObject({ code: "NH_UNAUTHORIZED" });
+    await expect(handleRestartJob(h.ctx, `Bearer ${TOKEN}`, "nope", {})).rejects.toMatchObject({ code: "NH_JOB_UNKNOWN" });
+    await put(h, { state: "finalized" });
+    await expect(handleRestartJob(h.ctx, `Bearer ${TOKEN}`, JOB_HASH, {})).rejects.toMatchObject({ code: "NH_JOB_CLOSED" });
+  });
+
+  it("asks the enclave to restart at the epoch and log head the host holds, serves no announcement until the new one, and passes a refusal through", async () => {
+    const h = await harness({ createJob: (m) => ({ epoch: (m["restart"] as { prev_epoch: number }).prev_epoch + 1, job_public_key: "TkVX", attestation: "QVRU" }) });
+    await put(h, { epoch: 0 });
+    const r = await handleRestartJob(h.ctx, `Bearer ${TOKEN}`, JOB_HASH, { reason: "total_loss" });
+    expect(r).toEqual({ job_hash: JOB_HASH, epoch: 1, status: "keyed" });
+    const sent = h.enclave.received.filter((m) => m.kind === "create_job").at(-1)!;
+    expect(sent["restart"]).toEqual({ prev_epoch: 0, last_log: "bafkreihead", reason: "total_loss" });
+    expect(sent["program"]).toBeTruthy();
+    expect((await h.ctx.jobs.get(JOB_HASH))!.epoch).toBe(1);
+    await expect(handleGetAnnouncement(h.ctx, JOB_HASH)).rejects.toMatchObject({ code: "NH_JOB_UNKNOWN" });
+    // a newer record in the log index wins over the stored head (`opened` is published before the job record exists)
+    await h.ctx.logs.append(JOB_HASH, { seq: 4, record_cid: "bafkreinewer" } as never);
+    await put(h, { epoch: 1 });
+    await handleRestartJob(h.ctx, `Bearer ${TOKEN}`, JOB_HASH, {});
+    expect(h.enclave.received.filter((m) => m.kind === "create_job").at(-1)!["restart"]).toMatchObject({ prev_epoch: 1, last_log: "bafkreinewer" });
+    await put(h, { epoch: 1 });
+    const refused = await harness({ createJob: () => ({ reject: "JOB_MALFORMED" }) });
+    await put(refused);
+    await expect(handleRestartJob(refused.ctx, `Bearer ${TOKEN}`, JOB_HASH, {})).rejects.toMatchObject({ code: "JOB_MALFORMED" });
   });
 });

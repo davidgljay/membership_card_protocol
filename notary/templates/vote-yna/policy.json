@@ -1,0 +1,80 @@
+{
+  "about": "The yes/no/abstain vote template policy (protocol-objects.md \u00a72.1 example). A community fills in the contributor predicate, `program_cid` and `k_min`.",
+  "notary": {
+    "contributor_predicate": {
+      "issued_under_template": "<member policy CID>"
+    },
+    "input_replacement": "latest_wins",
+    "input_schema": [
+      {
+        "name": "choice",
+        "type": "text",
+        "required": true,
+        "description": "Ballot choice",
+        "enum": [
+          "yes",
+          "no",
+          "abstain"
+        ]
+      }
+    ],
+    "isolation": "shared",
+    "job_requester_predicate": {
+      "is_holder": true
+    },
+    "mode": "aggregate",
+    "output_action": "statement",
+    "output_recipients": {
+      "public": true,
+      "job_requester": true,
+      "cards": []
+    },
+    "output_schema": [
+      {
+        "name": "abstain",
+        "type": "integer",
+        "required": true,
+        "description": "Abstentions",
+        "clamp": [
+          0,
+          100000
+        ]
+      },
+      {
+        "name": "no",
+        "type": "integer",
+        "required": true,
+        "description": "No votes",
+        "clamp": [
+          0,
+          100000
+        ]
+      },
+      {
+        "name": "yes",
+        "type": "integer",
+        "required": true,
+        "description": "Yes votes",
+        "clamp": [
+          0,
+          100000
+        ]
+      }
+    ],
+    "parameter_bounds": [
+      {
+        "name": "question",
+        "type": "text",
+        "required": true,
+        "description": "The question shown to voters",
+        "regex": "^.{1,280}$"
+      }
+    ],
+    "platform": "aws-nitro-enclaves",
+    "privacy": {
+      "k_min": 5
+    },
+    "program_cid": "<CID of modules/vote-yna.wasm>",
+    "retention": "none"
+  }
+}

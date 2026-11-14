@@ -41,11 +41,12 @@ impl Broker {
             return error(req_id, "INPUT_WRONG_JOB", "sealed input is for another job");
         }
         let Some(job) = self.jobs.get(&hash) else { return error(req_id, "NH_JOB_UNKNOWN", "no such job here") };
-        if job.state != State::Open {
-            return error(req_id, "NH_JOB_CLOSED", "the job is not open for inputs");
-        }
+        // an input for a past epoch (its key was erased at the restart) is undecryptable whatever state the new epoch is in
         if typed.epoch != job.epoch || typed.kem != notary_crypto::KEM_ID {
             return error(req_id, "INPUT_UNDECRYPTABLE", "wrong epoch or kem");
+        }
+        if job.state != State::Open {
+            return error(req_id, "NH_JOB_CLOSED", "the job is not open for inputs");
         }
         let Ok(input_hash) = jcs::h(&sealed) else { return error(req_id, "INPUT_MALFORMED", "not notary JSON") };
         let Some(opened) = self.open_sealed(&hash, &typed) else { return error(req_id, "INPUT_UNDECRYPTABLE", "B1: cannot open with the job key") };

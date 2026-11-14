@@ -68,6 +68,14 @@ export function createContext(d: HostDeps): HostContext {
   };
 }
 
+import { timingSafeEqual } from "node:crypto";
+
+export function requireOperator(ctx: Pick<HostContext, "config">, authorization: string | undefined): void {
+  const given = Buffer.from((authorization ?? "").replace(/^Bearer\s+/i, ""));
+  const want = Buffer.from(ctx.config.NOTARY_ADMIN_TOKEN);
+  if (given.length !== want.length || !timingSafeEqual(given, want)) throw new HostError("NH_UNAUTHORIZED", "operator authentication required", 401);
+}
+
 export class HostError extends Error {
   constructor(public readonly code: string, message: string, public readonly status = 400) { super(message); }
 }

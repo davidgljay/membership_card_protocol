@@ -45,6 +45,11 @@ pub struct Job {
     pub q: u32,
     pub state: State,
     pub announced: bool,
+    /// The job-log `seq` whose EAS anchor releases this epoch's announcement (`opened` for epoch 0, `epoch_started` after).
+    pub announce_after: Option<u64>,
+    /// CID of the newest signed announcement, and why the epoch started (for the next announcement's `prev_announcement`).
+    pub announcement_cid: Option<String>,
+    pub epoch_reason: Option<String>,
     /// B10 dedupe index: root-key hash → latest accepted entry. Who has a counted input, not what they chose.
     pub index: BTreeMap<[u8; 32], Entry>,
     pub rejected: u64,
@@ -75,7 +80,7 @@ impl Broker {
     fn create_job(&mut self, io: &mut dyn HostIo, msg: &Value) -> Result<Value, (&'static str, String)> {
         let e = |c: &'static str, m: &str| (c, m.to_string());
         if msg.get("restart").is_some() {
-            return Err(e("NH_UNSUPPORTED", "epoch restarts arrive in step 6.2"));
+            return self.restart_job(io, msg);
         }
         let job = msg.get("job").cloned().ok_or(e("JOB_MALFORMED", "job missing"))?;
         let typed: objects::NotaryJob = objects::from_value(&job, objects::types::JOB).map_err(|x| ("JOB_MALFORMED", x.message))?;
@@ -234,6 +239,9 @@ impl Broker {
                 q,
                 state: State::Keyed,
                 announced: false,
+                announce_after: Some(0),
+                announcement_cid: None,
+                epoch_reason: None,
                 index: BTreeMap::new(),
                 rejected: 0,
                 close_buffer: vec![],
@@ -244,15 +252,85 @@ impl Broker {
         Ok(json!({ "kind": "job_keyed", "epoch": epoch, "job_public_key": b64u::encode(&job_pk), "attestation": b64u::encode(&doc) }))
     }
 
+    /// Epoch restart (replication §7, steps 25–26), single replica: the host reports that no replica holds `K_job,e`
+    /// (`total_loss`). This enclave holds the job, so it moves to epoch `e + 1` itself: it erases the old key, makes a fresh
+    /// `K_job,e+1` and its purpose-0x02 attestation, writes `epoch_started` and **does not announce until that record is
+    /// anchored**. The other reasons (`runtime_migration`, `key_exposure`) and a job this enclave doesn't hold need the
+    /// identity handoff of step 6.3.
+    fn restart_job(&mut self, io: &mut dyn HostIo, msg: &Value) -> Result<Value, (&'static str, String)> {
+        let e = |c: &'static str, m: &str| (c, m.to_string());
+        let job = msg.get("job").cloned().ok_or(e("JOB_MALFORMED", "job missing"))?;
+        let typed: objects::NotaryJob = objects::from_value(&job, objects::types::JOB).map_err(|x| ("JOB_MALFORMED", x.message))?;
+        let pk = b64u::decode_len(&typed.requester_pubkey, notary_crypto::MLDSA44_PUBLIC_KEY_LEN).map_err(|_| e("JOB_SIGNATURE_INVALID", "requester key"))?;
+        if formats::card_pointer(&pk) != typed.requester_card || typed.requester_signature.public_key != typed.requester_pubkey || !notary_crypto::verify_object(&job, "requester_signature", &pk) {
+            return Err(e("JOB_SIGNATURE_INVALID", "requester signature does not verify"));
+        }
+        let hash = jcs::h_bytes(&job).map_err(|x| ("JOB_MALFORMED", x.message))?;
+        let restart = msg.get("restart").cloned().unwrap_or(Value::Null);
+        let (prev_epoch, last_log, reason) = (restart.get("prev_epoch").and_then(Value::as_u64), restart.get("last_log").and_then(Value::as_str), restart.get("reason").and_then(Value::as_str));
+        let (Some(prev_epoch), Some(last_log), Some(reason)) = (prev_epoch, last_log, reason) else { return Err(e("JOB_MALFORMED", "restart needs prev_epoch, last_log and reason")) };
+        if reason != "total_loss" {
+            return Err(e("NH_UNSUPPORTED", "runtime_migration and key_exposure restarts arrive with the identity handoff (step 6.3)"));
+        }
+        let Some(j) = self.jobs.get(&hash) else { return Err(e("NH_UNSUPPORTED", "restarting a job this enclave does not hold arrives with the identity handoff (step 6.3)")) };
+        if matches!(j.state, State::Finalized | State::Aborted) {
+            return Err(e("NH_JOB_CLOSED", "the job is finished"));
+        }
+        if prev_epoch != j.epoch {
+            return Err(e("JOB_MALFORMED", "prev_epoch is not this enclave's current epoch"));
+        }
+        let scope = j.job_hash_b64.clone();
+        if self.logs.head(&scope).map(|(_, cid)| cid).as_deref() != Some(last_log) {
+            return Err(e("JOB_MALFORMED", "last_log is not the head of this enclave's job log"));
+        }
+        // step 25: chain time is still before closes_at
+        let now = self.chain_now_ms().or_else(|| self.attested_now_ms().ok()).unwrap_or(i64::MAX);
+        if now >= j.closes_ms {
+            return Err(e("JOB_CLOSED", "past closes_at"));
+        }
+        // a fresh key for epoch e + 1; the old one is erased now
+        let (card, new_epoch) = (j.card.clone(), j.epoch + 1);
+        let admitted = j.admitted.clone();
+        self.keys.erase_job_epoch(&hash, prev_epoch);
+        let job_pk = self.keys.create_job_key(&admitted, hash, new_epoch).map_err(|c| (c, String::new()))?.public_key().to_vec();
+        let (idh, _) = self.keys.identity_binding(&card).ok_or(e("NOTARY_KEY_EXPOSED", "identity unusable"))?;
+        let ud = UserData {
+            purpose: 0x02, id_key_hash: idh, inst_key_hash: self.keys.inst_key_hash(), program_hash: admitted.program_hash, job_hash: hash, epoch: new_epoch,
+            isolation: if admitted.isolation == Isolation::Shared { 0x01 } else { 0x02 }, ..Default::default()
+        };
+        let (doc, att_cid) = self.attest(ud, Some(notary_crypto::sha256(&job_pk)), hash).map_err(|m| ("ATT_UNAVAILABLE", m))?;
+        self.publish(io, &doc);
+        {
+            let j = self.jobs.get_mut(&hash).expect("present");
+            j.epoch = new_epoch;
+            j.attestation_cid = att_cid.clone();
+            j.index.clear();
+            j.close_buffer.clear();
+            j.announced = false;
+            j.state = State::Keyed;
+            j.epoch_reason = Some(reason.to_string());
+            if let Some(t) = msg.get("transport") {
+                j.transport = t.clone();
+            }
+        }
+        // step 26: `epoch_started`, then wait for its anchor before announcing
+        self.append_log(io, &scope, &card, "epoch_started", json!({ "epoch": new_epoch, "epoch_reason": reason })).map_err(|c| (c, String::new()))?;
+        let seq = self.logs.head(&scope).map(|(s, _)| s);
+        self.jobs.get_mut(&hash).expect("present").announce_after = seq;
+        Ok(json!({ "kind": "job_keyed", "epoch": new_epoch, "job_public_key": b64u::encode(&job_pk), "attestation": b64u::encode(&doc) }))
+    }
+
     /// Continuations that wait for an anchor: the announcement after `opened` (step 20); key erasure after `notarized`
     /// or `aborted` (step 44).
     pub(crate) fn after_anchor(&mut self, io: &mut dyn HostIo, scope: &str, seq: u64) {
         let Ok(Ok(hash)) = b64u::decode_len(scope, 32).map(<[u8; 32]>::try_from) else { return };
         let Some(job) = self.jobs.get(&hash) else { return };
-        if seq == 0 && !job.announced && job.state == State::Keyed {
+        if Some(seq) == job.announce_after && !job.announced && job.state == State::Keyed {
             if let Some(ann) = self.sign_announcement(&hash) {
-                io.send(json!({ "kind": "announce", "req_id": format!("announce-{scope}"), "announcement": ann }));
+                let ann_cid = formats::cid_of_bytes(&jcs::canonical(&ann).expect("notary JSON"));
+                io.send(json!({ "kind": "announce", "req_id": format!("announce-{scope}-{seq}"), "announcement": ann }));
                 let j = self.jobs.get_mut(&hash).expect("present");
+                j.announcement_cid = Some(ann_cid);
                 j.announced = true;
                 j.state = State::Open;
             }
@@ -276,6 +354,14 @@ impl Broker {
             "attestations": [j.attestation_cid], "epoch": j.epoch, "issued_at": self.now_iso().ok()?, "job": j.job,
             "job_public_key": b64u::encode(&pk), "transport": j.transport, "type": objects::types::ANNOUNCEMENT,
         });
+        if let Some(reason) = &j.epoch_reason {
+            ann["epoch_reason"] = json!(reason);
+        }
+        if j.epoch > 0 {
+            if let Some(prev) = &j.announcement_cid {
+                ann["prev_announcement"] = json!(prev);
+            }
+        }
         ann["notary_signature"] = ident.id.sign_object(&ann, "notary_signature").ok()?;
         Some(ann)
     }

@@ -5,7 +5,8 @@ Audited `notary_v1` programs that a community activates with a policy and no cod
 | Template | Step | What it computes |
 |---|---|---|
 | `aggregate/` | 6.1 | A histogram of one integer value per contributor: `count`, `sum`, and up to eight buckets whose edges (`edge_1 … edge_7`) are job parameters |
-| `vote/` | 6.2 | (to come) a slot-based ballot tally |
+| `vote/` | 6.2 | A ballot tally with up to eight options and abstain, in fixed slots (`option_1 … option_8`, `abstain`). The question and the option labels are job parameters shown to voters; the program never reads them |
+| `vote-yna/` | 6.2 | The yes/no/abstain vote of the spec's example (`yes`, `no`, `abstain`) |
 | `derive/` | 6.4 | (to come) the derived-card program |
 
 Each template is a crate with `src/lib.rs` (the logic, testable natively through `notary-guest`'s harness), `schema.json` (its output schema in canonical form, embedded in the module as `notary.output_schema`) and `policy.json` (the policy's `notary` section with placeholders: the contributor predicate, `program_cid`, and the community's `k_min`).
@@ -15,7 +16,7 @@ Each template is a crate with `src/lib.rs` (the logic, testable natively through
 ## Building
 
 ```bash
-templates/build.sh aggregate            # writes templates/modules/aggregate.wasm
+templates/build.sh aggregate            # (or vote, vote-yna) writes templates/modules/aggregate.wasm
 templates/build.sh aggregate --check    # CI: the committed module equals a fresh build
 ```
 

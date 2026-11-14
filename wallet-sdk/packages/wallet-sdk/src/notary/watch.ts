@@ -63,8 +63,11 @@ export async function watchNotaryJobsOnce(d: WatchDeps): Promise<WatchAction[]> 
     if (!v.valid) { out.push({ ...id, action: "announcement_rejected", code: v.code }); continue; }
     const newerEpoch = v.epoch > s.epoch;
     if (!newerEpoch && !missingReceipt) { out.push({ ...id, action: "no_change" }); continue; }
-    const totalLoss = newerEpoch && (ann as { epoch_reason?: string }).epoch_reason === "total_loss";
+    const reason = newerEpoch ? (ann as { epoch_reason?: string }).epoch_reason : undefined;
+    const totalLoss = reason === "total_loss";
+    // replication §7, step 27: what the user is told depends on why the epoch changed
     if (totalLoss) d.notify("The notary lost its copies of this job, so your input was sent again automatically.");
+    else if (reason === "key_exposure") d.notify("The notary's software was found vulnerable, so your input was sent again automatically. An earlier copy may have been readable.");
     const r = await d.resubmit(s, v, ann);
     if (!r.submitted) { out.push({ ...id, action: "resubmit_failed", code: r.code }); continue; }
     await d.save({ ...s, epoch: v.epoch, submittedAtMs: d.nowMs(), hasValidationReceipt: true });

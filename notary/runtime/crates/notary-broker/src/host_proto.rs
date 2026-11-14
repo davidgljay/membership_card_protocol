@@ -63,6 +63,11 @@ impl Broker {
     }
 
     /// Replaces the card oracle (tests: the oracle needs the notary card created by genesis on this broker).
+    /// The CID of the newest record in a job's log (tests: the host knows it from the records it pinned).
+    pub fn job_log_head_for_tests(&self, job_hash: &[u8; 32]) -> Option<String> {
+        self.jobs.get(job_hash).and_then(|j| self.logs.head(&j.job_hash_b64)).map(|(_, cid)| cid)
+    }
+
     pub fn set_max_live_jobs_for_tests(&mut self, n: usize) {
         self.max_live_jobs = n;
     }

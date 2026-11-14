@@ -188,8 +188,13 @@ fn world_ext(isolation: &str, replacement: &str, k_min: u64, refuse_single_opera
 }
 
 fn world_full(isolation: &str, replacement: &str, k_min: u64, refuse_single_operator: bool, max_inputs: Option<u64>, tweak: Option<&dyn Fn(&mut Oracle)>) -> World {
+    world_custom(isolation, replacement, k_min, refuse_single_operator, max_inputs, tweak, None)
+}
+
+/// `custom`: a program and the `notary` section it comes with (a template), in place of the test tally.
+fn world_custom(isolation: &str, replacement: &str, k_min: u64, refuse_single_operator: bool, max_inputs: Option<u64>, tweak: Option<&dyn Fn(&mut Oracle)>, custom: Option<(Vec<u8>, Value)>) -> World {
     let enclave = FakeEnclave::start_tcp("127.0.0.1:0", EnclaveConfig { pcr0_seed: 0x42, debug: false, clock_ms: Some(T0 as u64) }).unwrap();
-    let program = tally_program(&output_schema());
+    let program = custom.as_ref().map(|(p, _)| p.clone()).unwrap_or_else(|| tally_program(&output_schema()));
     let program_cid = formats::cid_of_bytes(&program);
     let (rt, progs, keyset) = signed_lists(&notary_sim::pcr0_of(0x42), &program_cid, refuse_single_operator);
     let policy = json!({
@@ -200,6 +205,14 @@ fn world_full(isolation: &str, replacement: &str, k_min: u64, refuse_single_oper
         "platform": "simulator", "privacy": { "k_min": k_min }, "program_cid": program_cid, "retention": "none",
     });
     let mut policy = policy;
+    if let Some((_, mut section)) = custom {
+        section["contributor_predicate"] = json!({ "issued_under_template": "bafkreisource" });
+        section["platform"] = json!("simulator");
+        section["privacy"] = json!({ "k_min": k_min });
+        section["program_cid"] = json!(program_cid);
+        section["isolation"] = json!(isolation);
+        policy = section;
+    }
     if let Some(m) = max_inputs {
         policy["limits"] = json!({ "max_inputs": m });
     }
@@ -291,6 +304,7 @@ fn job_with_keys(w: &World, requester: &MlDsaKey, nonce: u8, instances: u32, rec
 struct Opened {
     job_hash: [u8; 32],
     job_pk: Vec<u8>,
+    announcement: Value,
 }
 
 fn create_and_open(w: &mut World, job: &Value) -> Opened {
@@ -318,7 +332,7 @@ fn create_and_open(w: &mut World, job: &Value) -> Opened {
     let ann = find(&out, "announce").expect("announcement after the anchor")["announcement"].clone();
     assert!(verify_object(&ann, "notary_signature", &id_pubkey_of(w)), "announcement signed by K_id");
     assert_eq!(ann["job_public_key"], keyed["job_public_key"]);
-    Opened { job_hash, job_pk }
+    Opened { job_hash, job_pk, announcement: ann }
 }
 
 fn id_pubkey_of(w: &World) -> Vec<u8> {
@@ -497,7 +511,7 @@ fn inputs_receipts_and_checks() {
     w.revoked.lock().unwrap().insert("3".repeat(64));
     assert_eq!(submit(&mut w, &seal_input(&o, 0, &"3".repeat(64), "yes", 0, r)).unwrap()["reject_reason"], "INPUT_CARD_REVOKED");
     // B1: not sealed to this job's key → plain error, no receipt
-    let other = Opened { job_hash: o.job_hash, job_pk: notary_crypto::XWingKey::generate().public_key().to_vec() };
+    let other = Opened { job_hash: o.job_hash, job_pk: notary_crypto::XWingKey::generate().public_key().to_vec(), announcement: Value::Null };
     assert_eq!(submit(&mut w, &seal_input(&other, 0, &"4".repeat(64), "yes", 0, r)), Err("INPUT_UNDECRYPTABLE".into()));
 }
 
@@ -597,6 +611,160 @@ fn a_private_close_fails_without_finalizing_when_a_recipient_cannot_be_reached()
         w.broker.handle(&mut w.host, &msg);
         assert_eq!(find(&w.host.take(), "error").unwrap()["code"], "CLOSE_FAILED");
     }
+}
+
+/// Replication §7, steps 25–26 (single replica): an epoch restart after `total_loss`. The enclave erases the old key, keys
+/// epoch 1, writes `epoch_started` and announces only after its anchor; inputs sealed to the old key no longer open, the
+/// voters resubmit (the dedupe index starts empty) and the notarization is for the final epoch. Replication §7, step 29.
+#[test]
+fn an_epoch_restart_re_keys_the_job_and_the_resubmitted_ballots_count() {
+    let mut w = world("dedicated", "latest_wins", 1);
+    push_header(&mut w, T0);
+    let job = job_for(&w, &MlDsaKey::generate(), 1);
+    let o = create_and_open(&mut w, &job);
+    let r = push_header(&mut w, OPENS + 1000);
+    let old_a = seal_input(&o, 0, &"1".repeat(64), "yes", 0, r);
+    let old_b = seal_input(&o, 0, &"2".repeat(64), "no", 0, r);
+    assert_eq!(submit(&mut w, &old_a).unwrap()["status"], "accepted");
+    assert_eq!(submit(&mut w, &old_b).unwrap()["status"], "accepted");
+    let head = w.broker.job_log_head_for_tests(&o.job_hash).unwrap();
+    let restart = |w: &mut World, prev: u64, last: &str, reason: &str| {
+        w.broker.handle(&mut w.host, &json!({ "kind": "create_job", "req_id": "r", "job": job, "program": b64u::encode(&w.program), "transport": {},
+            "restart": { "prev_epoch": prev, "last_log": last, "reason": reason } }));
+        w.host.take()
+    };
+    // refusals: another reason, a wrong epoch, a log head that isn't the enclave's
+    assert_eq!(find(&restart(&mut w, 0, &head, "runtime_migration"), "error").unwrap()["code"], "NH_UNSUPPORTED");
+    assert_eq!(find(&restart(&mut w, 3, &head, "total_loss"), "job_rejected").unwrap()["code"], "JOB_MALFORMED");
+    assert_eq!(find(&restart(&mut w, 0, "bafkreiforked", "total_loss"), "job_rejected").unwrap()["code"], "JOB_MALFORMED");
+
+    let out = restart(&mut w, 0, &head, "total_loss");
+    let keyed = find(&out, "job_keyed").unwrap_or_else(|| panic!("{out:?}")).clone();
+    assert_eq!(keyed["epoch"], 1);
+    assert!(find(&out, "announce").is_none(), "no announcement before epoch_started is anchored");
+    let anchor = find(&out, "eas_anchor").expect("epoch_started is anchored").clone();
+    assert_eq!(anchor["seq"], 1);
+    // the epoch-0 key is gone: a ballot sealed to it no longer opens
+    assert_eq!(submit(&mut w, &seal_input(&o, 0, &"3".repeat(64), "yes", 0, r)), Err("INPUT_UNDECRYPTABLE".into()));
+    // the anchor releases the epoch-1 announcement: epoch_reason, prev_announcement, the new key
+    w.broker.handle(&mut w.host, &json!({ "kind": "anchor_receipt", "req_id": "a", "scope_id": b64u::encode(&o.job_hash), "seq": 1, "tx_receipt": "0x2" }));
+    let ann = find(&w.host.take(), "announce").expect("announced after the anchor")["announcement"].clone();
+    assert_eq!((ann["epoch"].as_u64(), ann["epoch_reason"].as_str()), (Some(1), Some("total_loss")));
+    assert_eq!(ann["prev_announcement"].as_str(), Some(formats::cid_of_bytes(&jcs::canonical(&o.announcement).unwrap()).as_str()));
+    assert_ne!(ann["job_public_key"], o.announcement["job_public_key"]);
+    assert!(verify_object(&ann, "notary_signature", &id_pubkey_of(&w)));
+    // the voters resubmit their stored, already-signed ballots to the new key; the dedupe index was reset
+    let o1 = Opened { job_hash: o.job_hash, job_pk: b64u::decode(ann["job_public_key"].as_str().unwrap()).unwrap(), announcement: ann };
+    let r2 = push_header(&mut w, OPENS + 2000);
+    let new_a = seal_input(&o1, 1, &"1".repeat(64), "yes", 0, r2);
+    let new_b = seal_input(&o1, 1, &"2".repeat(64), "yes", 1, r2); // voter 2 had changed their ballot to yes at revision 1: only the latest is resubmitted
+    assert_eq!(submit(&mut w, &new_a).unwrap()["status"], "accepted");
+    assert_eq!(submit(&mut w, &new_b).unwrap()["status"], "accepted");
+    // close: the host still holds the epoch-0 ciphertexts and streams everything
+    push_header(&mut w, CLOSES + 5000);
+    w.enclave.set_clock_ms(Some(CLOSES as u64 + 10));
+    let all = [old_a.sealed.clone(), old_b.sealed.clone(), new_a.sealed.clone(), new_b.sealed.clone()];
+    w.broker.handle(&mut w.host, &json!({ "kind": "close_chunk", "req_id": "x", "job_hash": b64u::encode(&o.job_hash), "seq": 0, "sealed_inputs": all, "last": true }));
+    let out = w.host.take();
+    let n = &find(&out, "job_closed").unwrap_or_else(|| panic!("{out:?}"))["notarization"];
+    assert_eq!((n["final_epoch"].as_u64(), n["accepted"].as_u64(), n["dropped_after_acceptance"].as_u64()), (Some(1), Some(2), Some(0)), "only epoch-1 inputs count, and the old ones are not 'dropped'");
+    assert_eq!(n["output"]["public"], json!({ "no": 0, "yes": 2 }), "the latest ballots count");
+    // a finished job can't be restarted
+    assert_eq!(find(&restart(&mut w, 1, "bafkreix", "total_loss"), "error").unwrap()["code"], "NH_JOB_CLOSED");
+}
+
+// ---- the vote-yna template, end to end through the broker (step 6.2) --------------------------------------------------
+
+fn vote_world(k_min: u64) -> World {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../templates");
+    let module = std::fs::read(root.join("modules/vote-yna.wasm")).expect("run templates/build.sh vote-yna");
+    let policy: Value = serde_json::from_str(&std::fs::read_to_string(root.join("vote-yna/policy.json")).unwrap()).unwrap();
+    world_custom("shared", "latest_wins", k_min, false, None, None, Some((module, policy["notary"].clone())))
+}
+
+/// A job for the vote template: the `question` parameter, re-signed.
+fn vote_job(w: &World, nonce: u8) -> Value {
+    let requester = MlDsaKey::generate();
+    let mut job = job_n(w, &requester, nonce, 1);
+    job.as_object_mut().unwrap().remove("requester_signature");
+    job["parameters"] = json!({ "question": "Adopt the budget?" });
+    job["requester_signature"] = requester.sign_object(&job, "requester_signature").unwrap();
+    job
+}
+
+fn ballot(o: &Opened, epoch: u64, voter: u8, choice: &str, revision: u64, r: ([u8; 32], u64)) -> Submission {
+    seal_input(o, epoch, &format!("{voter}").repeat(64), choice, revision, r)
+}
+
+/// Ballot replacement (latest valid ballot counts, keyed per card), and close by chain AND enclave time: not before
+/// `closes_at` on either clock, then the tally of the latest ballots, in the real template under the real runtime.
+#[test]
+fn the_vote_template_counts_each_cards_latest_ballot_and_closes_only_when_both_clocks_say_so() {
+    let mut w = vote_world(1);
+    push_header(&mut w, T0);
+    let job = vote_job(&w, 1);
+    let o = create_and_open(&mut w, &job);
+    let r = push_header(&mut w, OPENS + 1000);
+    let (a1, b1, c1) = (ballot(&o, 0, 1, "yes", 0, r), ballot(&o, 0, 2, "no", 0, r), ballot(&o, 0, 3, "abstain", 0, r));
+    let b2 = ballot(&o, 0, 2, "yes", 1, r); // voter 2 changes their mind
+    for s in [&a1, &b1, &c1] {
+        assert_eq!(submit(&mut w, s).unwrap()["status"], "accepted");
+    }
+    assert_eq!(submit(&mut w, &b2).unwrap()["status"], "accepted", "a higher revision replaces");
+    assert_eq!(submit(&mut w, &b1).unwrap()["status"], "superseded", "an older revision arriving late does not");
+    let all = [a1.sealed.clone(), b1.sealed.clone(), c1.sealed.clone(), b2.sealed.clone()];
+    let close = |w: &mut World| {
+        w.broker.handle(&mut w.host, &json!({ "kind": "close_chunk", "req_id": "x", "job_hash": b64u::encode(&o.job_hash), "seq": 0, "sealed_inputs": all, "last": true }));
+        w.host.take()
+    };
+    // before closes_at on both clocks
+    assert_eq!(find(&close(&mut w), "error").unwrap()["code"], "CLOSE_NOT_DUE");
+    // the chain says it is time, the enclave's own clock does not
+    push_header(&mut w, CLOSES + 5000);
+    assert_eq!(find(&close(&mut w), "error").unwrap()["code"], "CLOSE_NOT_DUE");
+    // both: closed, with the latest ballots
+    w.enclave.set_clock_ms(Some(CLOSES as u64 + 10));
+    let out = close(&mut w);
+    let n = &find(&out, "job_closed").unwrap_or_else(|| panic!("{out:?}"))["notarization"];
+    assert_eq!(n["output"]["public"], json!({ "abstain": 1, "no": 0, "yes": 2 }));
+    assert_eq!((n["accepted"].as_u64(), n["suppressed"].as_bool()), (Some(3), Some(false)));
+}
+
+/// The same vote through an epoch restart: the epoch-0 ballots are gone, the voters' wallets resubmit their stored,
+/// signed, latest ballots to the new key, and the tally is of those.
+#[test]
+fn a_vote_survives_an_epoch_restart_when_the_wallets_resubmit() {
+    let mut w = vote_world(1);
+    push_header(&mut w, T0);
+    let job = vote_job(&w, 2);
+    let o = create_and_open(&mut w, &job);
+    let r = push_header(&mut w, OPENS + 1000);
+    let stored = [("1", "yes", 0), ("2", "no", 0), ("2", "yes", 1), ("3", "no", 0)];
+    let sent: Vec<Submission> = stored.iter().map(|(v, c, rev)| ballot(&o, 0, v.parse().unwrap(), c, *rev, r)).collect();
+    for s in &sent {
+        submit(&mut w, s).unwrap();
+    }
+    let head = w.broker.job_log_head_for_tests(&o.job_hash).unwrap();
+    w.broker.handle(&mut w.host, &json!({ "kind": "create_job", "req_id": "r", "job": job, "program": b64u::encode(&w.program), "transport": {},
+        "restart": { "prev_epoch": 0, "last_log": head, "reason": "total_loss" } }));
+    assert!(find(&w.host.take(), "job_keyed").is_some());
+    w.broker.handle(&mut w.host, &json!({ "kind": "anchor_receipt", "req_id": "a", "scope_id": b64u::encode(&o.job_hash), "seq": 1, "tx_receipt": "0x2" }));
+    let ann = find(&w.host.take(), "announce").expect("epoch 1 announced")["announcement"].clone();
+    let o1 = Opened { job_hash: o.job_hash, job_pk: b64u::decode(ann["job_public_key"].as_str().unwrap()).unwrap(), announcement: ann };
+    let r2 = push_header(&mut w, OPENS + 2000);
+    // each wallet resubmits only its latest ballot (voter 2: the revision-1 yes)
+    let again: Vec<Submission> = [("1", "yes", 0), ("2", "yes", 1), ("3", "no", 0)].iter().map(|(v, c, rev)| ballot(&o1, 1, v.parse().unwrap(), c, *rev, r2)).collect();
+    for s in &again {
+        assert_eq!(submit(&mut w, s).unwrap()["status"], "accepted");
+    }
+    push_header(&mut w, CLOSES + 5000);
+    w.enclave.set_clock_ms(Some(CLOSES as u64 + 10));
+    let everything: Vec<Value> = sent.iter().chain(&again).map(|s| s.sealed.clone()).collect();
+    w.broker.handle(&mut w.host, &json!({ "kind": "close_chunk", "req_id": "x", "job_hash": b64u::encode(&o.job_hash), "seq": 0, "sealed_inputs": everything, "last": true }));
+    let out = w.host.take();
+    let n = &find(&out, "job_closed").unwrap_or_else(|| panic!("{out:?}"))["notarization"];
+    assert_eq!((n["final_epoch"].as_u64(), n["accepted"].as_u64()), (Some(1), Some(3)));
+    assert_eq!(n["output"]["public"], json!({ "abstain": 0, "no": 1, "yes": 2 }));
 }
 
 /// Runtime §13 (limit L4): the first header anchors the chain only if its timestamp is near the attested time.
@@ -800,7 +968,7 @@ fn jobs_are_isolated_from_each_other() {
     cross.sealed["job_hash"] = json!(b64u::encode(&b2.job_hash));
     assert_eq!(submit(&mut s, &cross), Err("INPUT_UNDECRYPTABLE".into()));
     // an input for B, sealed with A's info/aad binding, also fails (info binds job_hash)
-    let wrong_binding = Opened { job_hash: a2.job_hash, job_pk: b2.job_pk.clone() };
+    let wrong_binding = Opened { job_hash: a2.job_hash, job_pk: b2.job_pk.clone(), announcement: Value::Null };
     let mut sub = seal_input(&wrong_binding, 0, &"1".repeat(64), "yes", 0, r);
     sub.sealed["job_hash"] = json!(b64u::encode(&b2.job_hash));
     assert_eq!(submit(&mut s, &sub), Err("INPUT_UNDECRYPTABLE".into()));

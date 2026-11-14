@@ -10,8 +10,8 @@ name=$1; mode=${2:-}
 crate=notary-template-$name
 RUSTFLAGS="--remap-path-prefix=$PWD=/notary --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo --remap-path-prefix=$(rustc --print sysroot)=/rustc -C debuginfo=0 -C opt-level=s -C panic=abort -C codegen-units=1 -C target-cpu=mvp -C target-feature=+mutable-globals,+sign-ext,+multivalue,+bulk-memory,-reference-types,-nontrapping-fptoint -C link-arg=--initial-memory=2097152 -C link-arg=--max-memory=4194304 -C link-arg=-zstack-size=262144 -C link-arg=--no-entry -C link-arg=--export=run -C link-arg=--gc-sections -C link-arg=--strip-all" \
   cargo build -q -p "$crate" --release --target wasm32-unknown-unknown 2>&1
-linked=target/wasm32-unknown-unknown/release/notary_template_${name}.wasm
-built=target/wasm32-unknown-unknown/release/notary_template_${name}.normalized.wasm
+linked=target/wasm32-unknown-unknown/release/notary_template_${name//-/_}.wasm
+built=target/wasm32-unknown-unknown/release/notary_template_${name//-/_}.normalized.wasm
 cargo run -q -p notary-template-normalize --release -- "$linked" "$built"
 mkdir -p templates/modules
 if [ "$mode" = "--check" ]; then

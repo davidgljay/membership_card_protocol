@@ -299,7 +299,7 @@ Goal: one end-to-end path running in the simulator: a job is announced with an a
   - **Context needed**: `notary_lifecycle.md` (aggregation); `notary_runtime.md`
   - **Done when**: tests cover the k-suppression path, an independently verified notarization, and a private output readable only by its listed recipients.
 
-- [ ] **6.2 Voting template and long-running jobs**
+- [x] **6.2 Voting template and long-running jobs**
   - **What**: Build the `vote` template and policy: stored ciphertexts recomputed at close, enclave validation receipts, latest valid ballot counts (keyed per card), chain-anchored close, epochs and wallet resubmission.
   - **Who**: Claude
   - **Context needed**: `notary_lifecycle.md` (vote); `notary_replication_and_recovery.md` (epochs, close)

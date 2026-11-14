@@ -2,17 +2,13 @@
  * Operator-authenticated genesis routes, peer relay and health (notary_host.md §5). `/genesis*` are direct, for
  * the operator only; the mechanism (a shared bearer token, `NOTARY_ADMIN_TOKEN`) is erratum E18.
  */
-import { timingSafeEqual } from "node:crypto";
 import { HostError } from "../context.js";
 import type { HostContext } from "../context.js";
 import { EnclaveError } from "../enclave/transport.js";
 import { liveSession } from "./jobs.js";
 
-export function requireOperator(ctx: HostContext, authorization: string | undefined): void {
-  const given = Buffer.from((authorization ?? "").replace(/^Bearer\s+/i, ""));
-  const want = Buffer.from(ctx.config.NOTARY_ADMIN_TOKEN);
-  if (given.length !== want.length || !timingSafeEqual(given, want)) throw new HostError("NH_UNAUTHORIZED", "operator authentication required", 401);
-}
+import { requireOperator } from "../context.js";
+export { requireOperator };
 
 async function viaEnclave<T>(f: () => Promise<T>): Promise<T> {
   try { return await f(); } catch (e) { if (e instanceof EnclaveError) throw new HostError(e.code, e.message, e.code === "NH_ENCLAVE_UNAVAILABLE" ? 503 : 400); throw e; }

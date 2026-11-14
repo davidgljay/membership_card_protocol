@@ -1,0 +1,193 @@
+{
+  "about": "The vote template policy (protocol-objects.md \u00a72.1): up to eight options and abstain. The labels are job parameters shown to voters; the program counts slots. A community fills in the contributor predicate, `program_cid` and `k_min`.",
+  "notary": {
+    "contributor_predicate": {
+      "issued_under_template": "<member policy CID>"
+    },
+    "input_replacement": "latest_wins",
+    "input_schema": [
+      {
+        "name": "choice",
+        "type": "integer",
+        "required": true,
+        "description": "0 = abstain, 1 to 8 = that option",
+        "min": 0,
+        "max": 8
+      }
+    ],
+    "isolation": "shared",
+    "job_requester_predicate": {
+      "is_holder": true
+    },
+    "mode": "aggregate",
+    "output_action": "statement",
+    "output_recipients": {
+      "public": true,
+      "job_requester": true,
+      "cards": []
+    },
+    "output_schema": [
+      {
+        "name": "option_1",
+        "type": "integer",
+        "required": true,
+        "description": "Votes for option 1",
+        "clamp": [
+          0,
+          100000
+        ]
+      },
+      {
+        "name": "option_2",
+        "type": "integer",
+        "required": true,
+        "description": "Votes for option 2",
+        "clamp": [
+          0,
+          100000
+        ]
+      },
+      {
+        "name": "option_3",
+        "type": "integer",
+        "required": true,
+        "description": "Votes for option 3",
+        "clamp": [
+          0,
+          100000
+        ]
+      },
+      {
+        "name": "option_4",
+        "type": "integer",
+        "required": true,
+        "description": "Votes for option 4",
+        "clamp": [
+          0,
+          100000
+        ]
+      },
+      {
+        "name": "option_5",
+        "type": "integer",
+        "required": true,
+        "description": "Votes for option 5",
+        "clamp": [
+          0,
+          100000
+        ]
+      },
+      {
+        "name": "option_6",
+        "type": "integer",
+        "required": true,
+        "description": "Votes for option 6",
+        "clamp": [
+          0,
+          100000
+        ]
+      },
+      {
+        "name": "option_7",
+        "type": "integer",
+        "required": true,
+        "description": "Votes for option 7",
+        "clamp": [
+          0,
+          100000
+        ]
+      },
+      {
+        "name": "option_8",
+        "type": "integer",
+        "required": true,
+        "description": "Votes for option 8",
+        "clamp": [
+          0,
+          100000
+        ]
+      },
+      {
+        "name": "abstain",
+        "type": "integer",
+        "required": true,
+        "description": "Abstentions",
+        "clamp": [
+          0,
+          100000
+        ]
+      }
+    ],
+    "parameter_bounds": [
+      {
+        "name": "question",
+        "type": "text",
+        "required": true,
+        "description": "The question shown to voters",
+        "regex": "^.{1,280}$"
+      },
+      {
+        "name": "option_1",
+        "type": "text",
+        "required": false,
+        "description": "Label of option 1, shown to voters (the program never reads it)",
+        "regex": "^.{1,80}$"
+      },
+      {
+        "name": "option_2",
+        "type": "text",
+        "required": false,
+        "description": "Label of option 2, shown to voters (the program never reads it)",
+        "regex": "^.{1,80}$"
+      },
+      {
+        "name": "option_3",
+        "type": "text",
+        "required": false,
+        "description": "Label of option 3, shown to voters (the program never reads it)",
+        "regex": "^.{1,80}$"
+      },
+      {
+        "name": "option_4",
+        "type": "text",
+        "required": false,
+        "description": "Label of option 4, shown to voters (the program never reads it)",
+        "regex": "^.{1,80}$"
+      },
+      {
+        "name": "option_5",
+        "type": "text",
+        "required": false,
+        "description": "Label of option 5, shown to voters (the program never reads it)",
+        "regex": "^.{1,80}$"
+      },
+      {
+        "name": "option_6",
+        "type": "text",
+        "required": false,
+        "description": "Label of option 6, shown to voters (the program never reads it)",
+        "regex": "^.{1,80}$"
+      },
+      {
+        "name": "option_7",
+        "type": "text",
+        "required": false,
+        "description": "Label of option 7, shown to voters (the program never reads it)",
+        "regex": "^.{1,80}$"
+      },
+      {
+        "name": "option_8",
+        "type": "text",
+        "required": false,
+        "description": "Label of option 8, shown to voters (the program never reads it)",
+        "regex": "^.{1,80}$"
+      }
+    ],
+    "platform": "aws-nitro-enclaves",
+    "privacy": {
+      "k_min": 5
+    },
+    "program_cid": "<CID of modules/vote.wasm>",
+    "retention": "none"
+  }
+}

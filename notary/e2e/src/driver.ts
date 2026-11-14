@@ -17,7 +17,8 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { ml_dsa44 } from "@noble/post-quantum/ml-dsa.js";
 import { simulator } from "@membership-card-protocol/notary-attestation";
 import { verifyGenesis, verifyNotarization, b64uDecode, b64uEncode, canonicalNotary, cidOfBytes, withoutFields, H, GENESIS_MAX_AGE_HOLDER_MS } from "@membership-card-protocol/verifier/notary";
-import { verifyNotaryJob, submitNotaryInputWithRetry } from "@membership-card-protocol/wallet-sdk/notary";
+import { verifyNotaryJob, submitNotaryInputWithRetry, watchNotaryJobsOnce } from "@membership-card-protocol/wallet-sdk/notary";
+import type { StoredNotaryInput } from "@membership-card-protocol/wallet-sdk/notary";
 import { canonicalize } from "@membership-card-protocol/verifier";
 import { decryptRoutingEnvelope } from "@membership-card-protocol/app-sdk";
 import { K, IDS, POLICY_ID, PROGRAM_CID, contributor, kemKeypair, encrypt, httpChain, registerWorld, approveNotary, signBytes, PRESS_ADDR } from "./world.ts";
@@ -120,6 +121,7 @@ async function job() {
 
   // Phase 3: three contributors, one value each (the aggregate template: count, sum and buckets at edges 5 and 10)
   const choices = [3, 7, 12];
+  const stored: StoredNotaryInput[] = []; // what each wallet keeps: its signed input, until a valid notarization is seen
   for (let i = 0; i < choices.length; i++) {
     const { card: m, sub: s } = contributor(i);
     const blocks = await chain.get<{ number: number; hash: string }[]>("/headers?after=0");
@@ -131,11 +133,40 @@ async function job() {
           evidence: [], job_hash: jobHash, payload: { value: choices[i] }, revision: 0, signed_at: new Date().toISOString(), type: "notary.input.v1" };
         return { ...input, contributor_signature: { public_key: s.b64, signature: signBytes(s, canonicalNotary(input)) } } as never;
       },
-      persist: async () => {},
+      persist: async (signed, inputHash) => { stored[i] = { jobHash, signed, inputHash, epoch: a.epoch, submittedAtMs: Date.now(), hasValidationReceipt: true }; },
       async send(sealed) { const r = await ohttp(HOST, `/jobs/${jobHash}/inputs`, "POST", sealed); if (r.status !== 200) throw new Error(JSON.stringify(r.body)); return r.body as never; },
     });
     check(r.submitted, `contributor ${i} submitted "${choices[i]}" with a host receipt and an accepted validation receipt${r.submitted ? "" : ` (${(r as { code: string }).code}: ${(r as { reason: string }).reason})`}`);
   }
+
+  // Phase 3b (6.2): every replica is lost. The operator restarts the job at a new epoch; each wallet's watcher sees the higher
+  // epoch, runs algorithm W on the new announcement and re-seals its stored, already-signed input to the new key.
+  const restarted = await host(`/jobs/${jobHash}/restart`, { reason: "total_loss" }, true);
+  check(restarted["epoch"] === 1, "the operator restarted the job at epoch 1");
+  const ann1 = await waitFor("the epoch-1 announcement", async () => { const r = await ohttp(HOST, `/jobs/${jobHash}/announcement`, "GET"); return r.status === 200 && (r.body as { epoch: number }).epoch === 1 ? r.body : null; }) as { job_public_key: string; epoch: number; epoch_reason?: string; prev_announcement?: string };
+  check(ann1.epoch_reason === "total_loss" && ann1.prev_announcement !== undefined && ann1.job_public_key !== a.job_public_key, "the epoch-1 announcement names its reason, the one before it, and a new key");
+  const notes: string[] = [];
+  const actions = await watchNotaryJobsOnce({
+    nowMs: () => Date.now(),
+    list: async () => stored,
+    save: async (x) => { stored[stored.findIndex((y) => y.inputHash === x.inputHash)] = x; },
+    remove: async () => {},
+    fetchAnnouncement: async () => { const r = await ohttp(HOST, `/jobs/${jobHash}/announcement`, "GET"); return r.status === 200 ? r.body : null; },
+    verify: (announcement, highestEpochSeen) => verifyNotaryJob({ announcement, config, reads: walletReads(chain, notary, lists), lists, attestation: [simulator], highestEpochSeen }),
+    resubmit: async (s, verified, announcement) => {
+      const next = announcement as { job_public_key: string };
+      const i = stored.findIndex((y) => y.inputHash === s.inputHash);
+      return submitNotaryInputWithRetry({
+        job: { jobHash, epoch: verified.epoch, jobPublicKey: next.job_public_key, quorum: 1, notaryCard: st.card, notaryIdPubkey: st.kId, operatorHostPubkey: st.hostPub },
+        buildSignedInput: async () => s.signed as never, // not re-signed, no prompt
+        persist: async (signed, inputHash) => { stored[i] = { ...s, signed, inputHash, epoch: verified.epoch }; },
+        send: async (sealed) => { const r = await ohttp(HOST, `/jobs/${jobHash}/inputs`, "POST", sealed); if (r.status !== 200) throw new Error(JSON.stringify(r.body)); return r.body as never; },
+      });
+    },
+    notify: (m) => notes.push(m),
+  });
+  check(actions.length === 3 && actions.every((x) => x.action === "resubmitted" && (x as { epoch: number }).epoch === 1), `the three wallets resubmitted to epoch 1 (${actions.map((x) => x.action).join(",")})`);
+  check(notes.length === 3 && /lost its copies/.test(notes[0]!), "each user was told the notary lost its copies and the input was sent again");
 
   // Phase 4: close and notarization
   log(`waiting for close at ${unsigned.closes_at}`);
@@ -148,7 +179,8 @@ async function job() {
     }
     return null;
   }, closeAfter + 120);
-  const n = JSON.parse(new TextDecoder().decode((await chain.bytes(notarizationCid!))!)) as { output: unknown; accepted: number; suppressed: boolean };
+  const n = JSON.parse(new TextDecoder().decode((await chain.bytes(notarizationCid!))!)) as { output: unknown; accepted: number; suppressed: boolean; final_epoch: number };
+  check(n.final_epoch === 1, `the notarization is for the final epoch (${n.final_epoch})`);
   check(n.accepted === 3 && !n.suppressed, `the notarization counts 3 contributors (accepted=${n.accepted})`);
   check(JSON.stringify(n.output) === JSON.stringify({ recipients: [contributor(0).card.addr] }), `the notarization carries no value, only its recipient: ${JSON.stringify(n.output)}`);
   // 6.1: the host delivered one message per recipient sub-card; contributor 0's device opens it with the App SDK

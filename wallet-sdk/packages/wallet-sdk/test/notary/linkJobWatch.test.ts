@@ -97,6 +97,15 @@ describe("watching and resubmitting (wallet_sdk.md §7b.5)", () => {
     expect((await watchNotaryJobsOnce(x.d))[0]).toMatchObject({ action: "resubmitted", totalLoss: false });
     expect(x.notes).toEqual([]);
   });
+  it("tells the user about a key_exposure restart, says nothing for runtime_migration (replication §7, step 27)", async () => {
+    const exposed = deps([stored()], { epoch: 1, reason: "key_exposure" });
+    await watchNotaryJobsOnce(exposed.d);
+    expect(exposed.notes.length).toBe(1);
+    expect(exposed.notes[0]).toMatch(/vulnerable/);
+    const migrated = deps([stored()], { epoch: 1, reason: "runtime_migration" });
+    expect((await watchNotaryJobsOnce(migrated.d))[0]).toMatchObject({ action: "resubmitted", totalLoss: false });
+    expect(migrated.notes).toEqual([]);
+  });
   it("does nothing when the epoch is unchanged and a receipt is held", async () => {
     const x = deps([stored()], { epoch: 0 });
     expect((await watchNotaryJobsOnce(x.d))[0]!.action).toBe("no_change");
