@@ -111,6 +111,8 @@ run_unit_tests() {
     bash -c "'$ROOT/notary/scripts/check-aws-isolation.sh'"
   step "notary: card vectors in step with the verifier" \
     bash -c "'$ROOT/notary/scripts/check-card-vectors.sh'"
+  step "notary: committed template modules are what their source builds (code-plan §7.4)" \
+    bash -c "'$ROOT/notary/templates/build.sh' aggregate --check"
 
   # press/wallet-service use pnpm (pnpm-lock.yaml only, no package-lock.json)
   # -- `npm ci` here would fail with EUSAGE (confirmed live).

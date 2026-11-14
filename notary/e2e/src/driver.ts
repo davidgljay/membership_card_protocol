@@ -99,7 +99,7 @@ async function job() {
   const now = Date.now();
   const closeAfter = Number(env("CLOSE_AFTER_SECONDS", "40"));
   const unsigned = { closes_at: new Date(now + closeAfter * 1000).toISOString(), created_at: new Date(now).toISOString(), kem: "x-wing-draft-06", min_live: 1,
-    nonce: b64uEncode(crypto.getRandomValues(new Uint8Array(16))), opens_at: new Date(now).toISOString(), parameters: {}, policy_id: POLICY_ID,
+    nonce: b64uEncode(crypto.getRandomValues(new Uint8Array(16))), opens_at: new Date(now).toISOString(), parameters: { edge_1: 5, edge_2: 10 }, policy_id: POLICY_ID,
     policy_state_cid: st.stateCid, replica_set: [{ instances: 1, notary_card: st.card }], requester_card: K.requester.addr, requester_pubkey: K.requester.b64, type: "notary.job.v1" };
   const job = { ...unsigned, requester_signature: { public_key: K.requester.b64, signature: signBytes(K.requester, canonicalNotary(unsigned)) } };
   const created = await host("/jobs", { job, program_cid: PROGRAM_CID });
@@ -117,8 +117,8 @@ async function job() {
   check((v.consent as unknown as { singleOperatorQuorum: boolean }).singleOperatorQuorum === true, "the consent model discloses the single-operator quorum");
   const a = ann as { job_public_key: string; epoch: number };
 
-  // Phase 3: three contributors (yes, yes, no)
-  const choices = ["yes", "yes", "no"];
+  // Phase 3: three contributors, one value each (the aggregate template: count, sum and buckets at edges 5 and 10)
+  const choices = [3, 7, 12];
   for (let i = 0; i < choices.length; i++) {
     const { card: m, sub: s } = contributor(i);
     const blocks = await chain.get<{ number: number; hash: string }[]>("/headers?after=0");
@@ -127,7 +127,7 @@ async function job() {
       job: { jobHash, epoch: a.epoch, jobPublicKey: a.job_public_key, quorum: 1, notaryCard: st.card, notaryIdPubkey: st.kId, operatorHostPubkey: st.hostPub },
       async buildSignedInput() {
         const input = { chain_ref: { block_hash: b64uEncode(Buffer.from(ref.hash.slice(2), "hex")), block_number: ref.number }, contributor_card: m.addr, contributor_card_pubkey: m.b64,
-          evidence: [], job_hash: jobHash, payload: { choice: choices[i] }, revision: 0, signed_at: new Date().toISOString(), type: "notary.input.v1" };
+          evidence: [], job_hash: jobHash, payload: { value: choices[i] }, revision: 0, signed_at: new Date().toISOString(), type: "notary.input.v1" };
         return { ...input, contributor_signature: { public_key: s.b64, signature: signBytes(s, canonicalNotary(input)) } } as never;
       },
       persist: async () => {},
@@ -149,7 +149,7 @@ async function job() {
   }, closeAfter + 120);
   const n = JSON.parse(new TextDecoder().decode((await chain.bytes(notarizationCid!))!)) as { output: unknown; accepted: number; suppressed: boolean };
   check(n.accepted === 3 && !n.suppressed, `the notarization counts 3 contributors (accepted=${n.accepted})`);
-  check(JSON.stringify(n.output) === JSON.stringify({ public: { no: 1, yes: 2 } }), `the public output is the tally ${JSON.stringify(n.output)}`);
+  check(JSON.stringify(n.output) === JSON.stringify({ public: { bucket_4: 0, bucket_5: 0, bucket_6: 0, bucket_7: 0, bucket_8: 0, count: 3, sum: 22 } }), `the public output is the template's (count 3, sum 22; the three occupied buckets hold one each, under the cell floor of 5, so they are omitted; empty buckets stay 0) ${JSON.stringify(n.output)}`);
   const res = await verifyNotarization(notarizationCid!, notarizationReads(chain, notary, lists), { attest: attestCfg, modules: [simulator], acceptedRuntimes: lists.acceptedRuntimes });
   check(res.valid, `algorithm N verifies the notarization${res.valid ? ` (warnings: ${(res as { warnings: string[] }).warnings.join(",") || "none"})` : ` (${JSON.stringify(res)})`}`);
   log("END TO END: PASS");

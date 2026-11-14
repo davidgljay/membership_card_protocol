@@ -1,0 +1,27 @@
+[package]
+name = "notary-template-aggregate"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+description = "The `aggregate` template program (notary_v1): a histogram of one integer value per contributor. Count, sum and up to eight buckets whose edges are job parameters. Integer only; no floats."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+notary-guest = { path = "../../guest", features = ["program"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+panic = "abort"
+codegen-units = 1
+
+[dev-dependencies]
+notary-types = { path = "../../runtime/crates/notary-types" }
+serde_json.workspace = true
+notary-admission = { path = "../../runtime/crates/notary-admission" }
+notary-worker = { path = "../../runtime/crates/notary-worker" }
+sha2.workspace = true
+notary-broker = { path = "../../runtime/crates/notary-broker" }

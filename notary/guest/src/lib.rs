@@ -14,6 +14,42 @@
 extern crate alloc;
 use alloc::{string::String, vec::Vec};
 
+/// Runtime support for a program crate (feature `program`, wasm only): a bump allocator over a fixed arena and a panic
+/// handler that traps. A run is one fresh instance, so memory is never freed.
+#[cfg(all(target_arch = "wasm32", feature = "program"))]
+mod program_rt {
+    use core::alloc::{GlobalAlloc, Layout};
+    use core::cell::UnsafeCell;
+
+    const ARENA: usize = 1 << 20;
+    struct Bump {
+        arena: UnsafeCell<[u8; ARENA]>,
+        next: UnsafeCell<usize>,
+    }
+    // SAFETY: the guest is single threaded (no atomics, no shared memory: admission rejects them).
+    unsafe impl Sync for Bump {}
+    unsafe impl GlobalAlloc for Bump {
+        unsafe fn alloc(&self, l: Layout) -> *mut u8 {
+            let next = &mut *self.next.get();
+            let start = (*next + l.align() - 1) & !(l.align() - 1);
+            let end = start + l.size();
+            if end > ARENA {
+                return core::ptr::null_mut();
+            }
+            *next = end;
+            (self.arena.get() as *mut u8).add(start)
+        }
+        unsafe fn dealloc(&self, _: *mut u8, _: Layout) {}
+    }
+    #[global_allocator]
+    static A: Bump = Bump { arena: UnsafeCell::new([0; ARENA]), next: UnsafeCell::new(0) };
+
+    #[panic_handler]
+    fn panic(_: &core::panic::PanicInfo) -> ! {
+        core::arch::wasm32::unreachable()
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 mod abi {
     #[link(wasm_import_module = "notary_v1")]

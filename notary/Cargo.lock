@@ -852,6 +852,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "notary-template-aggregate"
+version = "0.1.0"
+dependencies = [
+ "notary-admission",
+ "notary-broker",
+ "notary-guest",
+ "notary-types",
+ "notary-worker",
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
+name = "notary-template-normalize"
+version = "0.1.0"
+dependencies = [
+ "wasm-encoder 0.228.0",
+ "wasmparser 0.228.0",
+]
+
+[[package]]
 name = "notary-types"
 version = "0.1.0"
 dependencies = [
@@ -1367,6 +1388,16 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "wasm-encoder"
+version = "0.228.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05d30290541f2d4242a162bbda76b8f2d8b1ac59eab3568ed6f2327d52c9b2c4"
+dependencies = [
+ "leb128fmt",
+ "wasmparser 0.228.0",
+]
+
+[[package]]
+name = "wasm-encoder"
 version = "0.263.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b883a26aea02eaabe2d2c3fba7eb039ef5cdcb5d5201ae5551e73d5e251a81f"
@@ -1446,7 +1477,7 @@ dependencies = [
  "leb128fmt",
  "memchr",
  "unicode-width",
- "wasm-encoder",
+ "wasm-encoder 0.263.0",
 ]
 
 [[package]]

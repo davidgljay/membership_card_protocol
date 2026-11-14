@@ -1,0 +1,204 @@
+{
+  "about": "The aggregate template policy (protocol-objects.md \u00a72.1). A community copies the `notary` section into its policy card and replaces the placeholders: the contributor predicate (the member policy), `program_cid` (the template's CID, see dist/), and the input bounds.",
+  "notary": {
+    "contributor_predicate": {
+      "issued_under_template": "<member policy CID>"
+    },
+    "input_replacement": "reject_duplicates",
+    "input_schema": [
+      {
+        "name": "value",
+        "type": "integer",
+        "required": true,
+        "description": "The value contributed",
+        "min": -1000000000,
+        "max": 1000000000
+      }
+    ],
+    "isolation": "shared",
+    "job_requester_predicate": {
+      "is_holder": true
+    },
+    "mode": "aggregate",
+    "output_action": "statement",
+    "output_recipients": {
+      "public": true,
+      "job_requester": true,
+      "cards": []
+    },
+    "output_schema": [
+      {
+        "clamp": [
+          0,
+          100000
+        ],
+        "description": "Contributors counted",
+        "name": "count",
+        "required": true,
+        "type": "integer"
+      },
+      {
+        "clamp": [
+          -1000000000000000,
+          1000000000000000
+        ],
+        "description": "Sum of the values",
+        "name": "sum",
+        "required": true,
+        "type": "integer"
+      },
+      {
+        "clamp": [
+          0,
+          100000
+        ],
+        "description": "Contributors in bucket 1 (cells under 5 are omitted)",
+        "name": "bucket_1",
+        "required": false,
+        "suppress_cell_below_k": 5,
+        "type": "integer"
+      },
+      {
+        "clamp": [
+          0,
+          100000
+        ],
+        "description": "Contributors in bucket 2 (cells under 5 are omitted)",
+        "name": "bucket_2",
+        "required": false,
+        "suppress_cell_below_k": 5,
+        "type": "integer"
+      },
+      {
+        "clamp": [
+          0,
+          100000
+        ],
+        "description": "Contributors in bucket 3 (cells under 5 are omitted)",
+        "name": "bucket_3",
+        "required": false,
+        "suppress_cell_below_k": 5,
+        "type": "integer"
+      },
+      {
+        "clamp": [
+          0,
+          100000
+        ],
+        "description": "Contributors in bucket 4 (cells under 5 are omitted)",
+        "name": "bucket_4",
+        "required": false,
+        "suppress_cell_below_k": 5,
+        "type": "integer"
+      },
+      {
+        "clamp": [
+          0,
+          100000
+        ],
+        "description": "Contributors in bucket 5 (cells under 5 are omitted)",
+        "name": "bucket_5",
+        "required": false,
+        "suppress_cell_below_k": 5,
+        "type": "integer"
+      },
+      {
+        "clamp": [
+          0,
+          100000
+        ],
+        "description": "Contributors in bucket 6 (cells under 5 are omitted)",
+        "name": "bucket_6",
+        "required": false,
+        "suppress_cell_below_k": 5,
+        "type": "integer"
+      },
+      {
+        "clamp": [
+          0,
+          100000
+        ],
+        "description": "Contributors in bucket 7 (cells under 5 are omitted)",
+        "name": "bucket_7",
+        "required": false,
+        "suppress_cell_below_k": 5,
+        "type": "integer"
+      },
+      {
+        "clamp": [
+          0,
+          100000
+        ],
+        "description": "Contributors in bucket 8 (cells under 5 are omitted)",
+        "name": "bucket_8",
+        "required": false,
+        "suppress_cell_below_k": 5,
+        "type": "integer"
+      }
+    ],
+    "parameter_bounds": [
+      {
+        "name": "edge_1",
+        "type": "integer",
+        "required": false,
+        "description": "Bucket edge 1 (ascending)",
+        "min": -1000000000,
+        "max": 1000000000
+      },
+      {
+        "name": "edge_2",
+        "type": "integer",
+        "required": false,
+        "description": "Bucket edge 2 (ascending)",
+        "min": -1000000000,
+        "max": 1000000000
+      },
+      {
+        "name": "edge_3",
+        "type": "integer",
+        "required": false,
+        "description": "Bucket edge 3 (ascending)",
+        "min": -1000000000,
+        "max": 1000000000
+      },
+      {
+        "name": "edge_4",
+        "type": "integer",
+        "required": false,
+        "description": "Bucket edge 4 (ascending)",
+        "min": -1000000000,
+        "max": 1000000000
+      },
+      {
+        "name": "edge_5",
+        "type": "integer",
+        "required": false,
+        "description": "Bucket edge 5 (ascending)",
+        "min": -1000000000,
+        "max": 1000000000
+      },
+      {
+        "name": "edge_6",
+        "type": "integer",
+        "required": false,
+        "description": "Bucket edge 6 (ascending)",
+        "min": -1000000000,
+        "max": 1000000000
+      },
+      {
+        "name": "edge_7",
+        "type": "integer",
+        "required": false,
+        "description": "Bucket edge 7 (ascending)",
+        "min": -1000000000,
+        "max": 1000000000
+      }
+    ],
+    "platform": "aws-nitro-enclaves",
+    "privacy": {
+      "k_min": 10
+    },
+    "program_cid": "<CID of dist/aggregate.wasm>",
+    "retention": "none"
+  }
+}

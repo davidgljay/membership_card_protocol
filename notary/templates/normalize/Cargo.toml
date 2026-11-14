@@ -1,0 +1,10 @@
+[package]
+name = "notary-template-normalize"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+description = "Re-encodes a freshly linked template module canonically (no padded LEB128 operands), so admission's engine, which has reference types off, reads the table index of `call_indirect` as the single zero byte it expects."
+
+[dependencies]
+wasmparser = { version = "=0.228.0", default-features = false, features = ["std", "validate", "features"] }
+wasm-encoder = { version = "=0.228.0", default-features = false, features = ["std", "wasmparser"] }

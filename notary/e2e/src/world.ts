@@ -79,7 +79,10 @@ export const K = {
 };
 export const contributor = (i: number) => ({ card: key(`member-${i}`), sub: key(`member-${i}-sub`) });
 
-export const PROGRAM = new Uint8Array(readFileSync(new URL("tally.wasm", FIXTURES)));
+// the committed `aggregate` template module and its policy (templates/aggregate, step 6.1)
+const TEMPLATE = new URL("../../templates/", import.meta.url);
+export const PROGRAM = new Uint8Array(readFileSync(new URL("dist/aggregate.wasm", TEMPLATE)));
+const TEMPLATE_POLICY = JSON.parse(readFileSync(new URL("aggregate/policy.json", TEMPLATE), "utf8")).notary as Record<string, unknown>;
 export const PROGRAM_CID = cidOfBytes(PROGRAM);
 export const SIM_PCR0 = b64uEncode(new Uint8Array(48).fill(0x42));
 const marker = (name: string) => canonicalNotary({ e2e: name, type: "e2e.policy_marker" });
@@ -90,12 +93,11 @@ export const IDS = {
 };
 export const PRESS_ADDR = "0x" + "11".repeat(20);
 
-export const OUTPUT_SCHEMA = [{ name: "no", type: "integer", required: true, clamp: [0, 1000000] }, { name: "yes", type: "integer", required: true, clamp: [0, 1000000] }];
+export const OUTPUT_SCHEMA = TEMPLATE_POLICY["output_schema"];
+/** The aggregate template's policy with this world's placeholders filled in (the community's own choices: who may contribute, k_min). */
+const { job_requester_predicate: _anyoneMayRequest, ...TEMPLATE_BODY } = TEMPLATE_POLICY;
 export const NOTARY_SECTION = {
-  contributor_predicate: { issued_under_template: IDS.sourcePolicy }, input_replacement: "latest_wins",
-  input_schema: [{ name: "choice", type: "text", required: true, enum: ["yes", "no"] }],
-  isolation: "dedicated", mode: "aggregate", output_action: "statement", output_recipients: { cards: [], job_requester: false, public: true },
-  output_schema: OUTPUT_SCHEMA, platform: "simulator", privacy: { k_min: 2 }, program_cid: PROGRAM_CID, retention: "none",
+  ...TEMPLATE_BODY, contributor_predicate: { issued_under_template: IDS.sourcePolicy }, platform: "simulator", privacy: { k_min: 3 }, program_cid: PROGRAM_CID,
 };
 
 const card = (k: Key, policy: string, ancestry: string[], extra: Record<string, unknown> = {}) => ({
@@ -111,7 +113,7 @@ export const POLICY_ID = cidOfBytes(canonicalNotary(policyGenesis));
 // ---- governance lists (§34) ---------------------------------------------------------------------------------------
 
 export const RUNTIMES = [{ accepted_from: "2026-01-01T00:00:00Z", build_recipe_cid: IDS.listsPolicy, close_compat: "c1", pcr0: SIM_PCR0, platform: "simulator", source_commit: "e2e", version: "1" }];
-export const PROGRAMS = [{ accepted_from: "2026-01-01T00:00:00Z", audit_report_cid: IDS.listsPolicy, name: "tally", program_cid: PROGRAM_CID, source_commit: "e2e", toolchain: "wat", version: "1" }];
+export const PROGRAMS = [{ accepted_from: "2026-01-01T00:00:00Z", audit_report_cid: IDS.listsPolicy, name: "aggregate", program_cid: PROGRAM_CID, source_commit: "e2e", toolchain: "rust", version: "1" }];
 
 function approval(list: string, cardAddr: string, value: unknown): string {
   const a: Record<string, unknown> = { governance_version: 1, kind: "standard", list, list_card: cardAddr, list_hash: H(value), list_version: 1, signatures: [], type: "notary_list_approval" };
