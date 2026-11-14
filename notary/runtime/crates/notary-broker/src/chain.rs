@@ -108,6 +108,9 @@ pub struct HeaderChain {
     newest: Option<[u8; 32]>,
     /// The newest `chain_ref` accepted from an input (runtime §13 freshness floor).
     floor: u64,
+    /// Parent hashes of accepted headers: an older header whose hash is one of these links backwards (6.3, a replica
+    /// that joins a running job must re-check earlier inputs' `chain_ref`; `plans/notary-questions-6.3.md`).
+    parents: std::collections::BTreeSet<[u8; 32]>,
 }
 
 const KEEP: usize = 100_000;
@@ -125,13 +128,14 @@ impl HeaderChain {
             let links = if self.by_hash.is_empty() {
                 attested_now_ms.is_some_and(|now| (h.timestamp as i64 * 1000 - now).abs() <= ANCHOR_MARGIN_MS)
             } else {
-                self.by_hash.contains_key(&h.parent)
+                self.by_hash.contains_key(&h.parent) || self.parents.contains(&h.hash)
             };
             if !links || self.by_hash.contains_key(&h.hash) {
                 continue;
             }
             let newer = self.newest_header().is_none_or(|n| h.number > n.number);
             let hash = h.hash;
+            self.parents.insert(h.parent);
             self.by_hash.insert(hash, h);
             if newer {
                 self.newest = Some(hash);
@@ -140,6 +144,7 @@ impl HeaderChain {
         if self.by_hash.len() > KEEP {
             let cutoff = self.newest_header().map_or(0, |n| n.number.saturating_sub(KEEP as u64 / 2));
             self.by_hash.retain(|_, h| h.number >= cutoff);
+            self.parents = self.by_hash.values().map(|h| h.parent).collect();
         }
         self.newest_header().map_or(0, |h| h.number)
     }

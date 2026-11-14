@@ -51,7 +51,11 @@ export default defineNitroPlugin(async () => {
     const c = createContext({
       config, kv, ipfs: config.IPFS_PROVIDER === "sim" ? sim.ipfs : createMockIpfs(),
       eas: sim.eas, chain: sim.chain, submitter: sim.submitter, policies: sim.policies,
-      peers: { send: async (url, body) => post(`${url.replace(/\/$/, "")}/peer`, body) }, delivery: sim.delivery, replicas: mem.replicas,
+      peers: {
+        send: async (url, body) => post(`${url.replace(/\/$/, "")}/peer`, body),
+        request: async (url, body) => { const r = await fetch(`${url.replace(/\/$/, "")}/peer`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }); return r.ok ? r.json() : {}; },
+      },
+      delivery: sim.delivery, replicas: mem.replicas,
       monitor: webhookMonitor(config.ALERT_WEBHOOK_URL, post), sessions: new Map(), gateOnSnapshots: true,
     });
     for (const ep of config.ENCLAVE_ENDPOINTS) {
@@ -64,7 +68,9 @@ export default defineNitroPlugin(async () => {
       const session = new EnclaveSession(ep.cid, transport);
       attachEnclave(c, session);
       const hello = await session.call("hello", { challenge: b64uEncode(crypto.getRandomValues(new Uint8Array(32))) });
-      c.instances.set(b64uEncode(sha256(Buffer.from(String(hello["inst_pubkey"]), "base64url"))), session);
+      const instance = b64uEncode(sha256(Buffer.from(String(hello["inst_pubkey"]), "base64url")));
+      c.instances.set(instance, session);
+      c.instanceKeys.set(instance, String(hello["inst_pubkey"]));
       c.sessions.set(ep.cid, session);
     }
     await c.cards.load();

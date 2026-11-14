@@ -13,7 +13,7 @@ export interface MockScript {
   createJob?(m: Msg): { reject: string } | { epoch: number; job_public_key: string; attestation: string; announcement?: unknown; extra?: Msg[] };
   submitInput?(m: Msg): { error: string } | { input_hash: string; receipt_sealed: string };
   /** Reply to the last `close_chunk`: default `job_closed` with a small notarization. */
-  closeChunk?(m: Msg): { error: string } | { notarization: unknown; outputs?: unknown[] };
+  closeChunk?(m: Msg): { error: string } | { pending: true } | { notarization: unknown; outputs?: unknown[] };
 }
 
 export class MockEnclave implements EnclaveTransport {
@@ -57,8 +57,11 @@ export class MockEnclave implements EnclaveTransport {
       case "close_chunk": {
         if (m["last"] !== true) return;
         const r = this.script.closeChunk?.(m) ?? { notarization: { type: "notary.notarization.v1", mock: true } };
+        if ("pending" in r) return reply({ kind: "close_pending" });
         return "error" in r ? reply({ kind: "error", code: r.error, message: "mock enclave refused the close" }) : reply({ kind: "job_closed", notarization: r.notarization, record: null, outputs: r.outputs ?? [] });
       }
+      case "start_handoff": return reply({ kind: "handoff_started" });
+      case "shutdown": return reply({ kind: "shutdown_ack" });
       default: return; // fetch_result, anchor_receipt, chain_result, peer_message, policy_updates: no reply
     }
   }

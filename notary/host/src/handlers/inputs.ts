@@ -38,7 +38,8 @@ export async function handleSubmitInput(ctx: HostContext, jobHash: string, body:
   // 3. forward to the enclave holding the job
   const session = liveSession(ctx, job.replicas);
   let reply;
-  try { reply = await session.call("submit_input", { job_hash: jobHash, sealed_input: sealed }); }
+  // with q > 1 the enclave answers once q replicas acknowledged, or after 60 s with INPUT_ACK_TIMEOUT (6.3): 75 s at the default 30 s
+  try { reply = await session.call("submit_input", { job_hash: jobHash, sealed_input: sealed }, session.timeoutMs * 2.5); }
   catch (e) {
     if (e instanceof EnclaveError) {
       // an input the enclave cannot decrypt cannot be counted: do not keep it, and no receipt is returned

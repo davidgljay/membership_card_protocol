@@ -1,0 +1,63 @@
+# Step 6.3: three operators' hosts, each with its own Redis, joined as peers (PEER_HOSTS). Host C runs two enclaves so it
+# can re-replicate. The scenario (notary/e2e/run-three.sh): formation across hosts, a replica stopped mid-job,
+# re-replication, a quorum-cosigned close. The base for step 7.1. Every key in e2e/sim.env is a TEST value; the three
+# hosts share the test K_host here only for brevity.
+x-host: &host
+  image: notary-host:dev
+  env_file: ../e2e/sim.env
+  depends_on: [sim-chain]
+services:
+  sim-chain:
+    build: { context: ../.., dockerfile: notary/deploy/Dockerfile.e2e }
+    image: notary-e2e:dev
+    environment: { SIM_CHAIN_PORT: "8545" }
+  redis-a: { image: "redis:7-alpine" }
+  redis-b: { image: "redis:7-alpine" }
+  redis-c: { image: "redis:7-alpine" }
+  enclave-a: { build: { context: .., dockerfile: deploy/Dockerfile.runtime-sim }, image: notary-runtime-sim:dev }
+  enclave-b: { image: notary-runtime-sim:dev }
+  enclave-c1: { image: notary-runtime-sim:dev }
+  enclave-c2: { image: notary-runtime-sim:dev }
+  host-a:
+    <<: *host
+    build: { context: ../.., dockerfile: notary/deploy/Dockerfile.host }
+    environment:
+      EXTERNAL_KV_URL: redis://redis-a:6379
+      SIM_CHAIN_URL: http://sim-chain:8545
+      ENCLAVE_CIDS: a-1
+      ENCLAVE_ENDPOINTS: "a-1=enclave-a:7001"
+      NOTARY_PUBLIC_BASE_URL: http://host-a:3000
+      PEER_HOSTS: http://host-b:3000,http://host-c:3000
+    depends_on: [sim-chain, redis-a, enclave-a]
+  host-b:
+    <<: *host
+    environment:
+      EXTERNAL_KV_URL: redis://redis-b:6379
+      SIM_CHAIN_URL: http://sim-chain:8545
+      ENCLAVE_CIDS: b-1
+      ENCLAVE_ENDPOINTS: "b-1=enclave-b:7001"
+      NOTARY_PUBLIC_BASE_URL: http://host-b:3000
+      PEER_HOSTS: http://host-a:3000,http://host-c:3000
+    depends_on: [sim-chain, redis-b, enclave-b]
+  host-c:
+    <<: *host
+    environment:
+      EXTERNAL_KV_URL: redis://redis-c:6379
+      SIM_CHAIN_URL: http://sim-chain:8545
+      ENCLAVE_CIDS: c-1,c-2
+      ENCLAVE_ENDPOINTS: "c-1=enclave-c1:7001,c-2=enclave-c2:7001"
+      NOTARY_PUBLIC_BASE_URL: http://host-c:3000
+      PEER_HOSTS: http://host-a:3000,http://host-b:3000
+    depends_on: [sim-chain, redis-c, enclave-c1, enclave-c2]
+  driver:
+    image: notary-e2e:dev
+    profiles: ["driver"]
+    env_file: ../e2e/sim.env
+    environment:
+      HOSTS: http://host-a:3000,http://host-b:3000,http://host-c:3000
+      SIM_CHAIN_URL: http://sim-chain:8545
+      STATE_FILE: /state/e2e-three-state.json
+    volumes: ["e2e-three-state:/state"]
+    entrypoint: ["node", "--experimental-strip-types", "src/driver3.ts"]
+volumes:
+  e2e-three-state: {}

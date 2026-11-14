@@ -76,6 +76,69 @@ impl JobLogs {
         Some((sc.next_seq.checked_sub(1)?, sc.prev.clone()?))
     }
 
+    /// The `seq` of a record this enclave wrote and whose anchor it still waits for.
+    pub fn waiting(&self, scope: &str) -> Option<u64> {
+        self.scopes.get(scope).and_then(|s| s.waiting_for)
+    }
+
+    /// Whether this enclave keeps a log for `scope`.
+    pub fn has(&self, scope: &str) -> bool {
+        self.scopes.contains_key(scope)
+    }
+
+    /// The next `seq` this log expects (its own next record, or the next record it follows).
+    pub fn next_seq(&self, scope: &str) -> u64 {
+        self.scopes.get(scope).map_or(0, |s| s.next_seq)
+    }
+
+    /// Starts following a log written elsewhere (a handoff receiver, a restarted epoch): its head is `(seq, cid)`,
+    /// whose anchor this enclave takes as given (`settled`) or still waits for. Replaces any earlier state.
+    pub fn follow_from(&mut self, scope: &str, identity_log: bool, head: Option<(u64, String)>, settled: bool) {
+        let log_type = if identity_log { notary_types::objects::types::IDENTITY_LOG } else { notary_types::objects::types::JOB_LOG };
+        let (next_seq, prev, waiting_for) = match head {
+            Some((seq, cid)) => (seq + 1, Some(cid), (!settled).then_some(seq)),
+            None => (0, None, None),
+        };
+        self.scopes.insert(scope.to_string(), Scope { next_seq, prev, waiting_for, queue: VecDeque::new(), log_type });
+    }
+
+    /// Adopts an anchored record written by another replica (replication §3 step 10, §6): it must be the next `seq` and
+    /// link to this log's head. The caller has checked its signatures. Returns false (and changes nothing) otherwise.
+    pub fn adopt(&mut self, scope: &str, seq: u64, prev: Option<&str>, cid: &str) -> bool {
+        let Some(sc) = self.scopes.get_mut(scope) else { return false };
+        if seq != sc.next_seq || prev != sc.prev.as_deref() || !sc.queue.is_empty() {
+            return false;
+        }
+        if sc.waiting_for.is_some_and(|w| w + 1 != seq) {
+            return false;
+        }
+        sc.waiting_for = None;
+        sc.prev = Some(cid.to_string());
+        sc.next_seq += 1;
+        true
+    }
+
+    /// A followed record of an anchored kind that arrived before its anchor: the log waits for that anchor.
+    pub fn mark_waiting(&mut self, scope: &str, seq: u64) {
+        if let Some(sc) = self.scopes.get_mut(scope) {
+            if sc.next_seq == seq + 1 {
+                sc.waiting_for = Some(seq);
+            }
+        }
+    }
+
+    pub fn clear_waiting(&mut self, scope: &str, seq: u64) {
+        if let Some(sc) = self.scopes.get_mut(scope) {
+            if sc.waiting_for == Some(seq) {
+                sc.waiting_for = None;
+            }
+        }
+    }
+
+    pub fn forget(&mut self, scope: &str) {
+        self.scopes.remove(scope);
+    }
+
     fn drain(scope: &str, sc: &mut Scope, s: &Signers<'_>) -> Vec<Signed> {
         let mut out = vec![];
         while sc.waiting_for.is_none() {

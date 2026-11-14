@@ -34,7 +34,11 @@ export interface ChainReader {
   events(filter: string): Promise<unknown | null>;
 }
 
-export interface PeerClient { send(hostUrl: string, body: { to_instance: string; from_instance: string; bytes: string }): Promise<void> }
+/** Calls a peer host's `POST /peer` (notary_host.md §11). `send` relays an envelope; `request` carries the other kinds and returns the JSON answer. */
+export interface PeerClient {
+  send(hostUrl: string, body: { to_instance: string; from_instance: string; bytes: string }): Promise<void>;
+  request(hostUrl: string, body: Record<string, unknown>): Promise<unknown>;
+}
 export interface DeliveryClient { deliver(routingEnvelope: unknown): Promise<void> }
 /** Starts and attests a new enclave, preferably in another availability zone. */
 export interface ReplicaStarter { start(forJob: string | null, notaryCard: string | null): Promise<void> }

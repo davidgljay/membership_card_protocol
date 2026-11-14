@@ -46,6 +46,13 @@ export interface HostContext extends HostDeps {
   /** Notary cards this host serves: `NOTARY_CARD_ADDRESSES` plus every card created through `/genesis` on this host (kept in the KV). */
   /** Policies whose first snapshot every live enclave has received (set by the snapshot scheduler). */
   snapshotsSent: Set<string>;
+  /** 6.3: instance → `K_inst` public key (from `hello_ack`) and the card its operator means it to serve (a directory hint). */
+  instanceKeys: Map<string, string>;
+  instanceCards: Map<string, string>;
+  /** 6.3: instance → peer host URL, learned from peer directories, for routing `peer_send`. */
+  peerRoutes: Map<string, string>;
+  /** 6.3: jobs whose ciphertexts changed after a `close_pending` (a `need_inputs` arrived): stream again. */
+  restream: Set<string>;
   cards: { all(): string[]; add(card: string): Promise<void>; load(): Promise<void> };
 }
 
@@ -65,6 +72,7 @@ export function createContext(d: HostDeps): HostContext {
     ...d, now: d.now ?? Date.now, keys: hostKeys(d.config.NOTARY_HOST_MLDSA44_SEED),
     jobs: jobStore(d.kv), inputs: inputStore(d.kv), receipts: receiptStore(d.kv), logs: logStore(d.kv), snapshots: snapshotStore(d.kv), blobs: blobStore(d.kv),
     instances: new Map(), served: new Map(), snapshotsSent: new Set(), cards: cardSet(d),
+    instanceKeys: new Map(), instanceCards: new Map(), peerRoutes: new Map(), restream: new Set(),
   };
 }
 

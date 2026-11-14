@@ -91,7 +91,10 @@ fn platform(args: &[String], root: &[u8]) -> Result<Platform, String> {
     let env = notary_attest::AttestationVerifier::verify_envelope(&notary_attest::sim::SimVerifier, &doc, root).map_err(|c| c.code().to_string())?;
     let clock_addr = spec.trim_start_matches("sim:tcp:").to_string();
     let clock = notary_attest::sim::SimulatorBackend::new(notary_attest::sim::SimAddr::Tcp(clock_addr));
-    Ok(Platform { attest: backend, attested_time_ms: Box::new(move || clock.attested_time_ms().map_err(|e| e.to_string())), pcr0: env.measurement })
+    // handoff peers are verified against the same pinned root (algorithm P, P1)
+    let platform_name = backend.platform().to_string();
+    let peer_roots = notary_attest::verify::Config { roots: [(platform_name.clone(), root.to_vec())].into(), allow_simulator: platform_name == "simulator" };
+    Ok(Platform { attest: backend, attested_time_ms: Box::new(move || clock.attested_time_ms().map_err(|e| e.to_string())), pcr0: env.measurement, peer_roots })
 }
 
 pub fn run_broker(args: &[String]) -> Result<(), String> {

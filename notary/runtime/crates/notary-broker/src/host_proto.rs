@@ -26,6 +26,31 @@ pub struct Broker {
     pub(crate) genesis: BTreeMap<String, String>,
     /// Live jobs a `shared` runtime holds (runtime §3, §14: 256).
     pub(crate) max_live_jobs: usize,
+    // ---- replication (step 6.3) ----
+    /// The host's peer directory: an untrusted hint of where to send (instance → hint).
+    pub(crate) directory: BTreeMap<String, crate::peer::PeerHint>,
+    /// What this enclave has heard from each peer instance (heartbeats, liveness).
+    pub(crate) heard: BTreeMap<String, crate::peer::Heard>,
+    /// Instances known (from completed identity handoffs) to hold a card's identity.
+    pub(crate) instance_cards: BTreeMap<String, String>,
+    pub(crate) sends: BTreeMap<String, crate::handoff::SendSession>,
+    pub(crate) recvs: BTreeMap<String, crate::handoff::RecvSession>,
+    /// Anchored records for logs this enclave doesn't follow yet (a handoff payload may arrive after them).
+    pub(crate) follow_buffer: BTreeMap<String, Vec<(u64, Vec<u8>)>>,
+    /// Template-scope receivers: sender's card (identity-log scope) → template, until the handoff record is anchored.
+    pub(crate) template_watch: BTreeMap<String, String>,
+    /// Followed records of anchored kinds that arrived before their anchor: (scope, seq) → record.
+    pub(crate) deferred: BTreeMap<(String, u64), Value>,
+    /// Peers whose handoff this enclave refused, and when (no new job offer to them for `handoff::MAX_AGE_MS`).
+    pub(crate) refused: BTreeMap<String, i64>,
+    /// The attested-clock reading of the latest `tick` (Q6).
+    pub(crate) tick_ms: Option<i64>,
+    pub(crate) last_hb_ms: Option<i64>,
+    pub(crate) last_lists_ms: Option<i64>,
+    pub(crate) hb_seq: u64,
+    pub(crate) peer_seq: u64,
+    /// After `shutdown`: this replica serves nothing.
+    pub(crate) stopped: bool,
 }
 
 pub fn error(req_id: &str, code: &str, message: impl Into<String>) -> Value {
@@ -45,6 +70,21 @@ impl Broker {
             platform,
             genesis: BTreeMap::new(),
             max_live_jobs: 256,
+            directory: BTreeMap::new(),
+            heard: BTreeMap::new(),
+            instance_cards: BTreeMap::new(),
+            sends: BTreeMap::new(),
+            recvs: BTreeMap::new(),
+            follow_buffer: BTreeMap::new(),
+            template_watch: BTreeMap::new(),
+            deferred: BTreeMap::new(),
+            refused: BTreeMap::new(),
+            tick_ms: None,
+            last_hb_ms: None,
+            last_lists_ms: None,
+            hb_seq: 0,
+            peer_seq: 0,
+            stopped: false,
         }
     }
 
@@ -66,6 +106,16 @@ impl Broker {
     /// The CID of the newest record in a job's log (tests: the host knows it from the records it pinned).
     pub fn job_log_head_for_tests(&self, job_hash: &[u8; 32]) -> Option<String> {
         self.jobs.get(job_hash).and_then(|j| self.logs.head(&j.job_hash_b64)).map(|(_, cid)| cid)
+    }
+
+    /// Seeds a template's `dup_tag` key here (step 6.4 does this for the first template enclave; 6.3 only moves it).
+    pub fn create_template_key_for_tests(&mut self, template: &str) {
+        self.keys.create_template_key(template);
+    }
+
+    /// Whether a usable template key is held (no key material).
+    pub fn template_ready_for_tests(&self, template: &str) -> bool {
+        self.keys.template_key(template).is_some()
     }
 
     pub fn set_max_live_jobs_for_tests(&mut self, n: usize) {
@@ -115,7 +165,7 @@ impl Broker {
     pub(crate) fn append_log(&mut self, io: &mut dyn HostIo, scope: &str, card: &str, kind: &str, body: Value) -> Result<(), &'static str> {
         let at = self.now_iso()?;
         let id = self.keys.identity(card).ok_or("NOTARY_KEY_EXPOSED")?;
-        let recs = self.logs.append(scope, false, kind, body, &at, &Signers { id: &id.id, inst: self.keys.inst() });
+        let recs = self.logs.append(scope, scope == card, kind, body, &at, &Signers { id: &id.id, inst: self.keys.inst() });
         self.emit_records(io, recs);
         Ok(())
     }
@@ -138,14 +188,30 @@ impl Broker {
         if !exposed.is_empty() {
             io.send(json!({ "kind": "alert", "req_id": "alert-exposed", "level": "error", "code": "key_exposed" }));
         }
+        // runtime §4: an exposed K_job,e stops receipts for that job until a `key_exposure` epoch is anchored
+        for x in &exposed {
+            if let crate::keyring::Exposed::Job(h, e) = x {
+                if let Some(j) = self.jobs.get_mut(h) {
+                    if j.epoch == *e {
+                        j.pending_inputs.clear();
+                    }
+                }
+            }
+        }
     }
 
     /// Handles one host message. Replies and enclave requests go out through `io`.
     pub fn handle(&mut self, io: &mut dyn HostIo, msg: &Value) {
         let req_id = msg.get("req_id").and_then(Value::as_str).unwrap_or_default().to_string();
         let kind = msg.get("kind").and_then(Value::as_str).unwrap_or_default();
+        if self.stopped && kind != "hello" {
+            if !matches!(kind, "tick" | "peer_message" | "anchor_receipt" | "log_record" | "fetch_result" | "chain_result") {
+                io.send(error(&req_id, "NH_ENCLAVE_UNAVAILABLE", "this replica has shut down"));
+            }
+            return;
+        }
         let reply = match kind {
-            "hello" => Some(self.on_hello(&req_id, msg)),
+            "hello" => Some(self.on_host_hello(&req_id, msg)),
             "chain_headers" => Some(self.on_headers(&req_id, msg)),
             "policy_snapshot" => {
                 let p = msg.get("policy_address").and_then(Value::as_str).unwrap_or_default().to_string();
@@ -160,15 +226,37 @@ impl Broker {
             "genesis" => Some(self.on_genesis(io, &req_id, msg)),
             "countersign_notary_card" => Some(self.on_countersign(io, &req_id, msg)),
             "create_job" => Some(self.on_create_job(io, &req_id, msg)),
-            "submit_input" => Some(self.on_submit_input(io, &req_id, msg)),
+            "submit_input" => self.on_submit_input(io, &req_id, msg),
             "close_chunk" => self.on_close_chunk(io, &req_id, msg),
             "anchor_receipt" => {
                 self.on_anchor_receipt(io, msg);
                 None
             }
             "abort_job" => Some(self.on_abort(io, &req_id, msg)),
-            // fetch_result is consumed by the HostIo; chain_result and peer_message belong to steps 6.3/6.4.
-            "fetch_result" | "chain_result" | "peer_message" => None,
+            "tick" => {
+                self.on_tick(io);
+                None
+            }
+            "peer_directory" => {
+                self.on_peer_directory(io, msg);
+                None
+            }
+            "peer_message" => {
+                self.on_peer_message(io, msg);
+                None
+            }
+            "log_record" => {
+                // a record another replica published (not anchored yet): followed, effects wait for its anchor
+                if let (Some(scope), Some(seq), Some(bytes)) = (msg.get("scope_id").and_then(Value::as_str), msg.get("seq").and_then(Value::as_u64), msg.get("record").and_then(Value::as_str).and_then(|b| b64u::decode(b).ok())) {
+                    let scope = scope.to_string();
+                    self.follow_record(io, &scope, seq, bytes, false);
+                }
+                None
+            }
+            "start_handoff" => Some(self.on_start_handoff(io, &req_id, msg)),
+            "shutdown" => Some(self.on_shutdown(io, &req_id)),
+            // fetch_result is consumed by the HostIo; chain_result belongs to step 6.4.
+            "fetch_result" | "chain_result" => None,
             _ => Some(error(&req_id, "NH_UNKNOWN_KIND", format!("unknown message kind {kind:?}"))),
         };
         if let Some(r) = reply {
@@ -176,7 +264,7 @@ impl Broker {
         }
     }
 
-    fn on_hello(&mut self, req_id: &str, msg: &Value) -> Value {
+    fn on_host_hello(&mut self, req_id: &str, msg: &Value) -> Value {
         let Some(challenge) = msg.get("challenge").and_then(Value::as_str).and_then(|c| b64u::decode_len(c, 32).ok()) else {
             return error(req_id, "NH_MALFORMED", "challenge must be 32 bytes, base64url");
         };
@@ -199,9 +287,21 @@ impl Broker {
         json!({ "kind": "chain_ack", "req_id": req_id, "newest": newest })
     }
 
+    /// The anchor of a record this enclave wrote releases the next one. A record another replica wrote (its bytes in
+    /// `record`) is followed (`replication.rs`).
     fn on_anchor_receipt(&mut self, io: &mut dyn HostIo, msg: &Value) {
         let (Some(scope), Some(seq)) = (msg.get("scope_id").and_then(Value::as_str), msg.get("seq").and_then(Value::as_u64)) else { return };
         let scope = scope.to_string();
+        if self.deferred.contains_key(&(scope.clone(), seq)) {
+            self.settle_deferred(io, &scope, seq);
+            return;
+        }
+        if self.logs.waiting(&scope) != Some(seq) {
+            if let Some(bytes) = msg.get("record").and_then(Value::as_str).and_then(|b| b64u::decode(b).ok()) {
+                self.follow_anchored(io, &scope, seq, bytes);
+            }
+            return;
+        }
         let Some(card) = self.card_for_scope(&scope) else { return };
         let Some(id) = self.keys.identity(&card) else { return };
         let recs = self.logs.on_anchor(&scope, seq, &Signers { id: &id.id, inst: self.keys.inst() });
@@ -209,9 +309,9 @@ impl Broker {
         self.after_anchor(io, &scope, seq);
     }
 
-    fn card_for_scope(&self, scope: &str) -> Option<String> {
+    pub(crate) fn card_for_scope(&self, scope: &str) -> Option<String> {
         // an identity log's scope is the notary card address itself
-        if self.keys.identity(scope).is_some() {
+        if self.keys.identity_held(scope).is_some() {
             return Some(scope.to_string());
         }
         let hash: [u8; 32] = b64u::decode_len(scope, 32).ok()?.try_into().ok()?;

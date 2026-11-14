@@ -58,7 +58,7 @@ export interface NotarizationConfig {
   singleOperatorRefusedSinceMs?: number;
 }
 
-export type NotarizationWarning = "runtime_retired_vulnerable" | "notary_key_exposed_later" | "JOB_LOG_GAP" | "JOB_LOG_FORK" | "EPOCH_TOTAL_LOSS" | "SINGLE_OPERATOR_QUORUM" | "NOTARIZATION_CONTRIBUTOR_POLICIES_UNVERIFIED";
+export type NotarizationWarning = "runtime_retired_vulnerable" | "notary_key_exposed_later" | "JOB_LOG_GAP" | "JOB_LOG_FORK" | "EPOCH_TOTAL_LOSS" | "SINGLE_OPERATOR_QUORUM" | "NOTARIZATION_CONTRIBUTOR_POLICIES_UNVERIFIED" | "NOTARIZATION_REPLICA_OVER_CAPACITY";
 
 export type NotarizationVerificationResult =
   | { valid: true; job_hash: string; notary_card: string; final_epoch: number; accepted: number; rejected: number; dropped_after_acceptance: number;
@@ -180,6 +180,20 @@ export async function verifyNotarization(notarizationCid: string, reads: Notariz
     const seqs = new Map<number, Set<string>>();
     for (const a of anchors) { const s = seqs.get(a.seq) ?? new Set(); s.add(a.record_cid); seqs.set(a.seq, s); }
     if ([...seqs.values()].some((s) => s.size > 1)) addWarning("JOB_LOG_FORK");
+    // Q7 (6.3): live instances per notary card, from the public log (opened / epoch_started start an epoch's set with
+    // their writer; job-scope `handoff` adds; `replica_lost` removes), never more than replica_set allows
+    const allowed = new Map<string, number>();
+    for (const r of job["replica_set"] as { notary_card: string; instances: number }[]) allowed.set(r.notary_card, (allowed.get(r.notary_card) ?? 0) + r.instances);
+    let live = new Map<string, string>();
+    for (const r of [...walk].reverse()) {
+      const body = r.body as Record<string, unknown>;
+      if (r.kind === "opened" || r.kind === "epoch_started") live = new Map([[r.instance, cardPointer(b64uDecode(r.notary_signature.public_key, 1312))]]);
+      else if (r.kind === "handoff" && body["scope"] === "job" && typeof body["to_instance"] === "string") live.set(body["to_instance"], String(body["to_notary_card"]));
+      else if (r.kind === "replica_lost") live.delete(String(body["instance"]));
+      const perCard = new Map<string, number>();
+      for (const c of live.values()) perCard.set(c, (perCard.get(c) ?? 0) + 1);
+      if ([...perCard].some(([c, k]) => k > (allowed.get(c) ?? 0))) addWarning("NOTARIZATION_REPLICA_OVER_CAPACITY");
+    }
   }
   // anchored records (cached): the `notarized` record's anchor time is the chain time N4a judges the keys at
   const anchored: { a: { seq: number; record_cid: string; timestamp: number }; rec: JobLogRecord | null }[] = [];

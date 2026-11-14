@@ -287,6 +287,19 @@ impl Lists {
         )
     }
 
+    /// The `close_compat` of an accepted-runtime entry (§34), for handoff check P4.
+    pub fn close_compat(&self, pcr0: &[u8]) -> Option<String> {
+        let Some((Value::Array(items), _)) = &self.runtimes else { return None };
+        let want = b64u::encode(pcr0);
+        items.iter().find(|e| e.get("pcr0").and_then(Value::as_str) == Some(want.as_str())).and_then(|e| e.get("close_compat")?.as_str().map(String::from))
+    }
+
+    /// The highest list versions a peer has seen travel with an identity handoff: they become floors (runtime §12 step 4).
+    pub fn raise_floors(&mut self, accepted_runtimes: u64, program_allowlist: u64) {
+        self.pins.accepted_runtimes_floor = self.pins.accepted_runtimes_floor.max(accepted_runtimes);
+        self.pins.program_allowlist_floor = self.pins.program_allowlist_floor.max(program_allowlist);
+    }
+
     /// PCR0s retired as `"vulnerable"` (for the key-lineage check, runtime §4).
     pub fn vulnerable_pcr0s(&self) -> Vec<Vec<u8>> {
         self.accepted_runtimes().into_iter().filter(|r| r.retire_reason == Some(RetireReason::Vulnerable)).map(|r| r.pcr0).collect()

@@ -55,10 +55,16 @@ function logRecord(seq: number, kind: string, body: object, prev?: string, over:
 
 function world(o: {
   patch?: (n: Record<string, any>) => void; cosigs?: string[]; reads?: Partial<NotarizationReads>; policy?: Partial<{ notary: NotarySection; approvedNotaries: string[]; chainValid: boolean }>;
-  extraAnchors?: (log: { cid: string }[]) => { seq: number; record_cid: string; timestamp: number }[]; dropRecord?: boolean; totalLoss?: boolean; cosigDigestOverText?: boolean; closerDoc?: string; resign?: boolean;
+  extraAnchors?: (log: { cid: string }[]) => { seq: number; record_cid: string; timestamp: number }[]; dropRecord?: boolean; totalLoss?: boolean; handoffsTo?: number; cosigDigestOverText?: boolean; closerDoc?: string; resign?: boolean;
 } = {}): World {
   const r0 = logRecord(0, "opened", { attestations: [] });
-  const r1 = o.totalLoss ? logRecord(1, "epoch_started", { epoch: 0, epoch_reason: "total_loss" }, r0.cid) : logRecord(1, "replicated", { instance: "x", attestation: docCid("cosig_1") }, r0.cid);
+  let r1 = o.totalLoss ? logRecord(1, "epoch_started", { epoch: 0, epoch_reason: "total_loss" }, r0.cid) : logRecord(1, "replicated", { instance: "x", attestation: docCid("cosig_1") }, r0.cid);
+  // job-scope handoffs to `handoffsTo` more instances of the notary card (6.3, Q7)
+  for (let i = 0; i < (o.handoffsTo ?? 0); i++) {
+    const hb = { at: "2026-11-12T10:00:00Z", epoch: 0, from_attestation: docCid("closer"), from_instance: "a", job_hash: spec.job_hash, pcr0_from: "AA", pcr0_to: "AA", receiver_signature: { public_key: "AA", signature: "AA" },
+      scope: "job", state_hash: "AA", state_version: 0, to_attestation: docCid("cosig_1"), to_instance: `inst-${i}`, to_notary_card: NOTARY_CARD, type: "notary.handoff.v1" };
+    r1 = logRecord(r1.rec["seq"] as number + 1, "handoff", hb, r1.cid);
+  }
   if (o.dropRecord) store.delete(r0.cid);
   const cosigDocs = o.cosigs ?? ["closer", "cosig_1", "cosig_2"];
   const instKeys: Record<string, number> = { closer: 7, cosig_1: 8, cosig_2: 9, cosig_1_wrong_instance: 8, cosig_1_stranger_id: 8 };
@@ -74,8 +80,8 @@ function world(o: {
   const unsignedFull = { ...body, cosignatures };
   const notarization = { ...unsignedFull, notary_signature: signObj(1, unsignedFull) };
   const cid = put(canonicalNotary(notarization));
-  const notarizedRec = logRecord(2, "notarized", { accepted: 42, input_commitment: COMMIT, notarization: cid, rejected: 4 }, r1.cid);
-  const base = [{ seq: 0, record_cid: r0.cid, timestamp: T("2026-11-12T10:00:10Z") }, { seq: 2, record_cid: notarizedRec.cid, timestamp: T("2026-11-19T10:05:00Z") }];
+  const notarizedRec = logRecord((r1.rec["seq"] as number) + 1, "notarized", { accepted: 42, input_commitment: COMMIT, notarization: cid, rejected: 4 }, r1.cid);
+  const base = [{ seq: 0, record_cid: r0.cid, timestamp: T("2026-11-12T10:00:10Z") }, { seq: notarizedRec.rec["seq"] as number, record_cid: notarizedRec.cid, timestamp: T("2026-11-19T10:05:00Z") }];
   const anchors = [...base, ...(o.extraAnchors?.([r0, r1, notarizedRec]) ?? [])];
   const reads: NotarizationReads = {
     nowMs: () => T("2026-11-19T11:00:00Z"),
@@ -205,6 +211,12 @@ describe("algorithm N (notary_lifecycle.md A.4) with real simulator attestations
     if (fork.valid) expect(fork.warnings).toContain("JOB_LOG_FORK"); else throw new Error("expected valid");
     const loss = await run(world({ totalLoss: true }));
     if (loss.valid) expect(loss.warnings).toContain("EPOCH_TOTAL_LOSS"); else throw new Error(`expected valid, got ${loss.code}`);
+  });
+  it("Q7 (6.3): more live instances of a notary card than replica_set allows, counted from the log, is a warning", async () => {
+    const ok = await run(world({ handoffsTo: 2 }));
+    if (ok.valid) expect(ok.warnings).not.toContain("NOTARIZATION_REPLICA_OVER_CAPACITY"); else throw new Error(`expected valid, got ${ok.code}`);
+    const over = await run(world({ handoffsTo: 3 }));
+    if (over.valid) expect(over.warnings).toContain("NOTARIZATION_REPLICA_OVER_CAPACITY"); else throw new Error(`expected valid, got ${over.code}`);
   });
   // N12
   it("N12 NOT_QUORUM_INSUFFICIENT: one cosignature, a wrong-instance attestation, a duplicate instance, a signature over the base64url text, bad close_quorum", async () => {

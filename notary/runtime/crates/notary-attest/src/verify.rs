@@ -116,3 +116,16 @@ pub fn verify_attestation(doc: &[u8], cfg: &Config, expected: &Expected, ctx: &C
     let env = module.verify_envelope(doc, root).map_err(|c| c.code())?;
     verify_parsed(&env, expected, ctx)
 }
+
+/// Steps V1–V5 only, through the same platform gate as `verify_attestation`: the parsed envelope of a document whose
+/// format, root, chain and signature check out. Callers then run V6–V12 with `verify_parsed` once they know what the
+/// document must bind (handoff check P reads the peer's PCR0 and bound fields this way, replication §3).
+pub fn verify_envelope(doc: &[u8], cfg: &Config, platform: &str) -> Result<Envelope, &'static str> {
+    let module: Box<dyn AttestationVerifier> = match platform {
+        "aws-nitro-enclaves" => Box::new(AwsVerifier),
+        "simulator" if cfg.allow_simulator => Box::new(SimVerifier),
+        _ => return Err("ATT_PLATFORM_NOT_ALLOWED"),
+    };
+    let root = cfg.roots.get(platform).ok_or("ATT_PLATFORM_NOT_ALLOWED")?;
+    module.verify_envelope(doc, root).map_err(|c| c.code())
+}

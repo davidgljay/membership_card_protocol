@@ -6,6 +6,8 @@
 **Architecture:** `ARCHITECTURE.md` ADR-013 · **Runtime:** `object_specs/notary_runtime.md` · **Processes:** `process_specs/notary_lifecycle.md`, `notary_replication_and_recovery.md`, `derived_card_revocation_propagation.md`
 **Amended 2026-11-12:** §8 snapshot entries carry head-event history and `sub_card_doc_cid`; per-card fetch shapes defined; policy, requester and list-card reads use per-card fetches. Source: `plans/notary-spec-wording-e31.md`, approved by David 2026-11-12.
 
+**Amended 2026-11-14 (6.3):** §11 the peer directory, `tick`, and `need_inputs` ciphertext sync. David approved 2026-11-14 (`plans/notary-questions-phase-6.md`, Q5–Q9). Also relaying log records and storing acknowledged inputs (`store_input`), **for David's review** (`plans/notary-questions-6.3.md`).
+
 **Amended 2026-11-14 (6.2):** §5 `POST /jobs/{job_hash}/restart`. A consequence of the approved Phase 6 plan (6.2), not covered by an earlier approval; **for David's review** (`plans/notary-questions-phase-6.md`).
 
 **Amended 2026-11-14 (6.0a):** §8 `policy_head_cid`; snapshots go out when a job is created and gate its announcement. A consequence of the approved Q2 wording, found while implementing it; **for David's review** (`plans/notary-questions-phase-6.md`, Q2).
@@ -120,12 +122,14 @@ All configuration is through environment variables.
 | `POST` | `/ohttp/gateway` | The relay | Oblivious-transport gateway. Decapsulates and dispatches to the routes marked "oblivious" below. |
 | `GET` | `/jobs/{job_hash}/announcement` | Oblivious | The newest `JobAnnouncement` for the highest epoch |
 | `POST` | `/jobs/{job_hash}/inputs` | Oblivious | Body is a `SealedInput` (`protocol-objects.md §24`). Stores it, signs a `HostReceipt`, forwards it to a local enclave, and returns `{ host_receipt, receipt_sealed }`. |
-| `POST` | `/jobs` | Direct, from the job requester | Body: `{ job, program_cid }`. The host fetches the program and sends `create_job`. Returns `{ job_hash, status }`. |
+| `POST` | `/jobs` | Direct, from the job requester | Body: `{ job, program_cid }`. The host fetches the program and sends `create_job`. Returns `{ job_hash, status }`. *(6.3, for David's review, `plans/notary-questions-6.3.md` R12:)* with N > 1 only the host serving the first `replica_set` card sends `create_job`; another host records the job and answers `status: "awaiting_handoff"`. |
+| `POST` | `/operator/handoff` | Direct, `NOTARY_ADMIN_TOKEN` | *(6.3, for review, R5)* Body `{ scope, card, template?, from_instance?, to_instance }`: an identity or template handoff between instances (`start_handoff`) |
+| `POST` | `/operator/shutdown` | Direct, `NOTARY_ADMIN_TOKEN` | *(6.3, for review, R5)* Body `{ instance }`: the instance tells its peers it stops (`shutdown`) |
 | `POST` | `/jobs/{job_hash}/restart` | Direct, `NOTARY_ADMIN_TOKEN` | Body `{ reason }` (default `total_loss`). The operator reports that no replica holds the job key. The host sends `create_job` with `restart { prev_epoch, last_log, reason }` (the epoch it holds and its newest job-log record) to a local enclave, stops serving the old announcement, and serves the new epoch's only after the enclave announces it (`notary_replication_and_recovery.md` §7). Returns `{ job_hash, epoch, status }`. |
 | `GET` | `/jobs/{job_hash}/status` | Direct | Public status only: state, epoch, live replica count, job-log head CID |
 | `POST` | `/genesis` | Direct, `NOTARY_ADMIN_TOKEN` | Starts notary genesis (`notary_lifecycle.md` Phase 0) and returns the genesis request and attestation. The host then serves the new notary card (§4). |
 | `POST` | `/genesis/countersign` | Direct, `NOTARY_ADMIN_TOKEN` | Passes the policy holder's notary card offer to the enclave and returns the countersigned offer |
-| `POST` | `/peer` | Direct, from peer hosts | Relays peer messages (handoff, `input_ack`, cosignatures, heartbeats) to the named local instance |
+| `POST` | `/peer` | Direct, from peer hosts | Relays peer messages (handoff, `input_ack`, cosignatures, heartbeats) to the named local instance. *(6.3)* With `kind`: `directory` (this host's instances, Q5), `inputs` (stored ciphertexts by hash, Q8), and, for review (R2), `log_record`, `anchor` and `announce` (records, anchors and announcements other hosts' enclaves produced) |
 | `GET` | `/health` | Direct | Liveness, plus the number of attested enclaves |
 
 The announcement and input routes are reached **only** through the gateway. A direct request to them is refused (`NH_DIRECT_FORBIDDEN`), the same pattern the press uses for its sensitive routes.
@@ -202,6 +206,10 @@ For derived-card template policies only:
 
 - **Starting enclaves.** The host starts enclaves from the pinned image and sends `hello`. It answers `need_replica` by starting a new enclave, preferably in another availability zone, and introducing it to the replica that asked, so the handoff can run (`notary_replication_and_recovery.md` §3).
 - **Peer relay.** Traffic between replicas goes through `peer_send` from the sending enclave, then the sending host's `POST /peer` call to the receiving host, then the receiving host's `peer_message` to its enclave. Hosts see only signed or sealed bytes.
+- **Peer directory** *(added 2026-11-14, Q5)*. The host sends each enclave `peer_directory`: the instances it knows of for the enclave's jobs and cards (its own and those reached through `PEER_HOSTS`), each with `notary_card`, `inst_pubkey`, `attestation` and `host_url`. It is only a routing hint; enclaves trust nothing in it.
+- **Ticks** *(added 2026-11-14, Q6)*. The host sends each enclave `tick {}` about once a second. Withholding ticks only slows the enclave's timers.
+- **Ciphertext sync** *(added 2026-11-14, Q8)*. On `need_inputs { job_hash, hashes }` the host fetches each missing `SealedInput` from peer hosts through `/peer`, checks `H(sealed) == input_hash` itself, and stores it under `input:` (§7). A host can withhold an input, never inject one. On `store_input` it stores an input its enclave acknowledged for a peer, with the same check (**for David's review** (`plans/notary-questions-6.3.md`), R4).
+- **Log records** (**for David's review** (`plans/notary-questions-6.3.md`), R2). The host relays every job-log and identity-log record its enclave publishes to the other hosts of the replica set, and gives its enclave the records the others wrote (`log_record`, and `anchor_receipt` with `record` once anchored).
 - **Re-attestation.** Every `REATTEST_INTERVAL_SECONDS` the host asks each enclave to re-attest its live jobs, then serves the re-issued announcement.
 - **Restarts.** After a total loss, the operator may restart a job (`create_job` with `restart`, `notary_replication_and_recovery.md` §7). The resulting epoch change is public.
 

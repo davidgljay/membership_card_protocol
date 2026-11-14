@@ -17,9 +17,13 @@ export function memoryServices() {
     return { set: (id, v) => { m.set(id, v); }, notary: async (id) => m.get(id) ?? null };
   })();
   const chain: ChainReader = { cardHead: async () => new Uint8Array([1]), pressAuth: async () => ({ active: true }), subcard: async () => ({}), events: async () => [] };
-  const peers: PeerClient = { async send(url, body) { if (state.failPeer) throw new Error("peer down"); peerSends.push({ url, body }); } };
+  const peerAnswers = new Map<string, (body: Record<string, unknown>) => unknown>();
+  const peers: PeerClient = {
+    async send(url, body) { if (state.failPeer) throw new Error("peer down"); peerSends.push({ url, body }); },
+    async request(url, body) { if (state.failPeer) throw new Error("peer down"); peerSends.push({ url, body }); return peerAnswers.get(url)?.(body) ?? {}; },
+  };
   const delivery: DeliveryClient = { async deliver(e) { if (state.failDelivery) throw new Error("routing down"); delivered.push(e); } };
   const replicas: ReplicaStarter = { async start(job, card) { if (state.noReplica) throw new Error("no capacity"); started.push({ job, card }); } };
   const monitor: Monitor = { async alert(level, code, counts) { alerts.push({ level, code, ...(counts ? { counts } : {}) }); } };
-  return { ipfs: createMockIpfs(), eas, submitter, policies, chain, peers, delivery, replicas, monitor, anchors, alerts, delivered, peerSends, started, submitted, state };
+  return { ipfs: createMockIpfs(), eas, submitter, policies, chain, peers, delivery, replicas, monitor, anchors, alerts, delivered, peerSends, peerAnswers, started, submitted, state };
 }

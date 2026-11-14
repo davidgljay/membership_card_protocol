@@ -24,6 +24,8 @@ export interface StoredJob {
   replicas: string[];
   state: "keyed" | "open" | "closing" | "finalized" | "ended" | "aborted";
   logHead: string | null;
+  /** `seq` of `logHead` (6.3: records arrive from several replicas). */
+  logSeq?: number;
 }
 
 export interface StoredInput { sealedInput: unknown; receivedAt: string }

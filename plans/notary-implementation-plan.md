@@ -305,7 +305,7 @@ Goal: one end-to-end path running in the simulator: a job is announced with an a
   - **Context needed**: `notary_lifecycle.md` (vote); `notary_replication_and_recovery.md` (epochs, close)
   - **Done when**: tests cover ballot replacement, close before and after `closes_at`, and an epoch restart with resubmission.
 
-- [ ] **6.3 Replication** *(Opus)*
+- [x] **6.3 Replication** *(Opus)*
   - **What**: Implement the mutual-attestation handoff (P1–P5), handoff records, heartbeats and re-replication, with replicas across separate simulated hosts. Also implement runtime upgrades (rolling handoff, `close_compat`, `runtime_migration` epochs) and key exposure (lineage, algorithm E, `key_exposure` epochs) *(added during CP4 review)*.
   - **Who**: Claude
   - **Context needed**: `notary_replication_and_recovery.md`; `notary-design-decisions.md §2.5`

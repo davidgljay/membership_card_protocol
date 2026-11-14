@@ -7,9 +7,9 @@
 //! The broker keeps, per accepted input, `root_key_hash → { revision, input_hash, epoch }` (plus the digest of the
 //! signed input, to tell a resubmission from a conflict): who has a counted input, not what they chose.
 //!
-//! Step 5.3 scope: a single replica (`acks` = 1). Quorum acknowledgment across replicas is step 6.3.
+//! With q > 1 the receipt waits for q matching acknowledgments from peers (replication §4, `replication.rs`).
 use crate::{env::HostIo, host_proto::{error, Broker}, jobs::State};
-use notary_crypto::{sealed_input_info_aad, seal_receipt};
+use notary_crypto::sealed_input_info_aad;
 use notary_types::{b64u, formats, jcs, objects};
 use serde_json::{json, Value};
 
@@ -29,61 +29,51 @@ pub(crate) enum Verdict {
 }
 
 impl Broker {
-    pub(crate) fn on_submit_input(&mut self, io: &mut dyn HostIo, req_id: &str, msg: &Value) -> Value {
-        let Some(sealed) = msg.get("sealed_input").cloned() else { return error(req_id, "INPUT_MALFORMED", "sealed_input missing") };
+    /// Returns the reply now (q = 1, or an error), or `None` while it waits for acknowledgments (the reply then goes
+    /// out on its own with this `req_id`, replication §4).
+    pub(crate) fn on_submit_input(&mut self, io: &mut dyn HostIo, req_id: &str, msg: &Value) -> Option<Value> {
+        let Some(sealed) = msg.get("sealed_input").cloned() else { return Some(error(req_id, "INPUT_MALFORMED", "sealed_input missing")) };
         let Ok(typed) = objects::from_value::<objects::SealedInput>(&sealed, objects::types::SEALED_INPUT) else {
-            return error(req_id, "INPUT_MALFORMED", "not a SealedInput");
+            return Some(error(req_id, "INPUT_MALFORMED", "not a SealedInput"));
         };
         let Some(hash) = b64u::decode_len(&typed.job_hash, 32).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()) else {
-            return error(req_id, "INPUT_MALFORMED", "job_hash");
+            return Some(error(req_id, "INPUT_MALFORMED", "job_hash"));
         };
         if msg.get("job_hash").and_then(Value::as_str) != Some(typed.job_hash.as_str()) {
-            return error(req_id, "INPUT_WRONG_JOB", "sealed input is for another job");
+            return Some(error(req_id, "INPUT_WRONG_JOB", "sealed input is for another job"));
         }
-        let Some(job) = self.jobs.get(&hash) else { return error(req_id, "NH_JOB_UNKNOWN", "no such job here") };
+        let Some(job) = self.jobs.get(&hash) else { return Some(error(req_id, "NH_JOB_UNKNOWN", "no such job here")) };
         // an input for a past epoch (its key was erased at the restart) is undecryptable whatever state the new epoch is in
         if typed.epoch != job.epoch || typed.kem != notary_crypto::KEM_ID {
-            return error(req_id, "INPUT_UNDECRYPTABLE", "wrong epoch or kem");
+            return Some(error(req_id, "INPUT_UNDECRYPTABLE", "wrong epoch or kem"));
+        }
+        if !job.serving && job.state.live() {
+            return Some(error(req_id, "NH_ENCLAVE_UNAVAILABLE", "this replica does not serve the job yet"));
         }
         if job.state != State::Open {
-            return error(req_id, "NH_JOB_CLOSED", "the job is not open for inputs");
+            return Some(error(req_id, "NH_JOB_CLOSED", "the job is not open for inputs"));
         }
-        let Ok(input_hash) = jcs::h(&sealed) else { return error(req_id, "INPUT_MALFORMED", "not notary JSON") };
-        let Some(opened) = self.open_sealed(&hash, &typed) else { return error(req_id, "INPUT_UNDECRYPTABLE", "B1: cannot open with the job key") };
-
-        let Ok(processed_at) = self.now_iso() else { return error(req_id, "ATT_UNAVAILABLE", "the attested clock is unavailable") };
+        let Ok(input_hash) = jcs::h(&sealed) else { return Some(error(req_id, "INPUT_MALFORMED", "not notary JSON")) };
+        if self.jobs[&hash].pending_inputs.contains_key(&input_hash) {
+            return Some(error(req_id, "NH_ENCLAVE_UNAVAILABLE", "this input is already waiting for acknowledgments; retry"));
+        }
+        let Some(opened) = self.open_sealed(&hash, &typed) else { return Some(error(req_id, "INPUT_UNDECRYPTABLE", "B1: cannot open with the job key")) };
+        if self.now_iso().is_err() {
+            return Some(error(req_id, "ATT_UNAVAILABLE", "the attested clock is unavailable"));
+        }
         let verdict = self.check_input(io, &hash, opened.plaintext.expose(), &input_hash, typed.epoch, false);
-        let job = self.jobs.get_mut(&hash).expect("present");
-        let (status, reject_reason, revision) = match verdict {
-            Verdict::Accepted { root, entry } => {
-                let rev = entry.revision;
-                job.index.insert(root, entry);
-                ("accepted", None, rev)
-            }
-            Verdict::Superseded { revision } => ("superseded", None, revision),
-            Verdict::Rejected { code, revision } => {
-                job.rejected += 1;
-                ("rejected", Some(code), revision)
-            }
-        };
-        let (epoch, card, scope) = (job.epoch, job.card.clone(), job.job_hash_b64.clone());
-        let Some(ident) = self.keys.identity(&card) else { return error(req_id, "NOTARY_KEY_EXPOSED", "identity unusable") };
-        let mut receipt = json!({
-            "acks": 1, "epoch": epoch, "input_hash": input_hash, "instance": self.keys.instance_id(), "job_hash": scope,
-            "processed_at": processed_at, "revision": revision, "status": status, "type": objects::types::VALIDATION_RECEIPT,
-        });
-        if let Some(r) = reject_reason {
-            receipt["reject_reason"] = json!(r);
+        let ((status, reject_reason), revision) = self.apply_verdict(&hash, verdict);
+        let receipt_key = opened.receipt_key;
+        drop(opened.plaintext);
+        if self.jobs[&hash].q > 1 {
+            // replication step 12: forward to every live member; the receipt waits for q matching acknowledgments
+            self.start_quorum(io, &hash, req_id, &sealed, &input_hash, status, reject_reason, revision, receipt_key);
+            return None;
         }
-        receipt["notary_signature"] = match ident.id.sign_object(&receipt, "notary_signature") {
-            Ok(s) => s,
-            Err(_) => return error(req_id, "INPUT_MALFORMED", "receipt"),
-        };
-        let bytes = jcs::canonical(&receipt).expect("receipt is notary JSON");
-        match seal_receipt(&opened.receipt_key, &input_hash, &scope, &bytes) {
-            Ok(sealed) => json!({ "kind": "input_result", "req_id": req_id, "input_hash": input_hash, "receipt_sealed": b64u::encode(&sealed) }),
-            Err(_) => error(req_id, "INPUT_UNDECRYPTABLE", "receipt sealing failed"),
-        }
+        Some(match self.issue_receipt(&hash, &input_hash, status, reject_reason, revision, 1, &receipt_key) {
+            Ok(sealed) => json!({ "kind": "input_result", "req_id": req_id, "input_hash": input_hash, "receipt_sealed": sealed }),
+            Err(c) => error(req_id, c, "receipt"),
+        })
     }
 
     pub(crate) fn open_sealed(&self, hash: &[u8; 32], s: &objects::SealedInput) -> Option<notary_crypto::Opened> {

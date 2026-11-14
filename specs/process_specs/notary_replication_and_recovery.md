@@ -7,6 +7,8 @@
 
 **Amended 2026-11-12:** step 33, genesis after total loss makes a new notary card with its own identity log (E26). Source: `plans/notary-spec-wording-batch2.md`, approved by David 2026-11-12.
 
+**Amended 2026-11-14 (6.3):** step 7 counts capacity from the job log (Q7); §1 timers run on the attested clock, read once per host `tick` (Q6); peer messages use the envelope of `protocol-objects.md` §35 and peers are found through an untrusted directory (Q5); step 22 and §4 ciphertext sync (Q8). David approved 2026-11-14 (`plans/notary-questions-phase-6.md`, Q5–Q9). Also: who sends job-scope handoffs, how followers see the log, `replica_gone`, and the leader that changes mid-close (steps 2, 10, 17, 21), **for David's review** (`plans/notary-questions-6.3.md`).
+
 > **Terminology.** "The enclave" means an AWS Nitro Enclaves enclave. "Enclave attestation" means the AWS Nitro Enclaves attestation document. See `ARCHITECTURE.md`, terminology note.
 
 ---
@@ -59,6 +61,8 @@ It covers:
 | Per-input key grace | How long an old epoch's key is kept after rotation | 1 h |
 | Wallet input retention | How long a wallet keeps a signed input | Until a valid notarization is seen, plus 7 days |
 
+**Timers** *(amended 2026-11-14, Q6)*. Every interval above is measured on the enclave's attested clock. The host sends `tick {}` about once a second, carrying no time; the enclave reads the attested clock at most once per tick and runs every due timer against that reading. A host that withholds ticks only slows timers.
+
 **Why a majority quorum.** Any two sets of q replicas share at least one replica, and an honest replica co-signs at most one result per job. So two conflicting results can never both reach a quorum, even when a host partitions the replicas. For the same reason, an input acknowledged by q replicas survives the loss of any minority of them.
 
 **Leadership** is derived from heartbeats (§6). A partition can create two leaders. That is tolerated: they can fork the job log, which verifiers see as `JOB_LOG_FORK`, but they can't both get a result accepted (§5).
@@ -69,7 +73,7 @@ It covers:
 
 1. **Host → originator enclave.** `create_job` with the job and the program. The originator runs the job checks and program admission, then generates `K_job,0` and attests with purpose `0x02` (`notary_lifecycle.md` steps 16–17).
    - *Threat note:* the host can refuse to start or send `create_job`, which only delays the job. It cannot make a key exist for a program that wasn't admitted, because admission comes first.
-2. **Originator → each other instance in `replica_set`.** The originator runs a **job-scope handoff** (§3). For another operator's instances, the message goes through that operator's host. Each receiver attests with purpose `0x02` for the same key hash.
+2. **Originator → each other instance in `replica_set`.** The originator runs a **job-scope handoff** (§3). It finds instances through the host's `peer_directory`, an untrusted hint of where to send; every peer still passes algorithm P (Q5). Job-scope handoffs are always sent by the job leader, which at formation is the originator (**for David's review** (`plans/notary-questions-6.3.md`), R1). For another operator's instances, the message goes through that operator's host. Each receiver attests with purpose `0x02` for the same key hash.
    - *Threat note:* hosts can drop handoff traffic, so the job never reaches q. They cannot get the key to a non-enclave, to a non-accepted runtime, or to a notary card outside `replica_set` (§3, P1–P5).
 3. **Job leader**, once q instances hold the key. Writes the `opened` job-log record listing each instance's `0x02` attestation, and waits for its EAS anchor.
    - *Threat note:* the host can withhold the anchor, which delays opening. It cannot open the job with fewer than q replicas.
@@ -94,7 +98,7 @@ A **sender** S transfers keys and state to a **receiver** R. All messages travel
 5. **S and R** each choose a fresh 32-byte challenge and send it to the other.
    - *Threat note:* the host can drop or delay challenges, so the handoff fails (denial of service). Fresh challenges mean old attestations can't be replayed.
 6. **R** generates an ephemeral X-Wing **handoff key**. It requests a purpose-`0x03` attestation with `nonce` = S's challenge and `public_key = SHA-256(handoff key)`. For `job` scope it also runs program admission and requests a purpose-`0x04` attestation for the job and epoch, with the same nonce and `public_key`. **S** requests a purpose-`0x03` attestation with `nonce` = R's challenge.
-7. **Each side runs algorithm P** (below) on the other. **S** also refuses (`HANDOFF_OVER_CAPACITY`) if its heartbeats show R's notary card already holds as many instances as `replica_set` allows.
+7. **Each side runs algorithm P** (below) on the other. **S** also refuses (`HANDOFF_OVER_CAPACITY`) if R's notary card already runs as many instances as `replica_set` allows, counted from **the anchored job log S holds**: the instances named by `handoff` and `replicated` records for that card, minus those named by `replica_lost`. Heartbeats may only lower the count (a peer reports a stop). Verifiers check the same rule from the public log (algorithm N warning `NOTARIZATION_REPLICA_OVER_CAPACITY`). *(Amended 2026-11-14, Q7.)*
    - *Threat note:* the host can start extra enclaves of its **own** operator, up to the capacity cap. It cannot substitute its own handoff key, because the key's hash is in R's attestation. It cannot target a debug enclave, a non-accepted runtime, the wrong notary card, or an enclave without the program admitted.
 8. **S** builds the payload `{ scope, keys, state, state_version, state_hash, job_log_head, seq }`. It HPKE-seals it to R's handoff key with `info = "card-notary-handoff-v1" || S challenge || R challenge`, and signs `SHA-256(ciphertext)` with its `K_inst`.
    - *Threat note:* the host sees only ciphertext. It can't read keys or state.
@@ -102,6 +106,7 @@ A **sender** S transfers keys and state to a **receiver** R. All messages travel
    - *Threat note:* the host cannot hand R older state, because versions only go forward.
 10. **The job leader** (for `job` scope) or **S** (for `identity` and `template` scopes) writes a `handoff` record to the job log or the identity log, and waits for its EAS anchor. **R does not serve** (accept inputs, co-sign, write chain payloads) until it has seen that anchor.
     - *Threat note:* the host can withhold the anchor, so R never serves. It cannot make R act without a public handoff record. This is how "every key handoff appears in the job log" is enforced.
+    - *How R sees it* (**for David's review** (`plans/notary-questions-6.3.md`), R2): hosts give their enclaves the records other replicas wrote (`anchor_receipt` with the record's bytes, and `log_record` for published records). A replica adopts a record only if it is signed by a `replica_set` card's `K_id` and an instance key and links to its head; a record of an anchored kind takes effect only at its anchor.
 
 **Algorithm P: peer check.** Run by each side on the other. Codes are listed in §Error Paths.
 
@@ -172,9 +177,9 @@ What an operator does depends on how the old and new runtimes compare:
 
     A peer silent for more than 120 s counts as down.
     - *Threat note:* the host can delay or drop heartbeats, which makes peers look down and triggers re-replication. It cannot forge or replay heartbeats, because they are signed and `seq` increases.
-21. **Job leader.** When the live count falls below `min_live` while at least one replica is alive, it writes `replica_lost` (naming the silent instance) and sends its host `alert need_replica`.
+21. **Job leader.** When the live count falls below `min_live` while at least one replica is alive, it writes `replica_lost` (naming the silent instance) and sends its host `alert need_replica`. A replica that is being stopped tells its peers (`replica_gone`), and the leader writes `replica_lost` for it at once, so the logged count frees its place under the cap (**for David's review** (`plans/notary-questions-6.3.md`), R5).
     - *Threat note:* the host can kill its own replicas or claim they died. That is visible: the record is anchored, and the job halts if the anchor is missing.
-22. **That operator's host.** Starts a new enclave, preferably in another availability zone. A job-scope handoff (§3) follows, and the leader writes `replicated`.
+22. **That operator's host.** Starts a new enclave, preferably in another availability zone. A job-scope handoff (§3) follows, and the leader writes `replicated`. The handoff payload carries the dedupe index, so the new replica knows every `input_hash` the job counts; it tells its host `need_inputs { job_hash, hashes }`, and the host fetches each missing `SealedInput` from peer hosts through `/peer`, checking `H(sealed) == input_hash` itself before storing it. A host can only withhold an input, never inject one (amended 2026-11-14, Q8).
     - *Threat note:* the host can refuse to start one, which stalls the job (L1).
 23. **While fewer than q replicas are live:** no validation receipts are issued and close waits. Re-replication restores service.
 24. **A replica that returns after being counted down** rejoins only through a fresh handoff. It discards its old keys and state.

@@ -1858,6 +1858,53 @@ Each list card also has a field **`list_approval`**, replaced on every update. I
 
 ---
 
+## 35. PeerEnvelope
+
+*Added 2026-11-14 (6.3). David approved 2026-11-14 (`plans/notary-questions-phase-6.md`, Q5–Q9).*
+
+**Transmitted:** Enclave to enclave. The sending enclave hands the bytes to its host (`peer_send`), the host relays them to the receiving instance's host (`POST /peer`), which gives them to its enclave (`peer_message`). Hosts never parse them. Never published.
+**Signed by:** The sender's `K_inst` (`instance_signature`)
+**Serialized for signing:** Canonical RFC 8785 JSON of all fields except `instance_signature`
+
+```json
+{
+  "body":               { "<per kind>": "..." },
+  "from":               "<base64url — SHA-256(sender K_inst)>",
+  "instance_signature": { "public_key": "<base64url — K_inst>", "signature": "<base64url>" },
+  "kind":               "<kind>",
+  "to":                 "<base64url — SHA-256(receiver K_inst)>",
+  "type":               "notary.peer.v1"
+}
+```
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `type` | `text` | Yes | `"notary.peer.v1"` |
+| `kind` | `text` | Yes | One of the kinds below |
+| `from`, `to` | `base64url` | Yes | Instance ids. A receiver checks `SHA-256(instance_signature.public_key) == from` and that `to` is itself. |
+| `body` | object | Yes | Per kind |
+| `instance_signature` | SignatureEntry | Yes | |
+
+**Kinds** (`notary_replication_and_recovery.md`):
+
+| `kind` | Step | Body |
+|---|---|---|
+| `handoff_offer` | §3 step 5 (S → R) | `{ handoff_id, scope, challenge, from_card, job?, epoch?, card?, template? }` |
+| `hello` | §3 steps 5–6 (R → S) | `{ handoff_id, challenge, handoff_pubkey, attestation, admitted_attestation?, id_pubkey?, id_proof?, abi }` |
+| `handoff_payload` | §3 step 8 (S → R) | `{ handoff_id, attestation, id_pubkey, id_proof, job_attestation?, enc, ct, ct_signature }` |
+| `handoff_ack` | §3 step 9 (R → S) | `{ handoff_id, record: HandoffRecord (§29), job_attestation? }` |
+| `input_forward` | §4 step 12 | `{ job_hash, sealed_input }` |
+| `input_ack` | §4 step 12 | `{ job_hash, input_hash, status, revision, instance }` |
+| `close_body` | §5 step 17 | `{ job_hash, body, counted }` |
+| `close_cosign` | §5 step 17 | `{ job_hash, body_hash, attestation, signature }` |
+| `close_mismatch` | §5 step 19 | `{ job_hash, counted_hash }` |
+| `heartbeat` | §6 step 20 | a Heartbeat (§30) |
+| `replica_gone` | §6 | `{ instance, job_hash? }` |
+
+A message's sender is authenticated by its signature. Handoff kinds come with attestations that algorithm P checks. Every other kind is accepted only from a replica the anchored job log names. The body field lists are implemented as shown; they are **for David's review** with `plans/notary-questions-6.3.md`, since Q5 approved the envelope and the kinds, not each body.
+
+---
+
 ## Object Relationship Summary
 
 ```

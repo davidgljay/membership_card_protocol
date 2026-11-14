@@ -14,5 +14,12 @@ export function sanitizeAlert(level: string, code: string, counts: Record<string
 }
 
 export function webhookMonitor(url: string | undefined, post: (url: string, body: unknown) => Promise<void>): Monitor {
-  return { async alert(level, code, counts) { if (url) await post(url, sanitizeAlert(level, code, counts)).catch(() => undefined); } };
+  return {
+    async alert(level, code, counts) {
+      const a = sanitizeAlert(level, code, counts);
+      if (url) await post(url, a).catch(() => undefined);
+      // the sanitized alert also goes to the host's own log: level and code only, never job data
+      else console.warn(`[notary-host] alert ${a.level} ${a.code}`);
+    },
+  };
 }

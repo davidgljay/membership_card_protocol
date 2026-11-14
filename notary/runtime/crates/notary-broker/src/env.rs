@@ -57,6 +57,11 @@ pub trait CardOracle {
     /// 6.0a: whether the contributor's master card and signing sub-card come from a snapshot of one of `policies`
     /// (runtime §9, `fetch`: a contributor's own cards are never read through the per-card fallback).
     fn contributor_from_snapshot(&self, master_card: &str, sub_card: &str, policies: &[String]) -> bool;
+    /// Template-scope handoff check P3: the card's `issuer_card` is the template `T` and it is in `T.approved_notaries`.
+    /// Read like any registry state (limit L4). Fails closed by default; step 6.4 implements it for template policies.
+    fn serves_template(&mut self, _io: &mut dyn HostIo, _card: &str, _template: &str) -> bool {
+        false
+    }
     /// `policy_snapshot` / `policy_updates` from the host (never filtered; host §8).
     fn on_snapshot(&mut self, policy: &str, msg: &Value);
     fn on_updates(&mut self, policy: &str, msg: &Value);
@@ -75,6 +80,8 @@ pub struct Platform {
     pub attested_time_ms: Box<dyn Fn() -> Result<u64, String>>,
     /// This image's PCR0 (read from its own boot attestation).
     pub pcr0: Vec<u8>,
+    /// The pinned attestation roots this runtime verifies peers against (handoff check P1, algorithm V).
+    pub peer_roots: notary_attest::verify::Config,
 }
 
 /// In-process workers (tests and macOS development). No process isolation: the runtime binary uses `ProcessWorkers`.

@@ -15,6 +15,7 @@ import type { HostContext } from "../context.js";
 import type { ChainFeed } from "../services.js";
 import { buildSnapshot, buildUpdates } from "../chain/snapshots.js";
 import { EnclaveError } from "../enclave/transport.js";
+import { directoryTick, tickTick } from "../handlers/replication.js";
 
 const CLOSE_CHUNK = 256;
 
@@ -27,9 +28,11 @@ export interface SchedulerState {
   /** Jobs with a close in flight. */
   closing: Set<string>;
   snapshotting: boolean;
+  /** 6.3: jobs whose local replica answered `close_pending` (the result comes from the leader). */
+  closePending: Set<string>;
 }
 
-export const newSchedulerState = (): SchedulerState => ({ newestHeader: 0, chainTimeMs: 0, sentPolicies: new Map(), closing: new Set(), snapshotting: false });
+export const newSchedulerState = (): SchedulerState => ({ newestHeader: 0, chainTimeMs: 0, sentPolicies: new Map(), closing: new Set(), snapshotting: false, closePending: new Set() });
 
 export async function headersTick(ctx: HostContext, feed: ChainFeed, st: SchedulerState): Promise<void> {
   const hs = await feed.headersAfter(st.newestHeader);
@@ -121,6 +124,8 @@ async function runSnapshots(ctx: HostContext, feed: ChainFeed, st: SchedulerStat
 export async function closeTick(ctx: HostContext, st: SchedulerState): Promise<void> {
   for (const j of await liveJobs(ctx)) {
     if (j.state !== "open" || st.closing.has(j.jobHash)) continue;
+    // after `close_pending`, stream again only when ciphertexts arrived since (need_inputs, replication step 19)
+    if (st.closePending.has(j.jobHash)) { if (!ctx.restream.has(j.jobHash)) continue; ctx.restream.delete(j.jobHash); }
     const closesMs = Date.parse(String((j.job as { closes_at?: string }).closes_at));
     if (!(st.chainTimeMs >= closesMs)) continue;
     const session = j.replicas.map((id) => ctx.instances.get(id)).find((s) => s && !s.closed);
@@ -135,6 +140,7 @@ export async function closeTick(ctx: HostContext, st: SchedulerState): Promise<v
       if (chunks.length === 0) chunks.push([]);
       for (let i = 0; i < chunks.length - 1; i++) await session.notify("close_chunk", `close-${j.jobHash}-${i}`, { job_hash: j.jobHash, seq: i, sealed_inputs: chunks[i], last: false });
       const reply = await session.call("close_chunk", { job_hash: j.jobHash, seq: chunks.length - 1, sealed_inputs: chunks[chunks.length - 1], last: true });
+      if (reply.kind === "close_pending") st.closePending.add(j.jobHash);
       if (reply.kind === "job_closed" && reply["notarization"] && typeof reply["notarization"] === "object") {
         // the enclave also publishes it; pinning the same canonical bytes again is idempotent and keeps it served by CID
         const bytes = canonicalNotary(reply["notarization"]);
@@ -152,7 +158,7 @@ export async function closeTick(ctx: HostContext, st: SchedulerState): Promise<v
 }
 
 /** Runs the three schedulers on timers. Returns a stop function. */
-export function startSchedulers(ctx: HostContext, feed: ChainFeed, o: { headerMs?: number; snapshotSeconds: number; closeMs?: number }): () => void {
+export function startSchedulers(ctx: HostContext, feed: ChainFeed, o: { headerMs?: number; snapshotSeconds: number; closeMs?: number; tickMs?: number; directoryMs?: number }): () => void {
   const st = newSchedulerState();
   const guard = (f: () => Promise<void>) => { let busy = false; return async () => { if (busy) return; busy = true; try { await f(); } catch { /* next tick */ } finally { busy = false; } }; };
   const timers = [
@@ -160,6 +166,9 @@ export function startSchedulers(ctx: HostContext, feed: ChainFeed, o: { headerMs
     setInterval(guard(() => snapshotsTick(ctx, feed, st)), o.snapshotSeconds * 1000),
     setInterval(guard(() => snapshotsTick(ctx, feed, st, true)), o.headerMs ?? 1000),
     setInterval(guard(() => closeTick(ctx, st)), o.closeMs ?? 2000),
+    // 6.3: ticks (Q6) and the peer directory (Q5)
+    setInterval(guard(() => tickTick(ctx)), o.tickMs ?? 1000),
+    setInterval(guard(() => directoryTick(ctx)), o.directoryMs ?? 5000),
   ];
   return () => timers.forEach(clearInterval);
 }

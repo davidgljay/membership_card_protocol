@@ -230,6 +230,7 @@ fn main() {
         attest: Box::new(notary_attest::sim::SimulatorBackend::new(addr)),
         attested_time_ms: Box::new(move || clock.attested_time_ms().map_err(|e| e.to_string())),
         pcr0: notary_sim::pcr0_of(0x42),
+        peer_roots: notary_attest::verify::Config { roots: [("simulator".to_string(), notary_sim::test_root_der())].into(), allow_simulator: true },
     };
     let pins = Pins { accepted_runtimes_card: "runtimes".into(), program_allowlist_card: "programs".into(), keyset, accepted_runtimes_floor: 1, program_allowlist_floor: 1 };
     let card_check_s = std::rc::Rc::new(std::cell::Cell::new(0.0));

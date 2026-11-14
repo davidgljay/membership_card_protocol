@@ -4,6 +4,7 @@ pub mod cards_oracle;
 pub mod chain;
 pub mod close;
 pub mod env;
+pub mod handoff;
 pub mod host_proto;
 pub mod inputs;
 pub mod joblog;
@@ -11,6 +12,8 @@ pub mod jobs;
 pub mod keyring;
 pub mod lists;
 pub mod params;
+pub mod peer;
+pub mod replication;
 pub mod transforms;
 
 pub use host_proto::Broker;

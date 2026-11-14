@@ -7,7 +7,7 @@ import { handleCountersign, handleGenesis, handleHealth, handlePeer, requireOper
 import { blobStore, logStore } from "../src/storage/index.js";
 import { createInMemoryKv } from "../src/kv.js";
 import { HostError } from "../src/context.js";
-import { harness } from "./helpers.js";
+import { harness, kEnclaveInst } from "./helpers.js";
 
 const POL = "pol-1";
 const ev = (card: string, head: string, block: number, kind: RegistryEvent["kind"] = "CardHeadUpdated", policy = POL): RegistryEvent => ({ kind, policyAddress: policy, cardAddress: card, headCid: head, pressAddress: "press", block, timestamp: `2027-01-01T00:00:${String(block).padStart(2, "0")}.000Z` });
@@ -105,9 +105,9 @@ describe("operator-authenticated routes, peer relay and health", () => {
   });
   it("health reports the number of attested enclaves", async () => {
     const h = await harness();
-    expect(handleHealth(h.ctx)).toEqual({ status: "ok", attested_enclaves: 1 });
+    expect(handleHealth(h.ctx)).toEqual({ status: "ok", attested_enclaves: 1, instances: [kEnclaveInst] });
     h.session.closed = true;
-    expect(handleHealth(h.ctx)).toEqual({ status: "degraded", attested_enclaves: 0 });
+    expect(handleHealth(h.ctx)).toEqual({ status: "degraded", attested_enclaves: 0, instances: [] });
   });
 });
 

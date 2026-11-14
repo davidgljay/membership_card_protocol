@@ -357,3 +357,101 @@ The `aggregate` template (committed module, reproducible build, admitted under A
 The `vote` and `vote-yna` templates; ballot replacement and the two-clock close under the real runtime; single-replica epoch restart with wallet resubmission, end to end (operator restart, announcement of epoch 1, three wallets resubmit, algorithm N verifies epoch 1). Tests: Rust 123, host 85, wallet SDK 240 + 1 todo, attestation 94, vector tools 46; both e2e runs pass with the restart.
 
 **For David's review:** the restart route and `create_job` restart behaviour (specs marked); restart is `total_loss` only until 6.3.
+
+## 6.3 stopped at the host side (2026-11-14)
+
+**The enclave side of replication is built and tested; the host side and the three-host compose scenario are not.** 6.3 is **not ticked**. Nothing committed.
+
+**Done-when, on the in-process multi-broker harness** (`notary-broker/tests/support`, real brokers, per-node fake enclaves, a bus that can drop, hold, replay and rewrite). Each item has a passing test in `tests/replication.rs`:
+
+| Done-when item | Test |
+|---|---|
+| Kill one replica mid-vote, no ballot lost | `killing_one_replica_mid_vote_loses_no_ballots` |
+| Re-replication back to `min_live` | `re_replication_restores_min_live_and_every_handoff_is_logged` |
+| A refused handoff per mismatch: P1 (nonce, debug, stale), P2, P3 ×2, P4 (program, ABI, `close_compat`), P5, `HANDOFF_OVER_CAPACITY` | `the_sender_refuses_a_handoff_for_each_mismatch` (no payload sent in any case); P5 and the template-scope P3 in the emergency and template tests; capacity in `over_capacity_is_refused_and_a_receiver_serves_only_after_its_handoff_anchor` |
+| Every handoff in the log, and no serving before its anchor | `re_replication…`, `over_capacity…` |
+| Rolling upgrade of a live vote | `a_rolling_upgrade_of_a_live_vote_loses_no_ballots` |
+| Incompatible upgrade by migration epoch | `an_incompatible_upgrade_moves_the_job_by_a_migration_epoch` |
+| Emergency retirement: card unusable, jobs re-keyed | `an_emergency_retirement_kills_the_card_and_re_keys_its_jobs` |
+
+Also tested: formation, quorum acknowledgment and the cosigned close (`a_vote_forms…`); never two bodies (`a_replica_never_cosigns_two_bodies_for_one_job`); replayed, rewritten and reordered relays, including I2 against a replayed handoff payload (`hostile_relays…`); template scope (`a_template_key_moves…`).
+
+**Specs.**
+- Q5–Q9 are written in, marked "Amended 2026-11-14 (6.3)": `protocol-objects.md` §35; runtime §9, §16; replication §1, steps 2, 7, 21, 22; lifecycle A.4; host §11; propagation §1, §3.
+- Everything beyond Q5–Q9 is marked for review in `plans/notary-questions-6.3.md` (R1–R11). Four are **[security]**:
+  - R2: followers learn the log through `anchor_receipt.record` and a new `log_record`;
+  - R3: backward header linking, plus a found gap: the header window is ≈ 7 hours on Arbitrum, too short for long votes even on one replica;
+  - R7: restarts read `last_log` and `prev_attestation` by CID;
+  - R9: a leader lost mid-close across operators stalls the close.
+
+**Bugs found by the harness and fixed:** handoff payloads with `null`s; lists not loaded before an identity handoff; a stale directory entry and an in-flight offer to a dead replica holding the free place; a new leader forking the log because unanchored records never reached followers (hence R2); state versions compared across epochs; ineligible peers starving eligible ones (refusal back-off).
+
+**Tests run at the end of the session:**
+
+| Command | Result |
+|---|---|
+| `cargo test --workspace` in `notary/` | 133 passed, 0 failed (was 123: −1 obsolete "multi-replica refused" test, +11 replication). The replication suite was run five more times on its own: passed each time. |
+| `pnpm test` in `notary/host`; `typecheck`, `typecheck:server` | 85 passed; both clean |
+| `pnpm test` in `notary/vectors-tools` | 46 passed |
+| `pnpm test` in `notary/attestation-ts` | 95 passed (+1: Q7 warning) |
+| verifier `pnpm test` | 276 passed |
+| wallet SDK `pnpm test`, `typecheck` (after `pnpm install --force`) | 240 passed, 1 todo; clean |
+| app-sdk `pnpm test` | 193 passed |
+| `check-card-vectors.sh`, `check-aws-isolation.sh`, `templates/build.sh {aggregate,vote,vote-yna} --check` | pass |
+| `notary/e2e/run-local.sh`, `notary/e2e/run-compose.sh` | END TO END: PASS (single replica; unchanged path) |
+
+**Not built (the rest of 6.3):**
+- the host's `tick` scheduler and `peer_directory`;
+- `/peer` relay of envelopes, log records and anchors to peer hosts;
+- `need_inputs` fetch and `store_input`;
+- asynchronous `input_result` / `job_closed` and `close_pending` in the enclave session;
+- the `shutdown` route;
+- the three-host, three-Redis compose scenario.
+
+The Linux-only sandbox tests were not run this session (macOS).
+
+**Next:** David answers R1–R11; then the host side and the compose scenario, then tick 6.3.
+
+## 6.3 done (2026-11-14, second part: the host side)
+
+**6.3 is ticked.** Every "Done when" item has a passing test (enclave side, above), and the host side and the three-host compose scenario are now built and run. Nothing committed.
+
+**Host side built** (`notary/host`):
+- `POST /peer` kinds: `directory`, `inputs`, `log_record`, `anchor`, `announce`.
+- Relays: every record, anchor and announcement a local enclave produces goes to peer hosts and to the other local enclaves.
+- Which local instance holds a job is learned from the records.
+- `need_inputs` and `store_input`, each with the host's own `H(sealed) == input_hash` check.
+- `tick` (1 s) and peer-directory (5 s) schedulers.
+- `close_pending` handling, and a late `job_closed`.
+- `submit_input` waits 2.5× the session timeout for a quorum answer.
+- Operator routes `/operator/handoff` and `/operator/shutdown`.
+- One originator per job across hosts (R12, new, in `plans/notary-questions-6.3.md`).
+- Alerts go to the host log when no webhook is configured.
+
+**Three-host scenario** (`deploy/docker-compose.three.yml`, `e2e/run-three.sh`, `e2e/src/driver3.ts`; the base for 7.1):
+- three hosts, each with its own Redis; host C runs two enclaves;
+- genesis on each host (algorithm G);
+- C's identity handed to its standby enclave (logged);
+- the job sent to all three hosts, and only A keys it;
+- formation by handoff across hosts; the announcement relayed to B and C;
+- three inputs acknowledged by a quorum;
+- the replica holding C's place stopped; after the liveness window the leader writes `replica_lost`, and C's standby is handed the job (`handoff`, `replicated`) and fetches the earlier ciphertexts;
+- a fourth input acknowledged;
+- close cosigned by a quorum of distinct instances, counting all four inputs, with none dropped;
+- algorithm N valid (warning `SINGLE_OPERATOR_QUORUM`: the test notary cards share one operator card).
+
+**Tests run at the end:**
+
+| Command | Result |
+|---|---|
+| `cargo test --workspace` in `notary/` | 133 passed |
+| `pnpm test` in `notary/host`; `typecheck`, `typecheck:server` | 96 passed; clean |
+| `notary/e2e/run-three.sh` | THREE HOSTS: PASS, twice in a row. One earlier run timed out waiting for formation (90 s); it wasn't reproduced and its cause is unknown, and alerts now reach the host log, so the next occurrence can be diagnosed. |
+| `notary/e2e/run-local.sh`, `run-compose.sh` | END TO END: PASS |
+| `check-aws-isolation.sh` | OK |
+
+(Verifier 276, attestation 95, vector tools 46, wallet SDK 240 + 1 todo, app-sdk 193, card vectors and template checks: as in the first part of this session; this part didn't change them.)
+
+**Still open for David:** R1–R12 in `plans/notary-questions-6.3.md`. Four are security-relevant (R2, R3, R7, R9), and R3 includes the ≈ 7-hour header window, which affects long votes today.
+
+**Next:** 6.4a (CP7: the registry write gate, devnode only), after David's answers.

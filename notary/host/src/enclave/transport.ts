@@ -61,11 +61,11 @@ export class EnclaveSession {
   onEnclaveRequest(h: (m: Msg) => void): void { this.#requestHandler = h; }
 
   /** Sends a message and waits for its reply. An `error` reply is thrown as `EnclaveError` with the enclave's code. */
-  async call(kind: string, fields: Record<string, unknown> = {}): Promise<Msg> {
+  async call(kind: string, fields: Record<string, unknown> = {}, timeoutMs = this.timeoutMs): Promise<Msg> {
     if (this.closed) throw new EnclaveError("NH_ENCLAVE_UNAVAILABLE", "enclave connection closed");
     const req_id = `${this.cid}-${++this.#seq}`;
     const reply = new Promise<Msg>((resolve, reject) => {
-      const timer = setTimeout(() => { this.#pending.delete(req_id); reject(new EnclaveError("NH_ENCLAVE_UNAVAILABLE", `no reply to ${kind} within ${this.timeoutMs} ms`)); }, this.timeoutMs);
+      const timer = setTimeout(() => { this.#pending.delete(req_id); reject(new EnclaveError("NH_ENCLAVE_UNAVAILABLE", `no reply to ${kind} within ${timeoutMs} ms`)); }, timeoutMs);
       this.#pending.set(req_id, { resolve, reject, timer });
     });
     await this.transport.send({ ...fields, kind, req_id });
@@ -80,5 +80,5 @@ export class EnclaveSession {
   }
 }
 
-const ENCLAVE_KINDS = new Set(["fetch", "publish", "announce", "chain_submit", "eas_anchor", "deliver", "peer_send", "need_replica", "alert"]);
+const ENCLAVE_KINDS = new Set(["fetch", "publish", "announce", "chain_submit", "eas_anchor", "deliver", "peer_send", "need_replica", "alert", "need_inputs", "store_input"]);
 const isEnclaveRequest = (k: string) => ENCLAVE_KINDS.has(k);

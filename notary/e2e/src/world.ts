@@ -187,9 +187,10 @@ export async function registerWorld(c: ChainWrites, nContributors: number) {
 }
 
 /** After genesis: the policy holder approves the notary card (a field update on the policy card). Returns the new state CID. */
-export async function approveNotary(c: ChainWrites, policyGenesisCid: string, notaryCard: string): Promise<string> {
-  const entry = { card_state: { approved_notaries: [notaryCard] }, code: 300, entry_type: "field_update", history: [policyGenesisCid], prev_log_root: policyGenesisCid, version: 1 };
-  const head = await c.pin(encrypt(K.policy.pub, entry, `policy-approve-${notaryCard}`));
+export async function approveNotary(c: ChainWrites, policyGenesisCid: string, notaryCard: string | string[]): Promise<string> {
+  const cards = Array.isArray(notaryCard) ? notaryCard : [notaryCard];
+  const entry = { card_state: { approved_notaries: cards }, code: 300, entry_type: "field_update", history: [policyGenesisCid], prev_log_root: policyGenesisCid, version: 1 };
+  const head = await c.pin(encrypt(K.policy.pub, entry, `policy-approve-${cards.join("-")}`));
   await c.registerCard({ address: K.policy.addr, policy: IDS.metaPolicy, press: PRESS_ADDR, head_cid: head });
   return head;
 }

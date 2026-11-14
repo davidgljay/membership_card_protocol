@@ -5,6 +5,8 @@
 **Status:** Draft. `expiry_only` and `sealed_link` are in v1. `escrowed_link` is **specified, not implemented in v1**.  
 **Architecture:** `ARCHITECTURE.md` ADR-013 · **Objects:** `protocol-objects.md` §1 (`expires_at`), §2.1, §2.2, §20–§24, §26, §28, §31, §32 · **Lifecycle:** `notary_lifecycle.md` · **Replication:** `notary_replication_and_recovery.md` · **Design record:** `plans/notary-design-decisions.md` §2.6
 
+**Amended 2026-11-14 (6.3):** §1 and §3: periods, issuance batch boundaries and renewal windows are judged on the enclave's attested clock. David approved 2026-11-14 (`plans/notary-questions-phase-6.md`, Q5–Q9).
+
 > **Terminology.** "The enclave" means an AWS Nitro Enclaves enclave. See `ARCHITECTURE.md`, terminology note.
 
 ---
@@ -55,7 +57,7 @@ Each flow is numbered, with a threat note per step for a **hostile host**. The g
 
 ## §1 Periods, `dup_tag` and renewal
 
-**Periods.** Let `P = derived_card.nullifier_period`. Period `p` covers `[p·P, (p+1)·P)`, measured in seconds from the Unix epoch. Periods are aligned to these boundaries. A derived card issued for period `p` has `expires_at = (p+1)·P`, so every card in a period expires at the same moment and expiry says nothing about the holder.
+**Periods.** Let `P = derived_card.nullifier_period`. Period `p` covers `[p·P, (p+1)·P)`, measured in seconds from the Unix epoch. Periods are aligned to these boundaries. *(Amended 2026-11-14, Q6.)* The enclave judges periods, `issuance_batch_interval` boundaries, `renewal_window` and the D1 period check on its **attested clock**, read at most once per host `tick` (`notary_runtime.md` §9), never on header or host time. A derived card issued for period `p` has `expires_at = (p+1)·P`, so every card in a period expires at the same moment and expiry says nothing about the holder.
 
 **`dup_tag`.** Every derived card carries:
 
@@ -115,6 +117,8 @@ The host must never learn which source card is presented, and must never learn w
 ---
 
 ## §3 Issuance flow
+
+*(Amended 2026-11-14, Q6.)* Every boundary in this section is a time on the enclave's attested clock (§1).
 
 1. **Holder's wallet.** Fetches the job's announcement and runs algorithm W (`notary_lifecycle.md` Appendix A.2). Shows consent built from `T` and the job:
    - the source policy;

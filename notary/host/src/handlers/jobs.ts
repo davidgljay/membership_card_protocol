@@ -58,6 +58,12 @@ export async function handleCreateJob(ctx: HostContext, body: { job?: unknown; p
   const existing = await ctx.jobs.get(jobHash);
   if (existing && existing.state !== "aborted") return { job_hash: jobHash, status: existing.state };
 
+  // 6.3 (R12): one originator per job. The host serving the first replica_set card keys it; the others record the job
+  // and wait: their enclaves receive the key by handoff, and the records tell this host which local instance holds it.
+  if (!ctx.cards.all().includes(job.replica_set[0]!.notary_card)) {
+    await ctx.jobs.put({ job, jobHash, programCid: body.program_cid, announcement: null, epoch: 0, replicas: [], state: "keyed", logHead: null });
+    return { job_hash: jobHash, status: "awaiting_handoff" };
+  }
   const session = liveSession(ctx);
   let reply;
   try {

@@ -224,6 +224,7 @@ fn world_custom(isolation: &str, replacement: &str, k_min: u64, refuse_single_op
         attest: Box::new(backend(&addr)),
         attested_time_ms: Box::new(move || clock_backend.attested_time_ms().map_err(|e| e.to_string())),
         pcr0: notary_sim::pcr0_of(0x42),
+        peer_roots: Config { roots: [("simulator".to_string(), notary_sim::test_root_der())].into(), allow_simulator: true },
     };
     let pins = Pins { accepted_runtimes_card: "runtimes".into(), program_allowlist_card: "programs".into(), keyset, accepted_runtimes_floor: 1, program_allowlist_floor: 1 };
     let mut w = World { broker: Broker::new(pins, Box::new(oracle.clone()), Box::new(InProcessWorkers::default()), platform), host: Host::default(), enclave, revoked, program, headers: vec![], card: String::new(), isolation: if isolation == "shared" { 0x01 } else { 0x02 } };
@@ -515,19 +516,6 @@ fn inputs_receipts_and_checks() {
     assert_eq!(submit(&mut w, &seal_input(&other, 0, &"4".repeat(64), "yes", 0, r)), Err("INPUT_UNDECRYPTABLE".into()));
 }
 
-/// Step 5.7: a job that needs q > 1 replicas is refused until the quorum paths exist (6.3); before this check the
-/// enclave keyed it and issued receipts with `acks` 1 under q = 2.
-#[test]
-fn multi_replica_jobs_are_refused_until_step_6_3() {
-    let mut w = world("dedicated", "latest_wins", 1);
-    push_header(&mut w, T0);
-    let job = job_n(&w, &MlDsaKey::generate(), 1, 2);
-    w.broker.handle(&mut w.host, &json!({ "kind": "create_job", "req_id": "c", "job": job, "program": b64u::encode(&w.program), "transport": {} }));
-    let out = w.host.take();
-    assert_eq!(find(&out, "error").expect("refused")["code"], "NH_UNSUPPORTED");
-    assert!(find(&out, "job_keyed").is_none(), "no key for a job this enclave cannot back");
-}
-
 /// 6.1, private outputs: the notarization names the recipients, and the value goes to each recipient sub-card as a
 /// `notary_output` message that only that sub-card's ML-KEM key opens and that `K_id` signed.
 #[test]
@@ -634,7 +622,10 @@ fn an_epoch_restart_re_keys_the_job_and_the_resubmitted_ballots_count() {
         w.host.take()
     };
     // refusals: another reason, a wrong epoch, a log head that isn't the enclave's
-    assert_eq!(find(&restart(&mut w, 0, &head, "runtime_migration"), "error").unwrap()["code"], "NH_UNSUPPORTED");
+    // runtime_migration is refused when this runtime's close_compat is the previous epoch's (it is: same enclave)
+    assert_eq!(find(&restart(&mut w, 0, &head, "runtime_migration"), "job_rejected").unwrap()["code"], "JOB_MALFORMED");
+    // key_exposure is refused when this enclave's verified list shows no vulnerable runtime in the key's lineage
+    assert_eq!(find(&restart(&mut w, 0, &head, "key_exposure"), "job_rejected").unwrap()["code"], "JOB_MALFORMED");
     assert_eq!(find(&restart(&mut w, 3, &head, "total_loss"), "job_rejected").unwrap()["code"], "JOB_MALFORMED");
     assert_eq!(find(&restart(&mut w, 0, "bafkreiforked", "total_loss"), "job_rejected").unwrap()["code"], "JOB_MALFORMED");
 

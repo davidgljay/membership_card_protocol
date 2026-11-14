@@ -52,13 +52,17 @@ export async function notaryCardDoc(chain: Chain, address: string, kIdB64: strin
   } catch { return null; }
 }
 
-export function walletReads(chain: Chain, notary: { card: string; kId: string; genesisAttestation: string }, lists: VerifiedLists): NotaryChainReads {
+type NotaryInfo = { card: string; kId: string; genesisAttestation: string };
+/** One notary card, or several (the three-host scenario, 6.3). */
+const find = (n: NotaryInfo | NotaryInfo[], card: string) => (Array.isArray(n) ? n : [n]).find((x) => x.card === card);
+
+export function walletReads(chain: Chain, notaries: NotaryInfo | NotaryInfo[], lists: VerifiedLists): NotaryChainReads {
   const world = () => chain.get<CardWorld>("/world");
   const exposure = makeKeyExposureRead({
     reads: { anchors: (card) => chain.get(`/eas/${card}`), fetch: (cid) => chain.bytes(cid) },
     accepted: lists.acceptedRuntimes,
     // the genesis PCR0 is the simulator runtime's (the attestation itself is checked by algorithm G at genesis)
-    card: async (p) => (p === notary.card ? { kIdPubkey: notary.kId, genesisPcr0: b64uDecode(SIM_PCR0, 48), genesisAttestation: notary.genesisAttestation } : null),
+    card: async (p) => { const x = find(notaries, p); return x ? { kIdPubkey: x.kId, genesisPcr0: b64uDecode(SIM_PCR0, 48), genesisAttestation: x.genesisAttestation } : null; },
   });
   return {
     nowMs: () => Date.now(),
@@ -76,8 +80,9 @@ export function walletReads(chain: Chain, notary: { card: string; kId: string; g
     },
     satisfies: async () => true,
     async notaryCard(pointer) {
-      if (pointer !== notary.card) return null;
-      const d = await notaryCardDoc(chain, pointer, notary.kId);
+      const x = find(notaries, pointer);
+      if (!x) return null;
+      const d = await notaryCardDoc(chain, pointer, x.kId);
       if (!d) return null;
       // E11: the card's issuer_card names the policy card; a reader resolves it to the policy CID
       const issuer = d["issuer_card"] === K.policy.addr ? POLICY_ID : String(d["issuer_card"]);
@@ -88,12 +93,12 @@ export function walletReads(chain: Chain, notary: { card: string; kId: string; g
   };
 }
 
-export function notarizationReads(chain: Chain, notary: { card: string; kId: string; genesisAttestation: string }, lists: VerifiedLists): NotarizationReads {
-  const w = walletReads(chain, notary, lists);
+export function notarizationReads(chain: Chain, notaries: NotaryInfo | NotaryInfo[], lists: VerifiedLists): NotarizationReads {
+  const w = walletReads(chain, notaries, lists);
   const exposure = makeKeyExposureRead({
     reads: { anchors: (card) => chain.get(`/eas/${card}`), fetch: (cid) => chain.bytes(cid) },
     accepted: lists.acceptedRuntimes,
-    card: async (p) => (p === notary.card ? { kIdPubkey: notary.kId, genesisPcr0: b64uDecode(SIM_PCR0, 48), genesisAttestation: notary.genesisAttestation } : null),
+    card: async (p) => { const x = find(notaries, p); return x ? { kIdPubkey: x.kId, genesisPcr0: b64uDecode(SIM_PCR0, 48), genesisAttestation: x.genesisAttestation } : null; },
   });
   return {
     nowMs: () => Date.now(),
