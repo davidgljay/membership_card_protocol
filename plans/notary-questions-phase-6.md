@@ -2,9 +2,9 @@
 
 Implementation plan: [notary-implementation-plan.md](notary-implementation-plan.md) · Code plan: [notary-code-plan.md](notary-code-plan.md) · Phase 5 summary: [milestones/notary-phase-5-summary.md](milestones/notary-phase-5-summary.md) · Earlier errata: [notary-questions-5.7.md](notary-questions-5.7.md)
 
-**Status:** Open. **No Phase 6 code has been written.** Each question has a recommended answer. Reply "OK to all" or answer by number. Anything marked **[security]** or **[spec]** is asked now rather than guessed (CP5, CP9). Specs are approved text, so every **[spec]** item needs your approval before it is written or implemented.
+**Status:** Answered, "OK to all" (David, 2026-11-14): every recommendation is accepted, including the specific choices below. **No Phase 6 code has been written yet.** Each question has a recommended answer. Reply "OK to all" or answer by number. Anything marked **[security]** or **[spec]** is asked now rather than guessed (CP5, CP9). Specs are approved text, so every **[spec]** item needs your approval before it is written or implemented.
 
-**How answers are recorded:** write the answer under **Answer:** in each question. I will not start 6.0a until Q1 and Q2 have answers, and I will not start a step whose questions are unanswered.
+**How answers are recorded:** write the answer under **Answer:** in each question. Every question is answered, so 6.0 is done.
 
 **What Phase 6 starts from.** Phase 5 left the broker as a single-replica runtime for aggregate jobs, with a test tally program (`notary/e2e/fixtures/tally.wasm`) and no real templates. It refuses, with `NH_UNSUPPORTED`: epoch restarts, replica sets larger than one, per-input jobs, and card output. The host schedulers cover headers, snapshots and close. The sealed-link and derived-card machinery (`dup_tag`, issuance pool, state blob, `derive`, `propagation`, `registry`, `output`) does not exist yet.
 
@@ -32,7 +32,7 @@ Implementation plan: [notary-implementation-plan.md](notary-implementation-plan.
   4. Sessions: Sonnet for 6.0a–6.2 and 6.4; Opus for 6.3 and 6.5; I stop after each milestone step for your review.
 - **Alternative.** Do 6.4a immediately after CP7 and build 6.4 against the real devnode, which costs one checkpoint earlier but removes the simulated gate.
 
-**Answer:**
+**Answer:** OK, as recommended (David, 2026-11-14).
 
 ### Q2. 6.0a: exact spec wording **[spec]**
 
@@ -46,7 +46,7 @@ Implementation plan: [notary-implementation-plan.md](notary-implementation-plan.
 - **Decision needed: refuse or warn when the set is open?** Today `LINT_NO_SNAPSHOT_POLICY` is a warning and wallets show a participation disclosure (lifecycle step 31). Recommendation: **refuse (A12) for `public: true` or `job_requester: true` outputs; allow with the existing disclosure only for jobs whose output goes to a fixed `cards` list.** Reason: an open set is the one case where per-card fetches reveal who contributed, and it matters most when the result is published. Alternative: keep it a warning everywhere and only add the notarization field.
 - **Recommendation.** Approve the four pieces, with the refuse rule above. This needs a new policy field `participation_disclosure` only if you want the fixed-recipients exception; if not, drop the exception and refuse everywhere (simpler). **I recommend dropping it: refuse everywhere.**
 
-**Answer:**
+**Answer:** OK, as recommended (David, 2026-11-14).
 
 ---
 
@@ -66,7 +66,7 @@ Implementation plan: [notary-implementation-plan.md](notary-implementation-plan.
 - **Alternative.** Relax A9 so the program embeds the *shape* but not the *names* (output keys taken from `parameters`). That makes templates fully generic but changes approved text and lets a requester choose output field names per job, which weakens "the policy fixes what leaves the enclave". I recommend against it.
 - **Build and publication.** Templates are Rust crates in `notary/templates/{vote,aggregate,derive}`, built to `wasm32-unknown-unknown` with the pinned toolchain, linted by `notary-lint`, and the built module and its CID are **committed** (`notary/templates/dist/`) with a CI check that two builds are byte-identical (code-plan §7.4). Allowlist publication is the governance script in 7.1 (CP7), not Phase 6.
 
-**Answer:**
+**Answer:** OK, as recommended (David, 2026-11-14).
 
 ### Q4. Private outputs: how does the enclave get the recipients' keys, and which ML-KEM code? **[security] [spec]**
 
@@ -82,7 +82,7 @@ Implementation plan: [notary-implementation-plan.md](notary-implementation-plan.
   4. Record `ml-kem` next to E9 as unaudited, for the Phase 8 security review.
 - **Needs your approval:** the `output_recipient_keys` field; the `ml-kem` dependency.
 
-**Answer:**
+**Answer:** OK, as recommended (David, 2026-11-14).
 
 ---
 
@@ -99,7 +99,7 @@ Implementation plan: [notary-implementation-plan.md](notary-implementation-plan.
   3. Instance id stays `SHA-256(K_inst)`, as in the spec.
 - **Needs your approval:** the envelope, the new message kinds in runtime §9, and a new §35 in `protocol-objects.md`.
 
-**Answer:**
+**Answer:** OK, as recommended (David, 2026-11-14).
 
 ### Q6. Timers: what clock drives heartbeats, timeouts and issuance boundaries? **[spec] [security]**
 
@@ -112,7 +112,7 @@ Implementation plan: [notary-implementation-plan.md](notary-implementation-plan.
   3. The cost of one attestation per second per enclave is measured in Phase 8 on real hardware; in the simulator the clock is free. If it is too slow, the rate drops to once per 5 s with no spec change.
 - **Needs your approval:** the `tick` message and the statement that periods and boundaries use attested time (a clarification to `derived_card_revocation_propagation.md §1` and `§3`).
 
-**Answer:**
+**Answer:** OK, as recommended (David, 2026-11-14).
 
 ### Q7. Handoff capacity should be counted from the job log, not from heartbeats **[spec] [security]**
 
@@ -121,7 +121,7 @@ Implementation plan: [notary-implementation-plan.md](notary-implementation-plan.
 - **Recommendation.** The sender computes each card's live instance count from the **job log it holds** (anchored, hash-chained, and the receiver doesn't serve until its `handoff` record is anchored): instances named by `handoff` and `replicated` records for that card, minus those named by `replica_lost`. Heartbeats may only *lower* the count (a peer reports a stop). Verifiers can check the same rule from the public log: algorithm N warns **`NOTARIZATION_REPLICA_OVER_CAPACITY`** if any card appears with more live instances than `replica_set` allows. Spec change: replication step 7 and A.4 (one warning).
 - **Needs your approval:** the wording in step 7 and the warning name.
 
-**Answer:**
+**Answer:** OK, as recommended (David, 2026-11-14).
 
 ### Q8. How does a newly started replica get the stored ciphertexts? **[spec]**
 
@@ -129,7 +129,7 @@ Implementation plan: [notary-implementation-plan.md](notary-implementation-plan.
 - **Recommendation.** Hosts sync ciphertexts peer to peer. The handoff payload already carries the **dedupe index**, so it contains every `input_hash` the job counts. The receiving enclave tells its host `need_inputs { job_hash, hashes }` (a new enclave→host message). The host fetches each missing `SealedInput` from peer hosts through `/peer`, and **checks `H(sealed) == input_hash` itself** before storing it. This is self-authenticating, so a host can't inject a forged input, only withhold one (visible: `dropped_after_acceptance`, contributors' receipts). Spec addition: host §11–§12 and runtime §9.
 - **Needs your approval:** the message and the host behaviour.
 
-**Answer:**
+**Answer:** OK, as recommended (David, 2026-11-14).
 
 ### Q9. What does 6.3 test, and against what? (scope)
 
@@ -141,7 +141,7 @@ Implementation plan: [notary-implementation-plan.md](notary-implementation-plan.
   4. Runtime upgrades use the simulator's two builds with different PCR0s and `close_compat` (the sim already supports a different PCR0 per fake enclave).
 - **Alternative.** Compose only, which is slower and cannot inject hostile-host behaviour.
 
-**Answer:**
+**Answer:** OK, as recommended (David, 2026-11-14).
 
 ---
 
@@ -152,14 +152,14 @@ Implementation plan: [notary-implementation-plan.md](notary-implementation-plan.
 - **Facts.** `registry_contract.md §6.1` step 8 requires every signed field of a write payload to equal the calldata (`E-49 PAYLOAD_CALLDATA_MISMATCH`). The spec makes it a prerequisite for derived cards: without it a host could deface card heads. The work touches the logic contract and the verifier module in `contracts/` (Stylus Rust, with the ABI conventions recorded in memory) with unit tests and a devnode test. Deploying anywhere other than the local devnode is a separate approval.
 - **Recommendation.** Approve 6.4a **for the local devnode only**, to start when 6.3 is done (Q1). I will bring the contract diff and its tests to you before any deployment, and make no on-chain action. If you want it sooner, say which step it should precede.
 
-**Answer:**
+**Answer:** OK, as recommended (David, 2026-11-14).
 
 ### Q11. The derived-card chain path: how far does "standard verification" go before Phase 7? **[spec]**
 
 - **Facts.** 6.4's "Done when" says derived cards pass standard verification. That verification has two parts the notary can't satisfy alone: Stage 5 needs a `PressAuthorizations` entry for the notary card under the template `T` (an on-chain `AuthorizePress`, governance, CP7), and `CardVerifier` isn't yet wired to the notary pieces (Phase 7: the adapters, Stage 5 step 3a).
 - **Recommendation.** In Phase 6, "standard verification" means **the TypeScript verifier's stages run over the simulated chain**, with the `AuthorizePress` entry created by the simulated registry in the test setup, and `verifyNotaryIssuedCard` (step 3a, already built) called directly. Wiring into `CardVerifier` and real `AuthorizePress` stay in 7.1. The 6.4 summary states this plainly so nobody reads it as the end-to-end claim.
 
-**Answer:**
+**Answer:** OK, as recommended (David, 2026-11-14).
 
 ### Q12. Randomness, shuffling and issuance timing inside the enclave **[security]**
 
@@ -167,7 +167,7 @@ Implementation plan: [notary-implementation-plan.md](notary-implementation-plan.
 - **Recommendation.** Use one function in `notary-crypto`, **`fn random_bytes(n)`**, backed by `getrandom` (which on Linux reads the kernel RNG, and in the enclave the NSM-seeded RNG per runtime §4), and a Fisher–Yates shuffle that draws every index by rejection sampling (no modulo bias). Tests: a fixed-seed shuffle for determinism of the *algorithm*, and a statistical check that every permutation of a small set occurs. Add a `SimulatorBackend` random source only if the simulator needs to be deterministic. Confirm on real hardware in Phase 8 that `getrandom` is NSM-seeded (a CP9 item to add to the checkpoints).
 - **Needs your approval:** adding "RNG is NSM-seeded" as CP9 checkpoint 5.
 
-**Answer:**
+**Answer:** OK, as recommended (David, 2026-11-14).
 
 ---
 

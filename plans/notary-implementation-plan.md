@@ -277,7 +277,7 @@ Goal: one end-to-end path running in the simulator: a job is announced with an a
 
 ## Phase 6: Build the use cases — *Sonnet (6.3 and 6.5 Opus)*
 
-- [ ] **6.0 Phase 6 questions**
+- [x] **6.0 Phase 6 questions**
   - **What**: Same as 5.0, for Phase 6, in `plans/notary-questions-phase-6.md`. **Wait for answers** (**CP5**).
   - **Who**: Claude, then David
   - **Context needed**: `notary-code-plan.md`; Phase 5 summary
