@@ -13,8 +13,8 @@
 | 5.3a | **Done, ticked** (Opus, 2026-11-12). B5–B8 are ported and agree with TypeScript on all 58 cases. The policy, requester and list reads (W3–W5, W10, §12) are open (**E31**) and fail closed. |
 | 5.4 wallet and verifier support | **Done, ticked** (its Done-when is met). Four items are deliberately deferred; see "5.4: deferred". |
 | 5.5 host service | **Ticked 2026-11-13: the end-to-end path runs in docker-compose against the simulator** (see "5.5 end to end: done" below). Earlier status: built against a mock enclave. The Done-when (the end-to-end path in compose against the simulator) needs the runtime from 5.3 (and a chain, EAS and IPFS wired for real, Phase 7). See "5.5: built and not built". |
-| 5.6 capacity benchmark | **Not started.** Unblocked for the runtime itself (5.3 done); a meaningful benchmark of input checking also needs 5.3a. |
-| 5.7 milestone review | Separate session. |
+| 5.6 capacity benchmark | **Done, ticked** (2026-11-13). Results in code-plan §11. |
+| 5.7 milestone review | **Done, ticked** (2026-11-13). Summary: `plans/milestones/notary-phase-5-summary.md`; errata: `plans/notary-questions-5.7.md`. |
 
 ## Tests (all run at the end of this session)
 
@@ -310,3 +310,32 @@ The results and the provisional instance-size recommendation are in code-plan §
 **Next:** 5.7 milestone review (a separate session).
 
 **Initial deployment decided (David, 2026-11-13):** one c6g.large per operator (enclave 1 vCPU / ≈ 1 GiB), on a 1-year savings plan, shared by the first communities: ≈ $35–40/month. Details are in code-plan §11, "Initial deployment". Phase 8 confirms the enclave memory figure on real hardware.
+
+## 5.7 review (2026-11-13)
+
+Summary: [notary-phase-5-summary.md](notary-phase-5-summary.md). Errata and questions for David: [../notary-questions-5.7.md](../notary-questions-5.7.md) (Q1–Q10). Nothing committed (CP11).
+
+**Fixed in code, each with a test:** a dedicated enclave counted finished jobs; multi-replica jobs were keyed by one enclave; the host fell back silently to in-memory chain, EAS and IPFS services under a production configuration; the header scheduler skipped headers after a failed call; four B-checks had no test; the G5 script could not see a call to the AWS module. The e2e driver retries `INPUT_CHAIN_REF_UNKNOWN` (B3's wait is not implemented: Q3). `run-local.sh` failed at `HEAD` on this machine for that reason.
+
+**Tests run at the end of the review:**
+
+| Command | Result |
+|---|---|
+| `cargo test --workspace` in `notary/` | 83 passed, 0 failed (was 80) |
+| `pnpm test` in `notary/host` (+ `typecheck`, `typecheck:server`) | 78 passed (was 74); both typechecks clean |
+| `pnpm test` in `notary/vectors-tools` | 43 passed |
+| `pnpm test` in `notary/attestation-ts` | 92 passed |
+| verifier `pnpm test` | 258 passed |
+| wallet SDK `pnpm test`, `typecheck`, `build` | 235 passed, 1 todo; typecheck and build clean |
+| `notary/scripts/check-card-vectors.sh` | up to date; Rust agrees on every case |
+| `notary/scripts/check-aws-isolation.sh` | OK (and a planted `notary_attest::aws` probe in production code fails it) |
+| `notary/e2e/run-local.sh` | END TO END: PASS |
+| `notary/e2e/run-compose.sh` | END TO END: PASS (Linux arm64 containers) |
+
+**Not run:** the Linux-only sandbox test on x86_64 (E27); the worker sandbox tests on Linux this session (the compose run uses Linux arm64 containers and exercised the worker process, but `cargo test` was run on macOS); nitropack and Rust 1.96 as pinned.
+
+**Follow-up (2026-11-13), David approved Q1, Q2, Q3, Q5, Q6, Q9, Q10:** implemented and the specs amended; see "Resolution" in `plans/notary-questions-5.7.md`. Open: Q4, Q7, Q8 (recommendations given there). Tests after the follow-up: Rust 85 passed; host 78; vector tools 43; attestation 92; verifier 258; wallet SDK 237 + 1 todo; card-vector and AWS-isolation checks pass; `run-local.sh` and `run-compose.sh` pass.
+
+**Q4 done (2026-11-13):** the host serves cards created through `/genesis` (no config, no restart). Open: Q7, Q8. Host tests 79; `run-local.sh` and `run-compose.sh` pass.
+
+**Q7 and Q8 done (2026-11-13).** Q7: first header within 10 minutes of the attested time (runtime §13 amended). Q8: wallet SDK peers made optional; `.github/workflows/wallet-sdk-ci.yml` added (not yet run on GitHub). Rust 86 passed; host 79; wallet SDK 237 + 1 todo; both e2e runs pass. Every Q1–Q10 item is closed.

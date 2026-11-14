@@ -267,7 +267,7 @@ Goal: one end-to-end path running in the simulator: a job is announced with an a
   - **Context needed**: the runtime from 5.3
   - **Done when**: the numbers are recorded, and any result contradicting the strategic plan's economics is flagged to David.
 
-- [ ] **5.7 Phase 5 Milestone Review**
+- [x] **5.7 Phase 5 Milestone Review**
   - **What**: Check that the code matches the specs (names, objects, checks), that test coverage maps to the specs, and that nothing outside the attestation modules and image packaging references AWS-specific formats.
   - **Who**: Claude
   - **Context needed**: Phase 5 code; `notary-code-plan.md`; the relevant specs
