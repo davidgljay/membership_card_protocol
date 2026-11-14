@@ -37,7 +37,7 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Build the file: dependencies, in order
+      - name: "Build the file: dependencies, in order"
         run: |
           set -e
           build() { (cd "$1" && pnpm install --frozen-lockfile && pnpm run build); }
