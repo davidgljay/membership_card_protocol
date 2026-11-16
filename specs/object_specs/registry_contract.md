@@ -749,6 +749,8 @@ ClaimOpenOffer(
 2. `max_acceptances == type(uint64).max OR OpenOfferUseCounts[offer_id] < max_acceptances`.
 3. Press authorization checks (same as §4.1 steps 2–4).
 
+> **Known gap, 2026-11-15 (notary step 6.4a, `plans/notary-questions-6.4a.md` W4), for David's review.** The press payload for `ClaimOpenOffer` carries `offer_id`, `card_address`, `initial_log_cid`, `policy_address` and `press_address`, which step 8 (§6.1) binds. It does not carry `max_acceptances` or `expires_at`, so a submitter holding a valid signature can pass `max_acceptances = type(uint64).max` and `expires_at = 0` and claim past the offer's limits. The proposed fix adds both to the signed payload and to step 8.
+
 > **Issuer signature verification is press-side only.** The press verifies the ML-DSA-44 issuer signature on the `OpenCardOffer` document before submitting `ClaimOpenOffer`. The contract does not receive or re-verify the issuer signature. A press submitting a claim for an offer with an invalid issuer signature is detectable by observers and constitutes a press policy violation (press-side error E-14).
 
 **State changes (all atomic):**
@@ -1584,6 +1586,22 @@ RemovePolicyAddress(
 
 **Authorization paths (exactly one must be satisfied):**
 
+**`RemovePolicyAddressPayload` (signed by press; path A only):**
+
+> *Amended 2026-11-15 (notary step 6.4a), for David's review (`plans/notary-questions-6.4a.md` W5).* The section named `press_sig_payload` but defined no payload. Write-gate step 8 (§6.1) binds these fields to the calldata.
+
+```json
+{
+  "op":            "remove_policy_address",
+  "domain":        "<domain string>",
+  "path":          "<path string>",
+  "card_address":  "<base64url — bytes32; the domain admin card authorizing the removal>",
+  "press_address": "<base64url — bytes32>",
+  "sequence":      <uint64 — must equal PressAuthorizations[DnsGovernancePolicyAddress][press_address].next_sequence>,
+  "timestamp":     "<ISO 8601>"
+}
+```
+
 **Path A — Press-authorized removal (card holder initiated):**
 - Verifies press is authorized under `DnsGovernancePolicyAddress` (same checks as §4.19 preconditions 4–8).
 - Verifies `card_address` is active and issued under `DnsGovernancePolicyAddress` (preconditions 7–8).
@@ -1961,13 +1979,33 @@ The following check is applied on every call to `RegisterCard`, `UpdateCardHead`
    → Error: PAYLOAD_CALLDATA_MISMATCH (E-49)
 ```
 
+> *Amended 2026-11-15 (notary step 6.4a): how step 8 compares, as implemented in `protocol_types::calldata_binding`.*
+>
+> - **Fields per operation.**
+>   - `RegisterCard`: `card_address`, `initial_log_cid`, `policy_address`, `press_address`.
+>   - `UpdateCardHead`: `card_address`, `prev_log_cid`, `new_log_cid`, `press_address`.
+>   - `ClaimOpenOffer`: `offer_id` plus the `RegisterCard` fields (see the §4.5 gap note).
+>   - `BatchUpdateCardHeads`: `policy_address`, `press_address`, and `updates` (same length, same order, each item's `card_address`, `prev_log_cid` and `new_log_cid`).
+>   - `RegisterSubCard`: `sub_card_address`, `master_card_address`, `registration_log_head`, `sub_card_doc_cid`, `press_address`.
+>   - `DeregisterSubCard`: `sub_card_address`, `press_address`.
+>   - `RegisterAddressForward`: `old_address`, `new_address` in the holder payload the press co-signs.
+>   - `SetPolicyAddress`: `domain`, `path`, `policy_card_address`, `admin_card_address`, `sub_card_address`, `press_address`.
+>   - `RemovePolicyAddress` (path A): `domain`, `path`, `card_address`, `press_address` (§4.20).
+> - **Encoding.** `bytes32` values and CIDs are unpadded base64url strings. The contract encodes the calldata and compares, so exactly one string matches. DNS `domain` and `path` are JSON strings compared byte for byte, and must be written without escape sequences: a value that needs escaping is refused (W6, for David's review).
+> - **Top-level fields only** (for David's review, W2). Fields are read from the top level of the payload object. A key-shaped sequence inside a string or a nested value never counts, a repeated key or trailing bytes make the payload invalid, `op` must be a string and `sequence` a number. Before this, the parser took the first `"name":` anywhere in the bytes, so caller-chosen string content (a DNS `path`, for example) could shadow a later field.
+> - **Order.** Step 8 runs after steps 1–7. A refused call reverts, so it consumes no sequence number.
+
 > **Status 2026-11-11: step 8 above is now required** (notaries, ADR-013, decision D5 in `plans/notary-design-decisions.md`). A notary's on-chain key lives inside an enclave, but its host relays every payload the enclave signs. Without step 8, the host could resubmit a signed payload with different calldata, for example to point a derived card's head at a junk CID. Step 8 must be implemented, as a logic-contract upgrade, before derived cards ship. Until it is, the gap described next remains.
 >
-> **Known gap, confirmed 2026-07-16 (spec-consistency Phase 3, Tier 3 item (a)) — pending resolution, not yet fixed.** The write-gate implementation (`contracts/logic-contract/src/write_gate.rs`) verifies the press's signature over the signed payload and checks only `op` and `sequence` from that payload against contract state — it does not cross-check any other signed field (`card_address`, CIDs, `policy_address`, the `updates` array in batch operations, `domain`/`path` in DNS operations) against the actual calldata parameters being written. A valid signature+payload pair does not currently bind the signer to specific written content. The DNS-admin `AdminAuthorizeSubCardPayload` check (§4.3) has the same shape of gap: it confirms `sub_card_address`/`sub_card_doc_cid` are *present* in the payload but not that they *equal* the calldata values, despite this section's error `E-47` being intended to enforce that equality. The intended fix is a real field-by-field equality check — confirming the press is authorized to write the specific card/policy/domain named in the calldata, not just that *some* valid signature with the right sequence number exists — to be designed and implemented as a follow-up, not folded silently into this consistency pass. See `plans/spec-consistency/inconsistencies/phase-3-consolidated-fixes.md` Tier 3 item (a).
+> **Status 2026-11-15: step 8 is implemented** in the logic contract (notary step 6.4a, approved by David at CP7 for the local devnode), together with the E-47 equality check below. It is deployed only to the local `nitro-devnode` in the integration stack. The Sepolia and mainnet logic contracts still have the gap until they are upgraded, which needs a separate CP7 approval (`plans/notary-questions-6.4a.md` W8).
+>
+> **Known gap, confirmed 2026-07-16 (spec-consistency Phase 3, Tier 3 item (a)) — pending resolution, not yet fixed.** The write-gate implementation (`contracts/logic-contract/src/write_gate.rs`) verifies the press's signature over the signed payload and checks only `op` and `sequence` from that payload against contract state — it does not cross-check any other signed field (`card_address`, CIDs, `policy_address`, the `updates` array in batch operations, `domain`/`path` in DNS operations) against the actual calldata parameters being written. A valid signature+payload pair does not currently bind the signer to specific written content. The DNS-admin `AdminAuthorizeSubCardPayload` check (§4.3) has the same shape of gap: it confirms `sub_card_address`/`sub_card_doc_cid` are *present* in the payload but not that they *equal* the calldata values, despite this section's error `E-47` being intended to enforce that equality. The intended fix is a real field-by-field equality check — confirming the press is authorized to write the specific card/policy/domain named in the calldata, not just that *some* valid signature with the right sequence number exists — to be designed and implemented as a follow-up, not folded silently into this consistency pass. See `plans/spec-consistency/inconsistencies/phase-3-consolidated-fixes.md` Tier 3 item (a). *Resolved 2026-11-15 in the logic contract (step 8, and E-47 now checks equality, `master_card_address` and `op = "admin_authorize_sub_card"`); deployed only to the local devnode so far.*
 
 ### 6.2 Governance Quorum Verification
 
 Applied on every governance operation (§4.6–4.10). The signed `governance_payload` includes the operation name, all action parameters, a `governance_version` equal to the current keyset version, and a replay-prevention nonce.
+
+> **Known gap, found 2026-11-15 (notary step 6.4a, `plans/notary-questions-6.4a.md` W1), reported to David, not fixed.** The implementation (`write_gate.rs::verify_governance_quorum`) checks `governance_version`, the nonce and the signatures. It checks neither `op` nor any action parameter against the calldata. A quorum-signed payload can therefore be submitted once with any calldata, for any quorum-gated operation of the same body. This is the governance counterpart of the gap §6.1 step 8 closes. The deployed contracts have it.
 
 ```
 1. Confirm governance_version in payload matches GovernanceKeysets[body_id].version.
@@ -2288,7 +2326,7 @@ ProtocolVersionUpdated(
 | E-46 | `ADMIN_CARD_MISMATCH` | `admin_card_address` in `SetPolicyAddress` does not match `DomainRegistrations[domain].admin_card_address`. The caller supplied an admin card that is not the registered admin for this domain. |
 | E-47 | `INVALID_ADMIN_CARD_SIGNATURE` | `RegisterSubCard` failed the admin card secp256r1 check (§4.3 precondition 5). Covers: missing signature when master is a DNS admin card; payload field mismatch (`sub_card_address` or `sub_card_doc_cid` inconsistent with calldata); RIP-7212 signature verification failure; and spurious non-zero signature when master is not a DNS admin card. |
 | E-48 | `SUB_CARD_ADDRESS_RETIRED` | `RegisterSubCard` called for a `sub_card_address` that was previously registered and later deregistered (`SubCardRegistrations[sub_card_address].deregistered_at != 0`). Deregistered sub-card addresses can never be reused — `deregistered_at` is write-once-non-zero (§3.7), so a fresh registration attempt (which would write `deregistered_at = 0`) is rejected by the storage contract's invariant check before it can silently resurrect a retired entry. Added 2026-07-16, Phase 3 Tier 1 item 3 — this behavior was already implemented and intentional (audit-trail preserving); this error code was previously undocumented. |
-| E-49 | `PAYLOAD_CALLDATA_MISMATCH` | A signed write payload's operation-specific fields don't equal the calldata (§6.1 step 8). Added 2026-11-11 as required, not yet implemented (notaries, ADR-013). |
+| E-49 | `PAYLOAD_CALLDATA_MISMATCH` | A signed write payload's operation-specific fields don't equal the calldata (§6.1 step 8). Added 2026-11-11 as required (notaries, ADR-013). Implemented 2026-11-15 (notary step 6.4a); deployed only to the local devnode. |
 
 ---
 

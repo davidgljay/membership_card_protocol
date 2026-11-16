@@ -463,3 +463,24 @@ The Linux-only sandbox tests were not run this session (macOS).
   - **R9:** option (a). The operator procedure is in replication step 19a and host §11 *Stalled close*. Gap: the host has no `abort_job` route.
   - **R3:** option 1, built. Headers named by held inputs are pinned, job handoffs carry them, and backward linking is removed. New test `a_long_job_keeps_the_headers_its_inputs_name_and_hands_them_on`, checked against a disabled control.
 - The specs' 6.3 review marks now read "approved by David 2026-11-15".
+
+## 6.4a Registry write-gate calldata binding (2026-11-15)
+
+CP7 approved by David for the local devnode only. Nothing was deployed to Sepolia or mainnet.
+
+- **Step 8 (E-49).** `protocol_types::calldata_binding` has one check per operation. The logic contract calls it right after the signature, `op` and sequence checks and reverts with `PayloadCalldataMismatch()`. Fields per operation and the encoding rules are in `registry_contract.md §6.1`, marked as an amendment.
+- **Parser.** `payload_parser` now reads top-level members only and refuses duplicate keys and trailing bytes. Before, caller-chosen string content could shadow a later field (W2).
+- **E-47.** The admin sub-card payload now has to equal the calldata and carry `op = "admin_authorize_sub_card"`; before, the fields only had to be present (W3).
+- **Callers.** The DNS integration suite and `test_dns.sh` now sign the §4.19 payload. The press already signed every bound field.
+- **Findings for David** (`plans/notary-questions-6.4a.md`): W1 governance-quorum operations bind nothing, and the deployed contracts have this gap (**[security]**); W4 `ClaimOpenOffer` limits are unsigned; W5 the `RemovePolicyAddress` payload was undefined, now drafted; W9 E-48 is not raised by the logic contract.
+- **Next:** 6.4b, governance payload binding, planned in the implementation plan; needs CP7.
+
+**Tests run:**
+
+| Command | Result |
+|---|---|
+| `cargo test -p protocol-types` | 10 passed |
+| `cargo build --release --target wasm32-unknown-unknown -p logic-contract` | builds; WASM 238,950 bytes (was 232,797) |
+| `integration_tests`: `core/registry_write_gate.spec.ts` on the devnode | 4 passed |
+| `integration_tests`: all suites except `matrix-relay` | 155 passed, 38 todo. `policy_creation` timed out once at vitest's 5 s default, then passed twice alone. |
+| `forge test` in `contracts/tests` | 162 passed; 6 failed in `SepoliaIntegration.t.sol` (needs a Sepolia fork RPC; unrelated) |

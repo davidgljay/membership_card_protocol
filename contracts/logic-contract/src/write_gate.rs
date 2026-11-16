@@ -15,6 +15,12 @@
 //! 5. Confirm op field matches expected → E-06 (cross-operation replay prevention)
 //! 6. Confirm sequence == next_sequence → E-07
 //!    Increment next_sequence by 1 on success.
+//! 7. (UpdateCardHead only) prev_log_cid matches the stored head → E-08 (in card_ops)
+//! 8. Every operation-specific payload field equals the calldata → E-49.
+//!    Each operation calls `require_bound` with its `protocol_types::calldata_binding`
+//!    check right after the gate. The signer and the submitter can differ (a
+//!    notary's host relays what its enclave signs), so a valid signature must not
+//!    authorize any calldata other than what was signed (ADR-013, D5).
 //!
 //! ## Governance Quorum Verification (§6.2)
 //!
@@ -43,6 +49,18 @@ use crate::{
     static_call_ctx,
 };
 use protocol_types::{payload_parser, MAX_GOVERNANCE_KEYS};
+
+/// Write-gate step 8 (§6.1): revert with E-49 unless `bound` is true.
+///
+/// `bound` is the result of the operation's `protocol_types::calldata_binding`
+/// check over the signed payload and the calldata.
+pub fn require_bound(bound: bool) -> Result<(), Vec<u8>> {
+    if bound {
+        Ok(())
+    } else {
+        Err(errors::make_error(errors::PAYLOAD_CALLDATA_MISMATCH))
+    }
+}
 
 /// Result of running the card write gate.
 /// On success, returns the press's current next_sequence (before increment).

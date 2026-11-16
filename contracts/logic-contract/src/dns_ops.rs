@@ -44,7 +44,7 @@ use crate::{
     LogicContract,
     MethodError,
     static_call_ctx,
-    write_gate::{run_write_gate, verify_governance_quorum},
+    write_gate::{require_bound, run_write_gate, verify_governance_quorum},
 };
 
 /// DnsGovernanceBody body_id (§3.6).
@@ -342,6 +342,17 @@ pub fn set_policy_address(
         b"set_policy_address",
     )?;
 
+    // Write-gate step 8 (E-49): domain, path and every address are the signed ones.
+    require_bound(protocol_types::calldata_binding::set_policy_address(
+        &press_sig_payload,
+        &domain,
+        &path,
+        policy_card_address.as_slice(),
+        admin_card_address.as_slice(),
+        sub_card_address.as_slice(),
+        press_address.as_slice(),
+    ))?;
+
     // Check 7: policy_card_address must exist (E-41).
     let policy_exists = {
         let storage2 = IStorage::new(storage_addr);
@@ -446,6 +457,15 @@ pub fn remove_policy_address(
             &press_signature,
             b"remove_policy_address",
         )?;
+
+        // Write-gate step 8 (E-49).
+        require_bound(protocol_types::calldata_binding::remove_policy_address(
+            &press_sig_payload,
+            &domain,
+            &path,
+            card_address.as_slice(),
+            press_address.as_slice(),
+        ))?;
     } else {
         // Path B: governance quorum.
         verify_governance_quorum(contract, DNS_GOVERNANCE_BODY, &governance_payload, &governance_sigs)?;

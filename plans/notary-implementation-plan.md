@@ -318,11 +318,24 @@ Goal: one end-to-end path running in the simulator: a job is announced with an a
     - an incompatible upgrade by migration epoch;
     - an emergency retirement that makes the notary card unusable and re-keys its jobs.
 
-- [ ] **6.4a Registry write-gate calldata binding** *(added at CP4; requires CP7)*
+- [x] **6.4a Registry write-gate calldata binding** *(added at CP4; requires CP7)*
   - **What**: Implement `registry_contract.md §6.1` step 8 (every signed field must equal the calldata, error E-49) in the logic contract and verifier module, with Rust unit tests and a devnode test. Write no code until David approves at CP7. Deploying anywhere other than the local devnode is a separate CP7 approval.
   - **Who**: Claude, after David approves
   - **Context needed**: `registry_contract.md §6.1`; `contracts/` conventions; memory note on Stylus ABI conventions
   - **Done when**: the E-49 tests pass, existing contract tests still pass, and the devnode stack uses the new contract.
+  - **Done 2026-11-15** (CP7 approved for the devnode only). The checks live in `protocol_types::calldata_binding`, and the logic contract calls them; the verifier module needed no change. 10 Rust unit tests; `integration_tests/suites/core/registry_write_gate.spec.ts` passes on the devnode, and so do the other 19 suites. Foundry: 162 pass; the 6 failures are `SepoliaIntegration.t.sol`, which needs a Sepolia fork RPC. Decisions and findings for David: `plans/notary-questions-6.4a.md` (W1–W9).
+
+- [ ] **6.4b Governance payload binding** *(added 2026-11-15 from 6.4a finding W1; requires CP7)*
+  - **What**: Close the governance counterpart of the step 8 gap: `verify_governance_quorum` (§6.2) checks the version, nonce and signatures, but neither `op` nor any action parameter, so a quorum-signed payload can be submitted once with any calldata for any operation of the same body. In order:
+    1. **Inventory.** List every quorum-gated call (`governance_ops.rs`, `upgrade_ops.rs`, `dns_ops.rs`, `key_scheme_ops.rs`) with its body, its calldata, its §4 payload, and every script or fixture that builds that payload.
+    2. **Spec.** Write the missing payload definitions (for example §4.8 `RevokePress`, §4.10 `RotateGovernanceKeys`, §4.16, §4.25, `DeregisterPolicy`, the cancel and verifier-upgrade operations, and `RemovePolicyAddress` path B), and add a step to §6.2: `op` must equal the operation, and every action-parameter field must equal the calldata. Bring the spec changes to David before code.
+    3. **Contract.** Give `verify_governance_quorum` an expected `op`, and add a `calldata_binding` function per governance operation, the same way as step 8. Error: E-49 or a new code (question for David).
+    4. **Payload builders.** Make `contracts/scripts/build_governance_payload.rs` write the spec payloads (spec field names, base64url, no zero defaults), and check `governance/scripts/registry.ts`, the shell scripts that call it (`authorize_dev_press.sh`, `register_dev_policy.sh`, `rotate_governance_body.sh`, `setup_dns.sh`, `test_dns.sh`) and `integration_tests/fixtures/src/governanceBootstrap.ts`.
+    5. **Optional, same upgrade:** sign `max_acceptances` and `expires_at` in the `ClaimOpenOffer` press payload and bind them (6.4a W4). This changes the press.
+  - **Who**: Claude (Opus suggested: it changes who can act for each governance body), after David approves at CP7. Devnode only; deploying is step W8 of `plans/notary-questions-6.4a.md`, a separate CP7 approval, and should carry 6.4a and 6.4b in one logic-contract upgrade (one 7-day timelock).
+  - **Context needed**: `registry_contract.md §4.6–4.25, §6.2`; `plans/notary-questions-6.4a.md` W1, W4, W8; 6.4a's `calldata_binding` and `registry_write_gate.spec.ts` as the pattern
+  - **Done when**: for every quorum-gated operation, unit tests show that a wrong `op` and each altered parameter are refused, and that the spec payload is accepted; a devnode suite shows that swapped calldata reverts for at least `AuthorizePress`, `RotateGovernanceKeys` and `ProposeLogicUpgrade`; every payload builder writes the spec format; and all integration suites pass on the devnode.
+  - **Not blocking**: 6.4 does not depend on it. It must land before any Sepolia or mainnet upgrade.
 
 - [ ] **6.4 Derived-card template**
   - **What**: Build the `derive` template and policy: per-input mode with key rotation each period, `dup_tag` (including re-seeding by generation), the anonymity-set check, batched issuance through the notary acting as press, `expires_at` with renewal, and the `source_kind` refusal. Depends on 5.3a and 6.4a.

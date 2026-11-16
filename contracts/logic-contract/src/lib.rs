@@ -435,6 +435,8 @@ pub mod errors {
     pub const SUB_CARD_NOT_DOMAIN_ADMIN_SUBCARD: &[u8] = b"SubCardNotDomainAdminSubcard()";
     pub const ADMIN_CARD_MISMATCH: &[u8] = b"AdminCardMismatch()";
     pub const INVALID_ADMIN_CARD_SIGNATURE: &[u8] = b"InvalidAdminCardSignature()";
+    /// E-49 (§6.1 step 8): a signed write payload's fields don't equal the calldata.
+    pub const PAYLOAD_CALLDATA_MISMATCH: &[u8] = b"PayloadCalldataMismatch()";
 
     /// Build a revert payload from an error name string.
     /// Uses keccak256 of the error signature as the selector (4 bytes).

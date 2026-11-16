@@ -397,10 +397,19 @@ describe('dns_governance_verifier.md (live stack)', () => {
       args: [dnsPolicyAddress, pressAddress],
     })) as { next_sequence: bigint };
 
+    // SetPolicyAddressPayload (registry_contract.md §4.19): every written
+    // value is signed, and write-gate step 8 (E-49) checks each against the
+    // calldata. bytes32 values are unpadded base64url.
+    const zero32 = ('0x' + '00'.repeat(32)) as Hex;
+    const b64 = (h: string) => Buffer.from(h.replace(/^0x/, ''), 'hex').toString('base64url');
     const pressPayload = {
       op: 'set_policy_address',
       domain,
       path,
+      policy_card_address: b64(policyCardAddress),
+      admin_card_address: b64(adminCardAddress),
+      sub_card_address: b64(zero32),
+      press_address: b64(pressAddress),
       sequence: Number(nextSequence),
       timestamp: new Date().toISOString(),
     };
@@ -408,7 +417,6 @@ describe('dns_governance_verifier.md (live stack)', () => {
     const msgHash = keccak_256(payloadBytes);
     const pressSignature = secp256r1SignRaw(pressSecp256r1PrivateKey, msgHash);
 
-    const zero32 = ('0x' + '00'.repeat(32)) as Hex;
     const setPolicyHash = await gasWalletClient.writeContract({
       address: logicAddress,
       abi: LOGIC_ABI,

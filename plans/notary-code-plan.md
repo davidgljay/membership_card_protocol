@@ -188,7 +188,8 @@ Register the notary host as a third destination kind in the oblivious target reg
 
 ### 3.4 `contracts/` — **CP7**
 
-- **Write-gate step 8.** Every signed field must equal the calldata, with error E-49 `PAYLOAD_CALLDATA_MISMATCH`. This touches the logic contract and the verifier module, with Rust unit tests and a devnode test. *(registry_contract §6.1)*
+- **Write-gate step 8.** Every signed field must equal the calldata, with error E-49 `PAYLOAD_CALLDATA_MISMATCH`. This touches the logic contract and the verifier module, with Rust unit tests and a devnode test. *(registry_contract §6.1)* *Done 2026-11-15 (6.4a): the checks are in `protocol_types::calldata_binding`, called from the logic contract; the verifier module didn't change.*
+- **Governance payload binding (6.4b, added 2026-11-15).** `verify_governance_quorum` checks neither `op` nor any parameter. Add both, write the missing §4 payload definitions, and make the governance payload builders write the spec format. *(registry_contract §6.2; `plans/notary-questions-6.4a.md` W1)*
 - **No other contract changes.** Notary authorization uses the existing `AuthorizePress`, and list checks use the existing `GetGovernanceKeyset` read.
 
 The code is written only after David approves it at CP7. Deploying it to Sepolia or mainnet is a separate CP7 approval.
@@ -230,7 +231,8 @@ The order follows the implementation plan's steps, with the proposed amendments 
 | **6.1** Aggregation | `templates/aggregate`, input commitment, receipt inclusion | 5.x | k-suppression test; independent `verifyNotarization` |
 | **6.2** Vote and long-running jobs | `templates/vote`, `latest_wins`, close by chain and NSM time, epochs and resubmission (single replica) | 6.1 | Ballot replacement; close before and after `closes_at`; epoch restart |
 | **6.3** Replication *(Opus)* | `replication`, multi-replica `close`, peer relay in the host | 6.2 | Kill one replica with no loss; re-replication; each refused handoff; handoffs logged |
-| **6.4a** Write gate *(proposed, §9; CP7)* | §3.4 | CP7 approval | E-49 contract tests; devnode test |
+| **6.4a** Write gate *(CP7; done 2026-11-15)* | §3.4 | CP7 approval | E-49 contract tests; devnode test |
+| **6.4b** Governance binding *(CP7)* | §3.4; governance payload builders | 6.4a; CP7 approval | Per-operation refusal tests; devnode swaps for `AuthorizePress`, `RotateGovernanceKeys`, `ProposeLogicUpgrade` |
 | **6.4** Derived cards | `templates/derive`, `derive`, `registry`, the `source_kind` refusal, issuance pool | 6.3, 6.4a, 5.3a | Standard verification passes; `DERIVE_DUPLICATE`; anonymity-set refusal |
 | **6.5** Propagation *(Opus)* | `propagation`, `state_blob`, snapshots and the watch loop, wallet disclosure | 6.4 | Revocation within the window; rolled-back blob refused; `expiry_only` lapse |
 | **7.1** Integration suite | `integration_tests/suites/notary/`, compose services, governance scripts against the devnode | 6.x | One passing test per acceptance criterion |

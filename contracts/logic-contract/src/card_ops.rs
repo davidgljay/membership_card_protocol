@@ -32,9 +32,9 @@ use crate::{
     MethodError,
     static_call_ctx,
     current_timestamp,
-    write_gate::{run_write_gate, validate_write_gate_only, verify_single_sig},
+    write_gate::{require_bound, run_write_gate, validate_write_gate_only, verify_single_sig},
 };
-use protocol_types::{MAX_CID_LEN, MAX_BATCH_SIZE};
+use protocol_types::{calldata_binding as bind, MAX_CID_LEN, MAX_BATCH_SIZE};
 
 // ─── §4.1 RegisterCard ───────────────────────────────────────────────────────
 
@@ -85,6 +85,15 @@ pub fn register_card(
         &press_signature,
         b"register_card",
     )?;
+
+    // Write-gate step 8 (E-49): the signed fields are the ones being written.
+    require_bound(bind::register_card(
+        &press_sig_payload,
+        card_address.as_slice(),
+        &initial_log_cid,
+        policy_address.as_slice(),
+        press_address.as_slice(),
+    ))?;
 
     // Write the card entry.
     let mut storage_mut = IStorage::new(storage_addr);
@@ -153,6 +162,16 @@ pub fn update_card_head(
         &press_signature,
         b"update_card_head",
     )?;
+
+    // Write-gate step 8 (E-49): card, both CIDs and press are the signed ones,
+    // so a relayed signature can't point the head anywhere else.
+    require_bound(bind::update_card_head(
+        &press_sig_payload,
+        card_address.as_slice(),
+        &prev_log_cid,
+        &new_log_cid,
+        press_address.as_slice(),
+    ))?;
 
     // Step 7 (UpdateCardHead-specific): prev_log_cid must match stored head (E-08).
     // Although the write gate incremented next_sequence via a cross-contract call before
@@ -252,6 +271,16 @@ pub fn claim_open_offer(
         &press_signature,
         b"claim_open_offer",
     )?;
+
+    // Write-gate step 8 (E-49).
+    require_bound(bind::claim_open_offer(
+        &press_sig_payload,
+        offer_id.as_slice(),
+        card_address.as_slice(),
+        &initial_log_cid,
+        policy_address.as_slice(),
+        press_address.as_slice(),
+    ))?;
 
     // ── State changes (all atomic after all checks pass) ──────────────────────
     let mut storage_mut = IStorage::new(storage_addr);
@@ -375,6 +404,13 @@ pub fn register_address_forward(
         return Err(errors::make_error(errors::INVALID_PRESS_SIGNATURE));
     }
 
+    // Write-gate step 8 (E-49): the forward written is the one the holder signed.
+    require_bound(bind::register_address_forward(
+        &holder_sig_payload,
+        old_address.as_slice(),
+        new_address.as_slice(),
+    ))?;
+
     // Write the forward.
     let mut storage_mut = IStorage::new(storage_addr);
     storage_mut
@@ -439,6 +475,17 @@ pub fn batch_update_card_heads(
         &press_signature,
         b"batch_update_card_heads",
     )?;
+
+    // Write-gate step 8 (E-49): the signed `updates` list equals the calldata
+    // arrays (same length, same order, every field).
+    require_bound(bind::batch_update_card_heads(
+        &press_sig_payload,
+        policy_address.as_slice(),
+        press_address.as_slice(),
+        &card_addresses,
+        &prev_log_cids,
+        &new_log_cids,
+    ))?;
 
     // ── Validate all items before any state change ────────────────────────────
     // This is the critical safety property: ALL items must be valid before we

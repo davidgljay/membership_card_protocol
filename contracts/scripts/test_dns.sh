@@ -218,8 +218,11 @@ fi
 
 echo "[3/6] SetPolicyAddress — $TEST_DOMAIN/$TEST_PATH → $POLICY_CARD_ADDR"
 
+# bytes32 values are unpadded base64url in the signed payload (§4.19); write-gate
+# step 8 (E-49) compares each with the calldata.
+b64url() { echo -n "${1#0x}" | xxd -r -p | base64 | tr '+/' '-_' | tr -d '=\n'; }
 SET_PAYLOAD=$(printf '{"admin_card_address":"%s","domain":"%s","op":"set_policy_address","path":"%s","policy_card_address":"%s","press_address":"%s","sequence":%s,"sub_card_address":"%s","timestamp":"2026-01-01T00:00:01Z"}' \
-    "$ADMIN_CARD_ADDR" "$TEST_DOMAIN" "$TEST_PATH" "$POLICY_CARD_ADDR" "$DNS_PRESS_ADDR" "$DNS_PRESS_SEQ" "$ZERO32")
+    "$(b64url "$ADMIN_CARD_ADDR")" "$TEST_DOMAIN" "$TEST_PATH" "$(b64url "$POLICY_CARD_ADDR")" "$(b64url "$DNS_PRESS_ADDR")" "$DNS_PRESS_SEQ" "$(b64url "$ZERO32")")
 SET_SIG=$(sign_payload_with "$SET_PAYLOAD")
 SET_PAYLOAD_ARR=$(to_uint8_array "0x$(hex_encode "$SET_PAYLOAD")")
 SET_SIG_ARR=$(to_uint8_array "$SET_SIG")

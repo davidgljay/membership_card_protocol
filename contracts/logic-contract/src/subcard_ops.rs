@@ -38,7 +38,7 @@ use crate::{
     MethodError,
     static_call_ctx,
     current_timestamp,
-    write_gate::{run_write_gate, verify_single_sig},
+    write_gate::{require_bound, run_write_gate, verify_single_sig},
 };
 use protocol_types::MAX_CID_LEN;
 use stylus_sdk::alloy_primitives::keccak256;
@@ -121,17 +121,17 @@ pub fn register_sub_card(
             return Err(errors::make_error(errors::INVALID_ADMIN_CARD_SIGNATURE));
         }
 
-        // Verify payload encodes the correct sub_card_address and sub_card_doc_cid.
-        // We check that the raw payload bytes contain the base64url-encoded values.
-        // For simplicity we use the payload_parser to extract the fields.
-        use protocol_types::payload_parser;
-        let payload_sub = payload_parser::find_field(&admin_secp_payload, b"sub_card_address");
-        let payload_doc = payload_parser::find_field(&admin_secp_payload, b"sub_card_doc_cid");
-
-        // The fields must be present; exact value matching is done by verifying
-        // the signature covers the same payload the press constructed — if the
-        // admin signed a different sub_card_address the sig will fail RIP-7212.
-        if payload_sub.is_none() || payload_doc.is_none() {
+        // The admin payload must be an `admin_authorize_sub_card` payload whose
+        // sub_card_address, master_card_address and sub_card_doc_cid equal the
+        // calldata (§4.3, E-47). Before 2026-11-15 the contract only checked the
+        // fields were present, so an admin signature for one sub-card could be
+        // submitted for another.
+        if !protocol_types::calldata_binding::admin_authorize_sub_card(
+            &admin_secp_payload,
+            sub_card_address.as_slice(),
+            master_card_address.as_slice(),
+            &sub_card_doc_cid,
+        ) {
             return Err(errors::make_error(errors::INVALID_ADMIN_CARD_SIGNATURE));
         }
 
@@ -167,6 +167,16 @@ pub fn register_sub_card(
         &press_signature,
         b"register_sub_card",
     )?;
+
+    // Write-gate step 8 (E-49).
+    require_bound(protocol_types::calldata_binding::register_sub_card(
+        &press_sig_payload,
+        sub_card_address.as_slice(),
+        master_card_address.as_slice(),
+        &registration_log_head,
+        &sub_card_doc_cid,
+        press_address.as_slice(),
+    ))?;
 
     // ── State changes ─────────────────────────────────────────────────────────
     let ts = current_timestamp();
@@ -259,6 +269,13 @@ pub fn deregister_sub_card(
         &press_signature,
         b"deregister_sub_card",
     )?;
+
+    // Write-gate step 8 (E-49).
+    require_bound(protocol_types::calldata_binding::deregister_sub_card(
+        &press_sig_payload,
+        sub_card_address.as_slice(),
+        press_address.as_slice(),
+    ))?;
 
     // ── State changes ─────────────────────────────────────────────────────────
     let ts = current_timestamp();

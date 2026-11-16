@@ -59,6 +59,7 @@
 //! | E-45 | SUB_CARD_NOT_DOMAIN_ADMIN_SUBCARD | sub_card_address not a direct sub-card of admin |
 //! | E-46 | ADMIN_CARD_MISMATCH | admin_card_address != DomainRegistrations[domain].admin_card_address |
 //! | E-47 | INVALID_ADMIN_CARD_SIGNATURE | RegisterSubCard admin secp256r1 check failed |
+//! | E-49 | PAYLOAD_CALLDATA_MISMATCH | A signed write payload's operation-specific fields don't equal the calldata (§6.1 step 8) |
 
 #![no_std]
 
@@ -275,6 +276,9 @@ pub enum ContractError {
     AdminCardMismatch,
     /// E-47: RegisterSubCard admin secp256r1 check failed (missing, mismatched, or invalid sig).
     InvalidAdminCardSignature,
+    /// E-49: A signed write payload's operation-specific fields don't equal the
+    /// calldata (§6.1 step 8). See `calldata_binding`.
+    PayloadCalldataMismatch,
 
     // Internal errors (not in spec, used for implementation-specific cases)
     /// Payload JSON is malformed or missing required fields.
@@ -503,15 +507,19 @@ pub struct UpdateItem {
 /// Minimal JSON field extractor for press and governance payloads.
 ///
 /// The payload is canonical RFC 8785 JSON (UTF-8). This module provides
-/// a zero-dependency parser to extract specific field values without
-/// allocating or requiring `std`. It is intentionally minimal — only
+/// a zero-dependency, allocation-free scanner that reads the **top-level**
+/// members of the payload object. It is intentionally minimal — only
 /// extracts the fields the contract needs to validate.
 ///
-/// Security note: This parser makes assumptions about the canonical form:
-/// - Fields appear in lexicographic order (RFC 8785 requirement).
-/// - No nested objects have the same field names as top-level fields.
-/// - Numeric fields (sequence, governance_version) are bare integers.
-/// - String fields are quoted JSON strings.
+/// Security notes:
+/// - Only top-level keys match. A key-shaped sequence inside a string value
+///   (for example a DNS `path` containing `\"sequence\":`) or inside a nested
+///   object or array is never mistaken for a top-level field. Before
+///   2026-11-15 the scanner matched the first `"name":` anywhere in the bytes,
+///   which let caller-chosen string content shadow later fields.
+/// - A payload that names the same top-level key twice yields `None` for that
+///   key. RFC 8785 output never repeats a key.
+/// - A payload that is not a single well-formed object yields `None`.
 ///
 /// The `op` field check is a critical security invariant: verifying that
 /// the `"op"` field matches the expected operation name prevents a press
@@ -519,90 +527,233 @@ pub struct UpdateItem {
 /// operation. For example, a "register_card" payload cannot be accepted
 /// as a valid "update_card_head" payload even if all other fields match.
 pub mod payload_parser {
-    /// Find a JSON field value as a raw byte slice within the payload.
-    ///
-    /// For string fields, returns the bytes inside the quotes.
-    /// For numeric fields, returns the digits.
-    ///
-    /// Returns `None` if the field is not found.
-    pub fn find_field<'a>(payload: &'a [u8], field_name: &[u8]) -> Option<&'a [u8]> {
-        // Search for `"<field_name>":`
-        let mut i = 0;
-        while i + field_name.len() + 3 < payload.len() {
-            if payload[i] == b'"' {
-                let end = i + 1 + field_name.len();
-                if end + 2 <= payload.len()
-                    && &payload[i + 1..end] == field_name
-                    && payload[end] == b'"'
-                    && payload[end + 1] == b':'
-                {
-                    // Found the key; now find the value start
-                    let mut val_start = end + 2;
-                    // Skip whitespace (canonical JSON has none, but be safe)
-                    while val_start < payload.len() && payload[val_start] == b' ' {
-                        val_start += 1;
-                    }
-                    if val_start >= payload.len() {
-                        return None;
-                    }
+    /// The JSON type of a top-level value.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Kind {
+        /// A JSON string. The returned slice is the raw text between the quotes
+        /// (escape sequences are left as written).
+        String,
+        /// A number, `true`, `false` or `null`. The returned slice is the token.
+        Bare,
+        /// A JSON object. The returned slice includes the braces.
+        Object,
+        /// A JSON array. The returned slice includes the brackets.
+        Array,
+    }
 
-                    if payload[val_start] == b'"' {
-                        // String value — return inner bytes
-                        val_start += 1;
-                        let mut val_end = val_start;
-                        while val_end < payload.len() && payload[val_end] != b'"' {
-                            // Handle escaped quotes
-                            if payload[val_end] == b'\\' {
-                                val_end += 1; // skip escape char
-                            }
-                            val_end += 1;
-                        }
-                        return Some(&payload[val_start..val_end]);
-                    } else {
-                        // Numeric or other bare value — find end
-                        let val_end_offset = payload[val_start..]
-                            .iter()
-                            .position(|&b| b == b',' || b == b'}' || b == b' ')
-                            .unwrap_or(payload.len() - val_start);
-                        return Some(&payload[val_start..val_start + val_end_offset]);
-                    }
-                }
-                i += 1;
-            } else {
-                i += 1;
+    fn skip_ws(p: &[u8], mut i: usize) -> usize {
+        while i < p.len() && matches!(p[i], b' ' | b'\t' | b'\n' | b'\r') {
+            i += 1;
+        }
+        i
+    }
+
+    /// `p[i]` is an opening quote. Returns the index just past the closing quote.
+    fn skip_string(p: &[u8], i: usize) -> Option<usize> {
+        let mut j = i + 1;
+        while j < p.len() {
+            match p[j] {
+                b'\\' => j += 2,
+                b'"' => return Some(j + 1),
+                _ => j += 1,
             }
         }
         None
     }
 
+    /// Reads one value starting at `p[i]` (no leading whitespace).
+    /// Returns its kind, start and end (exclusive).
+    fn skip_value(p: &[u8], i: usize) -> Option<(Kind, usize, usize)> {
+        match *p.get(i)? {
+            b'"' => Some((Kind::String, i, skip_string(p, i)?)),
+            open @ (b'{' | b'[') => {
+                let kind = if open == b'{' { Kind::Object } else { Kind::Array };
+                let mut depth: usize = 0;
+                let mut j = i;
+                while j < p.len() {
+                    match p[j] {
+                        b'"' => {
+                            j = skip_string(p, j)?;
+                            continue;
+                        }
+                        b'{' | b'[' => depth += 1,
+                        b'}' | b']' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                return Some((kind, i, j + 1));
+                            }
+                        }
+                        _ => {}
+                    }
+                    j += 1;
+                }
+                None
+            }
+            b',' | b':' | b'}' | b']' => None,
+            _ => {
+                let mut j = i;
+                while j < p.len()
+                    && !matches!(p[j], b',' | b'}' | b']' | b' ' | b'\t' | b'\n' | b'\r')
+                {
+                    j += 1;
+                }
+                Some((Kind::Bare, i, j))
+            }
+        }
+    }
+
+    /// Calls `f(key, kind, value)` for each top-level member of the object in
+    /// `obj`, where `value` is the raw slice (string values: the text between
+    /// the quotes). Returns `None` if `obj` is not exactly one well-formed
+    /// object (surrounding whitespace allowed), or if `f` returns `false`.
+    pub fn for_each_member<'a>(
+        obj: &'a [u8],
+        mut f: impl FnMut(&'a [u8], Kind, &'a [u8]) -> bool,
+    ) -> Option<()> {
+        let p = obj;
+        let mut i = skip_ws(p, 0);
+        if p.get(i) != Some(&b'{') {
+            return None;
+        }
+        i = skip_ws(p, i + 1);
+        if p.get(i) == Some(&b'}') {
+            return if skip_ws(p, i + 1) == p.len() { Some(()) } else { None };
+        }
+        loop {
+            if p.get(i) != Some(&b'"') {
+                return None;
+            }
+            let key_end = skip_string(p, i)?;
+            let key = &p[i + 1..key_end - 1];
+            i = skip_ws(p, key_end);
+            if p.get(i) != Some(&b':') {
+                return None;
+            }
+            i = skip_ws(p, i + 1);
+            let (kind, start, end) = skip_value(p, i)?;
+            let value = if kind == Kind::String { &p[start + 1..end - 1] } else { &p[start..end] };
+            if !f(key, kind, value) {
+                return None;
+            }
+            i = skip_ws(p, end);
+            match p.get(i) {
+                Some(b',') => i = skip_ws(p, i + 1),
+                Some(b'}') => {
+                    return if skip_ws(p, i + 1) == p.len() { Some(()) } else { None };
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// Finds a top-level member by name. Returns `None` if the payload is
+    /// malformed, the member is absent, or it appears more than once.
+    pub fn find_member<'a>(payload: &'a [u8], field_name: &[u8]) -> Option<(Kind, &'a [u8])> {
+        let mut found: Option<(Kind, &'a [u8])> = None;
+        let mut duplicate = false;
+        for_each_member(payload, |key, kind, value| {
+            if key == field_name {
+                if found.is_some() {
+                    duplicate = true;
+                }
+                found = Some((kind, value));
+            }
+            true
+        })?;
+        if duplicate {
+            None
+        } else {
+            found
+        }
+    }
+
+    /// Find a top-level JSON field value as a raw byte slice within the payload.
+    ///
+    /// For string fields, returns the bytes inside the quotes.
+    /// For numeric fields, returns the digits.
+    ///
+    /// Returns `None` if the field is not found (see [`find_member`]).
+    pub fn find_field<'a>(payload: &'a [u8], field_name: &[u8]) -> Option<&'a [u8]> {
+        find_member(payload, field_name).map(|(_, v)| v)
+    }
+
+    /// Like [`find_field`], but only for a JSON string value.
+    pub fn find_string<'a>(payload: &'a [u8], field_name: &[u8]) -> Option<&'a [u8]> {
+        match find_member(payload, field_name)? {
+            (Kind::String, v) => Some(v),
+            _ => None,
+        }
+    }
+
+    /// Calls `f(index, kind, element)` for each element of the JSON array in
+    /// `arr` (brackets included). Returns the element count, or `None` if the
+    /// array is malformed or `f` returns `false`.
+    pub fn for_each_element<'a>(
+        arr: &'a [u8],
+        mut f: impl FnMut(usize, Kind, &'a [u8]) -> bool,
+    ) -> Option<usize> {
+        let p = arr;
+        let mut i = skip_ws(p, 0);
+        if p.get(i) != Some(&b'[') {
+            return None;
+        }
+        i = skip_ws(p, i + 1);
+        if p.get(i) == Some(&b']') {
+            return if skip_ws(p, i + 1) == p.len() { Some(0) } else { None };
+        }
+        let mut n = 0;
+        loop {
+            let (kind, start, end) = skip_value(p, i)?;
+            let value = if kind == Kind::String { &p[start + 1..end - 1] } else { &p[start..end] };
+            if !f(n, kind, value) {
+                return None;
+            }
+            n += 1;
+            i = skip_ws(p, end);
+            match p.get(i) {
+                Some(b',') => i = skip_ws(p, i + 1),
+                Some(b']') => {
+                    return if skip_ws(p, i + 1) == p.len() { Some(n) } else { None };
+                }
+                _ => return None,
+            }
+        }
+    }
+
     /// Extract the `"sequence"` field as a u64.
     /// Returns `None` if the field is missing or malformed.
     pub fn extract_sequence(payload: &[u8]) -> Option<u64> {
-        let bytes = find_field(payload, b"sequence")?;
-        parse_u64(bytes)
+        match find_member(payload, b"sequence")? {
+            (Kind::Bare, bytes) => parse_u64(bytes),
+            _ => None,
+        }
     }
 
     /// Extract the `"op"` field as raw bytes.
     pub fn extract_op(payload: &[u8]) -> Option<&[u8]> {
-        find_field(payload, b"op")
+        find_string(payload, b"op")
     }
 
     /// Extract the `"governance_version"` field as a u32.
     pub fn extract_governance_version(payload: &[u8]) -> Option<u32> {
-        let bytes = find_field(payload, b"governance_version")?;
-        parse_u64(bytes).map(|v| v as u32)
+        match find_member(payload, b"governance_version")? {
+            (Kind::Bare, bytes) => parse_u64(bytes).map(|v| v as u32),
+            _ => None,
+        }
     }
 
     /// Extract the `"nonce"` field as bytes (base64url-encoded bytes32 in the payload).
     /// Returns the raw string bytes inside the quotes, NOT the decoded bytes.
     pub fn extract_nonce_bytes(payload: &[u8]) -> Option<&[u8]> {
-        find_field(payload, b"nonce")
+        find_string(payload, b"nonce")
     }
 
     /// Extract the `"deadline_block"` field as a u64.
     pub fn extract_deadline_block(payload: &[u8]) -> Option<u64> {
-        let bytes = find_field(payload, b"deadline_block")?;
-        parse_u64(bytes)
+        match find_member(payload, b"deadline_block")? {
+            (Kind::Bare, bytes) => parse_u64(bytes),
+            _ => None,
+        }
     }
 
     /// Parse a decimal u64 from ASCII bytes.
@@ -630,5 +781,401 @@ pub mod payload_parser {
             Some(op) => op == expected_op,
             None => false,
         }
+    }
+}
+
+/// Write-gate step 8 (`registry_contract.md §6.1`, E-49 `PAYLOAD_CALLDATA_MISMATCH`):
+/// every operation-specific field of a signed payload must equal the calldata.
+///
+/// Why this exists: the signer of a press payload and the party that submits
+/// the transaction can differ. A notary's on-chain key lives inside the
+/// enclave, but its host relays every payload the enclave signs. Without
+/// these checks, the submitter could pair one valid signature with any
+/// card address and CID (ADR-013, decision D5).
+///
+/// Encoding rules (as the press and the notary build payloads):
+/// - `bytes32` values and CIDs are unpadded base64url strings. Equality is
+///   checked by encoding the calldata and comparing, so exactly one string is
+///   accepted for each value.
+/// - DNS `domain` and `path` are plain JSON strings. They must be written
+///   without escape sequences and equal the calldata bytes exactly; a value
+///   that needs escaping (a quote, a backslash or a control character) is
+///   refused.
+///
+/// Every function returns `true` only if every listed field is present once
+/// at the top level of the payload and equals its calldata value.
+pub mod calldata_binding {
+    use super::payload_parser::{find_member, find_string, for_each_element, Kind};
+
+    const B64URL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+    /// True iff `encoded` is exactly the unpadded base64url encoding of `raw`.
+    pub fn is_b64url_of(encoded: &[u8], raw: &[u8]) -> bool {
+        let full = raw.len() / 3;
+        let rem = raw.len() % 3;
+        let expected_len = full * 4 + match rem {
+            0 => 0,
+            1 => 2,
+            _ => 3,
+        };
+        if encoded.len() != expected_len {
+            return false;
+        }
+        let chunk = |n: u32, out: &[u8], count: usize| -> bool {
+            (0..count).all(|k| out[k] == B64URL[((n >> (18 - 6 * k)) & 63) as usize])
+        };
+        for c in 0..full {
+            let b = &raw[c * 3..c * 3 + 3];
+            let n = (b[0] as u32) << 16 | (b[1] as u32) << 8 | b[2] as u32;
+            if !chunk(n, &encoded[c * 4..c * 4 + 4], 4) {
+                return false;
+            }
+        }
+        let tail = &raw[full * 3..];
+        match rem {
+            1 => chunk((tail[0] as u32) << 16, &encoded[full * 4..], 2),
+            2 => chunk((tail[0] as u32) << 16 | (tail[1] as u32) << 8, &encoded[full * 4..], 3),
+            _ => true,
+        }
+    }
+
+    /// The string field `name` is the base64url encoding of `raw`.
+    pub fn b64_field(payload: &[u8], name: &[u8], raw: &[u8]) -> bool {
+        find_string(payload, name).map_or(false, |v| is_b64url_of(v, raw))
+    }
+
+    /// The string field `name` is written without escapes and equals `raw`.
+    pub fn text_field(payload: &[u8], name: &[u8], raw: &[u8]) -> bool {
+        find_string(payload, name).map_or(false, |v| !v.contains(&b'\\') && v == raw)
+    }
+
+    /// §4.1 RegisterCard.
+    pub fn register_card(payload: &[u8], card_address: &[u8], initial_log_cid: &[u8], policy_address: &[u8], press_address: &[u8]) -> bool {
+        b64_field(payload, b"card_address", card_address)
+            && b64_field(payload, b"initial_log_cid", initial_log_cid)
+            && b64_field(payload, b"policy_address", policy_address)
+            && b64_field(payload, b"press_address", press_address)
+    }
+
+    /// §4.2 UpdateCardHead.
+    pub fn update_card_head(payload: &[u8], card_address: &[u8], prev_log_cid: &[u8], new_log_cid: &[u8], press_address: &[u8]) -> bool {
+        b64_field(payload, b"card_address", card_address)
+            && b64_field(payload, b"prev_log_cid", prev_log_cid)
+            && b64_field(payload, b"new_log_cid", new_log_cid)
+            && b64_field(payload, b"press_address", press_address)
+    }
+
+    /// §4.5 ClaimOpenOffer. `offer_id` names the counter the claim writes.
+    pub fn claim_open_offer(payload: &[u8], offer_id: &[u8], card_address: &[u8], initial_log_cid: &[u8], policy_address: &[u8], press_address: &[u8]) -> bool {
+        b64_field(payload, b"offer_id", offer_id) && register_card(payload, card_address, initial_log_cid, policy_address, press_address)
+    }
+
+    /// §4.15 BatchUpdateCardHeads: same length, same order, every field equal.
+    pub fn batch_update_card_heads<A: AsRef<[u8]>, C: AsRef<[u8]>>(
+        payload: &[u8],
+        policy_address: &[u8],
+        press_address: &[u8],
+        card_addresses: &[A],
+        prev_log_cids: &[C],
+        new_log_cids: &[C],
+    ) -> bool {
+        let n = card_addresses.len();
+        if prev_log_cids.len() != n || new_log_cids.len() != n {
+            return false;
+        }
+        if !(b64_field(payload, b"policy_address", policy_address) && b64_field(payload, b"press_address", press_address)) {
+            return false;
+        }
+        let arr = match find_member(payload, b"updates") {
+            Some((Kind::Array, arr)) => arr,
+            _ => return false,
+        };
+        let count = for_each_element(arr, |i, kind, item| {
+            i < n
+                && kind == Kind::Object
+                && b64_field(item, b"card_address", card_addresses[i].as_ref())
+                && b64_field(item, b"prev_log_cid", prev_log_cids[i].as_ref())
+                && b64_field(item, b"new_log_cid", new_log_cids[i].as_ref())
+        });
+        count == Some(n)
+    }
+
+    /// §4.3 RegisterSubCard (press payload).
+    pub fn register_sub_card(payload: &[u8], sub_card_address: &[u8], master_card_address: &[u8], registration_log_head: &[u8], sub_card_doc_cid: &[u8], press_address: &[u8]) -> bool {
+        b64_field(payload, b"sub_card_address", sub_card_address)
+            && b64_field(payload, b"master_card_address", master_card_address)
+            && b64_field(payload, b"registration_log_head", registration_log_head)
+            && b64_field(payload, b"sub_card_doc_cid", sub_card_doc_cid)
+            && b64_field(payload, b"press_address", press_address)
+    }
+
+    /// §4.3 `AdminAuthorizeSubCardPayload` (E-47): the op, and the sub-card,
+    /// master card and document the admin signed.
+    pub fn admin_authorize_sub_card(payload: &[u8], sub_card_address: &[u8], master_card_address: &[u8], sub_card_doc_cid: &[u8]) -> bool {
+        super::payload_parser::verify_op(payload, b"admin_authorize_sub_card")
+            && b64_field(payload, b"sub_card_address", sub_card_address)
+            && b64_field(payload, b"master_card_address", master_card_address)
+            && b64_field(payload, b"sub_card_doc_cid", sub_card_doc_cid)
+    }
+
+    /// §4.4 DeregisterSubCard (press payload).
+    pub fn deregister_sub_card(payload: &[u8], sub_card_address: &[u8], press_address: &[u8]) -> bool {
+        b64_field(payload, b"sub_card_address", sub_card_address) && b64_field(payload, b"press_address", press_address)
+    }
+
+    /// §4.13 RegisterAddressForward (the holder payload the press co-signs).
+    pub fn register_address_forward(payload: &[u8], old_address: &[u8], new_address: &[u8]) -> bool {
+        b64_field(payload, b"old_address", old_address) && b64_field(payload, b"new_address", new_address)
+    }
+
+    /// §4.19 SetPolicyAddress.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_policy_address(payload: &[u8], domain: &[u8], path: &[u8], policy_card_address: &[u8], admin_card_address: &[u8], sub_card_address: &[u8], press_address: &[u8]) -> bool {
+        text_field(payload, b"domain", domain)
+            && text_field(payload, b"path", path)
+            && b64_field(payload, b"policy_card_address", policy_card_address)
+            && b64_field(payload, b"admin_card_address", admin_card_address)
+            && b64_field(payload, b"sub_card_address", sub_card_address)
+            && b64_field(payload, b"press_address", press_address)
+    }
+
+    /// §4.20 RemovePolicyAddress, press path (path A).
+    pub fn remove_policy_address(payload: &[u8], domain: &[u8], path: &[u8], card_address: &[u8], press_address: &[u8]) -> bool {
+        text_field(payload, b"domain", domain)
+            && text_field(payload, b"path", path)
+            && b64_field(payload, b"card_address", card_address)
+            && b64_field(payload, b"press_address", press_address)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use super::calldata_binding as cb;
+    use super::payload_parser as pp;
+    use std::format;
+    use std::string::String;
+    use std::vec::Vec;
+
+    /// Reference unpadded base64url encoder (test only).
+    fn b64(raw: &[u8]) -> String {
+        const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+        let mut s = String::new();
+        for c in raw.chunks(3) {
+            let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+            let k = c.len() + 1;
+            for i in 0..k {
+                s.push(A[((n >> (18 - 6 * i)) & 63) as usize] as char);
+            }
+        }
+        s
+    }
+
+    const CARD: [u8; 32] = [0x11; 32];
+    const OTHER: [u8; 32] = [0x22; 32];
+    const POLICY: [u8; 32] = [0x33; 32];
+    const PRESS: [u8; 32] = [0x44; 32];
+    const CID_A: &[u8] = b"bafy-genesis-cid-a";
+    const CID_B: &[u8] = b"bafy-next-cid-b";
+
+    fn register_payload() -> String {
+        format!(
+            r#"{{"card_address":"{}","initial_log_cid":"{}","op":"register_card","policy_address":"{}","press_address":"{}","sequence":7,"timestamp":"2026-11-15T00:00:00.000Z"}}"#,
+            b64(&CARD), b64(CID_A), b64(&POLICY), b64(&PRESS)
+        )
+    }
+
+    #[test]
+    fn base64url_matches_reference_for_every_length() {
+        for len in 0..70 {
+            let raw: Vec<u8> = (0..len).map(|i| (i * 37 + 5) as u8).collect();
+            let enc = b64(&raw);
+            assert!(cb::is_b64url_of(enc.as_bytes(), &raw), "len {len}");
+            // Padded, standard-alphabet and truncated forms are refused.
+            assert!(!cb::is_b64url_of(format!("{enc}=").as_bytes(), &raw));
+            if !enc.is_empty() {
+                assert!(!cb::is_b64url_of(&enc.as_bytes()[1..], &raw));
+                let mut flipped = enc.clone().into_bytes();
+                flipped[0] = if flipped[0] == b'A' { b'B' } else { b'A' };
+                assert!(!cb::is_b64url_of(&flipped, &raw));
+            }
+        }
+        // 0xfb 0xff → "-_8": the URL-safe alphabet, not "+/".
+        assert!(cb::is_b64url_of(b"-_8", &[0xfb, 0xff]));
+        assert!(!cb::is_b64url_of(b"+/8", &[0xfb, 0xff]));
+    }
+
+    #[test]
+    fn register_card_binds_every_field() {
+        let p = register_payload();
+        let p = p.as_bytes();
+        assert!(cb::register_card(p, &CARD, CID_A, &POLICY, &PRESS));
+        assert!(!cb::register_card(p, &OTHER, CID_A, &POLICY, &PRESS), "card_address");
+        assert!(!cb::register_card(p, &CARD, CID_B, &POLICY, &PRESS), "initial_log_cid");
+        assert!(!cb::register_card(p, &CARD, CID_A, &OTHER, &PRESS), "policy_address");
+        assert!(!cb::register_card(p, &CARD, CID_A, &POLICY, &OTHER), "press_address");
+        // A payload missing a field is refused.
+        let missing = format!(r#"{{"card_address":"{}","op":"register_card","sequence":7}}"#, b64(&CARD));
+        assert!(!cb::register_card(missing.as_bytes(), &CARD, CID_A, &POLICY, &PRESS));
+    }
+
+    #[test]
+    fn update_card_head_binds_every_field() {
+        let p = format!(
+            r#"{{"card_address":"{}","new_log_cid":"{}","op":"update_card_head","prev_log_cid":"{}","press_address":"{}","sequence":3,"timestamp":"t"}}"#,
+            b64(&CARD), b64(CID_B), b64(CID_A), b64(&PRESS)
+        );
+        let p = p.as_bytes();
+        assert!(cb::update_card_head(p, &CARD, CID_A, CID_B, &PRESS));
+        assert!(!cb::update_card_head(p, &OTHER, CID_A, CID_B, &PRESS));
+        assert!(!cb::update_card_head(p, &CARD, CID_B, CID_B, &PRESS));
+        // The host's attack: same signature, junk head.
+        assert!(!cb::update_card_head(p, &CARD, CID_A, b"bafy-junk", &PRESS));
+        // Swapping prev and new (rolling the head back) is refused.
+        assert!(!cb::update_card_head(p, &CARD, CID_B, CID_A, &PRESS));
+    }
+
+    #[test]
+    fn claim_open_offer_binds_offer_id() {
+        let offer = [0x55u8; 32];
+        let p = format!(
+            r#"{{"card_address":"{}","initial_log_cid":"{}","offer_id":"{}","op":"claim_open_offer","policy_address":"{}","press_address":"{}","sequence":1,"timestamp":"t"}}"#,
+            b64(&CARD), b64(CID_A), b64(&offer), b64(&POLICY), b64(&PRESS)
+        );
+        let p = p.as_bytes();
+        assert!(cb::claim_open_offer(p, &offer, &CARD, CID_A, &POLICY, &PRESS));
+        assert!(!cb::claim_open_offer(p, &OTHER, &CARD, CID_A, &POLICY, &PRESS));
+        assert!(!cb::claim_open_offer(p, &offer, &CARD, CID_B, &POLICY, &PRESS));
+    }
+
+    fn batch_payload(items: &[([u8; 32], &[u8], &[u8])]) -> String {
+        let updates: Vec<String> = items
+            .iter()
+            .map(|(c, prev, new)| format!(r#"{{"card_address":"{}","new_log_cid":"{}","prev_log_cid":"{}"}}"#, b64(c), b64(new), b64(prev)))
+            .collect();
+        format!(
+            r#"{{"op":"batch_update_card_heads","policy_address":"{}","press_address":"{}","sequence":9,"timestamp":"t","updates":[{}]}}"#,
+            b64(&POLICY), b64(&PRESS), updates.join(",")
+        )
+    }
+
+    #[test]
+    fn batch_binds_length_order_and_every_item() {
+        let items: [([u8; 32], &[u8], &[u8]); 2] = [(CARD, CID_A, CID_B), (OTHER, CID_B, CID_A)];
+        let p = batch_payload(&items);
+        let p = p.as_bytes();
+        let cards = [CARD, OTHER];
+        let prevs: [&[u8]; 2] = [CID_A, CID_B];
+        let news: [&[u8]; 2] = [CID_B, CID_A];
+        assert!(cb::batch_update_card_heads(p, &POLICY, &PRESS, &cards, &prevs, &news));
+        // Reordered.
+        assert!(!cb::batch_update_card_heads(p, &POLICY, &PRESS, &[OTHER, CARD], &[CID_B, CID_A], &[CID_A, CID_B]));
+        // One item changed.
+        assert!(!cb::batch_update_card_heads(p, &POLICY, &PRESS, &cards, &prevs, &[CID_B, b"bafy-junk" as &[u8]]));
+        // Calldata shorter or longer than the signed list.
+        assert!(!cb::batch_update_card_heads(p, &POLICY, &PRESS, &cards[..1], &prevs[..1], &news[..1]));
+        let three = [CARD, OTHER, [0x66; 32]];
+        assert!(!cb::batch_update_card_heads(p, &POLICY, &PRESS, &three, &[CID_A, CID_B, CID_A], &[CID_B, CID_A, CID_B]));
+        // Different policy.
+        assert!(!cb::batch_update_card_heads(p, &OTHER, &PRESS, &cards, &prevs, &news));
+    }
+
+    #[test]
+    fn sub_card_payloads_bind_every_field() {
+        let sub = [0x77u8; 32];
+        let doc: &[u8] = b"bafy-subcard-doc";
+        let p = format!(
+            r#"{{"master_card_address":"{}","op":"register_sub_card","press_address":"{}","registration_log_head":"{}","sequence":2,"sub_card_address":"{}","sub_card_doc_cid":"{}","timestamp":"t"}}"#,
+            b64(&CARD), b64(&PRESS), b64(CID_A), b64(&sub), b64(doc)
+        );
+        assert!(cb::register_sub_card(p.as_bytes(), &sub, &CARD, CID_A, doc, &PRESS));
+        assert!(!cb::register_sub_card(p.as_bytes(), &OTHER, &CARD, CID_A, doc, &PRESS));
+        assert!(!cb::register_sub_card(p.as_bytes(), &sub, &CARD, CID_A, b"bafy-other-doc", &PRESS));
+
+        let admin = format!(
+            r#"{{"master_card_address":"{}","op":"admin_authorize_sub_card","sub_card_address":"{}","sub_card_doc_cid":"{}","timestamp":"t"}}"#,
+            b64(&CARD), b64(&sub), b64(doc)
+        );
+        assert!(cb::admin_authorize_sub_card(admin.as_bytes(), &sub, &CARD, doc));
+        assert!(!cb::admin_authorize_sub_card(admin.as_bytes(), &OTHER, &CARD, doc));
+        assert!(!cb::admin_authorize_sub_card(admin.as_bytes(), &sub, &CARD, b"bafy-other-doc"));
+        assert!(!cb::admin_authorize_sub_card(admin.as_bytes(), &sub, &OTHER, doc));
+        let wrong_op = admin.replace("admin_authorize_sub_card", "something_else");
+        assert!(!cb::admin_authorize_sub_card(wrong_op.as_bytes(), &sub, &CARD, doc));
+
+        let d = format!(r#"{{"op":"deregister_sub_card","press_address":"{}","sequence":4,"sub_card_address":"{}","timestamp":"t"}}"#, b64(&PRESS), b64(&sub));
+        assert!(cb::deregister_sub_card(d.as_bytes(), &sub, &PRESS));
+        assert!(!cb::deregister_sub_card(d.as_bytes(), &OTHER, &PRESS));
+    }
+
+    #[test]
+    fn address_forward_binds_both_addresses() {
+        let p = format!(r#"{{"deadline_block":100,"new_address":"{}","nonce":"n","old_address":"{}","op":"register_address_forward"}}"#, b64(&OTHER), b64(&CARD));
+        assert!(cb::register_address_forward(p.as_bytes(), &CARD, &OTHER));
+        assert!(!cb::register_address_forward(p.as_bytes(), &CARD, &POLICY));
+        assert!(!cb::register_address_forward(p.as_bytes(), &OTHER, &CARD));
+    }
+
+    #[test]
+    fn dns_payloads_bind_domain_path_and_addresses() {
+        let zero = [0u8; 32];
+        let p = format!(
+            r#"{{"admin_card_address":"{}","domain":"example.org","op":"set_policy_address","path":"staff/reporter","policy_card_address":"{}","press_address":"{}","sequence":0,"sub_card_address":"{}","timestamp":"t"}}"#,
+            b64(&CARD), b64(&POLICY), b64(&PRESS), b64(&zero)
+        );
+        let p = p.as_bytes();
+        assert!(cb::set_policy_address(p, b"example.org", b"staff/reporter", &POLICY, &CARD, &zero, &PRESS));
+        assert!(!cb::set_policy_address(p, b"example.com", b"staff/reporter", &POLICY, &CARD, &zero, &PRESS));
+        assert!(!cb::set_policy_address(p, b"example.org", b"staff", &POLICY, &CARD, &zero, &PRESS));
+        assert!(!cb::set_policy_address(p, b"example.org", b"staff/reporter", &OTHER, &CARD, &zero, &PRESS));
+        assert!(!cb::set_policy_address(p, b"example.org", b"staff/reporter", &POLICY, &CARD, &OTHER, &PRESS));
+
+        // A path that needs escaping is refused even if it decodes to the calldata.
+        let esc = format!(
+            r#"{{"card_address":"{}","domain":"example.org","op":"remove_policy_address","path":"a\"b","press_address":"{}","sequence":0}}"#,
+            b64(&CARD), b64(&PRESS)
+        );
+        assert!(!cb::remove_policy_address(esc.as_bytes(), b"example.org", b"a\"b", &CARD, &PRESS));
+        let ok = esc.replace(r#"a\"b"#, "ab");
+        assert!(cb::remove_policy_address(ok.as_bytes(), b"example.org", b"ab", &CARD, &PRESS));
+    }
+
+    #[test]
+    fn parser_reads_top_level_members_only() {
+        // A caller-chosen string that contains key-shaped text cannot shadow a
+        // later top-level field. The old scanner returned "X" here.
+        let shadow = format!(
+            r#"{{"domain":"example.org","op":"set_policy_address","path":"\",\"policy_card_address\":\"X","policy_card_address":"{}","sequence":5}}"#,
+            b64(&POLICY)
+        );
+        assert_eq!(pp::find_string(shadow.as_bytes(), b"policy_card_address"), Some(b64(&POLICY).as_bytes()));
+        assert_eq!(pp::extract_sequence(shadow.as_bytes()), Some(5));
+
+        // Nested members are not top-level members.
+        let nested = br#"{"op":"batch_update_card_heads","sequence":1,"updates":[{"card_address":"Y","sequence":99}]}"#;
+        assert_eq!(pp::find_field(nested, b"card_address"), None);
+        assert_eq!(pp::extract_sequence(nested), Some(1));
+
+        // Duplicate keys, trailing bytes, and non-objects are refused.
+        assert_eq!(pp::extract_op(br#"{"op":"a","op":"b"}"#), None);
+        assert_eq!(pp::extract_op(br#"{"op":"a"}x"#), None);
+        assert_eq!(pp::extract_op(br#"["op","a"]"#), None);
+        assert_eq!(pp::extract_op(br#"{"op":"a""#), None);
+        assert_eq!(pp::extract_op(b""), None);
+
+        // A quoted number is not a sequence; a number is not an op.
+        assert_eq!(pp::extract_sequence(br#"{"sequence":"5"}"#), None);
+        assert!(!pp::verify_op(br#"{"op":5}"#, b"5"));
+
+        // Whitespace between tokens is tolerated, as before.
+        assert_eq!(pp::extract_sequence(br#"{ "op" : "x" , "sequence" : 12 }"#), Some(12));
+        assert!(pp::verify_op(br#"{ "op" : "x" }"#, b"x"));
+    }
+
+    #[test]
+    fn escaped_quote_inside_value_does_not_end_the_string() {
+        let p = br#"{"a":"x\"y","op":"register_card"}"#;
+        assert!(pp::verify_op(p, b"register_card"));
+        assert_eq!(pp::find_string(p, b"a"), Some(br#"x\"y"# as &[u8]));
     }
 }
