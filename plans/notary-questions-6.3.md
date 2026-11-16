@@ -124,3 +124,35 @@ Q5–Q9 were approved and are written into the specs with "Amended 2026-11-14 (6
   - Only the host serving `replica_set[0]`'s card sends `create_job`.
   - The others record the job (`status: "awaiting_handoff"`). Their enclaves receive the key by handoff. They learn which local instance holds it from the relayed `handoff` records, and serve the job once the relayed announcement arrives.
 - **Recommendation.** Add to step 16: "With N > 1, only the host of the first `replica_set` card sends `create_job`; the others wait for the handoff."
+
+---
+
+## Answers (David, 2026-11-15)
+
+- **OK:** R1, R2, R5, R6, R7, R8, R10, R11, R12. The specs' "for David's review" marks for them now read "approved by David 2026-11-15".
+- **R4: OK, after a question.** Does the host store decrypted text? **No.** `store_input` hands the host the same `SealedInput` a wallet sends: ciphertext sealed to the job key, which only enclaves hold. The receiving host already stores that object at submission; R4 only makes the other replicas' hosts keep a copy. The host checks `H(sealed_input) == input_hash` and stores nothing else.
+- **R9: option (a), with the operator procedure documented.** See replication step 19a and host §11, *Stalled close*.
+  - Gap found while writing it: the host has no operator route for `abort_job`.
+  - A possible later improvement: carry the co-signed body in the job-scope handoff payload, so a *new* instance of the lost leader's card can finish the close.
+- **R3: option 1 (David, 2026-11-15), built.** Headers named by held inputs are pinned, and the job handoff carries them. Backward linking was removed, so runtime §9's "ignores older headers" stands again. Option 4's length cap was not added. Test: `a_long_job_keeps_the_headers_its_inputs_name_and_hands_them_on`, which fails if the handoff headers are dropped (checked by disabling them).
+
+### R3 options: the header window
+
+**The facts.**
+- `HeaderChain` keeps up to 100,000 headers. Past that it prunes back to 50,000, so the window swings between about 3.5 and 7 hours at Arbitrum One's rate under load (about 4 blocks a second).
+- At close, every replica re-runs B3 on each counted input's `chain_ref`. A block outside the window makes the input `INPUT_CHAIN_REF_UNKNOWN`, so it isn't counted.
+- This already affects a single-replica vote longer than the window. A late-joining replica can't link far back either: backward linking would have to stream every block in between.
+
+**Options.**
+
+1. **Pin the headers inputs point to; send them with the job (recommended).**
+   - Each replica keeps every header named by an input in its dedupe index (at most one per contributor, in practice far fewer) and prunes the rest as now.
+   - The job-scope handoff payload carries those pinned headers. A receiver accepts them because the sender passed algorithm P and accepted them under the same rules, as it already accepts the dedupe index.
+   - Memory is bounded by the number of contributors. Backward linking is then not needed for late joiners.
+   - Spec: runtime §13 (retention) and the payload contents (§3 step 8).
+2. **Record the B3/B4 result at acceptance.** The index entry keeps the block's timestamp, and close re-checks B4 against it instead of looking the header up again. Smaller, but at close a replica trusts its own earlier lookup, and a late joiner trusts the sender's. It's equivalent to option 1 but stores less evidence.
+3. **Keep every header compactly.** Store only (hash, parent, number, timestamp), about 80 bytes each with map overhead. A one-week vote is about 2.4 million blocks, about 200 MB: too much for the planned 1 GiB enclave. Per-input jobs run a year. Not viable.
+4. **Bound job length.** Refuse `closes_at − opens_at` beyond the window. Simple, but it rules out week-long votes.
+5. **Hosts send sparse headers.** Not possible: hash linkage needs every block in between, and checkpoints would mean trusting the host.
+
+**Recommendation:** option 1, plus option 4's check as a safety net if retention can't be guaranteed: refuse jobs whose inputs couldn't be re-checked.

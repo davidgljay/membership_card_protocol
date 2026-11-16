@@ -455,3 +455,11 @@ The Linux-only sandbox tests were not run this session (macOS).
 **Still open for David:** R1–R12 in `plans/notary-questions-6.3.md`. Four are security-relevant (R2, R3, R7, R9), and R3 includes the ≈ 7-hour header window, which affects long votes today.
 
 **Next:** 6.4a (CP7: the registry write gate, devnode only), after David's answers.
+
+## 6.3 review answers applied (2026-11-15)
+
+- David answered R1–R12: OK to all but three.
+  - **R4:** clarified; the host stores ciphertext only.
+  - **R9:** option (a). The operator procedure is in replication step 19a and host §11 *Stalled close*. Gap: the host has no `abort_job` route.
+  - **R3:** option 1, built. Headers named by held inputs are pinned, job handoffs carry them, and backward linking is removed. New test `a_long_job_keeps_the_headers_its_inputs_name_and_hands_them_on`, checked against a disabled control.
+- The specs' 6.3 review marks now read "approved by David 2026-11-15".

@@ -1901,7 +1901,7 @@ Each list card also has a field **`list_approval`**, replaced on every update. I
 | `heartbeat` | §6 step 20 | a Heartbeat (§30) |
 | `replica_gone` | §6 | `{ instance, job_hash? }` |
 
-A message's sender is authenticated by its signature. Handoff kinds come with attestations that algorithm P checks. Every other kind is accepted only from a replica the anchored job log names. The body field lists are implemented as shown; they are **for David's review** with `plans/notary-questions-6.3.md`, since Q5 approved the envelope and the kinds, not each body.
+A message's sender is authenticated by its signature. Handoff kinds come with attestations that algorithm P checks. Every other kind is accepted only from a replica the anchored job log names. The body field lists are as shown, approved by David 2026-11-15 with `plans/notary-questions-6.3.md`.
 
 ---
 

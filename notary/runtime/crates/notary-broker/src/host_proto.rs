@@ -118,6 +118,11 @@ impl Broker {
         self.keys.template_key(template).is_some()
     }
 
+    /// Lowers how many recent headers the chain keeps (tests of the retention rule).
+    pub fn set_header_keep_for_tests(&mut self, n: usize) {
+        self.chain.set_keep(n);
+    }
+
     pub fn set_max_live_jobs_for_tests(&mut self, n: usize) {
         self.max_live_jobs = n;
     }
@@ -283,7 +288,9 @@ impl Broker {
             .flatten()
             .filter_map(|h| h.get("header_rlp").and_then(Value::as_str).and_then(|s| b64u::decode(s).ok()))
             .collect();
-        let newest = self.chain.accept(&headers, self.attested_now_ms().ok());
+        let now = self.attested_now_ms().ok();
+        let jobs = &self.jobs;
+        let newest = self.chain.accept(&headers, now, &|| crate::jobs::pinned_blocks(jobs));
         json!({ "kind": "chain_ack", "req_id": req_id, "newest": newest })
     }
 

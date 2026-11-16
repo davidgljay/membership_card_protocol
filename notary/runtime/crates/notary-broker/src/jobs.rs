@@ -578,6 +578,11 @@ impl Broker {
     }
 }
 
+/// Headers that held inputs name (R3): every live job's index entries' `chain_ref` blocks.
+pub(crate) fn pinned_blocks(jobs: &BTreeMap<[u8; 32], Job>) -> BTreeSet<[u8; 32]> {
+    jobs.values().filter(|j| j.state.live()).flat_map(|j| j.index.values().map(|e| e.block)).collect()
+}
+
 pub(crate) fn isolation_byte(a: &Admitted) -> u8 {
     if a.isolation == Isolation::Shared {
         0x01

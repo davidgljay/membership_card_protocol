@@ -627,3 +627,45 @@ fn a_template_key_moves_only_to_a_card_serving_the_template() {
     let rec = net.job_log(&ca).into_iter().find(|r| r["kind"] == "handoff").expect("in the sender's identity log");
     assert_eq!((rec["body"]["scope"].as_str(), rec["body"]["key_generation"].as_u64(), rec["body"]["to_notary_card"].as_str()), (Some("template"), Some(0), Some(cb.as_str())));
 }
+
+/// R3, option 1: a replica keeps a window of recent headers plus every header an input it holds names, so a job that
+/// runs far past the window still re-checks its early inputs at close (B3); a late-joining replica gets those headers in
+/// the job handoff, because its own chain anchored after them.
+#[test]
+fn a_long_job_keeps_the_headers_its_inputs_name_and_hands_them_on() {
+    let mut net = Net::new(&[rt(X, "c1")]);
+    let (a, b, c, c2) = (net.add_node("a", X), net.add_node("b", X), net.add_node("c", X), net.add_node("c2", X));
+    let (ca, cb, cc) = (net.genesis(a), net.genesis(b), net.genesis(c));
+    identity_handoff(&mut net, c, c2, &cc);
+    for i in [a, b, c, c2] {
+        net.nodes[i].broker.set_header_keep_for_tests(6);
+    }
+    net.directory();
+    let job = net.job(&MlDsaKey::generate(), 1, &[(&ca, 1), (&cb, 1), (&cc, 1)], 3);
+    let job_hash = jcs::h(&job).unwrap();
+    net.create_job(a, &job);
+    net.advance(60_000, 60_000);
+    let ann = net.announcement(&job_hash).expect("announced");
+    let early = net.headers.len() - 1;
+    for v in 1..4u8 {
+        assert!(net.submit(a, &net.ballot(&ann, v, "yes", 0)).is_ok());
+    }
+    // thirty more blocks: far past the 6-header window
+    net.advance(30 * 60_000, 60_000);
+    // an old header no input names is gone; the early ballots' header is still there
+    assert_eq!(net.submit(a, &net.ballot_at(&ann, 9, "no", 0, early - 1)).unwrap()["reject_reason"], "INPUT_CHAIN_REF_UNKNOWN");
+    // the replica holding card C's place stops; C's other enclave joins after the early headers left its window
+    let holder = net.job_log(&job_hash).iter().find(|r| r["kind"] == "handoff" && r["body"]["to_notary_card"] == cc.as_str()).unwrap()["body"]["to_instance"].as_str().unwrap().to_string();
+    let (gone, standby) = if net.instance(c) == holder { (c, c2) } else { (c2, c) };
+    net.kill(gone);
+    net.directory();
+    net.advance(180_000, 60_000);
+    let st_inst = net.instance(standby);
+    assert!(net.job_log(&job_hash).iter().any(|r| r["kind"] == "replicated" && r["body"]["instance"] == st_inst.as_str()), "re-replicated");
+    net.advance(CLOSES - net.now + 10_000, 60_000);
+    // the standby must co-sign: the close needs all three live replicas' agreement to be checked here
+    net.close(&job_hash, &[a, b, standby]);
+    let n = net.notarization().expect("closed");
+    assert_eq!((n["accepted"].as_u64(), n["dropped_after_acceptance"].as_u64()), (Some(3), Some(0)), "the early ballots still count");
+    assert!(net.alerts(standby).iter().all(|x| x != "close_mismatch"), "the late joiner re-checked the early ballots too: {:?}", net.alerts(standby));
+}

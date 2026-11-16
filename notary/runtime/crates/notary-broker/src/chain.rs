@@ -4,8 +4,12 @@
 //! Headers arrive as RLP (`chain_headers`). A header's hash is `keccak256(rlp)`; the broker reads `parentHash`
 //! (field 0), `stateRoot` (3), `number` (8) and `timestamp` (11). The first header received anchors the chain; every
 //! later one must link by parent hash to an accepted header. Older or unlinked headers are ignored.
+//!
+//! **Retention (6.3, R3 option 1).** The chain keeps a window of recent headers and, beyond it, every header an input
+//! the enclave holds names as its `chain_ref` (`pinned`), so close can re-run B3 on early inputs of a long job. A job
+//! handoff carries the pinned headers, which the receiver adopts from its attested sender (`adopt_trusted`).
 use notary_crypto::keccak256;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Header {
@@ -108,9 +112,8 @@ pub struct HeaderChain {
     newest: Option<[u8; 32]>,
     /// The newest `chain_ref` accepted from an input (runtime §13 freshness floor).
     floor: u64,
-    /// Parent hashes of accepted headers: an older header whose hash is one of these links backwards (6.3, a replica
-    /// that joins a running job must re-check earlier inputs' `chain_ref`; `plans/notary-questions-6.3.md`).
-    parents: std::collections::BTreeSet<[u8; 32]>,
+    /// Recent headers kept besides the pinned ones (`KEEP` unless a test lowers it).
+    keep: Option<usize>,
 }
 
 const KEEP: usize = 100_000;
@@ -120,7 +123,8 @@ pub const ANCHOR_MARGIN_MS: i64 = 10 * 60 * 1000;
 
 impl HeaderChain {
     /// Accepts headers that link to the chain (or anchor an empty one). Returns the newest block number.
-    pub fn accept(&mut self, headers: &[Vec<u8>], attested_now_ms: Option<i64>) -> u64 {
+    /// `pinned` names the headers held inputs point to; they survive pruning (read only when pruning).
+    pub fn accept(&mut self, headers: &[Vec<u8>], attested_now_ms: Option<i64>, pinned: &dyn Fn() -> BTreeSet<[u8; 32]>) -> u64 {
         for rlp in headers {
             let Some(h) = decode_header(rlp) else { continue };
             // The first header is the chain's anchor. It is trusted only if its timestamp is near the attested time
@@ -128,25 +132,39 @@ impl HeaderChain {
             let links = if self.by_hash.is_empty() {
                 attested_now_ms.is_some_and(|now| (h.timestamp as i64 * 1000 - now).abs() <= ANCHOR_MARGIN_MS)
             } else {
-                self.by_hash.contains_key(&h.parent) || self.parents.contains(&h.hash)
+                self.by_hash.contains_key(&h.parent)
             };
             if !links || self.by_hash.contains_key(&h.hash) {
                 continue;
             }
             let newer = self.newest_header().is_none_or(|n| h.number > n.number);
             let hash = h.hash;
-            self.parents.insert(h.parent);
             self.by_hash.insert(hash, h);
             if newer {
                 self.newest = Some(hash);
             }
         }
-        if self.by_hash.len() > KEEP {
-            let cutoff = self.newest_header().map_or(0, |n| n.number.saturating_sub(KEEP as u64 / 2));
-            self.by_hash.retain(|_, h| h.number >= cutoff);
-            self.parents = self.by_hash.values().map(|h| h.parent).collect();
+        let keep = self.keep.unwrap_or(KEEP);
+        if self.by_hash.len() > keep {
+            let cutoff = self.newest_header().map_or(0, |n| n.number.saturating_sub(keep as u64 / 2));
+            let pins = pinned();
+            self.by_hash.retain(|hash, h| h.number >= cutoff || pins.contains(hash));
         }
         self.newest_header().map_or(0, |h| h.number)
+    }
+
+    /// A header a job handoff carried: accepted by the sending enclave under these same rules (it passed algorithm P).
+    /// It is kept for B3 and never moves this chain's newest header or chain time.
+    pub fn adopt_trusted(&mut self, h: Header) {
+        self.by_hash.entry(h.hash).or_insert(h);
+    }
+
+    pub fn get(&self, hash: &[u8; 32]) -> Option<&Header> {
+        self.by_hash.get(hash)
+    }
+
+    pub fn set_keep(&mut self, n: usize) {
+        self.keep = Some(n);
     }
 
     pub fn newest_header(&self) -> Option<&Header> {

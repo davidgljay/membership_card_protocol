@@ -19,6 +19,8 @@ pub struct Entry {
     pub input_hash: String,
     pub epoch: u64,
     pub input_digest: [u8; 32],
+    /// The input's `chain_ref` block: its header stays pinned while the entry is held (6.3, R3).
+    pub block: [u8; 32],
 }
 
 /// The outcome of B2–B11 for one decrypted input.
@@ -136,7 +138,7 @@ impl Broker {
         // B10
         let job = &self.jobs[hash];
         let latest_wins = notary.get("input_replacement").and_then(Value::as_str) == Some("latest_wins");
-        let entry = Entry { revision: rev, input_hash: input_hash.to_string(), epoch, input_digest: digest };
+        let entry = Entry { revision: rev, input_hash: input_hash.to_string(), epoch, input_digest: digest, block: bh };
         match job.index.get(&root) {
             None => {
                 if !latest_wins && rev != 0 {

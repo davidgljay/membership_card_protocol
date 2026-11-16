@@ -394,14 +394,21 @@ impl Broker {
                 let index: Vec<Value> = j
                     .index
                     .iter()
-                    .map(|(root, e)| json!({ "epoch": e.epoch, "input_digest": b64u::encode(&e.input_digest), "input_hash": e.input_hash, "revision": e.revision, "root": b64u::encode(root) }))
+                    .map(|(root, e)| json!({ "block": b64u::encode(&e.block), "epoch": e.epoch, "input_digest": b64u::encode(&e.input_digest), "input_hash": e.input_hash, "revision": e.revision, "root": b64u::encode(root) }))
+                    .collect();
+                // R3: the headers the index's inputs point to, so the receiver can re-run B3 on them at close
+                let blocks: BTreeSet<[u8; 32]> = j.index.values().map(|e| e.block).collect();
+                let headers: Vec<Value> = blocks
+                    .iter()
+                    .filter_map(|b| self.chain.get(b))
+                    .map(|h| json!({ "hash": b64u::encode(&h.hash), "number": h.number, "parent": b64u::encode(&h.parent), "state_root": b64u::encode(&h.state_root), "timestamp": h.timestamp }))
                     .collect();
                 let members: Vec<Value> = j.members.iter().map(|(i, m)| json!({ "attestation": m.attestation, "card": m.card, "instance": i })).collect();
                 let head = self.logs.head(&j.job_hash_b64);
                 let settled = head.as_ref().is_none_or(|(seq, _)| self.logs.is_settled(&j.job_hash_b64, *seq));
                 let state_hash = jcs::h(&json!(index)).expect("notary JSON");
                 let p = json!({
-                    "announcement_cid": j.announcement_cid, "epoch": epoch, "epoch_reason": j.epoch_reason, "index": index, "job_hash": j.job_hash_b64,
+                    "announcement_cid": j.announcement_cid, "epoch": epoch, "epoch_reason": j.epoch_reason, "headers": headers, "index": index, "job_hash": j.job_hash_b64,
                     "key": b64u::encode(x.secret.expose()), "lineage": lineage_json(&x.lineage), "log_head": head.as_ref().map(|h| h.1.clone()),
                     "log_seq": head.as_ref().map(|h| h.0), "log_settled": settled, "lost_this_epoch": j.lost_this_epoch, "members": members,
                     "opened": j.opened, "rejected": j.rejected, "scope": "job", "state_hash": state_hash, "state_version": j.state_version, "transport": j.transport,
@@ -783,7 +790,7 @@ impl Broker {
         let transport = p.get("transport").cloned().unwrap_or(json!({ "key_config_url": "", "relay_target_id": "" }));
         let mut j = self.job_entry(c, epoch, att, transport, false);
         for e in p["index"].as_array().into_iter().flatten() {
-            let (Some(root), Some(digest)) = (b64_32(e.get("root")), b64_32(e.get("input_digest"))) else { continue };
+            let (Some(root), Some(digest), Some(block)) = (b64_32(e.get("root")), b64_32(e.get("input_digest")), b64_32(e.get("block"))) else { continue };
             j.index.insert(
                 root,
                 crate::inputs::Entry {
@@ -791,6 +798,7 @@ impl Broker {
                     input_hash: e["input_hash"].as_str().unwrap_or_default().into(),
                     epoch: e["epoch"].as_u64().unwrap_or(epoch),
                     input_digest: digest,
+                    block,
                 },
             );
         }
@@ -798,6 +806,13 @@ impl Broker {
             if let (Some(i), Some(card)) = (m["instance"].as_str(), m["card"].as_str()) {
                 j.members.insert(i.into(), Member { card: card.into(), attestation: m["attestation"].as_str().map(String::from) });
             }
+        }
+        // R3: the sender's pinned headers, adopted from an attested sender (they never move this chain's time)
+        for h in p["headers"].as_array().into_iter().flatten() {
+            let (Some(hash), Some(parent), Some(state_root), Some(number), Some(timestamp)) =
+                (b64_32(h.get("hash")), b64_32(h.get("parent")), b64_32(h.get("state_root")), h.get("number").and_then(Value::as_u64), h.get("timestamp").and_then(Value::as_u64))
+            else { continue };
+            self.chain.adopt_trusted(crate::chain::Header { hash, parent, state_root, number, timestamp });
         }
         j.rejected = p["rejected"].as_u64().unwrap_or(0);
         j.state_version = p["state_version"].as_u64().unwrap_or(0);

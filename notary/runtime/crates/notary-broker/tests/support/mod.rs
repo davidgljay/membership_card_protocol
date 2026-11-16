@@ -492,8 +492,8 @@ impl Net {
         (h, number)
     }
 
-    /// Feeds node `i` the headers it hasn't seen: newest first, so a node that joins late anchors near its own clock
-    /// and links the older ones backwards.
+    /// Feeds node `i` the headers it hasn't seen. A node's first batch goes newest first: it anchors near its own clock
+    /// and ignores the older ones (runtime §9); the headers a job's inputs need come with the job's handoff (R3).
     pub fn feed_headers(&mut self, i: usize) {
         let from = self.nodes[i].headers_fed;
         if from >= self.headers.len() || !self.nodes[i].up {
@@ -595,10 +595,15 @@ impl Net {
 
     /// A ballot sealed to an announcement's key (the wallet's side, §24).
     pub fn ballot(&self, ann: &Value, voter: u8, choice: &str, revision: u64) -> Ballot {
+        self.ballot_at(ann, voter, choice, revision, self.headers.len() - 1)
+    }
+
+    /// A ballot whose `chain_ref` is the header at index `at` of the bus's chain.
+    pub fn ballot_at(&self, ann: &Value, voter: u8, choice: &str, revision: u64, at: usize) -> Ballot {
         let job_hash: [u8; 32] = jcs::h_bytes(&ann["job"]).unwrap();
         let epoch = ann["epoch"].as_u64().unwrap();
         let pk = b64u::decode(ann["job_public_key"].as_str().unwrap()).unwrap();
-        let (bh, bn) = (self.headers.last().unwrap().0, self.headers.last().unwrap().1);
+        let (bh, bn) = (self.headers[at].0, self.headers[at].1);
         let input = json!({ "chain_ref": { "block_hash": b64u::encode(&bh), "block_number": bn }, "contributor_card": format!("{voter:02x}").repeat(32),
             "contributor_card_pubkey": "AA", "contributor_signature": { "public_key": "AA", "signature": "AA" }, "evidence": [],
             "job_hash": b64u::encode(&job_hash), "payload": { "choice": choice }, "revision": revision, "signed_at": "2027-01-15T00:10:00.000Z", "type": "notary.input.v1" });
