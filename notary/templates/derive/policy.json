@@ -1,0 +1,86 @@
+{
+  "about": "The derive template policy T (protocol-objects.md §2.2). Governance registers it (RegisterPolicy) and replaces the placeholder `program_cid`; the PressRegistryBody holds it. Anyone may open a job under it (no job_requester_predicate): the job names `source_policy` and `projected_fields`. `field_definitions` is the derived card's shape. The values in `derived_card` are the defaults of derived_card_revocation_propagation.md §9; a template may change them within the bounds there. `revocation_propagation.mode` is `expiry_only` until sealed_link lands (step 6.5).",
+  "field_definitions": [
+    {
+      "name": "source_policy",
+      "type": "cid",
+      "required": true,
+      "description": "The policy the presented source card was issued under"
+    },
+    {
+      "name": "projected",
+      "type": "text",
+      "required": true,
+      "description": "RFC 8785 JSON of the source card's projected fields, under their source names, values verbatim"
+    },
+    {
+      "name": "dup_tag",
+      "type": "base64url",
+      "required": true,
+      "description": "HMAC-SHA256 under the template key for the period: equal for any two cards derived from the same source card in one period"
+    }
+  ],
+  "notary": {
+    "contributor_predicate": {
+      "issued_under_template": {
+        "param": "source_policy"
+      }
+    },
+    "derived_card": {
+      "issuance_batch_interval": "PT6H",
+      "min_anonymity_set": 10,
+      "min_batch_size": 5,
+      "nullifier_period": "P7D",
+      "renewal_window": "P2D",
+      "source_kind": "card"
+    },
+    "input_replacement": "reject_duplicates",
+    "input_schema": [
+      {
+        "name": "derived_recipient_pubkey",
+        "type": "base64url",
+        "required": true,
+        "description": "The holder's fresh key for the derived card (ML-DSA-44, 1312 bytes)"
+      },
+      {
+        "name": "target_period",
+        "type": "integer",
+        "required": true,
+        "description": "The period index the card is for: the current one, or the next inside the renewal window",
+        "min": 0,
+        "max": 1000000
+      }
+    ],
+    "isolation": "shared",
+    "mode": "per_input",
+    "output_action": "card",
+    "output_schema": [],
+    "parameter_bounds": [
+      {
+        "name": "source_policy",
+        "type": "cid",
+        "required": true,
+        "description": "The policy whose cards may be presented"
+      },
+      {
+        "name": "projected_fields",
+        "type": "append-only-array",
+        "item_type": "text",
+        "required": true,
+        "min_count": 1,
+        "max_count": 3,
+        "regex": "[a-z][a-z0-9_]{0,63}",
+        "description": "Names of source-card fields to copy, at most three"
+      }
+    ],
+    "platform": "aws-nitro-enclaves",
+    "privacy": {
+      "k_min": 1
+    },
+    "program_cid": "<CID of modules/derive.wasm>",
+    "retention": "none",
+    "revocation_propagation": {
+      "mode": "expiry_only"
+    }
+  }
+}

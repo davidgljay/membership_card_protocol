@@ -15,6 +15,9 @@ pub struct PolicyRead {
     pub policy_address: String,
     pub notary: Value,
     pub approved_notaries: Vec<String>,
+    /// The policy card's ML-DSA-44 public key (from the plain `policy_id` document). A derived card's `ancestry_pubkeys`
+    /// ends with it (step 6.4).
+    pub policy_pubkey: Vec<u8>,
 }
 
 fn parse_object(bytes: &[u8]) -> Option<Doc> {
@@ -104,7 +107,7 @@ pub fn read_policy(src: &dyn CardSource, policy_id: &str, state_cid: &str, repli
     if !replica_cards.iter().all(|r| approved.contains(r)) {
         return Err("JOB_NOTARY_NOT_APPROVED");
     }
-    Ok(PolicyRead { policy_address: address, notary: head.get("notary").cloned().unwrap_or(Value::Null), approved_notaries: approved })
+    Ok(PolicyRead { policy_address: address, notary: head.get("notary").cloned().unwrap_or(Value::Null), approved_notaries: approved, policy_pubkey: pubkey })
 }
 
 /// R5: the requester's chain satisfies `predicate`; `is_holder` iff the requester holds the policy card.

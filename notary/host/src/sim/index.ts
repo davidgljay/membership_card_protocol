@@ -27,11 +27,18 @@ export function simChain(baseUrl: string) {
     async fetch(cid) { const r = await fetch(`${base}/ipfs/${cid}`); return r.ok ? new Uint8Array(await r.arrayBuffer()) : null; },
   };
   const eas: EasAnchorer = { async anchor(a) { const r = await post("/eas", { scope_id: a.scopeId, seq: a.seq, record_cid: a.recordCid }); return { txHash: String(r["tx_hash"]) }; } };
-  const submitter: ChainSubmitter = { async submit(s) { const r = await post("/tx", s); return { txHash: String(r["tx_hash"]) }; } };
+  const submitter: ChainSubmitter = {
+    async submit(s) {
+      const r = await fetch(`${base}/tx`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(s) });
+      const j = (await r.json()) as Json;
+      return r.ok ? { txHash: String(j["tx_hash"]) } : { failed: String(j["failed"] ?? r.status) };
+    },
+  };
   const chain: ChainReader = {
     // notary_host.md §8 shapes: `card_head:` → { head_cid, events }; `subcard:` → { master_card_address, sub_card_doc_cid, active }
     async cardHead(address) { const c = (await get(`/registry/card/${address}`)) as Json | null; return c ? canonicalNotary({ events: c["events"], head_cid: c["head_cid"] }) : null; },
-    pressAuth: async () => null,
+    pressAuth: (policy, press) => get(`/registry/press/${policy}/${press}`),
+    protocolVersion: async () => { const r = (await get("/registry/protocol-version")) as Json | null; return r ? String(r["version"]) : null; },
     subcard: (address) => get(`/registry/subcard/${address}`),
     events: async () => null,
   };

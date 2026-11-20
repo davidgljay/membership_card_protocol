@@ -5,6 +5,10 @@
 **Status:** Draft. `expiry_only` and `sealed_link` are in v1. `escrowed_link` is **specified, not implemented in v1**.  
 **Architecture:** `ARCHITECTURE.md` ADR-013 · **Objects:** `protocol-objects.md` §1 (`expires_at`), §2.1, §2.2, §20–§24, §26, §28, §31, §32 · **Lifecycle:** `notary_lifecycle.md` · **Replication:** `notary_replication_and_recovery.md` · **Design record:** `plans/notary-design-decisions.md` §2.6
 
+**Amended 2026-11-15 (6.4), for David's review; security items D1, D2, D4 and D8 approved by David 2026-11-19, the rest still for review** (`plans/notary-questions-6.4.md`): §1 `source_policy` in the `dup_tag` input is the policy CID's UTF-8 bytes (the registry's CID-bytes convention); the ratchet label is followed by `p` as 8 bytes big-endian; the key's period travels in the template handoff, and two seeds of one generation settle on the lower SHA-256; §3 an offer whose boundary passes is replaced when the holder resubmits the same signed input (the header of its `chain_ref` stays pinned for the period), and the countersign answers `DERIVE_OFFER_UNKNOWN`, `DERIVE_OFFER_STALE` or `DERIVE_COUNTERSIGN_INVALID`; check D4 compares the program's output with the projected values; `projected_fields` never names a protocol field; a v1 runtime serves a derived-card job with one replica and `expiry_only`.
+
+**Amended 2026-11-19 (6.5), for David's review** (`plans/notary-questions-6.5.md`): §3 step 6 the sealed link is made when the card is released (E7); §6 a source update counts when its head decrypts under the source card's content key (E4); §6 step 3, after a successor under the same source policy, a quiet (8xx) revocation ends the link and the card lapses at expiry, a loud (9xx) one is always propagated (E2); §6 a source-policy snapshot runs through the same test as an update; §7 step 1 eligibility counts from the later of the block time and the enclave's receipt of the update (E3).
+
 **Amended 2026-11-14 (6.3):** §1 and §3: periods, issuance batch boundaries and renewal windows are judged on the enclave's attested clock. David approved 2026-11-14 (`plans/notary-questions-phase-6.md`, Q5–Q9).
 
 > **Terminology.** "The enclave" means an AWS Nitro Enclaves enclave. See `ARCHITECTURE.md`, terminology note.
@@ -220,6 +224,7 @@ Those four values define a card's **group**. A card is released only once at lea
    - *Threat note:* the host learns only which source policies have live derived-card jobs, which is already public from the jobs. It doesn't learn which source cards are linked, which were ever presented, or which update caused a propagation. The host can withhold updates, which delays propagation (L1). Expiry still bounds the delay.
 2. **Enclave, for every update in the stream.** Looks up the address among its links. If found, it decrypts the new entry with the stored `source_pubkey` and reads `code`. It does the same lookup for every update, so nothing it requests from the host depends on the link set.
 3. **Successor rule.** If the source card has an effective `successor` (codes 100–102, `key_rotation.md`) whose chain is under the same source policy, the link moves to the successor and is checked there. A revocation of the old card, typically 801, is **not** propagated.
+   - *Amended 2026-11-19 (6.5), for David's review (`plans/notary-questions-6.5.md` E2):* the enclave can't read the successor's entries (they are under the new key), and `successor` is holder-editable. So only a quiet (8xx) revocation of a card whose successor is registered under the same source policy is not propagated; the link then ends and the derived card lapses at its expiry. A loud (9xx) revocation is always propagated.
 4. **Propagation test.** If `code` matches `revocation_propagation.propagated_codes` (default `["8xx","9xx"]`), the enclave queues a revocation of the derived card (§7).
 
 **Code mapping.**
@@ -240,7 +245,7 @@ The exact source subcode is never copied: 9xx subcodes say why someone was revok
 
 **The threat.** Source revocations are public `CardHeadUpdated` events under the source policy. A derived-card revocation that followed soon after, on its own, would let an observer match the two cards.
 
-1. **Eligibility.** A queued revocation becomes **eligible** at `source_effective_time + min_delay`, where `source_effective_time` is the block timestamp of the source card's update.
+1. **Eligibility.** A queued revocation becomes **eligible** at `source_effective_time + min_delay`, where `source_effective_time` is the block timestamp of the source card's update. *(Amended 2026-11-19 (6.5), for David's review, `plans/notary-questions-6.5.md` E3: the later of that timestamp, which the host supplies, and the enclave's attested time when the update arrived; a host can delay eligibility, never advance it.)*
 2. **Release.** At each `batch_window` boundary, the enclave releases every eligible revocation **if** at least `min_revocation_batch` are eligible. Otherwise it holds them all.
 3. **Dropping.** A held revocation whose derived card expires before release is dropped, because expiry achieves the same result without an event. Holding is therefore bounded by the period.
 4. **The release.** One `BatchUpdateCardHeads` transaction under `T` (`registry_contract.md §4.15`), built from a `PropagationBatch` (`protocol-objects.md §32`), with entries in shuffled order. Each entry's `LogEntry` has:

@@ -51,6 +51,11 @@ pub struct Broker {
     pub(crate) peer_seq: u64,
     /// After `shutdown`: this replica serves nothing.
     pub(crate) stopped: bool,
+    // ---- derived cards (step 6.4) ----
+    /// Per (notary card, template): the issuance pool, the tag history and pending registrations (`derive.rs`).
+    pub(crate) derive: BTreeMap<(String, String), crate::derive::Book>,
+    /// The registry's protocol version, read once through the host (`fetch protocol_version`).
+    pub(crate) protocol_version: Option<String>,
 }
 
 pub fn error(req_id: &str, code: &str, message: impl Into<String>) -> Value {
@@ -85,6 +90,8 @@ impl Broker {
             hb_seq: 0,
             peer_seq: 0,
             stopped: false,
+            derive: BTreeMap::new(),
+            protocol_version: None,
         }
     }
 
@@ -108,9 +115,21 @@ impl Broker {
         self.jobs.get(job_hash).and_then(|j| self.logs.head(&j.job_hash_b64)).map(|(_, cid)| cid)
     }
 
-    /// Seeds a template's `dup_tag` key here (step 6.4 does this for the first template enclave; 6.3 only moves it).
+    /// Seeds a template's `dup_tag` key here, for period 0 (tests of the handoff). The runtime seeds it through the
+    /// `seed_template` host message (step 6.4).
     pub fn create_template_key_for_tests(&mut self, template: &str) {
-        self.keys.create_template_key(template);
+        let _ = self.keys.create_template_key(template, 0);
+    }
+
+    /// The newest template-key generation held, usable or exposed (no key material).
+    pub fn template_generation_for_tests(&self, template: &str) -> Option<u64> {
+        self.keys.template_generation(template)
+    }
+
+    /// `SHA-256(k_T,p)` of the usable key chain for period `p`, or `None` if no usable key is held or `p` is before the held
+    /// period (erased). A fingerprint, not key material: tests compare chains with it.
+    pub fn template_key_fingerprint_for_tests(&self, template: &str, period: u64) -> Option<[u8; 32]> {
+        self.keys.template_period_key(template, period).map(|(_, k)| notary_crypto::sha256(k.expose()))
     }
 
     /// Whether a usable template key is held (no key material).
@@ -119,6 +138,18 @@ impl Broker {
     }
 
     /// Lowers how many recent headers the chain keeps (tests of the retention rule).
+    /// 6.5: the identity's state (version, loaded, header CID).
+    pub fn state_for_tests(&self, card: &str) -> Option<(u64, bool, Option<String>)> {
+        self.keys.identity(card).map(|i| (i.state_version, i.state_loaded, i.state_header_cid.clone()))
+    }
+    /// 6.5: sealed links and queued revocations this enclave holds for `card`.
+    pub fn links_for_tests(&self, card: &str) -> (usize, usize) {
+        self.derive.iter().filter(|((c, _), _)| c == card).fold((0, 0), |(l, q), (_, b)| (l + b.links.len(), q + b.queued.len()))
+    }
+    pub fn is_identity_leader_for_tests(&self, card: &str) -> bool {
+        self.is_identity_leader(card)
+    }
+
     pub fn set_header_keep_for_tests(&mut self, n: usize) {
         self.chain.set_keep(n);
     }
@@ -221,11 +252,13 @@ impl Broker {
             "policy_snapshot" => {
                 let p = msg.get("policy_address").and_then(Value::as_str).unwrap_or_default().to_string();
                 self.oracle.on_snapshot(&p, msg);
+                self.derive_watch_snapshot(&p, msg);
                 Some(json!({ "kind": "snapshot_ack", "req_id": req_id }))
             }
             "policy_updates" => {
                 let p = msg.get("policy_address").and_then(Value::as_str).unwrap_or_default().to_string();
                 self.oracle.on_updates(&p, msg);
+                self.derive_watch(&p, msg);
                 None
             }
             "genesis" => Some(self.on_genesis(io, &req_id, msg)),
@@ -260,8 +293,13 @@ impl Broker {
             }
             "start_handoff" => Some(self.on_start_handoff(io, &req_id, msg)),
             "shutdown" => Some(self.on_shutdown(io, &req_id)),
-            // fetch_result is consumed by the HostIo; chain_result belongs to step 6.4.
-            "fetch_result" | "chain_result" => None,
+            "seed_template" => Some(self.on_seed_template(&req_id, msg)),
+            "chain_result" => {
+                self.on_chain_result(io, msg);
+                None
+            }
+            // fetch_result is consumed by the HostIo
+            "fetch_result" => None,
             _ => Some(error(&req_id, "NH_UNKNOWN_KIND", format!("unknown message kind {kind:?}"))),
         };
         if let Some(r) = reply {
@@ -289,8 +327,12 @@ impl Broker {
             .filter_map(|h| h.get("header_rlp").and_then(Value::as_str).and_then(|s| b64u::decode(s).ok()))
             .collect();
         let now = self.attested_now_ms().ok();
-        let jobs = &self.jobs;
-        let newest = self.chain.accept(&headers, now, &|| crate::jobs::pinned_blocks(jobs));
+        let (jobs, derive) = (&self.jobs, &self.derive);
+        let newest = self.chain.accept(&headers, now, &|| {
+            let mut pins = crate::jobs::pinned_blocks(jobs);
+            pins.extend(crate::derive::pinned_blocks(derive));
+            pins
+        });
         json!({ "kind": "chain_ack", "req_id": req_id, "newest": newest })
     }
 

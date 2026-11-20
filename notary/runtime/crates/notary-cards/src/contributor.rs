@@ -16,7 +16,14 @@ pub struct ContributorConfig<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContributorResult {
-    Ok { root_key_hash: [u8; 32], chain_addresses: Vec<String> },
+    Ok {
+        root_key_hash: [u8; 32],
+        chain_addresses: Vec<String>,
+        /// The master card's root key (`past_keys[0].pubkey`, else `recipient_pubkey`), raw bytes: `dup_tag` takes it (step 6.4).
+        root_key: Vec<u8>,
+        /// The master card's decrypted document: the values a derived-card job projects (step 6.4).
+        master_doc: Map<String, Value>,
+    },
     Err { code: &'static str, detail: String },
 }
 
@@ -100,5 +107,5 @@ pub fn check_contributor(src: &dyn CardSource, input: &Value, predicate: &Value,
         .and_then(Value::as_str)
         .or_else(|| m.get("recipient_pubkey").and_then(Value::as_str));
     let Some(root) = root.and_then(|r| b64u::decode(r).ok()) else { return fail("INPUT_CARD_UNTRUSTED", "root key") };
-    ContributorResult::Ok { root_key_hash: notary_crypto::sha256(&root), chain_addresses: s3.addresses }
+    ContributorResult::Ok { root_key_hash: notary_crypto::sha256(&root), chain_addresses: s3.addresses, root_key: root, master_doc: s2.master_doc.clone() }
 }

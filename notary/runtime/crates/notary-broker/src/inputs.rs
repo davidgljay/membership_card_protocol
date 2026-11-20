@@ -46,7 +46,8 @@ impl Broker {
         }
         let Some(job) = self.jobs.get(&hash) else { return Some(error(req_id, "NH_JOB_UNKNOWN", "no such job here")) };
         // an input for a past epoch (its key was erased at the restart) is undecryptable whatever state the new epoch is in
-        if typed.epoch != job.epoch || typed.kem != notary_crypto::KEM_ID {
+        let epoch_ok = typed.epoch == job.epoch || job.derive.as_ref().is_some_and(|d| d.grace.contains_key(&typed.epoch));
+        if !epoch_ok || typed.kem != notary_crypto::KEM_ID {
             return Some(error(req_id, "INPUT_UNDECRYPTABLE", "wrong epoch or kem"));
         }
         if !job.serving && job.state.live() {
@@ -62,6 +63,16 @@ impl Broker {
         let Some(opened) = self.open_sealed(&hash, &typed) else { return Some(error(req_id, "INPUT_UNDECRYPTABLE", "B1: cannot open with the job key")) };
         if self.now_iso().is_err() {
             return Some(error(req_id, "ATT_UNAVAILABLE", "the attested clock is unavailable"));
+        }
+        if self.jobs[&hash].derive.is_some() {
+            // a derived-card job: D1–D4 and the offer, or a countersign (derive.rs). One replica: the receipt is final.
+            let outcome = self.derive_submit(io, &hash, opened.plaintext.expose(), &input_hash, typed.epoch);
+            let receipt_key = opened.receipt_key;
+            drop(opened.plaintext);
+            return Some(match self.issue_receipt_ext(&hash, &input_hash, typed.epoch, outcome.status, outcome.reason, outcome.revision, 1, &receipt_key, outcome.offer) {
+                Ok(sealed) => json!({ "kind": "input_result", "req_id": req_id, "input_hash": input_hash, "receipt_sealed": sealed }),
+                Err(c) => error(req_id, c, "receipt"),
+            });
         }
         let verdict = self.check_input(io, &hash, opened.plaintext.expose(), &input_hash, typed.epoch, false);
         let ((status, reject_reason), revision) = self.apply_verdict(&hash, verdict);
@@ -89,65 +100,24 @@ impl Broker {
     /// B2–B11 on a decrypted input. `at_close` re-runs against the closing chain state and skips B10/B11 updates
     /// (close recomputes the counted set itself).
     pub(crate) fn check_input(&mut self, io: &mut dyn HostIo, hash: &[u8; 32], plaintext: &[u8], input_hash: &str, epoch: u64, at_close: bool) -> Verdict {
-        let reject = |code, revision| Verdict::Rejected { code, revision };
-        // B2
-        let Ok(input) = jcs::parse_canonical(plaintext) else { return reject("INPUT_MALFORMED", 0) };
-        let Ok(typed) = objects::from_value::<objects::NotaryInput>(&input, objects::types::INPUT) else { return reject("INPUT_MALFORMED", 0) };
-        let rev = typed.revision;
-        let job = &self.jobs[hash];
-        if typed.job_hash != job.job_hash_b64 {
-            return reject("INPUT_WRONG_JOB", rev);
-        }
-        // B3
-        let Some(bh) = b64u::decode_len(&typed.chain_ref.block_hash, 32).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()) else {
-            return reject("INPUT_CHAIN_REF_UNKNOWN", rev);
+        let core = match self.check_core(io, hash, plaintext, input_hash, epoch, at_close) {
+            Ok(c) => c,
+            Err(v) => return v,
         };
-        let header_ms = match self.chain.lookup(&bh, typed.chain_ref.block_number) {
-            Ok(h) => h.timestamp as i64 * 1000,
-            Err(c) => return reject(c, rev),
-        };
-        // B4
-        if header_ms < job.opens_ms {
-            return reject("INPUT_TOO_EARLY", rev);
-        }
-        if header_ms >= job.closes_ms {
-            return reject("INPUT_LATE", rev);
-        }
-        let (notary, params) = (job.notary.clone(), job.job["parameters"].clone());
-        // B5–B8: card chain, binding, trust, revocation, eligibility (notary-cards)
-        let now = self.chain.chain_time_ms().unwrap_or(header_ms);
-        let root = match self.oracle.contributor(io, &input, &notary, &params, now) {
-            Ok(r) => r,
-            Err(c) => return reject(c, rev),
-        };
-        // 6.0a (runtime §9, `fetch`): the contributor's own master card and signing sub-card must come from a snapshot
-        // of one of the job's contributor policies, never from the per-card fallback.
-        let policies = notary_types::policy_set::policy_set(notary.get("contributor_predicate").unwrap_or(&Value::Null), &params).unwrap_or_default();
-        let sub_pk = b64u::decode(&typed.contributor_signature.public_key).unwrap_or_default();
-        if !self.oracle.contributor_from_snapshot(&typed.contributor_card, &formats::card_pointer(&sub_pk), &policies) {
-            return reject("INPUT_CARD_UNTRUSTED", rev);
-        }
-        // B9
-        if crate::params::check(&typed.payload, notary.get("input_schema")).is_err() {
-            return reject("INPUT_SCHEMA_INVALID", rev);
-        }
-        let digest = jcs::h_bytes(&input).expect("parsed canonical");
-        if !at_close {
-            self.chain.raise_floor(typed.chain_ref.block_number);
-        }
+        let (root, rev, digest, bh) = (core.root, core.revision, core.digest, core.block);
         // B10
         let job = &self.jobs[hash];
-        let latest_wins = notary.get("input_replacement").and_then(Value::as_str) == Some("latest_wins");
+        let latest_wins = job.notary.get("input_replacement").and_then(Value::as_str) == Some("latest_wins");
         let entry = Entry { revision: rev, input_hash: input_hash.to_string(), epoch, input_digest: digest, block: bh };
         match job.index.get(&root) {
             None => {
                 if !latest_wins && rev != 0 {
-                    return reject("INPUT_REVISION_INVALID", rev);
+                    return Verdict::Rejected { code: "INPUT_REVISION_INVALID", revision: rev };
                 }
                 // B11
                 let max = job.admitted.limits.max_inputs as usize;
                 if !at_close && job.index.len() >= max {
-                    return reject("INPUT_CAPACITY", rev);
+                    return Verdict::Rejected { code: "INPUT_CAPACITY", revision: rev };
                 }
                 Verdict::Accepted { root, entry }
             }
@@ -156,14 +126,85 @@ impl Broker {
                     return Verdict::Accepted { root, entry }; // a resubmission of the same signed input
                 }
                 if !latest_wins {
-                    return reject(if rev != 0 { "INPUT_REVISION_INVALID" } else { "INPUT_DUPLICATE" }, rev);
+                    return Verdict::Rejected { code: if rev != 0 { "INPUT_REVISION_INVALID" } else { "INPUT_DUPLICATE" }, revision: rev };
                 }
                 match rev.cmp(&prev.revision) {
                     std::cmp::Ordering::Less => Verdict::Superseded { revision: rev },
-                    std::cmp::Ordering::Equal => reject("REVISION_CONFLICT", rev),
+                    std::cmp::Ordering::Equal => Verdict::Rejected { code: "REVISION_CONFLICT", revision: rev },
                     std::cmp::Ordering::Greater => Verdict::Accepted { root, entry },
                 }
             }
         }
     }
+
+    /// B2–B9: the input parses, is for this job, names a known recent block inside the job's window, and its contributor's
+    /// card chain, binding, trust, revocation and eligibility check out against the evidence and the snapshot; the payload
+    /// fits `input_schema`. Shared by statement jobs (then B10, B11) and derived-card jobs (then D1–D4); a derived-card job
+    /// reads the whole source card (`SourceCard`) instead of only the root key.
+    pub(crate) fn check_core(&mut self, io: &mut dyn HostIo, hash: &[u8; 32], plaintext: &[u8], _input_hash: &str, _epoch: u64, at_close: bool) -> Result<Core, Verdict> {
+        let reject = |code, revision| Verdict::Rejected { code, revision };
+        // B2
+        let Ok(input) = jcs::parse_canonical(plaintext) else { return Err(reject("INPUT_MALFORMED", 0)) };
+        let Ok(typed) = objects::from_value::<objects::NotaryInput>(&input, objects::types::INPUT) else { return Err(reject("INPUT_MALFORMED", 0)) };
+        let rev = typed.revision;
+        let job = &self.jobs[hash];
+        if typed.job_hash != job.job_hash_b64 {
+            return Err(reject("INPUT_WRONG_JOB", rev));
+        }
+        // B3
+        let Some(bh) = b64u::decode_len(&typed.chain_ref.block_hash, 32).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()) else {
+            return Err(reject("INPUT_CHAIN_REF_UNKNOWN", rev));
+        };
+        let header_ms = match self.chain.lookup(&bh, typed.chain_ref.block_number) {
+            Ok(h) => h.timestamp as i64 * 1000,
+            Err(c) => return Err(reject(c, rev)),
+        };
+        // B4
+        if header_ms < job.opens_ms {
+            return Err(reject("INPUT_TOO_EARLY", rev));
+        }
+        if header_ms >= job.closes_ms {
+            return Err(reject("INPUT_LATE", rev));
+        }
+        let (notary, params, derive) = (job.notary.clone(), job.job["parameters"].clone(), job.derive.is_some());
+        // B5–B8: card chain, binding, trust, revocation, eligibility (notary-cards)
+        let now = self.chain.chain_time_ms().unwrap_or(header_ms);
+        let (root, source) = if derive {
+            match self.oracle.source_card(io, &input, &notary, &params, now) {
+                Ok(s) => (s.root_key_hash, Some(s)),
+                Err(c) => return Err(reject(c, rev)),
+            }
+        } else {
+            match self.oracle.contributor(io, &input, &notary, &params, now) {
+                Ok(r) => (r, None),
+                Err(c) => return Err(reject(c, rev)),
+            }
+        };
+        // 6.0a (runtime §9, `fetch`): the contributor's own master card and signing sub-card must come from a snapshot
+        // of one of the job's contributor policies, never from the per-card fallback.
+        let policies = notary_types::policy_set::policy_set(notary.get("contributor_predicate").unwrap_or(&Value::Null), &params).unwrap_or_default();
+        let sub_pk = b64u::decode(&typed.contributor_signature.public_key).unwrap_or_default();
+        if !self.oracle.contributor_from_snapshot(&typed.contributor_card, &formats::card_pointer(&sub_pk), &policies) {
+            return Err(reject("INPUT_CARD_UNTRUSTED", rev));
+        }
+        // B9
+        if crate::params::check(&typed.payload, notary.get("input_schema")).is_err() {
+            return Err(reject("INPUT_SCHEMA_INVALID", rev));
+        }
+        let digest = jcs::h_bytes(&input).expect("parsed canonical");
+        if !at_close {
+            self.chain.raise_floor(typed.chain_ref.block_number);
+        }
+        Ok(Core { input, revision: rev, root, digest, block: bh, source })
+    }
+}
+
+/// What B2–B9 established about an input.
+pub(crate) struct Core {
+    pub input: Value,
+    pub revision: u64,
+    pub root: [u8; 32],
+    pub digest: [u8; 32],
+    pub block: [u8; 32],
+    pub source: Option<crate::env::SourceCard>,
 }

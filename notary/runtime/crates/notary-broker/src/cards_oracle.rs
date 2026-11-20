@@ -11,7 +11,7 @@
 //!
 //! The policy and requester reads use algorithm R (lifecycle Appendix A.7) and the list histories use
 //! `notary_cards::lists_read` (runtime §12): all over vsock `fetch`, with no network connection.
-use crate::env::{CardOracle, HostIo, PolicyView, RecipientTarget};
+use crate::env::{CardOracle, HostIo, PolicyView, RecipientTarget, SourceCard};
 use crate::lists::ListVersion;
 use notary_cards::{check_contributor, CardEntry, CardSource, ContributorConfig, ContributorResult, SubCardEntry};
 use notary_types::{b64u, formats};
@@ -58,6 +58,8 @@ pub struct SnapshotOracle {
     snap: Snapshots,
     /// policy_id → policy address, from the last algorithm R read (for R5's `is_holder`).
     policy_addresses: BTreeMap<String, String>,
+    /// policy_id → the policy card's public key, from the same read.
+    policy_keys: BTreeMap<String, Vec<u8>>,
     cache: RefCell<IpfsCache>,
 }
 
@@ -68,7 +70,7 @@ impl SnapshotOracle {
     }
 
     pub fn new(pins: CardPins) -> Self {
-        Self { pins, snap: Snapshots::default(), policy_addresses: BTreeMap::new(), cache: RefCell::new(IpfsCache::default()) }
+        Self { pins, snap: Snapshots::default(), policy_addresses: BTreeMap::new(), policy_keys: BTreeMap::new(), cache: RefCell::new(IpfsCache::default()) }
     }
 }
 
@@ -176,25 +178,8 @@ impl SnapshotOracle {
             max_depth: self.pins.max_chain_depth,
         }
     }
-}
 
-impl CardOracle for SnapshotOracle {
-    fn policy(&mut self, io: &mut dyn HostIo, policy_id: &str, state_cid: &str, now_ms: i64) -> Result<PolicyView, &'static str> {
-        let src = Source { cache: &self.cache, io: RefCell::new(io), evidence: BTreeMap::new(), snap: &self.snap };
-        let roots = self.roots();
-        // R4 (replica cards approved) is checked by the broker against `approved_notaries` (W10).
-        let r = notary_cards::policy::read_policy(&src, policy_id, state_cid, &[], &roots, now_ms)?;
-        self.policy_addresses.insert(policy_id.to_string(), r.policy_address);
-        Ok(PolicyView { notary: r.notary, approved_notaries: r.approved_notaries })
-    }
-
-    fn requester_allowed(&mut self, io: &mut dyn HostIo, job: &Value, predicate: &Value, now_ms: i64) -> bool {
-        let Some(addr) = job.get("policy_id").and_then(Value::as_str).and_then(|p| self.policy_addresses.get(p)).cloned() else { return false };
-        let src = Source { cache: &self.cache, io: RefCell::new(io), evidence: BTreeMap::new(), snap: &self.snap };
-        notary_cards::policy::requester_allowed(&src, job, predicate, &addr, &self.roots(), now_ms)
-    }
-
-    fn contributor(&mut self, io: &mut dyn HostIo, input: &Value, notary: &Value, params: &Value, now_ms: i64) -> Result<[u8; 32], &'static str> {
+    fn run_contributor(&mut self, io: &mut dyn HostIo, input: &Value, notary: &Value, params: &Value, now_ms: i64) -> ContributorResult {
         let evidence: BTreeMap<String, Vec<u8>> = input
             .get("evidence")
             .and_then(Value::as_array)
@@ -215,7 +200,54 @@ impl CardOracle for SnapshotOracle {
             max_chain_depth: self.pins.max_chain_depth,
         };
         let predicate = notary.get("contributor_predicate").cloned().unwrap_or(Value::Null);
-        match check_contributor(&src, input, &predicate, params.as_object().unwrap_or(&empty), &cfg) {
+        check_contributor(&src, input, &predicate, params.as_object().unwrap_or(&empty), &cfg)
+    }
+}
+
+impl CardOracle for SnapshotOracle {
+    fn policy(&mut self, io: &mut dyn HostIo, policy_id: &str, state_cid: &str, now_ms: i64) -> Result<PolicyView, &'static str> {
+        let src = Source { cache: &self.cache, io: RefCell::new(io), evidence: BTreeMap::new(), snap: &self.snap };
+        let roots = self.roots();
+        // R4 (replica cards approved) is checked by the broker against `approved_notaries` (W10).
+        let r = notary_cards::policy::read_policy(&src, policy_id, state_cid, &[], &roots, now_ms)?;
+        self.policy_addresses.insert(policy_id.to_string(), r.policy_address);
+        self.policy_keys.insert(policy_id.to_string(), r.policy_pubkey);
+        Ok(PolicyView { notary: r.notary, approved_notaries: r.approved_notaries })
+    }
+
+    fn requester_allowed(&mut self, io: &mut dyn HostIo, job: &Value, predicate: &Value, now_ms: i64) -> bool {
+        let Some(addr) = job.get("policy_id").and_then(Value::as_str).and_then(|p| self.policy_addresses.get(p)).cloned() else { return false };
+        let src = Source { cache: &self.cache, io: RefCell::new(io), evidence: BTreeMap::new(), snap: &self.snap };
+        notary_cards::policy::requester_allowed(&src, job, predicate, &addr, &self.roots(), now_ms)
+    }
+
+    fn source_card(&mut self, io: &mut dyn HostIo, input: &Value, notary: &Value, params: &Value, now_ms: i64) -> Result<SourceCard, &'static str> {
+        match self.run_contributor(io, input, notary, params, now_ms) {
+            ContributorResult::Ok { root_key_hash, root_key, master_doc, .. } => {
+                let policy_id = master_doc.get("policy_id").and_then(Value::as_str).unwrap_or_default().to_string();
+                let address = input.get("contributor_card").and_then(Value::as_str).unwrap_or_default().to_string();
+                let pubkey = master_doc.get("recipient_pubkey").and_then(Value::as_str).map(notary_cards::support::b64_lenient).unwrap_or_default();
+                Ok(SourceCard { address, pubkey, root_key, root_key_hash, policy_id, fields: master_doc })
+            }
+            ContributorResult::Err { code, .. } => Err(code),
+        }
+    }
+
+    fn policy_public_key(&self, policy_id: &str) -> Option<Vec<u8>> {
+        self.policy_keys.get(policy_id).cloned()
+    }
+
+    fn card_policy(&self, card: &str) -> Option<String> {
+        self.snap.card_policy.get(card).cloned()
+    }
+
+    fn policy_card_count(&self, policy: &str) -> Option<usize> {
+        self.snap.policy_state.get(policy)?;
+        Some(self.snap.card_policy.values().filter(|p| *p == policy).count())
+    }
+
+    fn contributor(&mut self, io: &mut dyn HostIo, input: &Value, notary: &Value, params: &Value, now_ms: i64) -> Result<[u8; 32], &'static str> {
+        match self.run_contributor(io, input, notary, params, now_ms) {
             ContributorResult::Ok { root_key_hash, .. } => Ok(root_key_hash),
             ContributorResult::Err { code, .. } => Err(code),
         }

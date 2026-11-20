@@ -16,7 +16,7 @@ export function memoryServices() {
     const m = new Map<string, Awaited<ReturnType<PolicyReader["notary"]>>>();
     return { set: (id, v) => { m.set(id, v); }, notary: async (id) => m.get(id) ?? null };
   })();
-  const chain: ChainReader = { cardHead: async () => new Uint8Array([1]), pressAuth: async () => ({ active: true }), subcard: async () => ({}), events: async () => [] };
+  const chain: ChainReader = { cardHead: async () => new Uint8Array([1]), pressAuth: async () => ({ active: true, next_sequence: 0 }), protocolVersion: async () => "0.1", subcard: async () => ({}), events: async () => [] };
   const peerAnswers = new Map<string, (body: Record<string, unknown>) => unknown>();
   const peers: PeerClient = {
     async send(url, body) { if (state.failPeer) throw new Error("peer down"); peerSends.push({ url, body }); },

@@ -179,8 +179,30 @@ export async function handlePeerPost(ctx: HostContext, body: Record<string, unkn
       }
       return { inputs: out };
     }
+    // 6.5: an object this host stores unpinned (a notary card's state blob header and encrypted body, replication §8),
+    // for another holder of the card whose own host doesn't have it. The asker checks the bytes against the CID.
+    case "object": {
+      const cid = String(body["cid"] ?? "");
+      const bytes = ctx.served.get(cid);
+      return bytes ? { bytes: b64uEncode(bytes) } : { not_found: true };
+    }
     default: throw new HostError("NH_MALFORMED", `unknown peer kind ${kind}`);
   }
+}
+
+/** 6.5: an object by CID from the peer hosts (only bytes that hash to the CID are kept). */
+export async function objectFromPeers(ctx: HostContext, cid: string): Promise<Uint8Array | null> {
+  for (const url of ctx.config.PEER_HOSTS) {
+    let answer: unknown;
+    try { answer = await ctx.peers.request(url, { kind: "object", cid }); } catch { continue; }
+    const b = (answer as { bytes?: unknown })?.bytes;
+    if (typeof b !== "string") continue;
+    const bytes = b64uDecode(b);
+    if (cidOfBytes(bytes) !== cid) continue;
+    ctx.served.set(cid, bytes);
+    return bytes;
+  }
+  return null;
 }
 
 /** This host's own entries for peer directories. */
@@ -244,6 +266,21 @@ export async function handleOperatorHandoff(ctx: HostContext, authorization: str
   await viaEnclave(() => session.call("start_handoff", { scope, card, to_instance: to, ...(typeof body["template"] === "string" ? { template: body["template"] } : {}) }));
   if (scope === "identity") ctx.instanceCards.set(to, card);
   return { status: "started" };
+}
+
+/**
+ * `POST /operator/template-seed` (operator; step 6.4): the first enclave serving a derived-card template `T` seeds the template's
+ * `dup_tag` key (generation 0). Every other enclave that serves `T` gets it by template-scope handoff (`/operator/handoff`). The
+ * enclave refuses to seed twice. The host only names the template, the notary card and the period length.
+ */
+export async function handleOperatorSeedTemplate(ctx: HostContext, authorization: string | undefined, body: Record<string, unknown>): Promise<{ status: string; generation: number; period: number }> {
+  requireOperator(ctx, authorization);
+  const template = body?.["template"], card = body?.["notary_card"], period = body?.["nullifier_period"];
+  if (typeof template !== "string" || typeof card !== "string" || typeof period !== "string") throw new HostError("MISSING_FIELD", "template, notary_card and nullifier_period are required");
+  const from = typeof body["instance"] === "string" ? ctx.instances.get(body["instance"]) : undefined;
+  const session = from && !from.closed ? from : liveSession(ctx);
+  const r = await viaEnclave(() => session.call("seed_template", { template, notary_card: card, nullifier_period: period }));
+  return { status: "seeded", generation: Number(r["generation"]), period: Number(r["period"]) };
 }
 
 /** `POST /operator/shutdown` (operator): the named local instance tells its peers it stops and erases its job keys (R5). */

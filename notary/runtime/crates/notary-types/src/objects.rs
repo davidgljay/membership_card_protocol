@@ -30,6 +30,14 @@ obj! { pub struct ContributorPolicy { pub policy_id: String, pub snapshot_block:
 obj! { pub struct Cosignature { pub attestation: String, pub instance_signature: SignatureEntry } }
 obj! { pub struct ChainHead { pub block_hash: String, pub block_number: u64 } }
 obj! { pub struct PeerJob { pub epoch: u64, pub job_hash: String, pub state_version: u64 } }
+// 6.5: a heartbeat's word on an identity's state blob (replication step 31).
+obj! { pub struct IdentityState {
+    #[serde(default, skip_serializing_if = "is_none")] pub header_cid: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")] pub holders: Vec<String>,
+    pub notary_card: String,
+    #[serde(default)] pub serving: bool,
+    pub version: u64,
+} }
 obj! { pub struct ListVersions { pub accepted_runtimes: u64, pub program_allowlist: u64 } }
 obj! { pub struct PropagationEntry { pub card_address: String, pub log_entry_cid: String, pub prev_log_cid: String } }
 obj! { pub struct ListSignature { pub key_index: u32, pub signature: String } }
@@ -163,6 +171,7 @@ obj! {
     pub struct Heartbeat {
         pub chain_head: ChainHead,
         #[serde(default, skip_serializing_if = "is_none")] pub identity_state_version: Option<u64>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")] pub identity_states: Vec<IdentityState>,
         pub instance: String, pub instance_signature: SignatureEntry, pub jobs: Vec<PeerJob>,
         pub list_versions: ListVersions, pub peers_seen: Vec<String>, pub seq: u64,
         #[serde(rename = "type")] pub type_: String,

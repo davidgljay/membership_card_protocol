@@ -49,28 +49,78 @@ pub fn read_frame(r: &mut impl Read) -> std::io::Result<Value> {
 }
 
 /// `SimulatorBackend`: a client of the fake enclave service.
+///
+/// It keeps one connection open and sends every request over it (the service answers any number of
+/// frames per connection). Opening a connection per request ran a multi-node test through thousands
+/// of short-lived sockets, and under load a `connect` could fail, which the broker reports as
+/// `ATT_UNAVAILABLE`. A request that fails on a kept connection is retried once on a fresh one.
 pub struct SimulatorBackend {
     pub addr: SimAddr,
+    conn: std::sync::Mutex<Option<Conn>>,
+}
+
+enum Conn {
+    #[cfg(unix)]
+    Unix(std::os::unix::net::UnixStream),
+    Tcp(std::net::TcpStream),
+}
+
+impl Conn {
+    fn open(addr: &SimAddr) -> std::io::Result<Self> {
+        Ok(match addr {
+            #[cfg(unix)]
+            SimAddr::Unix(p) => Conn::Unix(std::os::unix::net::UnixStream::connect(p)?),
+            SimAddr::Tcp(a) => {
+                let s = std::net::TcpStream::connect(a)?;
+                s.set_nodelay(true)?;
+                Conn::Tcp(s)
+            }
+        })
+    }
+    fn round_trip(&mut self, req: &Value) -> std::io::Result<Value> {
+        match self {
+            #[cfg(unix)]
+            Conn::Unix(s) => {
+                write_frame(s, req)?;
+                read_frame(s)
+            }
+            Conn::Tcp(s) => {
+                write_frame(s, req)?;
+                read_frame(s)
+            }
+        }
+    }
 }
 
 impl SimulatorBackend {
     pub fn new(addr: SimAddr) -> Self {
-        Self { addr }
+        Self { addr, conn: std::sync::Mutex::new(None) }
     }
 
     fn call(&self, req: &Value) -> Result<Value, AttestError> {
         let io = |e: std::io::Error| AttestError(e.to_string());
-        let resp = match &self.addr {
-            #[cfg(unix)]
-            SimAddr::Unix(p) => {
-                let mut s = std::os::unix::net::UnixStream::connect(p).map_err(io)?;
-                write_frame(&mut s, req).map_err(io)?;
-                read_frame(&mut s).map_err(io)?
-            }
-            SimAddr::Tcp(a) => {
-                let mut s = std::net::TcpStream::connect(a).map_err(io)?;
-                write_frame(&mut s, req).map_err(io)?;
-                read_frame(&mut s).map_err(io)?
+        let mut conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
+        let kept = conn.is_some();
+        let first = match conn.as_mut() {
+            Some(c) => c.round_trip(req),
+            None => Conn::open(&self.addr).and_then(|mut c| {
+                let r = c.round_trip(req);
+                *conn = Some(c);
+                r
+            }),
+        };
+        let resp = match first {
+            Ok(v) => v,
+            Err(e) => {
+                *conn = None;
+                if !kept {
+                    return Err(io(e));
+                }
+                // The kept connection may have been closed by the service; retry once on a new one.
+                let mut c = Conn::open(&self.addr).map_err(io)?;
+                let v = c.round_trip(req).map_err(io)?;
+                *conn = Some(c);
+                v
             }
         };
         if resp["ok"] == json!(true) { Ok(resp) } else { Err(AttestError(resp["error"].as_str().unwrap_or("simulator error").to_string())) }

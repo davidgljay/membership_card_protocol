@@ -9,6 +9,8 @@ description = "Guest-side library for notary_v1 programs (notary_runtime.md §7)
 # For a crate that builds a wasm program: a bump allocator and a trapping panic handler (the module is instantiated
 # once per run, so memory is never freed).
 program = []
+# `output_raw`: write bytes as the output (the `derive` template copies data rather than a fixed schema).
+raw_output = []
 
 [lib]
 path = "src/lib.rs"

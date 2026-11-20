@@ -10,7 +10,7 @@ import type { EnclaveSession } from "../enclave/transport.js";
 import type { Msg } from "../enclave/protocol.js";
 import { pinExact } from "../ipfs/index.js";
 import { sanitizeAlert } from "../monitoring/index.js";
-import { lateJobClosed, needInputs, relayAnchor, relayAnnouncement, relayRecord, storeAnnouncement, storeInput } from "./replication.js";
+import { lateJobClosed, needInputs, objectFromPeers, relayAnchor, relayAnnouncement, relayRecord, storeAnnouncement, storeInput } from "./replication.js";
 
 const str = (m: Msg, k: string) => (typeof m[k] === "string" ? (m[k] as string) : "");
 
@@ -27,7 +27,7 @@ export async function handleEnclaveRequest(ctx: HostContext, session: EnclaveSes
     case "store_input": return storeInput(ctx, m);
     case "job_closed": return lateJobClosed(ctx, m); // after `close_pending` (6.3)
     case "chain_submit": {
-      const r = await ctx.submitter.submit({ op: str(m, "op"), payload: m["payload"], signature: str(m, "signature"), calldata: str(m, "calldata") });
+      const r = await ctx.submitter.submit({ op: str(m, "op"), payload: m["payload"], signature: str(m, "signature"), calldata: m["calldata"] });
       return session.notify("chain_result", m.req_id, "txHash" in r ? { tx_receipt: r.txHash } : { failed: r.failed });
     }
     case "eas_anchor": {
@@ -53,9 +53,10 @@ async function fetchRequest(ctx: HostContext, session: EnclaveSession, m: Msg): 
   const [kind, ...rest] = what.split(":");
   const arg = rest.join(":");
   let bytes: Uint8Array | null = null;
-  if (kind === "ipfs") bytes = ctx.served.get(arg) ?? (await ctx.ipfs.fetch(arg));
+  if (kind === "ipfs") bytes = ctx.served.get(arg) ?? (await ctx.ipfs.fetch(arg)) ?? (await objectFromPeers(ctx, arg));
   else if (kind === "policy_snapshot") { const s = await ctx.snapshots.get(arg); bytes = s ? canonicalNotary(s) : null; }
   else if (kind === "card_head") bytes = await ctx.chain.cardHead(arg);
+  else if (kind === "protocol_version") { const v = await ctx.chain.protocolVersion(); bytes = v ? new TextEncoder().encode(v) : null; }
   else if (kind === "press_auth" || kind === "subcard" || kind === "events") {
     const v = kind === "press_auth" ? await ctx.chain.pressAuth(...(arg.split(",") as [string, string])) : kind === "subcard" ? await ctx.chain.subcard(arg) : await ctx.chain.events(arg);
     bytes = v ? canonicalNotary(v) : null;

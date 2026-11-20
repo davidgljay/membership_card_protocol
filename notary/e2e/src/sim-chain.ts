@@ -24,7 +24,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { keccak_256 } from "@noble/hashes/sha3";
 import { sha256 } from "@noble/hashes/sha256";
 import { toRlp, bytesToHex, hexToBytes, numberToHex } from "viem";
-import { cidOfBytes } from "@membership-card-protocol/verifier/notary";
+import { p256 } from "@noble/curves/p256";
+import { cidOfBytes, canonicalNotary, b64uDecode } from "@membership-card-protocol/verifier/notary";
 
 const b64u = (b: Uint8Array) => Buffer.from(b).toString("base64url");
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -44,6 +45,8 @@ export function createSimChain(o: { blockMs?: number; startMs?: number } = {}) {
   const delivered: unknown[] = [];
   /** policy id → the address of the policy's own card (stands for the registry's `RegisterPolicy`) */
   const policyCards = new Map<string, string>();
+  /** `PressAuthorizations`: "policyHex:pressHex" → the press's secp256r1 key (x||y), next sequence. Test setup stands for `AuthorizePress`. */
+  const pressAuths = new Map<string, { key: Uint8Array; next: number; active: boolean }>();
   let lastTs = 0;
 
   function mine(): Block {
@@ -63,7 +66,38 @@ export function createSimChain(o: { blockMs?: number; startMs?: number } = {}) {
   const timer = setInterval(mine, o.blockMs ?? 1000);
   timer.unref();
 
-  const api = {
+  /** registry_contract §4.15 with the §6.1 gate (6.5): see `submitTx`. */
+  function batchGate(m: { op: string; payload: Record<string, unknown>; signature: string; calldata: Record<string, unknown> }): { tx_hash: string } | { failed: string } {
+    const pl = m.payload;
+    const hexOf = (s: unknown) => Buffer.from(b64uDecode(String(s))).toString("hex");
+    const text = (s: unknown) => new TextDecoder().decode(b64uDecode(String(s)));
+    const same = (a: unknown, b: unknown) => Buffer.from(canonicalNotary(a as never)).equals(Buffer.from(canonicalNotary(b as never)));
+    try {
+      if (pl["op"] !== "batch_update_card_heads") return { failed: "OP_MISMATCH" };
+      const policyHex = hexOf(pl["policy_address"]), pressHex = hexOf(pl["press_address"]);
+      const auth = pressAuths.get(`${policyHex}:${pressHex}`);
+      if (!auth || !auth.active) return { failed: "PRESS_NOT_AUTHORIZED" };
+      const digest = keccak_256(canonicalNotary(pl as never));
+      if (!p256.verify(b64uDecode(m.signature), digest, new Uint8Array([4, ...auth.key]), { prehash: false, lowS: false })) return { failed: "PRESS_SIGNATURE_INVALID" };
+      if (pl["sequence"] !== auth.next) return { failed: "SEQUENCE_MISMATCH" };
+      for (const f of ["policy_address", "press_address", "updates"]) if (m.calldata?.[f] === undefined || !same(m.calldata[f], pl[f])) return { failed: "PAYLOAD_CALLDATA_MISMATCH" };
+      const ups = pl["updates"] as { card_address: string; prev_log_cid: string; new_log_cid: string }[];
+      if (!Array.isArray(ups) || ups.length === 0 || ups.length > 100) return { failed: "BATCH_SIZE_INVALID" };
+      const policy = [...policyCards].find(([, addr]) => addr === policyHex)?.[0];
+      if (!policy) return { failed: "POLICY_UNKNOWN" };
+      for (const u of ups) {
+        const c = api.card(hexOf(u.card_address));
+        if (!c) return { failed: "CARD_NOT_FOUND" };
+        if (c.policy !== policy) return { failed: "BATCH_ITEM_INVALID" };
+        if (c.head_cid !== text(u.prev_log_cid)) return { failed: "STALE_PREV_CID" };
+      }
+      auth.next += 1;
+      for (const u of ups) api.registerCard({ address: hexOf(u.card_address), policy, press: pressHex, head_cid: text(u.new_log_cid) });
+      return { tx_hash: bytesToHex(digest) };
+    } catch (e) { return { failed: `MALFORMED: ${(e as Error).message}` }; }
+  }
+
+  const api: any = {
     ipfs, blocks, events, subs, anchors, txs, mine, policyCards, delivered,
     pin(bytes: Uint8Array) { const cid = cidOfBytes(bytes); ipfs.set(cid, bytes); return cid; },
     registerCard(c: { address: string; policy: string; press: string; head_cid: string }) {
@@ -109,6 +143,45 @@ export function createSimChain(o: { blockMs?: number; startMs?: number } = {}) {
       for (const [k, v] of ipfs) ip[k] = b64u(v);
       return { cards, subcards, ipfs: ip };
     },
+    authorizePress(policyHex: string, pressHex: string, keyXY: Uint8Array) { pressAuths.set(`${policyHex}:${pressHex}`, { key: keyXY, next: 0, active: true }); },
+    pressAuth(policyHex: string, pressHex: string) {
+      const a = pressAuths.get(`${policyHex}:${pressHex}`);
+      return a ? { next_sequence: a.next, active: a.active, press_public_key: b64u(a.key) } : null;
+    },
+    /**
+     * `chain_submit` payloads. `register_card` goes through the write gate of registry_contract §4.1 and §6.1: press
+     * authorized and active (3), signature over keccak256(payload) (4), sequence (5), every signed field equal to the
+     * calldata in unpadded base64url (8, E-49), no re-registration. `batch_update_card_heads` (§4.15, step 6.5) goes
+     * through the same gate, with the `updates` list equal to the calldata's in order, every card under the policy and
+     * its `prev_log_cid` its current head; then every head moves. Other ops are only recorded.
+     */
+    submitTx(m: { op: string; payload: Record<string, string | number>; signature: string; calldata: Record<string, string> }): { tx_hash: string } | { failed: string } {
+      txs.push(m);
+      if (m.op === "batch_update_card_heads") return batchGate(m as never);
+      if (m.op !== "register_card") return { tx_hash: bytesToHex(keccak_256(canonicalNotary(m.payload as never))) };
+      const pl = m.payload;
+      const hexOf = (s: unknown) => Buffer.from(b64uDecode(String(s))).toString("hex");
+      try {
+        if (pl["op"] !== "register_card") return { failed: "OP_MISMATCH" };
+        const policyHex = hexOf(pl["policy_address"]), pressHex = hexOf(pl["press_address"]);
+        const auth = pressAuths.get(`${policyHex}:${pressHex}`);
+        if (!auth || !auth.active) return { failed: "PRESS_NOT_AUTHORIZED" };
+        const digest = keccak_256(canonicalNotary(pl as never));
+        if (!p256.verify(b64uDecode(m.signature), digest, new Uint8Array([4, ...auth.key]), { prehash: false, lowS: false })) return { failed: "PRESS_SIGNATURE_INVALID" };
+        if (pl["sequence"] !== auth.next) return { failed: "SEQUENCE_MISMATCH" };
+        for (const f of ["card_address", "initial_log_cid", "policy_address", "press_address"]) {
+          const v = m.calldata?.[f];
+          if (typeof v !== "string" || v !== pl[f] || b64u(b64uDecode(v)) !== v) return { failed: "PAYLOAD_CALLDATA_MISMATCH" };
+        }
+        const card = hexOf(pl["card_address"]);
+        if (events.some((e) => e.cardAddress === card)) return { failed: "CARD_EXISTS" };
+        const policy = [...policyCards].find(([, addr]) => addr === policyHex)?.[0];
+        if (!policy) return { failed: "POLICY_UNKNOWN" };
+        auth.next += 1;
+        api.registerCard({ address: card, policy, press: pressHex, head_cid: new TextDecoder().decode(b64uDecode(String(pl["initial_log_cid"]))) });
+        return { tx_hash: bytesToHex(digest) };
+      } catch (e) { return { failed: `MALFORMED: ${(e as Error).message}` }; }
+    },
     stop() { clearInterval(timer); },
   };
   return api;
@@ -152,7 +225,10 @@ export function serveSimChain(chain: SimChain, port: number, host = "0.0.0.0") {
       if (m === "GET" && p[0] === "block" && p[1]) { const b = chain.blocks[Number(p[1]) - 1]; return b ? send(res, 200, b) : send(res, 404, { error: "not found" }); }
       if (m === "POST" && p[0] === "eas") return send(res, 200, chain.anchor(JSON.parse((await body(req)).toString())));
       if (m === "GET" && p[0] === "eas" && p[1]) return send(res, 200, chain.anchors.get(p[1]) ?? []);
-      if (m === "POST" && p[0] === "tx") { chain.txs.push(JSON.parse((await body(req)).toString())); const b = chain.mine(); return send(res, 200, { tx_hash: b.hash }); }
+      if (m === "POST" && p[0] === "tx") { const r = chain.submitTx(JSON.parse((await body(req)).toString())); return send(res, "failed" in r ? 409 : 200, r); }
+      if (m === "POST" && p[0] === "registry" && p[1] === "press-auth") { const b = JSON.parse((await body(req)).toString()) as { policy: string; press: string; key: string }; chain.authorizePress(b.policy, b.press, b64uDecode(b.key)); return send(res, 200, { ok: true }); }
+      if (m === "GET" && p[0] === "registry" && p[1] === "press" && p[2] && p[3]) { const a = chain.pressAuth(p[2], p[3]); return a ? send(res, 200, a) : send(res, 404, { error: "not found" }); }
+      if (m === "GET" && p[0] === "registry" && p[1] === "protocol-version") return send(res, 200, { version: "0.1" });
       return send(res, 404, { error: "no route" });
     } catch (e) { return send(res, 500, { error: (e as Error).message }); }
   });

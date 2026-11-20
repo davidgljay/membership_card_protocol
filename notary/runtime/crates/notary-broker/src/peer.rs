@@ -47,6 +47,8 @@ pub struct Heard {
     pub hb_seq: Option<u64>,
     pub job_versions: BTreeMap<String, u64>,
     pub identity_version: Option<u64>,
+    /// 6.5: the cards whose derived-card jobs this peer said it serves (its latest heartbeat).
+    pub serving_cards: std::collections::BTreeSet<String>,
 }
 
 /// An opened, authenticated envelope.
@@ -117,7 +119,7 @@ impl Broker {
             "hello" => self.on_hello(io, &from, &pk, &body),
             "handoff_payload" => self.on_handoff_payload(io, &from, &pk, &body),
             "handoff_ack" => self.on_handoff_ack(io, &from, &pk, &body),
-            "heartbeat" => self.on_heartbeat(&from, &pk, &body),
+            "heartbeat" => self.on_heartbeat(io, &from, &pk, &body),
             "replica_gone" => self.on_replica_gone(io, &from, &body),
             "input_forward" => self.on_input_forward(io, &from, &body),
             "input_ack" => self.on_input_ack(io, &from, &body),
@@ -236,6 +238,8 @@ impl Broker {
             self.resend_close_bodies(io);
         }
         self.expire_pending_inputs(io, now);
+        // derived cards: rotation, the issuance pool, key upkeep, all on this tick's one clock reading (step 6.4)
+        self.derive_tick(io, now);
         let hashes: Vec<[u8; 32]> = self.jobs.keys().copied().collect();
         for h in hashes {
             self.check_liveness(io, &h);
@@ -252,6 +256,9 @@ impl Broker {
             jobs.push(json!({ "epoch": j.epoch, "job_hash": j.job_hash_b64, "state_version": j.state_version }));
             peers.extend(j.members.keys().filter(|i| **i != me && !j.gone.contains(*i)).cloned());
         }
+        // 6.5: the other holders of this enclave's identities (known from identity handoffs), for the state blob
+        let mine = self.keys.identity_cards();
+        peers.extend(self.instance_cards.iter().filter(|(_, c)| mine.contains(c)).map(|(i, _)| i.clone()));
         peers.sort();
         peers.dedup();
         if peers.is_empty() {
@@ -269,6 +276,10 @@ impl Broker {
         if let Some(v) = self.keys.identity_cards().iter().filter_map(|c| self.keys.identity(c)).map(|i| i.state_version).max() {
             hb["identity_state_version"] = json!(v);
         }
+        let states = self.identity_states();
+        if !states.is_empty() {
+            hb["identity_states"] = json!(states);
+        }
         hb["instance_signature"] = self.keys.inst().sign_object(&hb, "instance_signature").expect("heartbeat is notary JSON");
         for p in peers {
             self.send_peer(io, &p, "heartbeat", hb.clone());
@@ -276,7 +287,7 @@ impl Broker {
     }
 
     /// A heartbeat counts only if signed by the sender's `K_inst` and its `seq` is newer than any seen (no replay).
-    fn on_heartbeat(&mut self, from: &str, pk: &[u8], body: &Value) {
+    fn on_heartbeat(&mut self, io: &mut dyn HostIo, from: &str, pk: &[u8], body: &Value) {
         let Ok(hb) = objects::from_value::<objects::Heartbeat>(body, objects::types::HEARTBEAT) else { return };
         if hb.instance != from || !notary_crypto::verify_object(body, "instance_signature", pk) {
             return;
@@ -294,6 +305,11 @@ impl Broker {
         }
         if let Some(v) = hb.identity_state_version {
             h.identity_version = Some(h.identity_version.map_or(v, |o| o.max(v)));
+        }
+        h.serving_cards = hb.identity_states.iter().filter(|s| s.serving).map(|s| s.notary_card.clone()).collect();
+        if !hb.identity_states.is_empty() {
+            let states: Vec<Value> = hb.identity_states.iter().map(|s| json!({ "header_cid": s.header_cid, "holders": s.holders, "notary_card": s.notary_card, "version": s.version })).collect();
+            self.on_identity_state_hint(io, from, &states);
         }
     }
 

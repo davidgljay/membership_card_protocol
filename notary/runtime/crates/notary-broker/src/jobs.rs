@@ -13,7 +13,8 @@
 //! **Epoch restarts (replication §7, steps 25–26).** `total_loss`, `runtime_migration` (confirmed: this enclave's
 //! `close_compat` differs from the previous epoch's) and `key_exposure` (confirmed from this enclave's own verified list).
 //! An enclave that doesn't hold the job reads the previous log head by CID, runs the full job checks and continues the
-//! log from it. Per-input jobs (derived cards) are refused with `NH_UNSUPPORTED` until step 6.4.
+//! log from it. A per-input job (derived cards, step 6.4, `derive.rs`) is not restarted: its pool and tag history are state
+//! only the state blob (6.5) can carry to another enclave, so an epoch restart of one answers `NH_UNSUPPORTED`.
 use crate::{
     env::HostIo,
     host_proto::{error, Broker},
@@ -101,6 +102,8 @@ pub struct Job {
     pub cosigned_body: Option<Value>,
     /// The leader's latest `close_body`, kept until this replica's own close computation is done.
     pub pending_body: Option<(String, Value)>,
+    /// A per-input job that issues derived cards (step 6.4).
+    pub derive: Option<crate::derive::DeriveJob>,
 }
 
 const MAX_PER_INPUT_SPAN_MS: i64 = 366 * 86_400_000;
@@ -121,6 +124,7 @@ pub(crate) struct Checked {
     pub q: u32,
     pub min_live: u32,
     pub allowed: BTreeMap<String, u32>,
+    pub derive: Option<crate::derive::DeriveJob>,
 }
 
 type Fail = (&'static str, String);
@@ -193,6 +197,7 @@ impl Broker {
             return Err(e("JOB_NOTARY_NOT_APPROVED", "notary.platform differs from this enclave's platform"));
         }
         let mode = notary.get("mode").and_then(Value::as_str).unwrap_or_default();
+        let mut derive = None;
         let closes_ms = match (mode, &typed.closes_at, &typed.key_period, &typed.ends_at) {
             ("aggregate", Some(c), None, None) => ts(c)?,
             ("per_input", None, Some(_), Some(end)) => {
@@ -200,15 +205,16 @@ impl Broker {
                 if end - opens_ms > MAX_PER_INPUT_SPAN_MS {
                     return Err(e("JOB_MALFORMED", "ends_at is more than a year after opens_at"));
                 }
-                return Err(e("NH_UNSUPPORTED", "per-input jobs arrive in step 6.4"));
+                derive = Some(self.derive_job_checks(&typed, &notary, opens_ms, n)?);
+                end
             }
             _ => return Err(e("JOB_MALFORMED", "mode fields do not match notary.mode")),
         };
         if closes_ms <= opens_ms {
             return Err(e("JOB_MALFORMED", "closes_at must be after opens_at"));
         }
-        if notary.get("output_action").and_then(Value::as_str) != Some("statement") {
-            return Err(e("NH_UNSUPPORTED", "card output arrives in step 6.4"));
+        if derive.is_none() && notary.get("output_action").and_then(Value::as_str) != Some("statement") {
+            return Err(e("JOB_MALFORMED", "a card policy must be per_input"));
         }
         // W5
         if let Some(pred) = notary.get("job_requester_predicate") {
@@ -252,7 +258,7 @@ impl Broker {
         }
         let job_bytes = jcs::canonical(job).map_err(|x| ("JOB_MALFORMED", x.message))?;
         let params_bytes = jcs::canonical(&typed.parameters).map_err(|x| ("JOB_PARAMETERS_OUT_OF_BOUNDS", x.message))?;
-        Ok(Checked { job: job.clone(), job_hash, job_bytes, notary, params_bytes, program, admitted, card, opens_ms, closes_ms, n, q, min_live: typed.min_live, allowed })
+        Ok(Checked { job: job.clone(), job_hash, job_bytes, notary, params_bytes, program, admitted, card, opens_ms, closes_ms, n, q, min_live: typed.min_live, allowed, derive })
     }
 
     /// The purpose-0x02 attestation for a key this enclave holds (§33). Published; returns `(doc, cid)`.
@@ -315,6 +321,7 @@ impl Broker {
             close: None,
             cosigned_body: None,
             pending_body: None,
+            derive: c.derive.clone(),
         }
     }
 
@@ -432,6 +439,9 @@ impl Broker {
             None => self.jobs.get(&hash).map(|j| j.program.clone()).ok_or(e("JOB_MALFORMED", "program missing"))?,
         };
         let c = self.check_job(io, &job, program, Some(hash))?;
+        if c.derive.is_some() {
+            return Err(e("NH_UNSUPPORTED", "a derived-card job's pool and tag history move only with the state blob (step 6.5)"));
+        }
         // Continue the log: a holder from its own head; anyone else from the record at last_log, read by CID and
         // checked to be a record of this job signed by a replica_set card (a host can point at an older one: a fork,
         // which verifiers see as JOB_LOG_FORK; replication step 26).
@@ -502,6 +512,7 @@ impl Broker {
     /// (step 44).
     pub(crate) fn after_anchor(&mut self, io: &mut dyn HostIo, scope: &str, seq: u64) {
         let Ok(Ok(hash)) = b64u::decode_len(scope, 32).map(<[u8; 32]>::try_from) else { return };
+        self.derive_after_anchor(io, &hash, seq);
         let Some(job) = self.jobs.get(&hash) else { return };
         if Some(seq) == job.announce_after && !job.announced && job.state == State::Keyed {
             if let Some(ann) = self.sign_announcement(&hash) {

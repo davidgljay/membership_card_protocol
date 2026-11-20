@@ -29,7 +29,7 @@ fn rust_agrees_with_typescript_on_every_case() {
             max_chain_depth: cfg.get("maxChainDepth").and_then(Value::as_u64).unwrap_or(64) as usize,
         };
         let got = match check_contributor(&world, &c["input"], &c["predicate"], c["parameters"].as_object().unwrap(), &config) {
-            ContributorResult::Ok { root_key_hash, chain_addresses } => json!({ "ok": true, "root_key_hash": b64u::encode(&root_key_hash), "chain_addresses": chain_addresses }),
+            ContributorResult::Ok { root_key_hash, chain_addresses, .. } => json!({ "ok": true, "root_key_hash": b64u::encode(&root_key_hash), "chain_addresses": chain_addresses }),
             ContributorResult::Err { code, .. } => json!({ "ok": false, "code": code }),
         };
         if got != c["expect"] {

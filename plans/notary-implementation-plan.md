@@ -337,17 +337,19 @@ Goal: one end-to-end path running in the simulator: a job is announced with an a
   - **Done when**: for every quorum-gated operation, unit tests show that a wrong `op` and each altered parameter are refused, and that the spec payload is accepted; a devnode suite shows that swapped calldata reverts for at least `AuthorizePress`, `RotateGovernanceKeys` and `ProposeLogicUpgrade`; every payload builder writes the spec format; and all integration suites pass on the devnode.
   - **Not blocking**: 6.4 does not depend on it. It must land before any Sepolia or mainnet upgrade.
 
-- [ ] **6.4 Derived-card template**
+- [x] **6.4 Derived-card template**
   - **What**: Build the `derive` template and policy: per-input mode with key rotation each period, `dup_tag` (including re-seeding by generation), the anonymity-set check, batched issuance through the notary acting as press, `expires_at` with renewal, and the `source_kind` refusal. Depends on 5.3a and 6.4a.
   - **Who**: Claude
   - **Context needed**: `notary_lifecycle.md` (derived cards); `notary-design-decisions.md §2.6`; `press.md` (issuance)
   - **Done when**: derived cards pass standard verification, and tests show duplicate refusal and the anonymity-set refusal.
+  - **Done 2026-11-16** (Q11 meaning: the TypeScript verifier's stages over the simulated chain, with `verifyNotaryIssuedCard` called directly; `CardVerifier` wiring and a real `AuthorizePress` stay in 7.1). `notary-broker/tests/derive.rs` (18 tests: `DERIVE_DUPLICATE`, `DERIVE_KEY_REUSED`, `DERIVE_PERIOD_INVALID`, the anonymity-set and batch-size refusals, renewal, rotation, re-seeding), `notary/e2e/test/derived.test.ts` (7). One replica and `expiry_only` only; no real-process derive e2e run; wallet `derived.ts` not built. Decisions for David: `plans/notary-questions-6.4.md`.
 
-- [ ] **6.5 Revocation propagation** *(Opus)*
+- [x] **6.5 Revocation propagation** *(Opus)*
   - **What**: Implement `expiry_only` and `sealed_link`: the state blob with on-chain anchoring and rollback refusal, the registry watch loop, batched and delayed revocation release, and the propagated-code filter. Add the sealed-link disclosure in the wallet.
   - **Who**: Claude
   - **Context needed**: `derived_card_revocation_propagation.md`; `notary-design-decisions.md §2.5–2.6`
   - **Done when**: tests cover revocation within the batching window, refusal of a rolled-back blob, and lapse at expiry for `expiry_only`.
+  - **Done 2026-11-19.** "On-chain anchoring" above contradicts the approved spec (replication §8, protocol-objects §31: no on-chain anchor; rollback is refused by versions in heartbeats and handoffs). The spec was followed (`plans/notary-questions-6.5.md` E5). `notary-broker/src/propagation.rs`; tests in `tests/derive.rs`: `a_source_revocation_is_propagated_within_the_batching_window_with_the_mapped_code`, `revocations_below_the_minimum_batch_are_held_and_dropped_at_expiry`, `the_successor_rule_and_a_fixed_derived_code`, `expiry_only_keeps_no_link_and_the_card_lapses_at_expiry`, `the_state_blob_survives_the_enclave_and_a_rolled_back_blob_is_refused` (negative controls for the delay and the rollback checks fail as expected); `notary/e2e/test/derived-revoked.test.ts` reads the propagated revocations through the TypeScript verifier. The wallet's sealed-link disclosure already existed (6.0a) and is tested. Questions E1–E11 for David.
 
 - [ ] **6.6 Phase 6 Milestone Review**
   - **What**: Check the four use cases for consistency (shared runtime paths, objects and receipts), and map tests to the strategic-plan objectives under G1 and G4.

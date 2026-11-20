@@ -47,6 +47,17 @@ pub fn aes_gcm_decrypt(key: &[u8; 32], data: &[u8]) -> Option<Vec<u8>> {
     Aes256Gcm::new_from_slice(key).ok()?.decrypt(&nonce.into(), &data[12..]).ok()
 }
 
+/// AES-256-GCM with a fresh random nonce, `nonce(12) || ciphertext || tag(16)` (twin of `aes256gcmEncrypt`). A card's content
+/// key is unique to the card, so a random 96-bit nonce is used once per key (ADR-006).
+pub fn aes_gcm_encrypt(key: &[u8; 32], plaintext: &[u8]) -> Vec<u8> {
+    use aes_gcm::{aead::{Aead, KeyInit}, Aes256Gcm};
+    let nonce: [u8; 12] = notary_crypto::random_array();
+    let ct = Aes256Gcm::new_from_slice(key).expect("32-byte key").encrypt(&nonce.into(), plaintext).expect("AES-GCM encrypts");
+    let mut out = nonce.to_vec();
+    out.extend_from_slice(&ct);
+    out
+}
+
 /// Twin of the verifier's `canonicalize` (sorted keys, no whitespace, `null` kept). Numbers must be integers: a
 /// fractional number gives `None` (JavaScript would format it; no signed card object carries one).
 pub fn canonicalize(v: &Value) -> Option<Vec<u8>> {

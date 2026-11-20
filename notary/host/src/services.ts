@@ -18,7 +18,8 @@ export interface EasAnchorer {
 
 /** Registry writes of enclave-signed payloads, submitted from the gas wallet **unchanged** (notary_host.md §10). */
 export interface ChainSubmitter {
-  submit(s: { op: string; payload: unknown; signature: string; calldata: string }): Promise<{ txHash: string } | { failed: string }>;
+  /** `calldata`: the logical arguments the enclave named (for `register_card`: `{ card_address, initial_log_cid, policy_address, press_address }`, unpadded base64url, the encodings the write gate compares). */
+  submit(s: { op: string; payload: unknown; signature: string; calldata: unknown }): Promise<{ txHash: string } | { failed: string }>;
 }
 
 /** Policy reads for job intake (the policy's `notary` section at a state). Backed by the chain feed. */
@@ -29,7 +30,10 @@ export interface PolicyReader {
 /** Per-card chain reads, answered only for ancestors outside snapshotted policies and the disclosed fallback. */
 export interface ChainReader {
   cardHead(address: string): Promise<Uint8Array | null>;
+  /** `PressAuthorizations[policy][press]`: `{ next_sequence, active, press_public_key }`. A derived-card enclave signs its registrations with `next_sequence`. */
   pressAuth(policy: string, press: string): Promise<unknown | null>;
+  /** The registry's `getProtocolVersion()`, which a derived card carries (protocol-objects §1). */
+  protocolVersion(): Promise<string | null>;
   subcard(address: string): Promise<unknown | null>;
   events(filter: string): Promise<unknown | null>;
 }

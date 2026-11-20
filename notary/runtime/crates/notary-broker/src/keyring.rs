@@ -33,6 +33,11 @@ pub struct Identity {
     pub state_key: SecretBytes,
     pub state_version: u64,
     pub state_hash: String,
+    /// The CID of the current `StateBlobHeader` (none before the first blob).
+    pub state_header_cid: Option<String>,
+    /// Whether this enclave holds the state of `state_version` (a holder that received the identity at version > 0 loads
+    /// the blob its handoff named before it may write; replication step 32).
+    pub state_loaded: bool,
     /// A received identity is unusable until its `handoff` record is anchored (replication step 10).
     pub pending_handoff: bool,
 }
@@ -43,11 +48,14 @@ pub struct JobKey {
     pub exposed: bool,
 }
 
-/// The `dup_tag` ratchet key `k_T,p` of a template (derived_card_revocation_propagation.md §1). Step 6.3 builds its
-/// transfer (template-scope handoff); its derivation and use are step 6.4.
+/// The `dup_tag` ratchet key `k_T,p` of a template (derived_card_revocation_propagation.md §1). `key` is the key of period
+/// `period`; later periods' keys are derived from it by the one-way ratchet and earlier ones are gone. Step 6.3 built the
+/// transfer (template-scope handoff); step 6.4 derives and uses it.
 pub struct TemplateKey {
     pub template: String,
     pub generation: u64,
+    /// The period index `key` belongs to (`k_T,period`).
+    pub period: u64,
     pub key: SecretBytes,
     pub lineage: BTreeSet<Vec<u8>>,
     pub exposed: bool,
@@ -61,6 +69,29 @@ pub struct Keyring {
     identities: BTreeMap<String, Identity>,
     jobs: BTreeMap<([u8; 32], u64), JobKey>,
     templates: BTreeMap<String, TemplateKey>,
+    /// Exposed keys of an older generation, kept until the end of the period they were re-seeded in, **only** to run D3
+    /// against tags already issued in that period (propagation §1). Never used to issue, never handed on.
+    retired_templates: BTreeMap<String, Vec<(TemplateKey, i64)>>,
+}
+
+/// `k_T,p = HKDF-SHA256(k_T,p-1, info = "card-notary-dup-tag-ratchet" || p)`, `p` as 8 bytes big-endian, no salt.
+pub const RATCHET_INFO: &[u8] = b"card-notary-dup-tag-ratchet";
+
+fn ratchet_step(prev: &[u8], p: u64) -> SecretBytes {
+    let mut info = RATCHET_INFO.to_vec();
+    info.extend_from_slice(&p.to_be_bytes());
+    let mut out = SecretBytes::zeroed(32);
+    notary_crypto::hkdf_sha256(prev, &[], &info, out.expose_mut()).expect("32 bytes");
+    out
+}
+
+/// `k_T,to` from `k_T,from` (`from <= to`).
+fn ratchet_to(key: &[u8], from: u64, to: u64) -> SecretBytes {
+    let mut k = SecretBytes::from_vec(key.to_vec());
+    for p in from + 1..=to {
+        k = ratchet_step(k.expose(), p);
+    }
+    k
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,6 +114,7 @@ pub struct ExportedIdentity {
     pub state_key: SecretBytes,
     pub state_version: u64,
     pub state_hash: String,
+    pub state_header_cid: Option<String>,
     pub lineage: BTreeSet<Vec<u8>>,
 }
 
@@ -93,7 +125,7 @@ fn hits(l: &BTreeSet<Vec<u8>>, vulnerable: &[Vec<u8>]) -> bool {
 impl Keyring {
     /// `K_inst` is generated at boot and never persisted (§4, §15).
     pub fn new(pcr0: Vec<u8>) -> Self {
-        Self { inst: MlDsaKey::generate(), pcr0, identities: BTreeMap::new(), jobs: BTreeMap::new(), templates: BTreeMap::new() }
+        Self { inst: MlDsaKey::generate(), pcr0, identities: BTreeMap::new(), jobs: BTreeMap::new(), templates: BTreeMap::new(), retired_templates: BTreeMap::new() }
     }
 
     pub fn pcr0(&self) -> &[u8] {
@@ -124,9 +156,16 @@ impl Keyring {
             state_key: SecretBytes::random(32),
             state_version: 0,
             state_hash: b64u::encode(&sha256(b"")),
+            state_header_cid: None,
+            state_loaded: true,
             pending_handoff: false,
         };
         self.identities.entry(card).or_insert(ident)
+    }
+
+    /// The usable identity, to update its state version (`propagation.rs`).
+    pub fn identity_mut(&mut self, card: &str) -> Option<&mut Identity> {
+        self.identities.get_mut(card).filter(|i| !i.exposed && !i.pending_handoff)
     }
 
     /// A usable identity: held, not exposed, and (if received by handoff) its handoff record anchored.
@@ -209,14 +248,74 @@ impl Keyring {
         self.jobs.keys().filter(|(j, _)| j == job_hash).map(|(_, e)| *e).collect()
     }
 
-    /// The first template enclave seeds `k_T` (generation 0). Step 6.4 calls this; 6.3 only moves it.
-    pub fn create_template_key(&mut self, template: &str) -> &TemplateKey {
-        let tk = TemplateKey { template: template.into(), generation: 0, key: SecretBytes::random(32), lineage: BTreeSet::from([self.pcr0.clone()]), exposed: false, pending: false };
-        self.templates.entry(template.into()).or_insert(tk)
+    /// The first template enclave seeds `k_T` (generation 0) for `period`. Refused if a key for `template` is held: a second
+    /// seed would give this operator tags the others can't match (cross-operator duplicates, propagation §1).
+    pub fn create_template_key(&mut self, template: &str, period: u64) -> Result<&TemplateKey, &'static str> {
+        if self.templates.contains_key(template) {
+            return Err("TEMPLATE_KEY_EXISTS");
+        }
+        let tk = TemplateKey { template: template.into(), generation: 0, period, key: SecretBytes::random(32), lineage: BTreeSet::from([self.pcr0.clone()]), exposed: false, pending: false };
+        Ok(self.templates.entry(template.into()).or_insert(tk))
     }
 
     pub fn template_key(&self, template: &str) -> Option<&TemplateKey> {
         self.templates.get(template).filter(|t| !t.exposed && !t.pending)
+    }
+
+    /// Whether a template key is held and its lineage is exposed (a re-seed is due, propagation §1).
+    pub fn template_exposed(&self, template: &str) -> bool {
+        self.templates.get(template).is_some_and(|t| t.exposed)
+    }
+
+    /// The newest generation held, usable or exposed.
+    pub fn template_generation(&self, template: &str) -> Option<u64> {
+        self.templates.get(template).map(|t| t.generation)
+    }
+
+    /// `k_T,p` of the newest usable generation, for issuing and checking tags. `None` if no usable key is held or `p`
+    /// is before the held period (those keys are erased).
+    pub fn template_period_key(&self, template: &str, p: u64) -> Option<(u64, SecretBytes)> {
+        let t = self.template_key(template)?;
+        (p >= t.period).then(|| (t.generation, ratchet_to(t.key.expose(), t.period, p)))
+    }
+
+    /// The exposed keys of older generations still held for D3: `(generation, k_T,p)` for period `p` if it is the period
+    /// they were kept for.
+    pub fn template_retired_keys(&self, template: &str, p: u64) -> Vec<(u64, SecretBytes)> {
+        self.retired_templates.get(template).into_iter().flatten().filter(|(k, _)| k.period == p).map(|(k, _)| (k.generation, SecretBytes::from_vec(k.key.expose().to_vec()))).collect()
+    }
+
+    /// Erases every period key before `min_period` (the ratchet is one-way, so an earlier key can't be recomputed), and
+    /// retired keys whose period has ended (`now_ms` at or after the end they were kept until).
+    pub fn advance_template(&mut self, template: &str, min_period: u64, now_ms: i64) {
+        if let Some(t) = self.templates.get_mut(template) {
+            if t.period < min_period && !t.exposed && !t.pending {
+                t.key = ratchet_to(t.key.expose(), t.period, min_period);
+                t.period = min_period;
+            }
+        }
+        if let Some(v) = self.retired_templates.get_mut(template) {
+            v.retain(|(_, until)| now_ms < *until);
+        }
+    }
+
+    /// Re-seeds an exposed chain (propagation §1): a **fresh random** key for `period` as generation `g + 1`. The exposed key
+    /// moves to the retired list until `keep_until_ms` (the end of that period). Only an enclave whose own runtime is clean
+    /// (`vulnerable` doesn't contain its PCR0) may do it. Returns the new generation.
+    pub fn reseed_template(&mut self, template: &str, period: u64, keep_until_ms: i64, vulnerable: &[Vec<u8>]) -> Result<u64, &'static str> {
+        if vulnerable.contains(&self.pcr0) {
+            return Err("NOTARY_KEY_EXPOSED");
+        }
+        let Some(old) = self.templates.remove(template) else { return Err("TEMPLATE_KEY_MISSING") };
+        if !old.exposed {
+            self.templates.insert(template.into(), old);
+            return Err("TEMPLATE_KEY_NOT_EXPOSED");
+        }
+        let generation = old.generation + 1;
+        self.retired_templates.entry(template.into()).or_default().push((old, keep_until_ms));
+        let tk = TemplateKey { template: template.into(), generation, period, key: SecretBytes::random(32), lineage: BTreeSet::from([self.pcr0.clone()]), exposed: false, pending: false };
+        self.templates.insert(template.into(), tk);
+        Ok(generation)
     }
 
     // ---- handoff only (I1, I2) ------------------------------------------------------------------------------------
@@ -241,14 +340,15 @@ impl Keyring {
             state_key: SecretBytes::from_vec(i.state_key.expose().to_vec()),
             state_version: i.state_version,
             state_hash: i.state_hash.clone(),
+            state_header_cid: i.state_header_cid.clone(),
             lineage: i.lineage.clone(),
         })
     }
 
-    /// I1: `k_T` leaves only for a checked peer, and never when exposed (P5).
-    pub fn export_template_key(&self, _p: &PeerChecked, template: &str) -> Option<(Exported, u64)> {
+    /// I1: `k_T` leaves only for a checked peer, and never when exposed (P5). Returns the key, its generation and its period.
+    pub fn export_template_key(&self, _p: &PeerChecked, template: &str) -> Option<(Exported, u64, u64)> {
         let t = self.templates.get(template).filter(|t| !t.exposed && !t.pending)?;
-        Some((Exported { secret: SecretBytes::from_vec(t.key.expose().to_vec()), lineage: t.lineage.clone() }, t.generation))
+        Some((Exported { secret: SecretBytes::from_vec(t.key.expose().to_vec()), lineage: t.lineage.clone() }, t.generation, t.period))
     }
 
     /// I2: installs a received `K_job,e`. Needs the opened payload and this enclave's own admission of the program.
@@ -276,19 +376,44 @@ impl Keyring {
         lineage.insert(self.pcr0.clone());
         self.identities.insert(
             card.into(),
-            Identity { card: card.into(), id, chain, lineage, exposed: false, state_key: x.state_key, state_version: x.state_version, state_hash: x.state_hash, pending_handoff: true },
+            Identity {
+                card: card.into(),
+                id,
+                chain,
+                lineage,
+                exposed: false,
+                state_key: x.state_key,
+                state_loaded: x.state_version == 0,
+                state_version: x.state_version,
+                state_hash: x.state_hash,
+                state_header_cid: x.state_header_cid,
+                pending_handoff: true,
+            },
         );
         Ok(())
     }
 
-    /// I2: installs a received template key.
-    pub fn install_template_key(&mut self, _p: &PayloadOpened, template: &str, generation: u64, key: SecretBytes, lineage: BTreeSet<Vec<u8>>) -> Result<(), &'static str> {
-        if self.templates.get(template).is_some_and(|t| t.generation >= generation) {
-            return Err("HANDOFF_ALREADY_HELD");
+    /// I2: installs a received template key of `generation`, valid for `period`. Only a **higher** generation replaces a held
+    /// one. At the **same** generation, when two clean enclaves each seeded it, the key whose SHA-256 is lower wins (both
+    /// brought to the later of the two periods first, so the comparison is the same on both sides); a held key that is
+    /// exposed is replaced by any clean newer one.
+    pub fn install_template_key(&mut self, _p: &PayloadOpened, template: &str, generation: u64, period: u64, key: SecretBytes, lineage: BTreeSet<Vec<u8>>) -> Result<(), &'static str> {
+        if let Some(t) = self.templates.get(template) {
+            if t.generation > generation {
+                return Err("HANDOFF_ALREADY_HELD");
+            }
+            if t.generation == generation {
+                let at = t.period.max(period);
+                let mine = sha256(ratchet_to(t.key.expose(), t.period, at).expose());
+                let theirs = sha256(ratchet_to(key.expose(), period, at).expose());
+                if !(theirs < mine) {
+                    return Err("HANDOFF_ALREADY_HELD");
+                }
+            }
         }
         let mut lineage = lineage;
         lineage.insert(self.pcr0.clone());
-        self.templates.insert(template.into(), TemplateKey { template: template.into(), generation, key, lineage, exposed: false, pending: true });
+        self.templates.insert(template.into(), TemplateKey { template: template.into(), generation, period, key, lineage, exposed: false, pending: true });
         Ok(())
     }
 

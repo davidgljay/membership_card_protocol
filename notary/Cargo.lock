@@ -881,6 +881,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "notary-template-derive"
+version = "0.1.0"
+dependencies = [
+ "notary-admission",
+ "notary-broker",
+ "notary-guest",
+ "notary-types",
+ "notary-worker",
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "notary-template-normalize"
 version = "0.1.0"
 dependencies = [

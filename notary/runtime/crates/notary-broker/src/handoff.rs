@@ -426,12 +426,18 @@ impl Broker {
                     "log_head": head.as_ref().map(|h| h.1.clone()), "log_seq": head.as_ref().map(|h| h.0), "log_settled": settled, "scope": "identity",
                     "state_hash": x.state_hash, "state_key": b64u::encode(x.state_key.expose()), "state_version": x.state_version,
                 });
+                let mut p = p;
+                // 6.5: the header the receiver loads, and only that one (replication step 32)
+                if let Some(h) = &x.state_header_cid {
+                    p["state_header_cid"] = json!(h);
+                }
+                p["holders"] = json!(self.identity_holders(card));
                 (p, x.state_version, x.state_hash.clone(), None)
             }
             HScope::Template { template } => {
-                let (x, generation) = self.keys.export_template_key(checked, template).ok_or("HANDOFF_KEY_EXPOSED")?;
+                let (x, generation, period) = self.keys.export_template_key(checked, template).ok_or("HANDOFF_KEY_EXPOSED")?;
                 let empty = b64u::encode(&sha256(b""));
-                let p = json!({ "generation": generation, "key": b64u::encode(x.secret.expose()), "lineage": lineage_json(&x.lineage), "scope": "template",
+                let p = json!({ "generation": generation, "key": b64u::encode(x.secret.expose()), "lineage": lineage_json(&x.lineage), "period": period, "scope": "template",
                     "state_hash": empty, "state_version": 0, "template": template });
                 (p, 0, empty, Some(generation))
             }
@@ -733,6 +739,7 @@ impl Broker {
                     state_key: SecretBytes::from_vec(b64_bytes(p.get("state_key")).ok_or("HANDOFF_PAYLOAD_INVALID")?),
                     state_version,
                     state_hash: state_hash.clone(),
+                    state_header_cid: p.get("state_header_cid").and_then(Value::as_str).map(String::from),
                     lineage,
                 };
                 // step 9 / 31: never a state version below one seen from a holder of this card
@@ -747,6 +754,7 @@ impl Broker {
                 let settled = p.get("log_settled").and_then(Value::as_bool).unwrap_or(false);
                 self.logs.follow_from(card, true, head, settled);
                 self.instance_cards.insert(from.to_string(), card.clone());
+                self.learn_identity_holders(card, p.get("holders"));
                 // the highest governance-list versions seen travel with the identity (runtime §12 step 4)
                 let lv = &p["list_versions"];
                 self.lists.raise_floors(lv.get("accepted_runtimes").and_then(Value::as_u64).unwrap_or(0), lv.get("program_allowlist").and_then(Value::as_u64).unwrap_or(0));
@@ -754,8 +762,12 @@ impl Broker {
             }
             HScope::Template { template } => {
                 let generation = p.get("generation").and_then(Value::as_u64).ok_or("HANDOFF_PAYLOAD_INVALID")?;
+                let period = p.get("period").and_then(Value::as_u64).ok_or("HANDOFF_PAYLOAD_INVALID")?;
                 let key = SecretBytes::from_vec(b64_bytes(p.get("key")).ok_or("HANDOFF_PAYLOAD_INVALID")?);
-                self.keys.install_template_key(&proof, template, generation, key, lineage)?;
+                if key.len() != 32 {
+                    return Err("HANDOFF_PAYLOAD_INVALID");
+                }
+                self.keys.install_template_key(&proof, template, generation, period, key, lineage)?;
                 key_generation = Some(generation);
                 // S writes the record to its own identity log; this enclave watches that log for it
                 self.template_watch.insert(s_card.clone(), template.clone());

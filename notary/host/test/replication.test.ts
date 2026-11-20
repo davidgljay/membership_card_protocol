@@ -88,6 +88,28 @@ describe("ciphertext sync (Q8, R4)", () => {
   });
 });
 
+describe("state blobs across hosts (6.5, replication §8)", () => {
+  it("an unpinned object is served to peer hosts by CID; a fetch this host can't answer asks them and keeps only bytes that hash to the CID", async () => {
+    const h = await harness();
+    const blob = new TextEncoder().encode("encrypted state body");
+    const cid = cidOfBytes(blob);
+    h.enclave.emit({ kind: "publish", req_id: "s", object: b64uEncode(blob), pin: false }); await flush();
+    expect(await handlePeerPost(h.ctx, { kind: "object", cid })).toEqual({ bytes: b64uEncode(blob) });
+    expect(await handlePeerPost(h.ctx, { kind: "object", cid: "bafkreinothere" })).toEqual({ not_found: true });
+    // another host's enclave asks for an object only a peer stores
+    const other = await harness();
+    const wanted = new TextEncoder().encode("a header another host stored");
+    const wcid = cidOfBytes(wanted);
+    let lie = true;
+    other.svc.peerAnswers.set("https://peer.example", () => ({ bytes: b64uEncode(lie ? new TextEncoder().encode("forged") : wanted) }));
+    other.enclave.emit({ kind: "fetch", req_id: "f1", what: `ipfs:${wcid}` }); await flush(); await flush();
+    expect(other.enclave.received.find((m) => m.req_id === "f1")).toMatchObject({ kind: "fetch_result", not_found: true });
+    lie = false;
+    other.enclave.emit({ kind: "fetch", req_id: "f2", what: `ipfs:${wcid}` }); await flush(); await flush();
+    expect(other.enclave.received.find((m) => m.req_id === "f2")).toMatchObject({ kind: "fetch_result", bytes: b64uEncode(wanted) });
+  });
+});
+
 describe("directory, ticks, routing (Q5, Q6)", () => {
   it("each enclave gets local and peer instances; peer_send then goes to the host that serves the instance", async () => {
     const h = await harness();

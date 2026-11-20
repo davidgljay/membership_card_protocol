@@ -6,6 +6,10 @@
 **Architecture:** `ARCHITECTURE.md` ADR-013 · **Runtime:** `object_specs/notary_runtime.md` · **Processes:** `process_specs/notary_lifecycle.md`, `notary_replication_and_recovery.md`, `derived_card_revocation_propagation.md`
 **Amended 2026-11-12:** §8 snapshot entries carry head-event history and `sub_card_doc_cid`; per-card fetch shapes defined; policy, requester and list-card reads use per-card fetches. Source: `plans/notary-spec-wording-e31.md`, approved by David 2026-11-12.
 
+**Amended 2026-11-19 (6.5), for David's review** (`plans/notary-questions-6.5.md` E8): §8 a `sealed_link` job's source policies are snapshotted and updated until `ends_at` + 2 × `nullifier_period`; §10 `chain_submit` op `batch_update_card_heads` is submitted with its `calldata` unchanged; §11 `pin: false` objects (state blobs) are served to peer hosts by `POST /peer { kind: "object", cid }`, and a `fetch ipfs:` the host can't answer asks its peer hosts, keeping only bytes that hash to the CID.
+
+**Amended 2026-11-15 (6.4), for David's review; security items D1, D2, D4 and D8 approved by David 2026-11-19, the rest still for review** (`plans/notary-questions-6.4.md`): §10 `chain_submit.calldata` is the object the enclave names, submitted unchanged; `fetch protocol_version` and `press_auth:<policy>,<press>`; operator route `POST /operator/template-seed`.
+
 **Amended 2026-11-14 (6.3):** §11 the peer directory, `tick`, and `need_inputs` ciphertext sync. David approved 2026-11-14 (`plans/notary-questions-phase-6.md`, Q5–Q9). Also relaying log records and storing acknowledged inputs (`store_input`), approved by David 2026-11-15 (`plans/notary-questions-6.3.md`).
 
 **Amended 2026-11-14 (6.2):** §5 `POST /jobs/{job_hash}/restart`. A consequence of the approved Phase 6 plan (6.2), not covered by an earlier approval; **for David's review** (`plans/notary-questions-phase-6.md`).

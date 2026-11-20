@@ -63,6 +63,25 @@ pub fn check(values: &Value, defs: Option<&Value>) -> Result<(), String> {
             Some("base64url") => {
                 notary_types::b64u::decode(v.as_str().ok_or_else(bad)?).map_err(|_| bad())?;
             }
+            // `append-only-array` of `text` (step 6.4: a derived-card job's `projected_fields`): `min_count`, `max_count`, and the
+            // item's own `regex` / `enum`. Items must be distinct.
+            Some("append-only-array") => {
+                if d.get("item_type").and_then(Value::as_str) != Some("text") {
+                    return Err(format!("{name}: only item_type text is supported"));
+                }
+                let items = v.as_array().ok_or_else(bad)?;
+                if d.get("min_count").and_then(Value::as_u64).is_some_and(|m| (items.len() as u64) < m) || d.get("max_count").and_then(Value::as_u64).is_some_and(|m| items.len() as u64 > m) {
+                    return Err(bad());
+                }
+                let re = d.get("regex").and_then(Value::as_str).map(|r| regex::Regex::new(&format!("^(?:{r})$")).map_err(|_| format!("{name}: bad regex"))).transpose()?;
+                let mut seen = std::collections::BTreeSet::new();
+                for it in items {
+                    let s = it.as_str().ok_or_else(bad)?;
+                    if !seen.insert(s) || re.as_ref().is_some_and(|re| !re.is_match(s)) || d.get("enum").and_then(Value::as_array).is_some_and(|e| !e.iter().any(|x| x.as_str() == Some(s))) {
+                        return Err(bad());
+                    }
+                }
+            }
             other => return Err(format!("{name}: unsupported field type {other:?}")),
         }
     }

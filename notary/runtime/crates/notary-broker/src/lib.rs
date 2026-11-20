@@ -3,6 +3,7 @@
 pub mod cards_oracle;
 pub mod chain;
 pub mod close;
+pub mod derive;
 pub mod env;
 pub mod handoff;
 pub mod host_proto;
@@ -13,6 +14,7 @@ pub mod keyring;
 pub mod lists;
 pub mod params;
 pub mod peer;
+pub mod propagation;
 pub mod replication;
 pub mod transforms;
 

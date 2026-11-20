@@ -92,6 +92,33 @@ export async function snapshotsTick(ctx: HostContext, feed: ChainFeed, st: Sched
   try { await runSnapshots(ctx, feed, st, onlyNew); } finally { st.snapshotting = false; }
 }
 
+/** ISO 8601 durations of the form `P[nD][T[nH][nM][nS]]`, in milliseconds (enough for the policy fields read here). */
+function durationMs(s: unknown): number | null {
+  const m = typeof s === "string" ? /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/.exec(s) : null;
+  if (!m) return null;
+  return (((Number(m[1] ?? 0) * 24 + Number(m[2] ?? 0)) * 60 + Number(m[3] ?? 0)) * 60 + Number(m[4] ?? 0)) * 1000;
+}
+
+/**
+ * 6.5: a `sealed_link` derived-card job's source policy is still watched after the job ends, for as long as a card it
+ * issued can be live (cards of the next period can be issued until `ends_at`): `ends_at` + 2 × `nullifier_period`.
+ * The enclave's links outlive the job; without the updates, a late source revocation would never reach it.
+ */
+async function sealedLinkJobs(ctx: HostContext): Promise<{ job: unknown; notary: unknown }[]> {
+  const out = [];
+  for (const h of await ctx.jobs.list()) {
+    const j = await ctx.jobs.get(h);
+    if (!j || j.state === "aborted") continue;
+    const job = j.job as { policy_id: string; policy_state_cid: string; ends_at?: string };
+    const p = await ctx.policies.notary(job.policy_id, job.policy_state_cid);
+    const n = p?.notary as { derived_card?: { nullifier_period?: string }; revocation_propagation?: { mode?: string } } | undefined;
+    if (n?.revocation_propagation?.mode !== "sealed_link" || !job.ends_at) continue;
+    const period = durationMs(n.derived_card?.nullifier_period ?? "P7D") ?? 7 * 86_400_000;
+    if (ctx.now() < Date.parse(job.ends_at) + 2 * period) out.push({ job: j.job, notary: p?.notary });
+  }
+  return out;
+}
+
 async function runSnapshots(ctx: HostContext, feed: ChainFeed, st: SchedulerState, onlyNew: boolean): Promise<void> {
   const policies = new Set<string>();
   for (const j of await liveJobs(ctx)) {
@@ -99,6 +126,7 @@ async function runSnapshots(ctx: HostContext, feed: ChainFeed, st: SchedulerStat
     const p = await ctx.policies.notary(job.policy_id, job.policy_state_cid);
     for (const x of relevantPolicies(job, p?.notary)) policies.add(x);
   }
+  for (const { job, notary } of await sealedLinkJobs(ctx)) for (const x of relevantPolicies(job, notary)) policies.add(x);
   for (const policy of policies) {
     if (onlyNew && st.sentPolicies.has(policy)) continue;
     const r = await feed.registry(policy);

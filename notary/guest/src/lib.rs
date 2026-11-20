@@ -305,3 +305,12 @@ mod tests {
         assert_eq!(mul_div_round(1_000_000_007, 3, 7), 428_571_432); // 428,571,431.57…
     }
 }
+
+/// Writes `bytes` as the run's output, once. For a program whose output is data it copies (the `derive` template), not a
+/// fixed schema of integers and enums; the broker still checks the output before anything is released. Behind the
+/// `raw_output` feature, and at the end of the file: panic locations are embedded in a module, so code added above would
+/// change the committed modules of the other templates.
+#[cfg(feature = "raw_output")]
+pub fn output_raw(bytes: &[u8]) {
+    write_output(bytes)
+}

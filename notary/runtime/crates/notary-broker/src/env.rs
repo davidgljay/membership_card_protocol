@@ -35,6 +35,20 @@ pub struct RecipientTarget {
     pub kem_public_key: Vec<u8>,
 }
 
+/// What B5–B8 established about a presented source card, for a derived-card job (step 6.4): the master card's root key
+/// (the `dup_tag` input), the policy it was issued under, and its current field values (what the job may project).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SourceCard {
+    /// The master card's pointer (the input's `contributor_card`) and its current `recipient_pubkey`: a sealed link keeps
+    /// both, to read the source card's later log entries (step 6.5).
+    pub address: String,
+    pub pubkey: Vec<u8>,
+    pub root_key: Vec<u8>,
+    pub root_key_hash: [u8; 32],
+    pub policy_id: String,
+    pub fields: serde_json::Map<String, Value>,
+}
+
 pub trait CardOracle {
     /// W3/W4: `Err("JOB_POLICY_UNTRUSTED" | "JOB_POLICY_CHANGED")`.
     /// `now_ms` is chain time, for the policy chain's revocation check (algorithm R, R3).
@@ -44,6 +58,24 @@ pub trait CardOracle {
     /// B5–B8 on a decrypted `NotaryInput`. Returns the contributor's root-key hash for dedupe (B10).
     /// `now_ms` is chain time (newest verified header), for `valid_until` and revocation dates.
     fn contributor(&mut self, io: &mut dyn HostIo, input: &Value, notary: &Value, params: &Value, now_ms: i64) -> Result<[u8; 32], &'static str>;
+    /// B5–B8 as `contributor`, for a derived-card job: the presented source card in full (step 6.4). Fails closed by default.
+    fn source_card(&mut self, _io: &mut dyn HostIo, _input: &Value, _notary: &Value, _params: &Value, _now_ms: i64) -> Result<SourceCard, &'static str> {
+        Err("NH_UNSUPPORTED")
+    }
+    /// The policy card's ML-DSA-44 public key, from the last verified read of `policy_id` (a derived card's `ancestry_pubkeys`
+    /// ends with it, protocol-objects §2.2).
+    fn policy_public_key(&self, _policy_id: &str) -> Option<Vec<u8>> {
+        None
+    }
+    /// The policy a snapshot or update delivered `card` under (propagation §6, successor rule). `None` if unknown.
+    fn card_policy(&self, _card: &str) -> Option<String> {
+        None
+    }
+    /// How many cards the host's whole-policy snapshot lists under `policy` (the second anonymity floor, propagation §4).
+    /// `None` without a snapshot.
+    fn policy_card_count(&self, _policy: &str) -> Option<usize> {
+        None
+    }
     /// 6.1, private outputs: the sub-cards of a recipient card, each with its verified ML-KEM-768 public key. `master_pubkey` is
     /// the recipient's ML-DSA-44 key from the signed job (`keccak256` of it is the card pointer). Each sub-card is verified as a
     /// contributor's signing sub-card is (SubCardDocument signatures, active flag, app-card chain); a sub-card with no

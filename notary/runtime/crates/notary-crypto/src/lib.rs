@@ -112,6 +112,66 @@ pub fn random_array<const N: usize>() -> [u8; N] {
     a
 }
 
+/// `n` random bytes from the kernel RNG (`getrandom`): the one entry point for randomness in the enclave (Q12; runtime §4).
+pub fn random_bytes(n: usize) -> Vec<u8> {
+    let mut v = vec![0u8; n];
+    fill_random(&mut v);
+    v
+}
+
+/// A uniform integer in `0..n` drawn from `fill` by **rejection sampling** (no modulo bias): 64-bit draws below
+/// `2^64 mod n` are discarded, so every residue is hit by exactly `floor(2^64 / n)` accepted values. `n` must be at least 1.
+pub fn uniform_below(n: u64, fill: &mut dyn FnMut(&mut [u8])) -> u64 {
+    assert!(n >= 1, "uniform_below needs n >= 1");
+    let threshold = n.wrapping_neg() % n; // 2^64 mod n
+    loop {
+        let mut b = [0u8; 8];
+        fill(&mut b);
+        let v = u64::from_le_bytes(b);
+        if v >= threshold {
+            return v % n;
+        }
+    }
+}
+
+/// Fisher–Yates shuffle (Durstenfeld form), every index drawn by [`uniform_below`]. Taking the byte source as an
+/// argument lets a test fix the algorithm's output with a seeded stream; production uses [`shuffle`].
+pub fn shuffle_with<T>(items: &mut [T], fill: &mut dyn FnMut(&mut [u8])) {
+    for i in (1..items.len()).rev() {
+        let j = uniform_below(i as u64 + 1, fill) as usize;
+        items.swap(i, j);
+    }
+}
+
+/// A uniformly random permutation of `items`, from the kernel RNG.
+pub fn shuffle<T>(items: &mut [T]) {
+    shuffle_with(items, &mut fill_random);
+}
+
+/// HMAC-SHA256 (RFC 2104).
+pub fn hmac_sha256(key: &[u8], msg: &[u8]) -> [u8; 32] {
+    use zeroize::Zeroize;
+    const BLOCK: usize = 64;
+    let mut k = [0u8; BLOCK];
+    if key.len() > BLOCK {
+        k[..32].copy_from_slice(&sha256(key));
+    } else {
+        k[..key.len()].copy_from_slice(key);
+    }
+    let mut inner = Vec::with_capacity(BLOCK + msg.len());
+    inner.extend(k.iter().map(|b| b ^ 0x36));
+    inner.extend_from_slice(msg);
+    let ih = sha256(&inner);
+    let mut outer = Vec::with_capacity(BLOCK + 32);
+    outer.extend(k.iter().map(|b| b ^ 0x5c));
+    outer.extend_from_slice(&ih);
+    let out = sha256(&outer);
+    k.zeroize();
+    inner.zeroize();
+    outer.zeroize();
+    out
+}
+
 /// `rand_core` 0.10 adapter over the kernel RNG, for the HPKE sender.
 struct KernelRng;
 impl rand_core::TryRng for KernelRng {

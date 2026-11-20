@@ -96,6 +96,26 @@ describe("schedulers (notary_host.md §8; replication §5)", () => {
   });
 });
 
+describe("sealed links outlive their job (6.5)", () => {
+  it("a sealed_link derived-card job's source policy is still watched after the job ends, until ends_at + 2 periods; an expiry_only one isn't", async () => {
+    for (const [mode, watched] of [["sealed_link", true], ["expiry_only", false]] as const) {
+      const h = await harness();
+      const endsAt = Date.parse("2027-01-10T00:00:00.000Z");
+      const dj = { ...job, ends_at: new Date(endsAt).toISOString(), parameters: { source_policy: "bafkreisrc" } };
+      h.svc.policies.set(job["policy_id"], { notary: { contributor_predicate: {}, derived_card: { nullifier_period: "P1D" }, revocation_propagation: { mode } } as never, approvedNotaries: [] });
+      await h.ctx.jobs.put({ job: dj, jobHash: JOB_HASH, programCid: "p", announcement: {}, epoch: 0, replicas: [kEnclaveInst], state: "ended", logHead: null });
+      const at = (ms: number) => { (h.ctx as { now: () => number }).now = () => ms; };
+      at(endsAt + 86_400_000);
+      await snapshotsTick(h.ctx, feed([], []), newSchedulerState());
+      expect(h.enclave.received.some((m) => m.kind === "policy_snapshot" && m["policy_address"] === "bafkreisrc"), mode).toBe(watched);
+      h.enclave.received.length = 0;
+      at(endsAt + 2 * 86_400_000 + 1);
+      await snapshotsTick(h.ctx, feed([], []), newSchedulerState());
+      expect(h.enclave.received.some((m) => m.kind === "policy_snapshot"), `${mode}, after the last card expired`).toBe(false);
+    }
+  });
+});
+
 describe("snapshots for a new job (6.0a)", () => {
   it("a first snapshot goes out as soon as a job needs the policy; the refresh sends nothing new for a policy already sent", async () => {
     const h = await harness();

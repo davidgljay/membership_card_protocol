@@ -484,3 +484,58 @@ CP7 approved by David for the local devnode only. Nothing was deployed to Sepoli
 | `integration_tests`: `core/registry_write_gate.spec.ts` on the devnode | 4 passed |
 | `integration_tests`: all suites except `matrix-relay` | 155 passed, 38 todo. `policy_creation` timed out once at vitest's 5 s default, then passed twice alone. |
 | `forge test` in `contracts/tests` | 162 passed; 6 failed in `SepoliaIntegration.t.sol` (needs a Sepolia fork RPC; unrelated) |
+
+## 6.4 Derived-card template (2026-11-16)
+
+**6.4 is ticked** on its Done-when, read as Q11 says: the TypeScript verifier's stages over the simulated chain, `verifyNotaryIssuedCard` called directly. Nothing committed.
+
+- **Built.** `derive` template and policy `T`; `notary-broker/src/derive.rs` (D1-D4, `dup_tag` ratchet and generations, offer, countersign, issuance pool, anonymity set, batches signed by `K_id` and registered with `K_chain` payloads, `issued` records, `key_period` rotation with an hour of grace); `random_bytes` and the rejection-sampled shuffle (Q12); `seed_template`; `chain_submit` / `chain_result`; host calldata object and `protocol_version` / `press_auth` fetches; the simulated chain's write gate (step 8 binding); wallet `append-only-array` parameters.
+- **Scope held back.** One replica, `expiry_only` (6.5 has the state blob and `sealed_link`); no real-process derive end-to-end run; wallet `derived.ts` not built; `serves_template` still fails closed.
+- **For David:** `plans/notary-questions-6.4.md` (D1-D11).
+
+| Command | Result |
+|---|---|
+| `cargo test --workspace` in `notary/` | 166 passed, 0 failed (was 134) |
+| `cargo test -p notary-broker --test derive` | 18 passed |
+| `pnpm test` / `typecheck` / `typecheck:server` in `notary/host` | 96 passed; clean |
+| `pnpm test` in `notary/e2e` | 7 passed (new) |
+| `pnpm test` in `notary/vectors-tools`, `notary/attestation-ts` | 48 (was 46), 95 |
+| `pnpm test`, `typecheck` in `wallet-sdk/packages/wallet-sdk` | 242 + 1 todo (was 240); clean |
+| `check-card-vectors.sh`, `check-aws-isolation.sh`, `build.sh {aggregate,vote,vote-yna,derive} --check` | pass |
+| `notary/e2e/run-local.sh` | PASS |
+| `run-compose.sh`, `run-three.sh` (Docker) | not run |
+| verifier, app-sdk | not re-run (unchanged) |
+
+### Test-harness fix found while checking 6.4 (2026-11-16)
+
+- **Intermittent `replication.rs` failures, present since 6.3.** Under load (other test runs at the same time), some of five replication tests failed with `ATT_UNAVAILABLE`, or with a handoff missing from the log as a knock-on. The committed tree failed 4 of 6 runs in the same conditions, so 6.4 didn't cause it.
+- **Cause.** `notary_attest::sim::SimulatorBackend` opened a new TCP connection to the fake enclave for every clock read and attestation, thousands per multi-node test; under load a `connect` failed.
+- **Fix.** The client keeps one connection open and retries once on a fresh connection if a kept one fails. Under the same load, 4 of 4 replication runs pass, and the suite runs in about 25 s instead of 45–60 s. `cargo test --workspace` passed twice: 166 each time.
+
+## 6.5 Revocation propagation (2026-11-19)
+
+- **Approvals recorded first:** David approved the 6.4 security items D1, D2, D4 and D8 (2026-11-19); the rest of `plans/notary-questions-6.4.md` stays open.
+- **Built** (`notary-broker/src/propagation.rs`, with edits in `derive.rs`, `keyring.rs`, `peer.rs`, `handoff.rs`, `replication.rs`, `host_proto.rs`, `cards_oracle.rs`, `env.rs`, `notary-types/objects.rs`):
+  - `sealed_link` links made at release; `expiry_only` keeps none;
+  - the watch loop over every snapshot and update of a source policy, decrypting a linked source card's new head with its stored key, the propagated-code filter and the code mapping (820/920 or a fixed code), the successor rule for quiet revocations;
+  - eligibility after `min_delay` from the later of block time and receipt; release at `batch_window` boundaries when at least `min_revocation_batch` are eligible; dropping at expiry; one shuffled `BatchUpdateCardHeads` per window (≤ 100 per transaction) of `K_id`-signed revocation entries, the payload signed by `K_chain`, retried with a fresh sequence;
+  - the identity leader (serving holder first) and holder sets shared by handoff and heartbeat;
+  - the state blob: written by the leader after each batch, loaded by other holders from heartbeats (only newer, CID-checked, `K_id`-signed) and by a new holder only at the exact header its handoff named.
+- **Host:** unpinned objects served to peer hosts (`/peer` kind `object`) and fetched from them on a miss; source policies of `sealed_link` jobs watched until `ends_at` + 2 periods.
+- **Simulated chains:** the Rust harness and `notary/e2e/src/sim-chain.ts` gate `BatchUpdateCardHeads` (signature, sequence, step 8 binding of the `updates` list, current heads).
+- **Questions for David:** `plans/notary-questions-6.5.md` E1–E11 (E1–E6 security).
+
+**Tests run:**
+
+| Command | Result |
+|---|---|
+| `cargo test --workspace` in `notary/` | 171 passed (was 166) |
+| `cargo test -p notary-broker --test derive` | 23 passed (5 new) |
+| Host `pnpm test`; `typecheck`, `typecheck:server` | 98 passed (2 new); clean |
+| `notary/e2e` `pnpm test` | 12 passed (5 new) |
+| Vector tools | 48 passed |
+| `check-aws-isolation.sh`, `check-card-vectors.sh`, `build.sh <4 templates> --check` | pass |
+| `run-local.sh`, `run-compose.sh` | END TO END: PASS |
+| `run-three.sh` | THREE HOSTS: PASS |
+
+Not rerun (packages unchanged): verifier, wallet SDK, App SDK, attestation.

@@ -5,6 +5,10 @@
 **Status:** In Review  
 **Amended 2026-11-12 (notaries):** §34 `list_approval` gains `single_operator_quorums` (program allowlist only), and rule E keeps it unchanged in emergency updates. Source: `plans/notary-spec-wording-e31.md`, approved by David 2026-11-12.
 
+**Amended 2026-11-19 (notaries, 6.5), for David's review** (`plans/notary-questions-6.5.md` E6, E9): §30 Heartbeat gains optional `identity_states: [{ notary_card, version, header_cid?, serving, holders }]`; the identity-scope handoff payload gains `state_header_cid` and `holders`.
+
+**Amended 2026-11-15 (notaries, 6.4), for David's review; security items D1, D2, D4 and D8 approved by David 2026-11-19, the rest still for review** (`plans/notary-questions-6.4.md`): §2.1 and §2.2 `parameter_bounds` may declare `append-only-array` of `text` (`item_type`, `min_count`, `max_count`, and the item's `regex` or `enum`), which is how `projected_fields` is bounded.
+
 **Amended 2026-11-14 (notaries, 6.1):** §16 SubCardDocument gains optional `kem_pubkey`; §21 NotaryJob gains `output_recipient_keys`. David approved 2026-11-14 (`plans/notary-questions-phase-6.md`, Q4; the KEM key's home chosen in the 6.1 session).
 
 **Amended 2026-11-14 (notaries, 6.0a):** §27 `contributor_policies` (the policies and states a notarization counted). David approved 2026-11-14 (`plans/notary-questions-phase-6.md`, Q2).
@@ -1688,6 +1692,7 @@ The public, hash-chained history of a job. An enclave refuses to sign record `se
 | `instance` | `base64url` | Yes | |
 | `jobs` | array | Yes | `[{ "job_hash", "epoch", "state_version" }]` |
 | `identity_state_version` | `integer` | If it holds `K_id` | |
+| `identity_states` | array | No | `[{ "notary_card", "version", "header_cid"?, "serving", "holders" }]`: per identity held, its state blob version and header, whether this holder serves the card's derived-card jobs, and the holders it knows. *Added 2026-11-19 (6.5), for David's review.* |
 | `list_versions` | object | Yes | `{ "accepted_runtimes": integer, "program_allowlist": integer }`: the highest governance list versions verified (§34) |
 | `peers_seen` | array of `base64url` | Yes | |
 | `chain_head` | object | Yes | `{ "block_number", "block_hash" }` |

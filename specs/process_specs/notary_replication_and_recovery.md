@@ -9,6 +9,8 @@
 
 **Amended 2026-11-14 (6.3):** step 7 counts capacity from the job log (Q7); §1 timers run on the attested clock, read once per host `tick` (Q6); peer messages use the envelope of `protocol-objects.md` §35 and peers are found through an untrusted directory (Q5); step 22 and §4 ciphertext sync (Q8). David approved 2026-11-14 (`plans/notary-questions-phase-6.md`, Q5–Q9). Also: who sends job-scope handoffs, how followers see the log, `replica_gone`, and the leader that changes mid-close (steps 2, 10, 17, 21), approved by David 2026-11-15 (`plans/notary-questions-6.3.md`).
 
+**Amended 2026-11-19 (6.5), for David's review** (`plans/notary-questions-6.5.md`, E1, E5, E6): §1 the identity leader is chosen first among live holders that serve the card's derived-card jobs, then by lowest instance id, and only one holder serves them at a time; the identity-scope handoff payload carries the sender's known `holders` and `state_header_cid`; step 31's heartbeat carries `identity_states` (version, header CID, whether it serves derived-card jobs, holders) and a holder loads a newer blob only from a known holder's heartbeat, only bytes that hash to the named CID, only a `K_id`-signed header with a higher version; step 32's holder loads only the header its handoff named and doesn't write, lead or open a derived-card job until it has.
+
 > **Terminology.** "The enclave" means an AWS Nitro Enclaves enclave. "Enclave attestation" means the AWS Nitro Enclaves attestation document. See `ARCHITECTURE.md`, terminology note.
 
 ---
@@ -41,7 +43,7 @@ It covers:
 |---|---|
 | **Replica** | An enclave holding a job's key for one epoch. Each has an instance key `K_inst`, generated at boot and bound by its purpose-`0x03` attestation. |
 | **Job leader** | The live replica of a job with the lowest `instance` value, `SHA-256(K_inst)`. It signs the job's log records and coordinates close. |
-| **Identity leader** | The live holder of a notary card's `K_id` with the lowest `instance`. It is the only writer of that card's on-chain payloads, so replicas never collide on the write gate's `next_sequence`. |
+| **Identity leader** | The live holder of a notary card's `K_id` with the lowest `instance`. It is the only writer of that card's on-chain payloads, so replicas never collide on the write gate's `next_sequence`. *(Amended 2026-11-19 (6.5), for David's review, `plans/notary-questions-6.5.md` E1: holders serving the card's derived-card jobs come first, and only one holder serves them at a time; among them, or among all holders if none serves one, the lowest `instance`.)* |
 | **Notary host** | Relays all traffic between replicas, starts replacement enclaves, stores ciphertexts and blobs, and submits EAS anchors. Untrusted. |
 | **Contributor's wallet** | Keeps its signed inputs and resubmits them after a new epoch |
 

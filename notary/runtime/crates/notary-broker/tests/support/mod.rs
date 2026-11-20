@@ -14,7 +14,7 @@
 use notary_attest::{sim::SimulatorBackend, verify::Config};
 use notary_broker::{
     chain::encode_test_header,
-    env::{CardOracle, HostIo, InProcessWorkers, Platform, PolicyView, RecipientTarget},
+    env::{CardOracle, HostIo, InProcessWorkers, Platform, PolicyView, RecipientTarget, SourceCard},
     lists::{approval_digest, Keyset, ListVersion, Pins},
     Broker,
 };
@@ -108,6 +108,14 @@ pub struct OracleState {
     pub runtimes: Vec<ListVersion>,
     pub programs: Vec<ListVersion>,
     pub template_cards: BTreeSet<(String, String)>,
+    /// Derived-card jobs (step 6.4): the source cards the host's evidence would show, by card pointer.
+    pub sources: BTreeMap<String, SourceCard>,
+    /// The template policy's public key (a derived card's `ancestry_pubkeys` ends with it).
+    pub policy_key: Vec<u8>,
+    /// How many cards the source-policy snapshot lists (the second anonymity floor).
+    pub snapshot_cards: Option<usize>,
+    /// The policy a snapshot delivered each card under (step 6.5, the successor rule).
+    pub card_policies: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Default)]
@@ -127,6 +135,28 @@ impl CardOracle for Oracle {
             return Err("INPUT_CARD_REVOKED");
         }
         Ok(sha256(card.as_bytes()))
+    }
+    fn source_card(&mut self, _: &mut dyn HostIo, input: &Value, _: &Value, _: &Value, _: i64) -> Result<SourceCard, &'static str> {
+        let card = input["contributor_card"].as_str().unwrap_or_default();
+        let s = self.0.lock().unwrap();
+        if s.revoked.contains(card) {
+            return Err("INPUT_CARD_REVOKED");
+        }
+        // the master card is the one the input names (a rotated key's card has its own pointer)
+        s.sources.get(card).cloned().map(|mut c| {
+            c.address = card.to_string();
+            c
+        }).ok_or("INPUT_NOT_ELIGIBLE")
+    }
+    fn card_policy(&self, card: &str) -> Option<String> {
+        self.0.lock().unwrap().card_policies.get(card).cloned()
+    }
+    fn policy_public_key(&self, _: &str) -> Option<Vec<u8>> {
+        let k = self.0.lock().unwrap().policy_key.clone();
+        (!k.is_empty()).then_some(k)
+    }
+    fn policy_card_count(&self, _: &str) -> Option<usize> {
+        self.0.lock().unwrap().snapshot_cards
     }
     fn recipient_targets(&mut self, _: &mut dyn HostIo, _: &[u8]) -> Result<Vec<RecipientTarget>, &'static str> {
         Err("RECIPIENT_UNREADABLE")
@@ -171,6 +201,8 @@ pub struct Node {
     pub saw: Vec<String>,
     pub clock: i64,
     pub headers_fed: usize,
+    /// The notary card's `K_chain` public key (x || y), from genesis: what the simulated registry verifies against.
+    pub chain_pubkey: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -181,6 +213,8 @@ pub enum Item {
     Record { to: usize, scope: String, seq: u64, record: Vec<u8> },
     /// An anchor receipt delivered to a host's enclave.
     Anchor { to: usize, scope: String, seq: u64, record: Option<Vec<u8>> },
+    /// The host's answer to a `chain_submit`.
+    ChainResult { to: usize, req_id: String, failed: Option<String> },
 }
 
 pub enum Fate {
@@ -196,6 +230,10 @@ pub enum Fate {
 struct Io<'a> {
     out: Vec<Value>,
     ipfs: &'a BTreeMap<String, Vec<u8>>,
+    /// What the host reads from the chain for the enclave (step 6.4): the registry's protocol version and the press's
+    /// next sequence. `None` simulates a host that doesn't answer.
+    version: Option<&'a str>,
+    next_sequence: Option<u64>,
 }
 
 impl HostIo for Io<'_> {
@@ -203,8 +241,31 @@ impl HostIo for Io<'_> {
         self.out.push(msg);
     }
     fn fetch(&mut self, what: &str) -> Option<Vec<u8>> {
+        if what == "protocol_version" {
+            return self.version.map(|v| v.as_bytes().to_vec());
+        }
+        if what.starts_with("press_auth:") {
+            return self.next_sequence.map(|n| format!("{{\"next_sequence\":{n}}}").into_bytes());
+        }
         what.strip_prefix("ipfs:").and_then(|cid| self.ipfs.get(cid).cloned())
     }
+}
+
+/// The simulated registry's write gate for `RegisterCard` (registry_contract §4.1, §6.1 steps 4, 5 and 8), as far as the
+/// notary's payload goes: the press signature over `keccak256(payload)`, the sequence, and that every signed field equals
+/// the calldata. (The TypeScript end-to-end run has its own, `notary/e2e/src/sim-chain.ts`.)
+#[derive(Default)]
+pub struct Registry {
+    pub next_sequence: u64,
+    /// card address (b64u) → head CID, in registration order.
+    pub cards: Vec<(String, String)>,
+    /// Chain submissions to refuse once each, with this message (a host or registry failure).
+    pub fail_next: Vec<String>,
+    pub submissions: Vec<Value>,
+    /// Withhold the version / sequence reads (a host that doesn't answer).
+    pub silent: bool,
+    /// Accepted `BatchUpdateCardHeads` payloads (step 6.5).
+    pub batches: Vec<Value>,
 }
 
 pub struct Net {
@@ -224,6 +285,9 @@ pub struct Net {
     pub policy_notary: Value,
     /// Peer messages addressed to an instance no node owns (a scripted impostor): (from node, to instance, bytes).
     pub outbox: Vec<(usize, String, Vec<u8>)>,
+    pub registry: Registry,
+    /// What each genesis produced, by notary card: the completed request, the attestation, the countersigned card offer.
+    pub geneses: BTreeMap<String, Value>,
 }
 
 pub fn find<'a>(msgs: &'a [Value], kind: &str) -> Option<&'a Value> {
@@ -247,6 +311,11 @@ pub fn vote_template() -> (Vec<u8>, Value) {
 impl Net {
     pub fn new(runtimes: &[Runtime]) -> Self {
         let (program, notary) = vote_template();
+        Self::new_with(runtimes, program, notary)
+    }
+
+    /// A network for another template: its module (allowlisted) and its `notary` section (what the oracle reads).
+    pub fn new_with(runtimes: &[Runtime], program: Vec<u8>, notary: Value) -> Self {
         let program_cid = formats::cid_of_bytes(&program);
         let gov = Gov::new();
         let (rt, progs) = gov.lists(runtimes, &program_cid);
@@ -259,7 +328,7 @@ impl Net {
         }
         let mut ipfs = BTreeMap::new();
         ipfs.insert(program_cid.clone(), program.clone());
-        let mut net = Net { nodes: vec![], oracle, gov, ipfs, anchors: vec![], headers: vec![], queue: VecDeque::new(), held: vec![], fault: None, now: T0, program, program_cid, policy_notary: notary, outbox: vec![] };
+        let mut net = Net { nodes: vec![], oracle, gov, ipfs, anchors: vec![], headers: vec![], queue: VecDeque::new(), held: vec![], fault: None, now: T0, program, program_cid, policy_notary: notary, outbox: vec![], registry: Registry { next_sequence: 0, ..Default::default() }, geneses: BTreeMap::new() };
         net.push_header(T0);
         net
     }
@@ -283,7 +352,7 @@ impl Net {
         let instance = broker.instance_id();
         let node = Node {
             name: name.into(), broker, enclave, inst_pubkey: vec![], instance, card: String::new(), up: true, store: BTreeMap::new(), alerts: vec![],
-            announcements: vec![], need_replica: vec![], replies: vec![], saw: vec![], clock: self.now, headers_fed: 0,
+            announcements: vec![], need_replica: vec![], replies: vec![], saw: vec![], clock: self.now, headers_fed: 0, chain_pubkey: vec![],
         };
         self.nodes.push(node);
         let i = self.nodes.len() - 1;
@@ -301,14 +370,84 @@ impl Net {
         let out = self.call(i, json!({ "kind": "genesis", "req_id": "g", "request": req }));
         let ready = find(&out, "genesis_ready").expect("genesis_ready").clone();
         let card = ready["notary_card"].as_str().unwrap().to_string();
+        self.nodes[i].chain_pubkey = b64u::decode(ready["chain_pubkey"].as_str().unwrap()).unwrap();
         let att_cid = formats::cid_of_bytes(&b64u::decode(ready["attestation"].as_str().unwrap()).unwrap());
         let offer = json!({ "chain_pubkey": ready["chain_pubkey"], "genesis_attestation": att_cid, "issuer_card": "c".repeat(64), "operator_card": format!("{:064x}", i + 1),
             "platform": "simulator", "policy_id": "bafkreinotarycardpolicy", "recipient_pubkey": ready["id_pubkey"], "issuer_signature": "sig" });
-        self.call(i, json!({ "kind": "countersign_notary_card", "req_id": "c", "offer": offer }));
+        let signed = self.call(i, json!({ "kind": "countersign_notary_card", "req_id": "c", "offer": offer }));
+        self.geneses.insert(card.clone(), json!({ "request": ready["request"], "attestation": ready["attestation"], "offer": find(&signed, "countersigned").map(|c| c["offer"].clone()), "id_pubkey": ready["id_pubkey"], "chain_pubkey": ready["chain_pubkey"] }));
         self.run();
         self.oracle.0.lock().unwrap().approved.push(card.clone());
         self.nodes[i].card = card.clone();
         card
+    }
+
+    /// The write gate for a `RegisterCard` the notary asked its host to submit.
+    fn registry_accepts(&mut self, i: usize, m: &Value) -> Result<(), String> {
+        let (payload, calldata) = (&m["payload"], &m["calldata"]);
+        let bytes = jcs::canonical(payload).map_err(|e| e.message)?;
+        let sig = b64u::decode(m["signature"].as_str().unwrap_or_default()).map_err(|_| "bad signature encoding".to_string())?;
+        // step 4: the press's key verifies the signature over keccak256(payload)
+        if !notary_crypto::p256_verify_digest(&self.nodes[i].chain_pubkey, &notary_crypto::keccak256(&bytes), &sig) {
+            return Err("PRESS_SIGNATURE_INVALID".into());
+        }
+        if payload["op"] == "batch_update_card_heads" && m["op"] == "batch_update_card_heads" {
+            return self.registry_batch(payload, calldata);
+        }
+        if payload["op"] != "register_card" || m["op"] != "register_card" {
+            return Err("OP_MISMATCH".into());
+        }
+        // step 5: the sequence
+        if payload["sequence"].as_u64() != Some(self.registry.next_sequence) {
+            return Err("SEQUENCE_MISMATCH".into());
+        }
+        // step 8: every signed field equals the calldata (E-49)
+        for f in ["card_address", "initial_log_cid", "policy_address", "press_address"] {
+            if payload[f] != calldata[f] {
+                return Err("PAYLOAD_CALLDATA_MISMATCH".into());
+            }
+        }
+        let addr = payload["card_address"].as_str().unwrap_or_default().to_string();
+        if self.registry.cards.iter().any(|(a, _)| *a == addr) {
+            return Err("CARD_EXISTS".into());
+        }
+        let cid = String::from_utf8(b64u::decode(payload["initial_log_cid"].as_str().unwrap_or_default()).unwrap_or_default()).unwrap_or_default();
+        self.registry.next_sequence += 1;
+        self.registry.cards.push((addr, cid));
+        Ok(())
+    }
+
+    /// `BatchUpdateCardHeads` (registry_contract §4.15, §6.1): the sequence, every signed field equal to the calldata
+    /// (the `updates` list in order), each card registered and its `prev_log_cid` its current head; then every head moves.
+    fn registry_batch(&mut self, payload: &Value, calldata: &Value) -> Result<(), String> {
+        if payload["sequence"].as_u64() != Some(self.registry.next_sequence) {
+            return Err("SEQUENCE_MISMATCH".into());
+        }
+        for f in ["policy_address", "press_address", "updates"] {
+            if payload[f] != calldata[f] {
+                return Err("PAYLOAD_CALLDATA_MISMATCH".into());
+            }
+        }
+        let ups = payload["updates"].as_array().ok_or("BATCH_SIZE_INVALID")?;
+        if ups.is_empty() || ups.len() > 100 {
+            return Err("BATCH_SIZE_INVALID".into());
+        }
+        let text = |v: &Value| String::from_utf8(b64u::decode(v.as_str().unwrap_or_default()).unwrap_or_default()).unwrap_or_default();
+        for u in ups {
+            let addr = u["card_address"].as_str().unwrap_or_default();
+            let head = self.registry.cards.iter().find(|(a, _)| a == addr).map(|(_, c)| c.clone()).ok_or("CARD_NOT_FOUND")?;
+            if head != text(&u["prev_log_cid"]) {
+                return Err("STALE_PREV_CID".into());
+            }
+        }
+        for u in ups {
+            let addr = u["card_address"].as_str().unwrap_or_default();
+            let slot = self.registry.cards.iter_mut().find(|(a, _)| a == addr).expect("checked");
+            slot.1 = text(&u["new_log_cid"]);
+        }
+        self.registry.next_sequence += 1;
+        self.registry.batches.push(payload.clone());
+        Ok(())
     }
 
     pub fn instance(&self, i: usize) -> String {
@@ -324,7 +463,8 @@ impl Net {
         if !self.nodes[i].up {
             return vec![];
         }
-        let mut io = Io { out: vec![], ipfs: &self.ipfs };
+        let silent = self.registry.silent;
+        let mut io = Io { out: vec![], ipfs: &self.ipfs, version: (!silent).then_some("0.1"), next_sequence: (!silent).then_some(self.registry.next_sequence) };
         self.nodes[i].broker.handle(&mut io, &msg);
         let out = io.out;
         let mut replies = vec![];
@@ -403,6 +543,13 @@ impl Net {
                 self.nodes[i].announcements.push(m["announcement"].clone());
                 None
             }
+            "chain_submit" => {
+                let req_id = m["req_id"].as_str().unwrap_or_default().to_string();
+                self.registry.submissions.push(m.clone());
+                let failed = if self.registry.fail_next.is_empty() { self.registry_accepts(i, &m).err() } else { Some(self.registry.fail_next.remove(0)) };
+                self.queue.push_back(Item::ChainResult { to: i, req_id, failed });
+                None
+            }
             "alert" => {
                 self.nodes[i].alerts.push(m["code"].as_str().unwrap_or_default().into());
                 None
@@ -453,6 +600,14 @@ impl Net {
             }
             Item::Record { to, scope, seq, record } => {
                 self.call(to, json!({ "kind": "log_record", "req_id": "r", "scope_id": scope, "seq": seq, "record": b64u::encode(&record) }));
+            }
+            Item::ChainResult { to, req_id, failed } => {
+                let mut msg = json!({ "kind": "chain_result", "req_id": req_id });
+                match failed {
+                    Some(f) => msg["failed"] = json!(f),
+                    None => msg["tx_receipt"] = json!("0xtx"),
+                }
+                self.call(to, msg);
             }
             Item::Anchor { to, scope, seq, record } => {
                 let mut msg = json!({ "kind": "anchor_receipt", "req_id": "a", "scope_id": scope, "seq": seq, "tx_receipt": "0x1" });
@@ -596,6 +751,26 @@ impl Net {
     /// A ballot sealed to an announcement's key (the wallet's side, §24).
     pub fn ballot(&self, ann: &Value, voter: u8, choice: &str, revision: u64) -> Ballot {
         self.ballot_at(ann, voter, choice, revision, self.headers.len() - 1)
+    }
+
+    /// Any plaintext (an input or a countersign) sealed to an announcement's key, the way a wallet seals it.
+    pub fn seal_plain(&self, ann: &Value, plaintext: &Value) -> Ballot {
+        let job_hash: [u8; 32] = jcs::h_bytes(&ann["job"]).unwrap();
+        let epoch = ann["epoch"].as_u64().unwrap();
+        let pk = b64u::decode(ann["job_public_key"].as_str().unwrap()).unwrap();
+        let (info, aad) = sealed_input_info_aad(&job_hash, epoch);
+        let s = xwing_seal(&pk, &info, &aad, &jcs::canonical(plaintext).unwrap()).unwrap();
+        let sealed = json!({ "ct": b64u::encode(&s.ct), "enc": b64u::encode(&s.enc), "epoch": epoch, "job_hash": b64u::encode(&job_hash), "kem": "x-wing-draft-06", "type": "notary.sealed_input.v1" });
+        Ballot { input_hash: jcs::h(&sealed).unwrap(), sealed, receipt_key: s.receipt_key, input: plaintext.clone() }
+    }
+
+    /// The header at index `at` of the bus's chain as a `chain_ref`.
+    pub fn chain_ref(&self, at: usize) -> Value {
+        json!({ "block_hash": b64u::encode(&self.headers[at].0), "block_number": self.headers[at].1 })
+    }
+
+    pub fn newest_header(&self) -> usize {
+        self.headers.len() - 1
     }
 
     /// A ballot whose `chain_ref` is the header at index `at` of the bus's chain.

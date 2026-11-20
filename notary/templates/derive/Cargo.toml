@@ -1,0 +1,21 @@
+[package]
+name = "notary-template-derive"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+description = "The `derive` template program (notary_v1): copies the source card's projected field values, verbatim, as the derived card's `projected` object. The runtime checks that nothing else leaves."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+notary-guest = { path = "../../guest", features = ["program", "raw_output"] }
+
+[dev-dependencies]
+notary-types = { path = "../../runtime/crates/notary-types" }
+serde_json.workspace = true
+notary-admission = { path = "../../runtime/crates/notary-admission" }
+notary-worker = { path = "../../runtime/crates/notary-worker" }
+notary-broker = { path = "../../runtime/crates/notary-broker" }
+sha2.workspace = true

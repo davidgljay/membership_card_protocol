@@ -220,7 +220,7 @@ impl Broker {
         }
     }
 
-    fn apply_followed(&mut self, _io: &mut dyn HostIo, scope: &str, rec: &Value) {
+    fn apply_followed(&mut self, io: &mut dyn HostIo, scope: &str, rec: &Value) {
         let me = self.instance_id();
         let kind = rec.get("kind").and_then(Value::as_str).unwrap_or_default();
         let body = rec.get("body").cloned().unwrap_or(Value::Null);
@@ -228,7 +228,15 @@ impl Broker {
             if kind == "handoff" && body.get("to_instance").and_then(Value::as_str) == Some(me.as_str()) {
                 match body.get("scope").and_then(Value::as_str) {
                     Some("identity") => {
-                        self.keys.activate_identity(scope);
+                        if self.keys.activate_identity(scope) {
+                            // 6.5, replication step 32: load the state blob the handoff named, and only that one
+                            if let Some(i) = self.keys.identity(scope).filter(|i| !i.state_loaded) {
+                                let (cid, exact) = (i.state_header_cid.clone(), (i.state_version, i.state_hash.clone()));
+                                if let Some(cid) = cid {
+                                    let _ = self.load_state_blob(io, scope, &cid, Some(exact));
+                                }
+                            }
+                        }
                     }
                     Some("template") => {
                         if let Some(t) = self.template_watch.remove(scope) {
@@ -322,15 +330,26 @@ impl Broker {
     /// Signs and seals the ValidationReceipt for an input whose quorum is reached.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn issue_receipt(&self, hash: &[u8; 32], input_hash: &str, status: &str, reject_reason: Option<&str>, revision: u64, acks: u64, receipt_key: &SecretBytes) -> Result<String, &'static str> {
+        let epoch = self.jobs.get(hash).ok_or("NH_JOB_UNKNOWN")?.epoch;
+        self.issue_receipt_ext(hash, input_hash, epoch, status, reject_reason, revision, acks, receipt_key, None)
+    }
+
+    /// As `issue_receipt`, for the epoch the input was sealed to (a rotated per-input job accepts the old epoch for an
+    /// hour) and with the derived-card offer a receipt carries (`derived_offer`, protocol-objects §26).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn issue_receipt_ext(&self, hash: &[u8; 32], input_hash: &str, epoch: u64, status: &str, reject_reason: Option<&str>, revision: u64, acks: u64, receipt_key: &SecretBytes, derived_offer: Option<Value>) -> Result<String, &'static str> {
         let j = self.jobs.get(hash).ok_or("NH_JOB_UNKNOWN")?;
         let processed_at = self.now_iso()?;
         let ident = self.keys.identity(&j.card).ok_or("NOTARY_KEY_EXPOSED")?;
         let mut receipt = json!({
-            "acks": acks, "epoch": j.epoch, "input_hash": input_hash, "instance": self.keys.instance_id(), "job_hash": j.job_hash_b64,
+            "acks": acks, "epoch": epoch, "input_hash": input_hash, "instance": self.keys.instance_id(), "job_hash": j.job_hash_b64,
             "processed_at": processed_at, "revision": revision, "status": status, "type": objects::types::VALIDATION_RECEIPT,
         });
         if let Some(r) = reject_reason {
             receipt["reject_reason"] = json!(r);
+        }
+        if let Some(o) = derived_offer {
+            receipt["derived_offer"] = o;
         }
         receipt["notary_signature"] = ident.id.sign_object(&receipt, "notary_signature").map_err(|_| "INPUT_MALFORMED")?;
         let bytes = jcs::canonical(&receipt).expect("receipt is notary JSON");

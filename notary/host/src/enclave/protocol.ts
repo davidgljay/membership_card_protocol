@@ -13,12 +13,14 @@ export type Msg = { kind: string; req_id: string; [field: string]: unknown };
 export const HOST_TO_ENCLAVE = ["hello", "chain_headers", "fetch_result", "policy_snapshot", "policy_updates", "genesis", "countersign_notary_card",
   "create_job", "submit_input", "close_chunk", "anchor_receipt", "chain_result", "peer_message", "abort_job",
   // 6.3 (replication)
-  "tick", "peer_directory", "log_record", "start_handoff", "shutdown"] as const;
+  "tick", "peer_directory", "log_record", "start_handoff", "shutdown",
+  // 6.4 (derived cards)
+  "seed_template"] as const;
 /** Enclave → host kinds (runtime §9). */
 export const ENCLAVE_TO_HOST = ["fetch", "publish", "announce", "chain_submit", "eas_anchor", "deliver", "peer_send", "need_replica", "alert", "need_inputs", "store_input"] as const;
 /** Replies to host calls. */
 export const REPLY_KINDS = ["hello_ack", "chain_ack", "snapshot_ack", "genesis_ready", "countersigned", "job_keyed", "job_rejected", "input_result",
-  "job_closed", "job_log_record", "error", "close_pending", "handoff_started", "shutdown_ack"] as const;
+  "job_closed", "job_log_record", "error", "close_pending", "handoff_started", "shutdown_ack", "template_seeded"] as const;
 
 export function encodeFrame(msg: Msg): Uint8Array {
   const body = canonicalNotary(msg);
