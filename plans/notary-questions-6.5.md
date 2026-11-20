@@ -109,7 +109,8 @@
 - **2026-11-19, David:** **E5** accepted, including total loss: if every holder of an identity dies, a fresh holder starts with no tag history and no links, so a person may get a second card in the current period (equal `dup_tag`) and live derived cards lapse at expiry instead of being revoked. No on-chain anchor for now.
 - **2026-11-19, David:** **E6** approved (holder sets learned only from holders; a hidden holder is the E1 limit).
 - **2026-11-19, David:** **E4**: add the check now. A linked source update counts only if its intent signature verifies under a key the source policy authorizes to revoke (see the E4 follow-up below).
-- Still open: E2 (the successor rule; the option of a template setting that ignores `successor` for long periods), E11 (scope).
+- **2026-11-19, David:** **E2**: narrow the skip. After a 100/101 successor under the same source policy, only 801 and 810 aren't propagated; every other 8xx (an issuer's 800, ...) and every 9xx is. A 102 sets no successor. This fixes a bug found on review: a 102 cancelled by 103 used to suppress propagation of a later quiet revocation. The per-template "ignore successor" option isn't needed. Built in `propagation.rs`. `tests/derive.rs::the_successor_rule_and_a_fixed_derived_code` covers 801 and 810 skipped, 800 and 901 propagated, 102 ignored, and a successor under another policy. As a control, putting back "any 8xx" fails that test. Propagation §6 step 3 amended.
+- Still open: E11 (scope).
 
 ### E4 follow-up (2026-11-19): the intent signature can't be checked from a `LogEntry` **[security]**
 

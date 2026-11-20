@@ -165,7 +165,8 @@ pub struct Link {
     pub head_cid: String,
     /// The derived card's policy-defined fields, reposted in the revocation's `card_state`.
     pub card_state: Value,
-    /// Set by a 100–102 entry naming a `successor` (key rotation, §6 step 3).
+    /// Set by a 100 or 101 entry naming a `successor` (the holder's key rotation, §6 step 3). A 102 (the issuer's recovery
+    /// rotation, pending and cancellable) doesn't set it.
     pub successor: Option<String>,
 }
 
@@ -299,7 +300,7 @@ impl Broker {
                     // the new head, readable only with the source card's key
                     let Some(entry) = bytes.as_deref().and_then(|b| notary_cards::support::aes_gcm_decrypt(&notary_cards::support::content_key(&link.source_pubkey), b)).and_then(|p| jcs::parse_canonical(&p).ok()) else { continue };
                     let Some(code) = entry.get("code").and_then(Value::as_u64).map(|c| c as u32) else { continue };
-                    if !(100..=102).contains(&code) && !prop.propagates(code) {
+                    if !matches!(code, 100 | 101) && !prop.propagates(code) {
                         continue;
                     }
                     // E4 (David, 2026-11-19): the content key comes from the source card's public key, which others than
@@ -310,7 +311,7 @@ impl Broker {
                         continue;
                     }
                     let book = self.derive.get_mut(key).expect("book");
-                    if (100..=102).contains(&code) {
+                    if matches!(code, 100 | 101) {
                         if let Some(s) = entry.pointer("/card_state/successor").and_then(Value::as_str) {
                             book.links.get_mut(&derived).expect("link").successor = Some(s.to_string());
                         }
@@ -319,10 +320,13 @@ impl Broker {
                     if !prop.propagates(code) {
                         continue;
                     }
-                    // §6 step 3: the quiet revocation of a card that names a successor under the same source policy is a
-                    // key rotation, not propagated. The enclave can't read the successor's entries (they are under the new
-                    // key), so the link ends and the derived card lapses at its expiry. A 9xx is always propagated.
-                    if code / 100 == 8 && link.successor.as_deref().is_some_and(|s| self.oracle.card_policy(s).as_deref() == Some(policy)) {
+                    // §6 step 3 (E2, decided by David 2026-11-19): after the holder names a successor under the same source
+                    // policy (100/101), only the rotation flow's own revocations are not propagated: 801 (voluntary
+                    // surrender) and 810 (signing key compromised). The link ends and the derived card lapses at its expiry.
+                    // Every other 8xx (an issuer's 800, ...) and every 9xx is propagated, so a holder can't dodge an
+                    // issuer's revocation by pointing `successor` at another card; the enclave can't read the successor or
+                    // the rotation statement.
+                    if matches!(code, 801 | 810) && link.successor.as_deref().is_some_and(|s| self.oracle.card_policy(s).as_deref() == Some(policy)) {
                         self.derive.get_mut(key).expect("book").links.remove(&derived);
                         continue;
                     }

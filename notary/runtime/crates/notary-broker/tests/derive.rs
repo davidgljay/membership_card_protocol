@@ -1054,29 +1054,40 @@ fn revocations_below_the_minimum_batch_are_held_and_dropped_at_expiry() {
     assert!(w.net.registry.batches.is_empty(), "expiry did it without an event");
 }
 
-/// §6 step 3 and the code mapping: a quiet revocation after a key rotation to a successor under the same source policy
-/// is not propagated (the link ends; the card lapses at expiry); a loud one always is; a successor under another policy
-/// doesn't count. A template's fixed `derived_code` is posted for every propagated revocation.
+/// §6 step 3 (E2, decided by David 2026-11-19) and the code mapping. After the holder names a successor under the same
+/// source policy (100/101), only the rotation flow's own revocations, 801 and 810, are not propagated (the link ends; the
+/// card lapses at expiry). An issuer's 800 is propagated even after a successor; a 9xx always is; the issuer's 102
+/// (pending, cancellable) sets no successor; a successor under another policy doesn't count. A template's fixed
+/// `derived_code` is posted for every propagated revocation.
 #[test]
 fn the_successor_rule_and_a_fixed_derived_code() {
     let mut w = World::with(sealed(json!({ "derived_code": 830 })), &["level"], |_| {});
-    let hs = w.issue(&[1, 2, 3, 4]);
+    let hs = w.issue(&[1, 2, 3, 4, 5, 6, 7, 8]);
     let card = w.card.clone();
     w.net.oracle.0.lock().unwrap().card_policies.insert(pointer(9), SOURCE.into());
-    // 1: rotation to a successor under the source policy, then the old card's quiet revocation
-    w.source_update(0, 1, 101, json!({ "successor": pointer(9) }));
-    w.source_update(0, 1, 801, json!({ "successor": pointer(9) }));
-    // 2: the same successor, then a loud revocation
-    w.source_update(0, 2, 101, json!({ "successor": pointer(9) }));
-    w.source_update(0, 2, 901, json!({ "successor": pointer(9) }));
-    // 3: a successor under another policy is no rotation within the source policy
-    w.source_update(0, 3, 100, json!({ "successor": pointer(10) }));
-    w.source_update(0, 3, 801, json!({ "successor": pointer(10) }));
-    assert_eq!(w.net.nodes[0].broker.links_for_tests(&card), (3, 2), "member 1's link ended; 2 and 3 queued");
+    let s9 = json!({ "successor": pointer(9) });
+    // 1, 2: the holder's rotation, then the rotation flow's surrender (801) or compromise (810): not propagated
+    w.source_update(0, 1, 101, s9.clone());
+    w.source_update(0, 1, 801, s9.clone());
+    w.source_update(0, 2, 100, s9.clone());
+    w.source_update(0, 2, 810, s9.clone());
+    // 3: a successor, then the issuer's "role ended" (800): propagated, so a successor can't dodge an issuer
+    w.source_update(0, 3, 100, s9.clone());
+    w.source_update(0, 3, 800, s9.clone());
+    // 4: a successor, then a loud revocation: always propagated
+    w.source_update(0, 4, 101, s9.clone());
+    w.source_update(0, 4, 901, s9.clone());
+    // 5: the issuer's recovery rotation (102) sets no successor
+    w.source_update(0, 5, 102, s9.clone());
+    w.source_update(0, 5, 801, s9.clone());
+    // 6: a successor under another policy is no rotation within the source policy
+    w.source_update(0, 6, 100, json!({ "successor": pointer(10) }));
+    w.source_update(0, 6, 801, json!({ "successor": pointer(10) }));
+    assert_eq!(w.net.nodes[0].broker.links_for_tests(&card), (6, 4), "members 1 and 2's links ended; 3, 4, 5, 6 queued");
     w.net.advance(3 * HOUR, 300_000);
     assert_eq!(w.net.registry.batches.len(), 1);
     let codes: Vec<Option<u64>> = hs.iter().map(|h| w.revocation_of(h).and_then(|r| r["code"].as_u64())).collect();
-    assert_eq!(codes, vec![None, Some(830), Some(830), None], "the fixed code, never the source subcode");
+    assert_eq!(codes, vec![None, None, Some(830), Some(830), Some(830), Some(830), None, None], "the fixed code, never the source subcode");
 }
 
 /// §5, `expiry_only`: no link is kept, not even while a card waits in the pool; a source revocation causes no event; the
