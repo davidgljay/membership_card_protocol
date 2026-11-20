@@ -94,6 +94,8 @@ impl World {
             let mut s = net.oracle.0.lock().unwrap();
             s.policy_key = MlDsaKey::generate().public_key().to_vec();
             s.snapshot_cards = Some(50);
+            // the source policy's press (E4: an update counts only if a certified press signed it)
+            s.certified_presses.insert(test_press(1).public_key().to_vec());
             // four members share one value, so the groups can fill
             for m in 1..=8u8 {
                 s.sources.insert(pointer(m), source(m, json!({ "level": "gold", "team": "red", "policy_id": SOURCE })));
@@ -936,7 +938,13 @@ impl World {
     /// The source card of `member` gets a new log entry with `code` (and `card_state`): the host relays the registry's
     /// `CardHeadUpdated` with the new head's bytes, encrypted under the source card's content key, to node `i`.
     fn source_update(&mut self, i: usize, member: u8, code: u32, card_state: Value) {
-        let entry = json!({ "card_state": card_state, "code": code, "entry_type": if code >= 800 { "revocation" } else { "field_update" }, "version": 2 });
+        self.source_update_by(i, member, code, card_state, &test_press(1));
+    }
+
+    /// As `source_update`, with the entry's `press_signature` by `press`.
+    fn source_update_by(&mut self, i: usize, member: u8, code: u32, card_state: Value, press: &MlDsaKey) {
+        let mut entry = json!({ "card_state": card_state, "code": code, "entry_type": if code >= 800 { "revocation" } else { "field_update" }, "version": 2 });
+        entry["press_signature"] = press.sign_object(&entry, "press_signature").unwrap();
         let enc = notary_cards::support::aes_gcm_encrypt(&notary_cards::support::content_key(&source_pubkey(member)), &jcs::canonical(&entry).unwrap());
         let cid = formats::cid_of_bytes(&enc);
         let at = formats::format_timestamp(self.net.now);
@@ -1181,4 +1189,40 @@ fn the_state_blob_survives_the_enclave_and_a_rolled_back_blob_is_refused() {
     for h in &hs[2..] {
         assert_eq!(w.revocation_of(h).and_then(|r| r["code"].as_u64()), Some(920));
     }
+}
+
+/// E4 (David, 2026-11-19): anyone who knows a source card's public key can make an entry that decrypts under its content
+/// key. A linked update counts only if a certified press of the source policy signed it; any such press will do. Forged
+/// revocations and a forged successor (which would suppress a later quiet revocation) are ignored, and the operator gets
+/// a count, never which card.
+#[test]
+fn only_updates_signed_by_a_certified_press_count() {
+    let mut w = World::with(sealed(json!({})), &["level"], |_| {});
+    let hs = w.issue(&[1, 2, 3, 4]);
+    let card = w.card.clone();
+    w.net.oracle.0.lock().unwrap().card_policies.insert(pointer(9), SOURCE.into());
+    let forger = test_press(66);
+    // a forged loud revocation of member 1, and a forged rotation of member 2
+    w.source_update_by(0, 1, 901, json!({}), &forger);
+    w.source_update_by(0, 2, 101, json!({ "successor": pointer(9) }), &forger);
+    assert_eq!(w.net.nodes[0].broker.links_for_tests(&card), (4, 0), "nothing queued");
+    assert_eq!(w.net.alerts(0).iter().filter(|a| *a == "SOURCE_UPDATE_UNCERTIFIED").count(), 2);
+    // a signature that doesn't cover the entry is refused even from a certified press
+    let mut bad = json!({ "card_state": {}, "code": 905, "entry_type": "revocation", "version": 2 });
+    bad["press_signature"] = test_press(1).sign_object(&json!({ "code": 300 }), "press_signature").unwrap();
+    let enc = notary_cards::support::aes_gcm_encrypt(&notary_cards::support::content_key(&source_pubkey(3)), &jcs::canonical(&bad).unwrap());
+    let upd = json!({ "card_address": pointer(3), "head_cid": formats::cid_of_bytes(&enc), "bytes": b64u::encode(&enc), "timestamp": formats::format_timestamp(w.net.now), "block": 10 });
+    w.net.call(0, json!({ "kind": "policy_updates", "req_id": "u", "policy_address": SOURCE, "updates": [upd] }));
+    w.net.run();
+    assert_eq!(w.net.nodes[0].broker.links_for_tests(&card), (4, 0));
+    // genuine revocations through two different certified presses both count; member 2's quiet revocation propagates,
+    // because the forged successor was never recorded
+    w.net.oracle.0.lock().unwrap().certified_presses.insert(test_press(2).public_key().to_vec());
+    w.source_update(0, 1, 803, json!({}));
+    w.source_update_by(0, 2, 801, json!({}), &test_press(2));
+    assert_eq!(w.net.nodes[0].broker.links_for_tests(&card), (4, 2));
+    w.net.advance(3 * HOUR, 300_000);
+    assert_eq!(w.net.registry.batches.len(), 1);
+    let codes: Vec<Option<u64>> = hs.iter().map(|h| w.revocation_of(h).and_then(|r| r["code"].as_u64())).collect();
+    assert_eq!(codes, vec![Some(820), Some(820), None, None]);
 }

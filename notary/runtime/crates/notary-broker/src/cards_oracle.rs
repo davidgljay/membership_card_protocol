@@ -60,8 +60,14 @@ pub struct SnapshotOracle {
     policy_addresses: BTreeMap<String, String>,
     /// policy_id → the policy card's public key, from the same read.
     policy_keys: BTreeMap<String, Vec<u8>>,
+    /// source policy → (when read, the certified presses' ML-DSA-44 keys): step 6.5, E4.
+    source_presses: BTreeMap<String, (i64, Vec<Vec<u8>>)>,
     cache: RefCell<IpfsCache>,
 }
+
+/// How often a watched source policy's certified presses are read again (E4). Press changes are rare; a refresh costs a
+/// few registry reads.
+pub const PRESS_REFRESH_MS: i64 = 10 * 60_000;
 
 impl SnapshotOracle {
     /// Number of verified IPFS objects held for reuse across inputs.
@@ -70,7 +76,7 @@ impl SnapshotOracle {
     }
 
     pub fn new(pins: CardPins) -> Self {
-        Self { pins, snap: Snapshots::default(), policy_addresses: BTreeMap::new(), policy_keys: BTreeMap::new(), cache: RefCell::new(IpfsCache::default()) }
+        Self { pins, snap: Snapshots::default(), policy_addresses: BTreeMap::new(), policy_keys: BTreeMap::new(), source_presses: BTreeMap::new(), cache: RefCell::new(IpfsCache::default()) }
     }
 }
 
@@ -231,6 +237,25 @@ impl CardOracle for SnapshotOracle {
             }
             ContributorResult::Err { code, .. } => Err(code),
         }
+    }
+
+    fn refresh_source_presses(&mut self, io: &mut dyn HostIo, policy_id: &str, now_ms: i64) {
+        if self.source_presses.get(policy_id).is_some_and(|(at, _)| now_ms - at < PRESS_REFRESH_MS) {
+            return;
+        }
+        let src = Source { cache: &self.cache, io: RefCell::new(io), evidence: BTreeMap::new(), snap: &self.snap };
+        // a failed read keeps the last good set (withholding reads is the host's to do anyway, L4)
+        let keys = notary_cards::policy::certified_press_keys(&src, policy_id, &self.roots(), now_ms).ok();
+        let entry = self.source_presses.entry(policy_id.to_string()).or_insert((now_ms, vec![]));
+        entry.0 = now_ms;
+        if let Some(k) = keys {
+            entry.1 = k;
+        }
+    }
+
+    fn source_entry_certified(&self, policy_id: &str, entry: &Value) -> Result<(), &'static str> {
+        let keys = self.source_presses.get(policy_id).map(|(_, k)| k.as_slice()).unwrap_or_default();
+        notary_cards::policy::entry_press_signed(entry, keys)
     }
 
     fn policy_public_key(&self, policy_id: &str) -> Option<Vec<u8>> {

@@ -91,7 +91,7 @@ mcard://<domain>/<path>
 ```
 
 - `<domain>` is a valid DNS domain name as defined by RFC 1123, lowercase-normalized, with no trailing dot. Examples: `nytimes.com`, `volunteer.example.org`.
-- `<path>` is a slash-separated path string with at least one segment. Paths are case-sensitive and must not be empty. The leading slash is not included in the path value stored on-chain (i.e., `mcard://nytimes.com/staff/reporter` has domain `nytimes.com` and path `staff/reporter`). Maximum path length: 512 bytes.
+- `<path>` is a slash-separated path string with at least one segment. Paths are case-sensitive and must not be empty. The leading slash is not included in the path value stored on-chain (i.e., `mcard://nytimes.com/staff/reporter` has domain `nytimes.com` and path `staff/reporter`). Maximum path length: 512 bytes. A path may not contain `"`, `\` or a control character (U+0000–U+001F); these are the characters JSON escapes, and a URL would percent-encode them anyway (`%22` is allowed). *Amended 2026-11-19 (W6, David); enforced on chain from notary step 6.4b (`registry_contract.md` §6.1).* Wallets and resolvers should refuse such a path rather than look it up.
 - Resolution requires an on-chain read (see §3).
 
 **Identifying this form:** The segment immediately after `mcard://` contains at least one dot (`.`) and satisfies the RFC 1123 domain name format. Any URI that passes the CID-form check is treated as Form A regardless of dots.

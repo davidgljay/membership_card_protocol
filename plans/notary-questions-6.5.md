@@ -98,3 +98,39 @@
 ### E11. Scope: still one replica per derived-card job
 
 - A derived-card job still runs one replica (6.4 D3). The blob lets the links and the tag history survive the enclave, and lets a standby take over propagation. It doesn't let issuance continue elsewhere: a new job is needed. Replicating the pool itself isn't specified.
+
+---
+
+## Answers
+
+- **2026-11-19, David:** the interface items are approved: **E7** (links made at release), **E8** (hosts serve blobs to peers and keep watching until `ends_at` + 2 periods), **E9** (new fields and codes), **E10** (the revocation `LogEntry`).
+- **2026-11-19, David:** **E1** approved (the holder serving derived-card jobs leads). Known limit recorded: a host that stops relaying heartbeats can make two holders each believe the other is dead, so both lead; two derived-card jobs could then issue a person two cards in a period, visible as equal `dup_tag`s. Only an on-chain lease would close it.
+- **2026-11-19, David:** **E3** approved (eligible at `max(block time, receipt) + min_delay`; a revocation rediscovered from a snapshot after a restart waits `min_delay` again).
+- **2026-11-19, David:** **E5** accepted, including total loss: if every holder of an identity dies, a fresh holder starts with no tag history and no links, so a person may get a second card in the current period (equal `dup_tag`) and live derived cards lapse at expiry instead of being revoked. No on-chain anchor for now.
+- **2026-11-19, David:** **E6** approved (holder sets learned only from holders; a hidden holder is the E1 limit).
+- **2026-11-19, David:** **E4**: add the check now. A linked source update counts only if its intent signature verifies under a key the source policy authorizes to revoke (see the E4 follow-up below).
+- Still open: E2 (the successor rule; the option of a template setting that ignores `successor` for long periods), E11 (scope).
+
+### E4 follow-up (2026-11-19): the intent signature can't be checked from a `LogEntry` **[security]**
+
+- **Finding.** A stored `LogEntry` (protocol-objects §3) carries `intent_signature`, but not the `UpdateIntentPayload` fields it signs that aren't otherwise in the entry: `target_card`, `updater_card` and `timestamp` (§4). No reader, the enclave included, can rebuild the signed bytes, so the intent signature can't be verified, and the `revocation_permissions` check (card_updates §7), which needs the updater's card, can't be repeated. Only the press checks it, at submission. My E4 write-up ("check the intent signature against the source policy's revocation permissions") assumed otherwise.
+- **What is checkable.** The `press_signature` over the whole entry, with the key it names.
+  - **Against `PressAuthorizations` read through the host:** no gain against a malicious host. The forged update is already a false chain read (L4), and the host can give a false press authorization in the same way, with no secret needed.
+  - **Against a press pinned when the link is made (proposed):** at input time, record the press that signed the source card's current head. The host can't target this, because the input is sealed and the host doesn't know which source card is in it. Later, a linked update counts only if its `press_signature` verifies and its key is that press's. A forger then needs that press's private key, not just the source card's public key. Cost: a genuine revocation made through a different approved press isn't propagated, and the derived card lapses at expiry, as under `expiry_only`. The fallback is a missed revocation, never a false one.
+  - **Spec fix (not in notary scope):** add `target_card`, `updater_card` and `timestamp` to `LogEntry` so the intent signature can be verified. That changes the press, the verifier and §3 for every card.
+- **Decision (David, 2026-11-19):** accept any **certified press** (pinning one press was rejected: if it goes down, revocations stop).
+- **Built.**
+  - `notary_cards::policy::certified_press_keys` reads the source policy's current `approved_presses`. Each entry may be a press card document CID (as the press writes it) or a card pointer. It reads the published press card's key, and keeps it if the card is registered, chains to a trusted root and isn't revoked.
+  - `entry_press_signed` checks one entry's `press_signature` against those keys and reads nothing.
+  - The enclave (`SnapshotOracle`) reads a watched source policy's certified presses on each snapshot or update message, at most every 10 minutes (`PRESS_REFRESH_MS`), whatever is linked. Checking an entry makes no host request, so §6 step 2's rule that "nothing it requests from the host depends on the link set" still holds. A first version that read the press card after each linked update broke that rule; it was caught before commit.
+  - The watch loop applies the check to successor entries (100–102) and propagated revocations. A refusal raises `SOURCE_UPDATE_UNCERTIFIED` once per entry, naming no card. The host forwards only level and code.
+- **Tests.**
+  - `notary-cards/tests/press_certified.rs` (7): CID and pointer forms; any approved press; a changed entry; a press that isn't approved; a forger whose press card chains to another root, an unregistered pointer, and a pointer bound to another key; a revoked press card; an unreadable policy.
+  - `notary-broker/tests/cards_oracle.rs`: reads happen per policy and are throttled; checking an entry reads nothing.
+  - `notary-broker/tests/derive.rs` `only_updates_signed_by_a_certified_press_count`: a forged 901 and a forged successor are ignored with two alerts; a certified press's signature over different bytes is refused; genuine revocations through two different certified presses both propagate.
+  - **Negative controls:** skipping the chain check fails the forger and revoked-press tests; skipping the watch-loop check fails the broker test.
+- **Reported, not fixed (CP10).**
+  1. A `LogEntry` doesn't carry the intent's `target_card`, `updater_card` and `timestamp`, so `intent_signature` can't be verified by any reader. Suggest adding them in protocol-objects §3.
+  2. `approved_presses` is a card-pointer array in protocol-objects §2, but the press writes and checks the press card's CID (`press/src/functions/issuance.ts`, `press.md` "Press card"). The enclave accepts both.
+  3. Dev and integration deployments use a placeholder press card (`integration_tests/env/press/.dev.vars`, `press/scripts/pin-dev-policy.mjs`). Until governance issues real press cards chaining to a trusted root, every source update is refused and `sealed_link` derived cards lapse at expiry instead of being revoked.
+- **Limit (L4):** the policy head and registry reads come through the host, so a host could hide a press card's revocation, and a stolen press key would keep working against the enclave until the host relays it.

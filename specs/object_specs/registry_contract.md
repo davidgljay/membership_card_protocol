@@ -1485,6 +1485,7 @@ DeregisterDomain(
 SetPolicyAddress(
     domain               string,    — Lowercase domain string.
     path                 string,    — Path string (no leading slash; case-sensitive). Maximum 512 bytes.
+                                      Must not contain `"` (0x22), `\` (0x5C) or a control character (0x00–0x1F), else E-43 (§ 6.1 step 8 note; amended 2026-11-19, W6, David; implemented in notary step 6.4b).
     policy_card_address  bytes32,   — On-chain registry address of the policy card to register at this
                                       domain/path. Must exist in CardEntries.
     admin_card_address   bytes32,   — On-chain registry address of the registered domain admin card.
@@ -1769,7 +1770,9 @@ Unlike `SetPolicyAddress` (§4.19), this operation:
 ```
 GovernanceSetPolicyAddress(
     domain               string,
-    path                 string,
+    path                 string,    — Same character rule as §4.19 when writing a non-zero value;
+                                      a clearing write (bytes32(0)) accepts any path, so entries written
+                                      before the rule can still be removed.
     policy_card_address  bytes32,   — Target value to write. bytes32(0) clears the entry
                                       (same effect as RemovePolicyAddress governance path).
                                       If non-zero, must exist in CardEntries.
@@ -1991,7 +1994,7 @@ The following check is applied on every call to `RegisterCard`, `UpdateCardHead`
 >   - `RegisterAddressForward`: `old_address`, `new_address` in the holder payload the press co-signs.
 >   - `SetPolicyAddress`: `domain`, `path`, `policy_card_address`, `admin_card_address`, `sub_card_address`, `press_address`.
 >   - `RemovePolicyAddress` (path A): `domain`, `path`, `card_address`, `press_address` (§4.20).
-> - **Encoding.** `bytes32` values and CIDs are unpadded base64url strings. The contract encodes the calldata and compares, so exactly one string matches. DNS `domain` and `path` are JSON strings compared byte for byte, and must be written without escape sequences: a value that needs escaping is refused (W6, for David's review).
+> - **Encoding.** `bytes32` values and CIDs are unpadded base64url strings. The contract encodes the calldata and compares, so exactly one string matches. DNS `domain` and `path` are JSON strings compared byte for byte, and must be written without escape sequences. *Amended 2026-11-19 (W6, David):* a path may not contain the characters JSON escapes (`"`, `\`, 0x00–0x1F). `SetPolicyAddress` and a non-clearing `GovernanceSetPolicyAddress` refuse such a path with E-43 before step 8, so the error names the cause. Removal (`RemovePolicyAddress`, `ClearDomainEntries`, a clearing `GovernanceSetPolicyAddress`) does not apply the rule, so an entry written before it can be removed. Domains are already limited by `validate_domain`. Implemented in notary step 6.4b; until then such a path is refused with E-49.
 > - **Top-level fields only** (for David's review, W2). Fields are read from the top level of the payload object. A key-shaped sequence inside a string or a nested value never counts, a repeated key or trailing bytes make the payload invalid, `op` must be a string and `sequence` a number. Before this, the parser took the first `"name":` anywhere in the bytes, so caller-chosen string content (a DNS `path`, for example) could shadow a later field.
 > - **Order.** Step 8 runs after steps 1–7. A refused call reverts, so it consumes no sequence number.
 
@@ -2320,7 +2323,7 @@ ProtocolVersionUpdated(
 | E-40 | `CARD_NOT_DNS_GOVERNANCE_POLICY` | The `card_address` supplied to `SetPolicyAddress` or `RemovePolicyAddress` was not issued under `DnsGovernancePolicyAddress` (`CardEntries[card_address].policy_address != DnsGovernancePolicyAddress`), or `DnsGovernancePolicyAddress` is `bytes32(0)` (DNS governance not yet initialized). |
 | E-41 | `POLICY_CARD_NOT_FOUND` | The `policy_card_address` supplied to `SetPolicyAddress` does not exist in `CardEntries` (`CardEntries[policy_card_address].exists == false`). |
 | E-42 | `DOMAIN_PATH_ENTRY_NOT_FOUND` | `RemovePolicyAddress` called for a domain/path pair whose `PolicyAddresses` entry is already zero (not registered or already removed). |
-| E-43 | `INVALID_DNS_PARAMETER` | A parameter to a DNS write operation failed validation: domain string is empty or exceeds 255 bytes (`RegisterDomain`, `DeregisterDomain`); `fraud_risk` value is > 2 or inconsistent with `suspension_expires_at` (`FlagDomainFraudRisk`). |
+| E-43 | `INVALID_DNS_PARAMETER` | A parameter to a DNS write operation failed validation: domain string is empty or exceeds 255 bytes (`RegisterDomain`, `DeregisterDomain`); path contains `"`, `\` or a control character (`SetPolicyAddress`, non-clearing `GovernanceSetPolicyAddress`; added 2026-11-19, W6); `fraud_risk` value is > 2 or inconsistent with `suspension_expires_at` (`FlagDomainFraudRisk`). |
 | E-44 | `DOMAIN_PATH_SCOPE_VIOLATION` | **Press-side rejection only.** The domain admin sub-card's `dns_path_scope` regex (from its IPFS card document) does not match the `path` argument in the `SetPolicyAddress` submission. The press refuses to submit the on-chain transaction. This is not an on-chain revert code. |
 | E-45 | `SUB_CARD_NOT_DOMAIN_ADMIN_SUBCARD` | `sub_card_address` in `SetPolicyAddress` is non-zero but fails the on-chain binding check: either `SubCardRegistrations[sub_card_address]` does not exist, `active == false`, or `master_card_address != admin_card_address`. Sub-sub-cards (depth > 1 from the domain admin) also trigger this error since the one-hop check fails. |
 | E-46 | `ADMIN_CARD_MISMATCH` | `admin_card_address` in `SetPolicyAddress` does not match `DomainRegistrations[domain].admin_card_address`. The caller supplied an admin card that is not the registered admin for this domain. |

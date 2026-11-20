@@ -183,3 +183,66 @@ fn snapshots_record_their_policy_state_and_where_each_card_came_from() {
     assert!(!o.contributor_from_snapshot("00".repeat(32).as_str(), &sub, &["pol".to_string()]), "a card the host never snapshotted");
     assert!(!SnapshotOracle::new(pins(&c["config"])).contributor_from_snapshot(&card, &sub, &["pol".to_string()]), "no snapshot, only the per-card fallback");
 }
+
+/// E4 (step 6.5): a watched source policy's certified presses are read per policy, at most every `PRESS_REFRESH_MS`;
+/// checking an entry reads nothing, so what the host is asked never depends on which source cards are linked.
+#[test]
+fn source_presses_are_read_per_policy_and_an_entry_check_reads_nothing() {
+    use notary_broker::cards_oracle::PRESS_REFRESH_MS;
+    use notary_crypto::MlDsaKey;
+    use notary_types::formats;
+    struct Counting {
+        inner: WorldHost,
+        reads: usize,
+    }
+    impl HostIo for Counting {
+        fn send(&mut self, _msg: Value) {}
+        fn fetch(&mut self, what: &str) -> Option<Vec<u8>> {
+            self.reads += 1;
+            self.inner.fetch(what)
+        }
+    }
+    let (root, policy, press, forger) = (MlDsaKey::generate(), MlDsaKey::generate(), MlDsaKey::generate(), MlDsaKey::generate());
+    let addr = |k: &MlDsaKey| formats::card_pointer(k.public_key());
+    let mut ipfs = serde_json::Map::new();
+    let mut put = |bytes: Vec<u8>| {
+        let cid = formats::cid_of_bytes(&bytes);
+        ipfs.insert(cid.clone(), json!(b64u::encode(&bytes)));
+        cid
+    };
+    let policy_id = put(serde_json::to_vec(&json!({ "recipient_pubkey": b64u::encode(policy.public_key()) })).unwrap());
+    let press_doc = put(serde_json::to_vec(&json!({ "recipient_pubkey": b64u::encode(press.public_key()), "ancestry_pubkeys": [b64u::encode(root.public_key())] })).unwrap());
+    let policy_head = put(notary_cards::support::aes_gcm_encrypt(
+        &notary_cards::support::content_key(policy.public_key()),
+        &serde_json::to_vec(&json!({ "approved_presses": [press_doc] })).unwrap(),
+    ));
+    let card = |cid: &str| json!({ "log_head_cid": cid, "events": [{ "cid": cid, "timestamp": "2027-01-01T00:00:00Z" }] });
+    let world = json!({ "cards": { addr(&policy): card(&policy_head), addr(&press): card(&press_doc) }, "subcards": {}, "ipfs": ipfs });
+    let mut oracle = SnapshotOracle::new(CardPins {
+        trusted_roots: vec![addr(&root)],
+        app_certification_root: String::new(),
+        login_service_root: String::new(),
+        max_chain_depth: 8,
+        list_cards: vec![],
+        list_holder_key: vec![],
+        list_press_key: vec![],
+    });
+    let mut host = Counting { inner: WorldHost { world, ipfs_fetches: 0 }, reads: 0 };
+    let now = 1_800_000_000_000;
+    let sign = |k: &MlDsaKey| {
+        let mut e = json!({ "code": 901, "entry_type": "revocation", "card_state": {}, "version": 2 });
+        e["press_signature"] = k.sign_object(&e, "press_signature").unwrap();
+        e
+    };
+    assert_eq!(oracle.source_entry_certified(&policy_id, &sign(&press)), Err("PRESS_NOT_CERTIFIED"), "nothing read yet");
+    oracle.refresh_source_presses(&mut host, &policy_id, now);
+    let after_first = host.reads;
+    assert!(after_first > 0);
+    assert_eq!(oracle.source_entry_certified(&policy_id, &sign(&press)), Ok(()));
+    assert_eq!(oracle.source_entry_certified(&policy_id, &sign(&forger)), Err("PRESS_NOT_CERTIFIED"));
+    assert_eq!(host.reads, after_first, "an entry check reads nothing");
+    oracle.refresh_source_presses(&mut host, &policy_id, now + PRESS_REFRESH_MS - 1);
+    assert_eq!(host.reads, after_first, "not again before the refresh interval");
+    oracle.refresh_source_presses(&mut host, &policy_id, now + PRESS_REFRESH_MS);
+    assert!(host.reads > after_first, "read again after it");
+}

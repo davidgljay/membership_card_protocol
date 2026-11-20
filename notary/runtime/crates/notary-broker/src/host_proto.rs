@@ -252,13 +252,13 @@ impl Broker {
             "policy_snapshot" => {
                 let p = msg.get("policy_address").and_then(Value::as_str).unwrap_or_default().to_string();
                 self.oracle.on_snapshot(&p, msg);
-                self.derive_watch_snapshot(&p, msg);
+                self.derive_watch_snapshot(io, &p, msg);
                 Some(json!({ "kind": "snapshot_ack", "req_id": req_id }))
             }
             "policy_updates" => {
                 let p = msg.get("policy_address").and_then(Value::as_str).unwrap_or_default().to_string();
                 self.oracle.on_updates(&p, msg);
-                self.derive_watch(&p, msg);
+                self.derive_watch(io, &p, msg);
                 None
             }
             "genesis" => Some(self.on_genesis(io, &req_id, msg)),

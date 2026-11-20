@@ -116,6 +116,14 @@ pub struct OracleState {
     pub snapshot_cards: Option<usize>,
     /// The policy a snapshot delivered each card under (step 6.5, the successor rule).
     pub card_policies: BTreeMap<String, String>,
+    /// Public keys of certified, approved presses of the source policy (step 6.5, E4). Which keys count is
+    /// `notary_cards::policy::entry_press_certified`'s job (its own tests); here the signature is checked for real.
+    pub certified_presses: BTreeSet<Vec<u8>>,
+}
+
+/// A deterministic test press key.
+pub fn test_press(n: u8) -> MlDsaKey {
+    MlDsaKey::from_seed(notary_crypto::SecretBytes::from_vec(vec![n; 32])).expect("seed")
 }
 
 #[derive(Clone, Default)]
@@ -150,6 +158,16 @@ impl CardOracle for Oracle {
     }
     fn card_policy(&self, card: &str) -> Option<String> {
         self.0.lock().unwrap().card_policies.get(card).cloned()
+    }
+    fn source_entry_certified(&self, _: &str, entry: &Value) -> Result<(), &'static str> {
+        let sig = &entry["press_signature"];
+        let pk = sig["public_key"].as_str().and_then(|k| b64u::decode(k).ok()).ok_or("PRESS_SIGNATURE_INVALID")?;
+        let s = sig["signature"].as_str().and_then(|k| b64u::decode(k).ok()).ok_or("PRESS_SIGNATURE_INVALID")?;
+        let msg = jcs::canonical(&jcs::without_fields(entry, &["press_signature"])).map_err(|_| "PRESS_SIGNATURE_INVALID")?;
+        if !notary_crypto::mldsa_verify(&pk, &msg, &s) {
+            return Err("PRESS_SIGNATURE_INVALID");
+        }
+        if self.0.lock().unwrap().certified_presses.contains(&pk) { Ok(()) } else { Err("PRESS_NOT_CERTIFIED") }
     }
     fn policy_public_key(&self, _: &str) -> Option<Vec<u8>> {
         let k = self.0.lock().unwrap().policy_key.clone();

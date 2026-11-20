@@ -128,3 +128,79 @@ pub fn requester_allowed(src: &dyn CardSource, job: &Value, predicate: &Value, p
     let ctx = Context { chain: &chain, addresses: &c.addresses, parameters: Some(params), is_holder: card == policy_address, is_issuer: false };
     predicates::evaluate(predicate, &ctx)
 }
+
+/// Step 6.5, E4 (decided by David, 2026-11-19): the ML-DSA-44 keys of the source policy's **certified presses**. A linked
+/// source card's new head counts only if one of them signed it (`entry_press_signed`); any of them will do
+/// (`derived_card_revocation_propagation.md` §6 step 2).
+///
+/// A `LogEntry` doesn't carry the `UpdateIntentPayload`'s `target_card`, `updater_card` or `timestamp`, so its
+/// `intent_signature` can't be checked by any reader; the press checked `revocation_permissions` at submission. What can be
+/// checked is the press. A key is certified when:
+/// 1. its press card is in the source policy's current `approved_presses`, named by the press card document's CID (as
+///    the press writes it, `press/src/functions/issuance.ts`) or by the card pointer (`keccak256` of the key,
+///    protocol-objects §2). The press card document is published readable (press.md, "Press card"), so the key is read
+///    from its `recipient_pubkey`; for a pointer, `keccak256` of that key must be the pointer;
+/// 2. the press card is registered, and its current head chains to a pinned trusted root and isn't revoked (Stages 3
+///    and 4).
+///
+/// Every read here is per policy, never per update: what the enclave asks the host for must not depend on which cards are
+/// linked (§6 step 2). A forger needs a governance-certified press key, not just the source card's public key (from which
+/// its content key is derived). The policy head and the registry reads come through the host (L4).
+pub fn certified_press_keys(src: &dyn CardSource, policy_id: &str, roots: &Roots<'_>, now_ms: i64) -> Result<Vec<Vec<u8>>, &'static str> {
+    let genesis = src.fetch(policy_id).and_then(|b| parse_object(&b)).ok_or("SOURCE_POLICY_UNREADABLE")?;
+    let policy_pk = genesis
+        .get("recipient_pubkey")
+        .and_then(Value::as_str)
+        .and_then(|k| b64u::decode_len(k, notary_crypto::MLDSA44_PUBLIC_KEY_LEN).ok())
+        .ok_or("SOURCE_POLICY_UNREADABLE")?;
+    let policy_entry = src.card(&address_of(&policy_pk)).ok_or("SOURCE_POLICY_UNREADABLE")?;
+    let policy = read_head(src, &policy_entry.log_head_cid, &content_key(&policy_pk)).ok_or("SOURCE_POLICY_UNREADABLE")?;
+    let mut keys: Vec<Vec<u8>> = vec![];
+    for a in policy.get("approved_presses").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str) {
+        let by_pointer = src.card(a);
+        // a pointer names a registered card: its genesis (first event) is the published press card document
+        let doc_cid = match &by_pointer {
+            Some(e) => match e.events.first() {
+                Some(g) => g.cid.as_str(),
+                None => continue,
+            },
+            None => a,
+        };
+        let Some(pk) = src
+            .fetch(doc_cid)
+            .and_then(|b| parse_object(&b))
+            .and_then(|d| d.get("recipient_pubkey").and_then(Value::as_str).map(crate::support::b64_lenient))
+            .filter(|k| k.len() == notary_crypto::MLDSA44_PUBLIC_KEY_LEN)
+        else {
+            continue;
+        };
+        let addr = address_of(&pk);
+        if by_pointer.is_some() && addr != a {
+            continue;
+        }
+        let key = content_key(&pk);
+        let binds = |d: &Doc| d.get("recipient_pubkey").and_then(Value::as_str).is_some_and(|r| crate::support::b64_lenient(r) == pk);
+        let Some(head) = src.card(&addr).and_then(|e| read_head(src, &e.log_head_cid, &key)).filter(binds) else { continue };
+        if chain_ok(src, head, &addr, roots, now_ms).is_some() && !keys.contains(&pk) {
+            keys.push(pk);
+        }
+    }
+    Ok(keys)
+}
+
+/// Step 6.5, E4: `entry`'s `press_signature` verifies, under the key it names, over the entry without it, and that key is
+/// one of `certified` (`certified_press_keys`). No reads.
+pub fn entry_press_signed(entry: &Value, certified: &[Vec<u8>]) -> Result<(), &'static str> {
+    let sig = entry.get("press_signature").ok_or("PRESS_SIGNATURE_INVALID")?;
+    let pk = sig
+        .get("public_key")
+        .and_then(Value::as_str)
+        .and_then(|k| b64u::decode_len(k, notary_crypto::MLDSA44_PUBLIC_KEY_LEN).ok())
+        .ok_or("PRESS_SIGNATURE_INVALID")?;
+    let s = sig.get("signature").and_then(Value::as_str).and_then(|x| b64u::decode(x).ok()).ok_or("PRESS_SIGNATURE_INVALID")?;
+    let msg = crate::support::canonicalize(&crate::support::without(entry, &["press_signature"])).ok_or("PRESS_SIGNATURE_INVALID")?;
+    if !notary_crypto::mldsa_verify(&pk, &msg, &s) {
+        return Err("PRESS_SIGNATURE_INVALID");
+    }
+    if certified.contains(&pk) { Ok(()) } else { Err("PRESS_NOT_CERTIFIED") }
+}

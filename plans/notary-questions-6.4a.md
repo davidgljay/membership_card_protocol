@@ -84,3 +84,11 @@ The change is under `contracts/`. It has been built and deployed only to the loc
 
 - **E-48 `SUB_CARD_ADDRESS_RETIRED` has no error of its own.** §4.3 step 2a (added 2026-07-16) refuses re-registering a deregistered sub-card address with E-48. `subcard_ops.rs::register_sub_card` only rejects an *active* entry. The write is still refused, by the storage contract's write-once `deregistered_at` invariant, but with the storage contract's error, not E-48. Reported, not fixed.
 - **Contract size.** The logic contract WASM grows from 232,797 to 238,950 bytes (56,187 → 58,135 compressed). The devnode deploys it. Mainnet size limits should be checked at W8.
+
+---
+
+## Answers
+
+- **2026-11-19, David:** **W5** approved (the `RemovePolicyAddress` press payload fields).
+- **2026-11-19, David:** **W6**: restrict path characters. A path may not contain `"`, `\` or 0x00–0x1F. Setting such a path is refused with E-43; removal doesn't apply the rule. Built in 6.4b (item 6), with a read-only scan of Sepolia and mainnet for existing paths that break the rule before the upgrade (item 7). Spec amended in `registry_contract.md` and `dns_resolution.md`.
+- Still open: W1–W4 (security), W7–W9 (reports, CP7).

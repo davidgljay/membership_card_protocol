@@ -86,4 +86,5 @@ The TypeScript verifier's Stages 3, 4 and 6 (`CardVerifier.verifyCard`) and Stag
 ## Answers
 
 - **2026-11-19, David:** the security recommendations are approved: **D1** (the output equals the projected values), **D2** (protocol fields refused; a unique policy field held back only by the anonymity set), **D4** (the template key is seeded once by an explicit operator action), **D8** (protocol version and press sequence are untrusted host reads; re-signing up to three times).
-- Still open: D3, D5, D6, D7 (confirm the `dup_tag` encodings before another implementation computes tags), D9 (what P3 checks for a template-scope handoff), D10 (report), D11 (scope).
+- **2026-11-19, David:** the interface items are approved: **D5** (a stale offer is replaced on resubmission; wallet polling to be specified with the wallet SDK), **D6** (the countersign codes), **D7** (the `dup_tag` encodings as written and in `vectors/dup_tag/cases.json`).
+- Still open: D3 (scope), D9 (what P3 checks for a template-scope handoff), D10 (report), D11 (scope).

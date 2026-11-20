@@ -71,6 +71,15 @@ pub trait CardOracle {
     fn card_policy(&self, _card: &str) -> Option<String> {
         None
     }
+    /// 6.5 E4: reads the certified presses of source policy `policy_id` (`notary_cards::policy::certified_press_keys`),
+    /// at most every `PRESS_REFRESH_MS`. Called for every watched source-policy message, whatever is linked, so the reads
+    /// never depend on the link set (propagation §6 step 2). `now_ms` is the attested time.
+    fn refresh_source_presses(&mut self, _io: &mut dyn HostIo, _policy_id: &str, _now_ms: i64) {}
+    /// 6.5 E4: whether a linked source card's new head `entry` (decrypted) is signed by one of `policy_id`'s certified
+    /// presses, as last read (`notary_cards::policy::entry_press_signed`). No reads. Fails closed by default.
+    fn source_entry_certified(&self, _policy_id: &str, _entry: &Value) -> Result<(), &'static str> {
+        Err("NH_UNSUPPORTED")
+    }
     /// How many cards the host's whole-policy snapshot lists under `policy` (the second anonymity floor, propagation §4).
     /// `None` without a snapshot.
     fn policy_card_count(&self, _policy: &str) -> Option<usize> {

@@ -263,7 +263,7 @@ impl Broker {
 
     /// A snapshot of a source policy: every card's current head goes through the same test as an update, so a revocation
     /// that happened while no holder was watching (an enclave restart, a new leader) is found again.
-    pub(crate) fn derive_watch_snapshot(&mut self, policy: &str, msg: &Value) {
+    pub(crate) fn derive_watch_snapshot(&mut self, io: &mut dyn HostIo, policy: &str, msg: &Value) {
         let heads: BTreeMap<&str, &str> = msg.get("heads").and_then(Value::as_array).into_iter().flatten().filter_map(|h| Some((h.get("cid")?.as_str()?, h.get("bytes")?.as_str()?))).collect();
         let mut updates = vec![];
         for e in msg.get("entries").and_then(Value::as_array).into_iter().flatten() {
@@ -271,14 +271,19 @@ impl Broker {
             let ts = e.get("events").and_then(Value::as_array).and_then(|ev| ev.iter().rev().find(|x| x.get("cid").and_then(Value::as_str) == Some(h))).and_then(|x| x.get("timestamp")).cloned().unwrap_or(Value::Null);
             updates.push(json!({ "card_address": a, "head_cid": h, "bytes": heads.get(h).copied(), "timestamp": ts }));
         }
-        self.derive_watch(policy, &json!({ "updates": updates }));
+        self.derive_watch(io, policy, &json!({ "updates": updates }));
     }
 
     /// `policy_updates` of a source policy (§6 steps 2–4).
-    pub(crate) fn derive_watch(&mut self, policy: &str, msg: &Value) {
+    pub(crate) fn derive_watch(&mut self, io: &mut dyn HostIo, policy: &str, msg: &Value) {
+        let mut uncertified = 0usize;
         let received = self.tick_ms.or_else(|| self.attested_now_ms().ok()).unwrap_or(0);
         let updates: Vec<Value> = msg.get("updates").and_then(Value::as_array).cloned().unwrap_or_default();
         let keys: Vec<(String, String)> = self.derive.keys().cloned().collect();
+        // E4: the source policy's certified presses, read for every watched message whatever is linked (§6 step 2)
+        if self.derive.values().any(|b| b.prop.as_ref().is_some_and(|p| p.sealed)) {
+            self.oracle.refresh_source_presses(io, policy, received);
+        }
         for u in &updates {
             let Some(addr) = u.get("card_address").and_then(Value::as_str) else { continue };
             let bytes = u.get("bytes").and_then(Value::as_str).and_then(|b| b64u::decode(b).ok());
@@ -294,6 +299,16 @@ impl Broker {
                     // the new head, readable only with the source card's key
                     let Some(entry) = bytes.as_deref().and_then(|b| notary_cards::support::aes_gcm_decrypt(&notary_cards::support::content_key(&link.source_pubkey), b)).and_then(|p| jcs::parse_canonical(&p).ok()) else { continue };
                     let Some(code) = entry.get("code").and_then(Value::as_u64).map(|c| c as u32) else { continue };
+                    if !(100..=102).contains(&code) && !prop.propagates(code) {
+                        continue;
+                    }
+                    // E4 (David, 2026-11-19): the content key comes from the source card's public key, which others than
+                    // the holder know, so decrypting proves little; the entry counts only if a certified press of the
+                    // source policy signed it. Any approved press will do. No reads here.
+                    if self.oracle.source_entry_certified(policy, &entry).is_err() {
+                        uncertified += 1;
+                        continue;
+                    }
                     let book = self.derive.get_mut(key).expect("book");
                     if (100..=102).contains(&code) {
                         if let Some(s) = entry.pointer("/card_state/successor").and_then(Value::as_str) {
@@ -316,6 +331,11 @@ impl Broker {
                     book.queued.entry(derived.clone()).or_insert(Queued { code: prop.mapped(code), eligible_ms });
                 }
             }
+        }
+        // one alert per refusal, never which card: a press change or a forgery attempt shows up for the operator (the host
+        // forwards only level and code)
+        for _ in 0..uncertified {
+            io.send(json!({ "kind": "alert", "req_id": "propagation", "level": "warn", "code": "SOURCE_UPDATE_UNCERTIFIED" }));
         }
     }
 
