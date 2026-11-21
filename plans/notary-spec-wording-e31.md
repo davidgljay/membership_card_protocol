@@ -140,11 +140,11 @@ Not covered: **E26** (the first identity-log record), which is still your questi
 
 **Current, the snapshot contents:**
 > - every `CardRegistered` and `CardHeadUpdated` under the policy, giving each card's address, current head CID and last press address;
-> - the `SubCardRegistrations` entries whose master card is in the set;
+> - the `SubCardRegistrations` entries whose primary card is in the set;
 
 **Proposed:**
 > - every `CardRegistered` and `CardHeadUpdated` under the policy, giving each card's address, current head CID and last press address, and its head-event history `events: [{ cid, timestamp }]` (the block timestamp of each event, oldest first). Card checks use it for provenance and for authoritative revocation dates;
-> - the `SubCardRegistrations` entries whose master card is in the set, each with `master_card`, `sub_card`, `sub_card_doc_cid` and `active`;
+> - the `SubCardRegistrations` entries whose primary card is in the set, each with `master_card`, `sub_card`, `sub_card_doc_cid` and `active`;
 
 `policy_updates` entries also carry `timestamp`.
 

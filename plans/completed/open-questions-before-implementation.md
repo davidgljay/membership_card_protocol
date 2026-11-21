@@ -67,18 +67,18 @@ cross-implementation verification.
 
 ~~**INC-4 — `SignedMessageEnvelope` payload shape is contested (Blocking for messaging).**~~ ✅ RESOLVED 2026-06-14
 
-**Decision:** `messaging_protocol.md` format is canonical. `protocol-objects.md §5` and `card_protocol_spec.md §6` updated to match: `type` (text, required), `content` (structured object, type-specific schema per `messaging_protocol.md §2`), `senders` (master card pointers), `recipients`, `timestamp`, and the optional threading fields. MSG-OQ-1 (type field routing vs outer header) and MSG-OQ-2 (senders necessity) remain open for behavior decisions but do not block the schema freeze.
+**Decision:** `messaging_protocol.md` format is canonical. `protocol-objects.md §5` and `card_protocol_spec.md §6` updated to match: `type` (text, required), `content` (structured object, type-specific schema per `messaging_protocol.md §2`), `senders` (primary card pointers), `recipients`, `timestamp`, and the optional threading fields. MSG-OQ-1 (type field routing vs outer header) and MSG-OQ-2 (senders necessity) remain open for behavior decisions but do not block the schema freeze.
 
 ~~**INC-5 — AuthenticationResponse's `signed_statement` does not match the envelope it claims to be (High).**~~ ✅ RESOLVED 2026-06-14
 
-**Decision:** `signed_statement` is now a proper `SignedMessageEnvelope` (§5) with `type: "auth_response"`, `content: { statement, context, nonce }` (auth-specific content), `senders` (holder's master card), `recipients` (requester card), and `timestamp` (set by wallet at signing time). `protocol-objects.md §9` and `card_protocol_spec.md §8` step 7 updated accordingly. The nonce remains auth-specific (inside `content`) — see nonce discussion below.
+**Decision:** `signed_statement` is now a proper `SignedMessageEnvelope` (§5) with `type: "auth_response"`, `content: { statement, context, nonce }` (auth-specific content), `senders` (holder's primary card), `recipients` (requester card), and `timestamp` (set by wallet at signing time). `protocol-objects.md §9` and `card_protocol_spec.md §8` step 7 updated accordingly. The nonce remains auth-specific (inside `content`) — see nonce discussion below.
 
 ### Mechanism / structural conflicts
 
 ~~**INC-6 — Two conflicting mechanisms for key-rotation / un-revocation (High).**~~ ✅ RESOLVED 2026-06-14
 
 **Decision:** Both mechanisms are kept; they serve distinct purposes:
-- **`successor`** (holder forward-pointer, codes 100/101) is the canonical mechanism for holder-initiated master key rotation — the holder sets a `successor` on their old card pointing to a new card with their new key.
+- **`successor`** (holder forward-pointer, codes 100/101) is the canonical mechanism for holder-initiated primary card key rotation — the holder sets a `successor` on their old card pointing to a new card with their new key.
 - **`successor`** (issuer forward-pointer, code 102) is an additional path for issuer-initiated card recovery when a holder has lost all key access. Subject to a **72-hour pending window** and a **mandatory notification message** to the holder. The holder may cancel within 72 hours by posting a code-103 entry.
 - **`supersedes` + `supersession_note`** (issuer backward-pointer on a new card) are for un-revocation — an issuer correcting an erroneous revocation by issuing a new card that points back to the incorrectly revoked one. Distinct use case from key rotation; these fields remain in `card_protocol_spec.md §Background` and `card_updates.md`.
 
@@ -235,19 +235,19 @@ issuer's **ML-DSA-44** signature over the offer payload atomically on-chain; `ca
 §6.3, and ADR-012 state the Phase-1 contract has **no on-chain ML-DSA-44 verifier** — only secp256r1
 via RIP-7212; the ML-DSA-44 Stylus verifier is deferred to Phase 3. As written, `ClaimOpenOffer`
 is unimplementable in Phase 1. **Decision needed:** either move issuer-signature verification
-off-chain (press-verified, like the `RegisterSubCard` master-signature resolution), or accept a
+off-chain (press-verified, like the `RegisterSubCard` primary-card-signature resolution), or accept a
 Phase-1 ML-DSA-44 verifier for this one path — and reconcile `card_protocol_spec.md §2` accordingly.
 
 ### Mechanism / structural conflicts
 
-~~**INC-22 — `registry_contract.md §4.3/§4.4`: master signature verified on-chain or off-chain? (Medium).**~~ ✅ **RESOLVED 2026-06-15**
-`RegisterSubCard` (§4.3) lists *"`master_signature` verifies against the master card holder's public
+~~**INC-22 — `registry_contract.md §4.3/§4.4`: primary card signature verified on-chain or off-chain? (Medium).**~~ ✅ **RESOLVED 2026-06-15**
+`RegisterSubCard` (§4.3) lists *"`master_signature` verifies against the primary card holder's public
 key"* as a **"Precondition checked by contract,"** and the error table defines `E-22
 INVALID_MASTER_SIGNATURE`; `DeregisterSubCard` (§4.4) precondition 2 is parallel. But each section's
 Resolution note and the §6.1 write gate say the contract verifies **only press authorization**, and
-the master (ML-DSA-44) signature is verified **off-chain by the press** (and indeed the Phase-1
+the primary card (ML-DSA-44) signature is verified **off-chain by the press** (and indeed the Phase-1
 contract can't verify ML-DSA-44 — cf. INC-21). If verification is off-chain, the contract can never
-emit `E-22`. **Decision needed:** move the master-signature checks out of the contract precondition
+emit `E-22`. **Decision needed:** move the primary-card-signature checks out of the contract precondition
 lists, and either remove `E-22` or relabel it a press-side (off-chain) rejection code.
 
 ### Hygiene / lower severity
@@ -299,11 +299,11 @@ with its table line.) Reconcile the deregistration gas payer in one place.
 | ~~INC-19~~ | ~~Blocking~~ | ~~Canonical serialization split-brain: RFC 8785 (spec/ARCH/corpus) vs canonical CBOR (everything else, incl. signer & verifier paths)~~ ✅ RESOLVED 2026-06-15 — Global find-and-replace of CBOR serialization language with RFC 8785 across all spec files; CBOR-specific transforms (base64url→byte strings, Tag 1 timestamps) removed from `card_signing.md`; `card_validation.md` and all process specs updated. | — |
 | ~~INC-20~~ | ~~Blocking~~ | ~~`card_protocol_spec.md` still ML-DSA-44 / full-on-chain; ADR-012 switched on-chain to secp256r1~~ ✅ RESOLVED 2026-06-15 — Timeline section, Press Model, smart contract enforcement, and acceptance criterion in `card_protocol_spec.md` updated to secp256r1 split-signing model; OQ-2 and OQ-16 corrected in this doc. | — |
 | ~~INC-21~~ | ~~Blocking*~~ | ~~`ClaimOpenOffer` requires on-chain ML-DSA-44 verify the Phase-1 contract can't do~~ ✅ RESOLVED 2026-06-15 — Issuer signature verification moved to press-side only; `issuer_sig_payload`/`issuer_signature` params removed from `ClaimOpenOffer` calldata; precondition 3 removed; E-14 relabeled as press-side rejection; `card_protocol_spec.md §2` updated accordingly. | — |
-| ~~INC-22~~ | ~~Medium~~ | ~~Sub-card master signature: contract precondition + `E-22` vs off-chain press verification~~ ✅ RESOLVED 2026-06-15 — Precondition 4 removed from `RegisterSubCard` contract checks; `DeregisterSubCard` precondition 2 clarified as press-side; E-22 relabeled as press-side rejection; OQ-16 marked resolved. | — |
+| ~~INC-22~~ | ~~Medium~~ | ~~Sub-card primary card signature: contract precondition + `E-22` vs off-chain press verification~~ ✅ RESOLVED 2026-06-15 — Precondition 4 removed from `RegisterSubCard` contract checks; `DeregisterSubCard` precondition 2 clarified as press-side; E-22 relabeled as press-side rejection; OQ-16 marked resolved. | — |
 | ~~INC-23~~ | ~~Low–Med~~ | ~~Rename incomplete (`UpdateMarkHead`, `OpenMarkOffer`, `MARK_*`, `master_mark_address`) + "arcardecture" corruption; X-1 wrongly marked resolved~~ ✅ RESOLVED 2026-06-15 — All renames applied in `registry_contract.md`, `protocol-objects.md`, `key_rotation.md`, and process specs; "arcardecture" corruption fixed in `ARCHITECTURE.md`; `mutual_aid_mvp.md` product name resolved to "Card". | — |
 | ~~INC-24~~ | ~~Low~~ | ~~`registry_contract.md §9` OQ table stale/self-contradictory~~ ✅ RESOLVED 2026-06-15 — OQ-15, OQ-16, OQ-4, OQ-17 struck and annotated with resolution text in §9. | — |
 | ~~INC-25~~ | ~~Low~~ | ~~Duplicate `§4.11` (RotateOnChainKeyScheme & Gas/Rate-limiting)~~ ✅ RESOLVED 2026-06-15 — Gas/Rate-limiting renumbered to §4.12; TOC updated; §4.3/§4.4 cross-references updated. | — |
-| ~~INC-26~~ | ~~Low~~ | ~~protocol-objects §14 (secp256r1) ↔ its own Serialization Quick Reference (ML-DSA-44/Stylus)~~ ✅ RESOLVED 2026-06-15 — Serialization Quick Reference `CardEntry` row updated to secp256r1/RIP-7212; `SubCardRegistration` row updated to reflect press secp256r1 on-chain + master ML-DSA-44 off-chain. | — |
+| ~~INC-26~~ | ~~Low~~ | ~~protocol-objects §14 (secp256r1) ↔ its own Serialization Quick Reference (ML-DSA-44/Stylus)~~ ✅ RESOLVED 2026-06-15 — Serialization Quick Reference `CardEntry` row updated to secp256r1/RIP-7212; `SubCardRegistration` row updated to reflect press secp256r1 on-chain + primary card ML-DSA-44 off-chain. | — |
 | ~~INC-27~~ | ~~Low~~ | ~~DeregisterSubCard gas payer: INC-10 summary ↔ `registry_contract.md §4.11`~~ ✅ RESOLVED 2026-06-15 — Decision: app pre-funded account pays for both `RegisterSubCard` and `DeregisterSubCard`; issuing org's press sponsors `DeregisterSubCard` if app balance is empty. Updated §4.12 table, prose, and acceptance criteria; §4.4 header; INC-10 resolution note. | — |
 
 \* Blocking specifically for the open-offer issuance path.
@@ -334,7 +334,7 @@ reviews:
 - **INC-21** (`ClaimOpenOffer` on-chain ML-DSA-44 issuer sig) — ✅ resolved *in `registry_contract.md
   §4.5` and `card_protocol_spec.md §2`*: issuer-signature verification moved to press pre-flight; the
   contract no longer receives or verifies it. **But see INC-36 — the fix wasn't propagated everywhere.**
-- **INC-22** (sub-card master-sig on-chain vs off-chain) — ✅ resolved. §4.3/§4.4 now carry "Master
+- **INC-22** (sub-card primary-card-sig on-chain vs off-chain) — ✅ resolved. §4.3/§4.4 now carry "Primary card
   signature is press-side only" notes; E-22/E-14 reclassified as press-side errors.
 - **INC-23** (incomplete rename) — ✅ resolved. `UpdateMarkHead`→`UpdateCardHead`,
   `OpenMarkOffer`→`OpenCardOffer`, `master_mark_address`→`master_card_address`, `MARK_*`→`CARD_*`,
@@ -575,43 +575,43 @@ heading text was renamed to `UpdateCardHead`.~~
 
 A fourth sweep on 2026-06-15 re-checked the whole `specs/` tree **after** the INC-37 fix
 (the new `ancestry_pubkeys` array on `CardDocument`/`PolicyCardDocument`) landed. The fix is
-internally consistent for the master→root walk, but it solved only one of the boundaries the
+internally consistent for the primary card→root walk, but it solved only one of the boundaries the
 content-encryption model breaks. The decisive gap is at the **sub-card boundary**, which is the
 entry point of essentially every verification (almost all signed statements are produced by a
-sub-card, not a master card). These are **not** in any INC/OQ list above.
+sub-card, not a primary card). These are **not** in any INC/OQ list above.
 
 ### Substantive design gap (same class as INC-37, not covered by its fix)
 
-~~**INC-40 — The sub-card→master and sub-card→app-card hops still cannot be decrypted; `ancestry_pubkeys` was added to `CardDocument` but not to `SubCardDocument` (Blocking for the verification path).**~~ ✅ RESOLVED 2026-06-15
+~~**INC-40 — The sub-card→primary card and sub-card→app-card hops still cannot be decrypted; `ancestry_pubkeys` was added to `CardDocument` but not to `SubCardDocument` (Blocking for the verification path).**~~ ✅ RESOLVED 2026-06-15
 INC-37 added `ancestry_pubkeys` to `CardDocument`/`PolicyCardDocument`, letting a walker go from a
-**decrypted master card** up to the root. But a verifier almost never starts at a master card — it
+**decrypted primary card** up to the root. But a verifier almost never starts at a primary card — it
 starts at a `SignedMessageEnvelope` (or AuthResponse / LogEntry) signed by a **sub-card**. The flow
 (`card_validation.md` Stage 2) is:
 1. Stage 2 step 6 decrypts the **leaf sub-card** document with the signer's `public_key` from the
    `SignatureEntry` (content key `HKDF-SHA3-256(public_key, info="card-content-v1")`). ✓ works.
 2. Stage 2 step 7 must "confirm the sub-card appears in the active sub-card list of its claimed
-   **master card's current metadata**," and step 8 must "verify the **master card's** ML-DSA-44
-   signature on the sub-card registration." Both require reading the **master (primary) card**, whose
-   IPFS content is encrypted under the *master's* public key.
+   **primary card's current metadata**," and step 8 must "verify the **primary card's** ML-DSA-44
+   signature on the sub-card registration." Both require reading the **primary card**, whose
+   IPFS content is encrypted under the *primary card's* public key.
 3. The decrypted `SubCardDocument` (§16) gives only **pointers** — `holder_primary_card` and
    `app_card` are `card-pointer` (= on-chain address = `keccak256(pubkey)`, one-way) — **not** the
-   master's or app card's public key. `SubCardRegistration` (§15) likewise stores only addresses
-   and a CID. The messaging envelope's `senders` (§5) is also a master **pointer**, not a pubkey.
+   primary card's or app card's public key. `SubCardRegistration` (§15) likewise stores only addresses
+   and a CID. The messaging envelope's `senders` (§5) is also a primary card **pointer**, not a pubkey.
 
-So the verifier holds the sub-card pubkey but **cannot derive the master card's pubkey**, cannot
-compute the master content key, cannot decrypt the master card — and therefore cannot read the
-master's active-sub-card list, cannot verify the holder/primary signature on the registration, and
-cannot even reach the master card's own `ancestry_pubkeys` (which is inside the ciphertext it can't
+So the verifier holds the sub-card pubkey but **cannot derive the primary card's pubkey**, cannot
+compute the primary card content key, cannot decrypt the primary card — and therefore cannot read the
+primary card's active-sub-card list, cannot verify the holder/primary signature on the registration, and
+cannot even reach the primary card's own `ancestry_pubkeys` (which is inside the ciphertext it can't
 open). The identical problem applies to the `app_card` certification chain (Stage 2/§16 verifier
 step 5: "`app_card` chains to the governance app-certification policy root"). `ancestry_pubkeys` on
-the master/app cards does not help, because you must already be able to decrypt those cards to read
-it. This also makes messaging **MSG-OQ-2**'s proposed alternative ("clients infer master identity
-via the sub-card→master link") unimplementable under content encryption.
+the primary and app cards does not help, because you must already be able to decrypt those cards to read
+it. This also makes messaging **MSG-OQ-2**'s proposed alternative ("clients infer primary card identity
+via the sub-card→primary card link") unimplementable under content encryption.
 
 **Suggested resolution (mirror the INC-37 decision one level down):**
 - Add the **public keys** (not just pointers) of the immediate parents to `SubCardDocument`:
   e.g. `holder_primary_card_pubkey` and `app_card_pubkey` (base64url ML-DSA-44, 1312 B), each an
-  untrusted hint bound by `keccak256(pubkey) == the corresponding pointer address`. With the master
+  untrusted hint bound by `keccak256(pubkey) == the corresponding pointer address`. With the primary card
   card decryptable, its own `ancestry_pubkeys` carries the walk the rest of the way to root; with the
   app card decryptable, its `ancestry_pubkeys` carries the app-certification walk. Alternatively give
   `SubCardDocument` its own `ancestry_pubkeys` array covering **both** chains (primary-card chain and
@@ -621,7 +621,7 @@ via the sub-card→master link") unimplementable under content encryption.
 - Update `card_validation.md` Stage 2 (read the parent pubkeys from the decrypted sub-card, bind via
   `keccak256`, decrypt parents), `subcards.md` "Verifier chain walk," and `protocol-objects.md §16`.
 
-**Decision:** Two explicitly-named fields chosen over a single `ancestry_pubkeys`-style array, for clarity. `holder_primary_card_pubkey` and `app_card_pubkey` added to `SubCardDocument` as required fields, set at sub-card issuance, covered by both `app_signature` and `holder_signature`. Binding check wording: *each parent pubkey is an untrusted hint; the verifier MUST confirm `keccak256(holder_primary_card_pubkey)` equals the `holder_primary_card` pointer address (and likewise for `app_card_pubkey` / `app_card`) before using it to derive a content key or verify a signature. A mismatch, or an AES-GCM authentication failure when decrypting the referenced card, is a hard rejection. Per-link on-chain addresses remain authoritative.* Files updated: `specs/protocol-objects.md` §15 (note on parent public keys living in §16) and §16 (JSON example, field table, "Serialized for signing" line, signing-sequence steps, verifier chain walk); `specs/process_specs/card_validation.md` Stage 2 (fully rewritten to read parent pubkeys, apply binding checks, decrypt master and app cards, then confirm sub-card in master's active list and verify holder sig — steps renumbered throughout); `specs/ARCHITECTURE.md` ADR-006 ("Sub-card boundary" note added; Chain Verification data flow updated); `specs/subcards.md` (SubCardDocument JSON example, wallet-validation steps, countersign step, acceptance criteria); `specs/card_protocol_spec.md` §7 step 2 (sub-card to master link).
+**Decision:** Two explicitly-named fields chosen over a single `ancestry_pubkeys`-style array, for clarity. `holder_primary_card_pubkey` and `app_card_pubkey` added to `SubCardDocument` as required fields, set at sub-card issuance, covered by both `app_signature` and `holder_signature`. Binding check wording: *each parent pubkey is an untrusted hint; the verifier MUST confirm `keccak256(holder_primary_card_pubkey)` equals the `holder_primary_card` pointer address (and likewise for `app_card_pubkey` / `app_card`) before using it to derive a content key or verify a signature. A mismatch, or an AES-GCM authentication failure when decrypting the referenced card, is a hard rejection. Per-link on-chain addresses remain authoritative.* Files updated: `specs/protocol-objects.md` §15 (note on parent public keys living in §16) and §16 (JSON example, field table, "Serialized for signing" line, signing-sequence steps, verifier chain walk); `specs/process_specs/card_validation.md` Stage 2 (fully rewritten to read parent pubkeys, apply binding checks, decrypt primary card and app cards, then confirm sub-card in primary card's active list and verify holder sig — steps renumbered throughout); `specs/ARCHITECTURE.md` ADR-006 ("Sub-card boundary" note added; Chain Verification data flow updated); `specs/subcards.md` (SubCardDocument JSON example, wallet-validation steps, countersign step, acceptance criteria); `specs/card_protocol_spec.md` §7 step 2 (sub-card to primary card link).
 
 **Strategic question (messaging bootstrap):** End-to-end messages are encrypted to "the recipient's
 static ML-KEM public key on their card" (MSG-OQ-3a), but `recipients`/`senders` are card **hashes**.
@@ -679,7 +679,7 @@ d. **TC-26 — `CardDocument` with `ancestry_pubkeys: []` (the INC-41 root base 
 
 | ID | Severity | One-line | Primary docs in conflict |
 |---|---|---|---|
-| ~~**INC-40**~~ | ~~**Blocking**~~ | ~~INC-37 added `ancestry_pubkeys` to `CardDocument` only; the sub-card→master and sub-card→app-card hops (the entry point of all verification) still expose only pointers, so a verifier cannot decrypt the master/app card to confirm the link, verify the holder/app signature, or reach the master's `ancestry_pubkeys`~~ ✅ RESOLVED 2026-06-15 — Two required fields added to `SubCardDocument`: `holder_primary_card_pubkey` and `app_card_pubkey` (base64url ML-DSA-44, 1312 B each). Both are untrusted hints bound by keccak256 check before use; AES-GCM failure on the referenced card is a hard rejection. Both covered by `app_signature` and `holder_signature`. `protocol-objects.md §15/§16`, `card_validation.md` Stage 2, `subcards.md`, `card_protocol_spec.md §7`, `ARCHITECTURE.md` ADR-006 all updated. | — |
+| ~~**INC-40**~~ | ~~**Blocking**~~ | ~~INC-37 added `ancestry_pubkeys` to `CardDocument` only; the sub-card→primary card and sub-card→app-card hops (the entry point of all verification) still expose only pointers, so a verifier cannot decrypt the primary card/app card to confirm the link, verify the holder/app signature, or reach the primary card's `ancestry_pubkeys`~~ ✅ RESOLVED 2026-06-15 — Two required fields added to `SubCardDocument`: `holder_primary_card_pubkey` and `app_card_pubkey` (base64url ML-DSA-44, 1312 B each). Both are untrusted hints bound by keccak256 check before use; AES-GCM failure on the referenced card is a hard rejection. Both covered by `app_signature` and `holder_signature`. `protocol-objects.md §15/§16`, `card_validation.md` Stage 2, `subcards.md`, `card_protocol_spec.md §7`, `ARCHITECTURE.md` ADR-006 all updated. | — |
 | ~~**INC-41**~~ | ~~Low–Med~~ | ~~`ancestry_pubkeys` (`Required: Yes`) has no defined empty-array/root base case or walk-termination condition~~ ✅ RESOLVED 2026-06-15 — `[]` allowed for root cards; walk terminates at a `PolicyAuthorizerKeys`-registered trusted root. | — |
 | **INC-42** | Low | Conformance corpus has no `CardDocument` vector and none covering `ancestry_pubkeys` or the three distinct signature-input subsets — TC-23…TC-26 now added to `serialization-conformance.json`; validate TS + Stylus encoders against full corpus before signing code locks | `serialization-conformance.json` vs `protocol-objects.md §1` |
 
@@ -801,15 +801,15 @@ neither stores the app card address nor performs any on-chain app-chain verifica
 verification is done off-chain by the wallet, per `subcards.md` and the INC-40 model). **Decision
 needed:** reconcile §15 to the contract — adopt one set of field names, and either drop
 `appCardAddress` and the "verified on-chain" claim from §15 (app-chain checks are off-chain) or add
-`appCardAddress` to `SubCardEntry` if an on-chain app reference is actually wanted. Note the master
+`appCardAddress` to `SubCardEntry` if an on-chain app reference is actually wanted. Note the primary card
 card is also called the "primary card" / `holder_primary_card` elsewhere — pick one term.
 
-**Resolution (2026-06-15):** On-chain `SubCardEntry` stores `master_card_address` (the holder's master card registry address), `registration_log_head` (log head CID snapshot for scope-attenuation), and a new `sub_card_doc_cid` field — the CID of the `SubCardDocument` on IPFS. The app card address (`app_card`), app card pubkey (`app_card_pubkey`), and app signature (`app_signature`) live in the IPFS `SubCardDocument` (§16) pointed to by `sub_card_doc_cid`. The on-chain entry does **not** store the app card address. `holderPrimaryCardAddress` → `master_card_address`; `registrationLogHeadCid` → `registration_log_head`; `appCardAddress` dropped entirely from the on-chain entry. App-chain verification (confirming `app_card` chains to the governance app-certification policy root) is performed **by the press at registration time** — the press fetches the `SubCardDocument` from IPFS, verifies `app_signature`, and walks the `app_card` certification chain before submitting `RegisterSubCard`. Runtime verifiers rely on the press's registration-time validation and do not re-walk the app certification chain independently. **Trust consequence:** relying parties now trust the press's app-chain validation rather than re-deriving it themselves at runtime — the same trust model already in use for the master signature (E-22), open-offer issuer signature (E-14), and forward-registration revocation check (E-28). The `app_card_pubkey` and `holder_primary_card_pubkey` fields are preserved in `SubCardDocument` (INC-40 fix) — `holder_primary_card_pubkey` is still used by runtime verifiers to decrypt/walk the holder's master chain; `app_card_pubkey` is used by the press at registration and may be used by auditors. Files updated: `registry_contract.md §3.4` (added `sub_card_doc_cid` to `SubCardEntry`), `§4.3` (`RegisterSubCard` call args, payload, state changes, press-side app-chain note), `§5` (`GetSubCardEntry` description), `§7` (`SubCardRegistered` event carries `sub_card_doc_cid`); `protocol-objects.md §15` (field names reconciled, `appCardAddress` dropped, `sub_card_doc_cid` added, app-chain press-side note), `§16` (Verifier chain walk updated — runtime verifiers do not re-walk app chain; app-certification note added), Object Relationship Summary updated, Serialization Quick Reference `SubCardRegistration` row updated; `subcards.md` (Step 5 rewritten as press-side app-chain verification + registration, Acceptance Criteria updated); `card_validation.md` Stage 2 (steps 11–12 updated — sub-card active check added; app-certification-chain walk removed from runtime; app_signature still verified; Stage 3 note updated; Error Paths updated).
+**Resolution (2026-06-15):** On-chain `SubCardEntry` stores `master_card_address` (the holder's primary card registry address), `registration_log_head` (log head CID snapshot for scope-attenuation), and a new `sub_card_doc_cid` field — the CID of the `SubCardDocument` on IPFS. The app card address (`app_card`), app card pubkey (`app_card_pubkey`), and app signature (`app_signature`) live in the IPFS `SubCardDocument` (§16) pointed to by `sub_card_doc_cid`. The on-chain entry does **not** store the app card address. `holderPrimaryCardAddress` → `master_card_address`; `registrationLogHeadCid` → `registration_log_head`; `appCardAddress` dropped entirely from the on-chain entry. App-chain verification (confirming `app_card` chains to the governance app-certification policy root) is performed **by the press at registration time** — the press fetches the `SubCardDocument` from IPFS, verifies `app_signature`, and walks the `app_card` certification chain before submitting `RegisterSubCard`. Runtime verifiers rely on the press's registration-time validation and do not re-walk the app certification chain independently. **Trust consequence:** relying parties now trust the press's app-chain validation rather than re-deriving it themselves at runtime — the same trust model already in use for the primary card signature (E-22), open-offer issuer signature (E-14), and forward-registration revocation check (E-28). The `app_card_pubkey` and `holder_primary_card_pubkey` fields are preserved in `SubCardDocument` (INC-40 fix) — `holder_primary_card_pubkey` is still used by runtime verifiers to decrypt/walk the holder's primary card chain; `app_card_pubkey` is used by the press at registration and may be used by auditors. Files updated: `registry_contract.md §3.4` (added `sub_card_doc_cid` to `SubCardEntry`), `§4.3` (`RegisterSubCard` call args, payload, state changes, press-side app-chain note), `§5` (`GetSubCardEntry` description), `§7` (`SubCardRegistered` event carries `sub_card_doc_cid`); `protocol-objects.md §15` (field names reconciled, `appCardAddress` dropped, `sub_card_doc_cid` added, app-chain press-side note), `§16` (Verifier chain walk updated — runtime verifiers do not re-walk app chain; app-certification note added), Object Relationship Summary updated, Serialization Quick Reference `SubCardRegistration` row updated; `subcards.md` (Step 5 rewritten as press-side app-chain verification + registration, Acceptance Criteria updated); `card_validation.md` Stage 2 (steps 11–12 updated — sub-card active check added; app-certification-chain walk removed from runtime; app_signature still verified; Stage 3 note updated; Error Paths updated).
 
 ~~**INC-47 — `past_keys` is used as a `CardDocument` field but is not defined in the object spec (Medium, signing-relevant).**~~
 ~~`key_rotation.md §2.3/§2.4` require "the new card's document includes a `past_keys` array" (objects
 of `{pubkey, valid_from, rotated_at}`) so a holder of the new key can derive content keys for
-historical entries after a master-key rotation — with a dedicated acceptance criterion (§2.7). But
+historical entries after a primary-card-key rotation — with a dedicated acceptance criterion (§2.7). But
 `past_keys` appears in **no** `CardDocument` definition: it is absent from `protocol-objects.md §1`
 (JSON, field table, and "Serialized for signing" lists) and from the `card_protocol_spec.md`
 Protocol-Required Fields table. Because it lives in the card document, it is almost certainly inside
@@ -837,7 +837,7 @@ INC-5 harmonization) shows `content: { nonce, session_id }` — different field 
 ### Hygiene / lower severity
 
 ~~**INC-48 — Stale `key_rotation.md §3.x` cross-references after the INC-34 renumber (Medium; broken cross-refs across 4 files).**~~
-~~INC-34 folded `key_rotation.md §2` into §1.5 and renumbered the old §3 (Master Card Key Rotation) to
+~~INC-34 folded `key_rotation.md §2` into §1.5 and renumbered the old §3 (Primary Card Key Rotation) to
 §2. The citing documents were not updated and still point to the old numbers: `protocol-objects.md`
 line ~118 (`§3.5`), `update_codes.md` lines ~43 (`§3.3`/`§3.4`/`§3.5`), ~97 (`§3.4`), ~141 (`§3.4`),
 and `registry_contract.md` lines ~792 (`§3.4 step 4a`) and ~983 (`§3.3`). Correct targets after the
@@ -886,7 +886,7 @@ and spot-checks of the others). Several findings are **propagation gaps from the
 
 ~~**INC-53 — `card_signing.md` payload omits `senders`, which is a Required signed field in the other two envelope specs (Medium–High, signing-critical).**~~ ✅ RESOLVED 2026-06-16
 `protocol-objects.md §5` and `messaging_protocol.md §1` both define `payload.senders` as **Required**
-(master-card pointers, parallel to `signatures`). But `card_signing.md` Phase 1 — the **signer-side**
+(primary-card pointers, parallel to `signatures`). But `card_signing.md` Phase 1 — the **signer-side**
 assembly that actually builds and signs the payload — omits `senders` entirely from its payload object
 and validation. Because the signature commits to the canonical payload byte-for-byte, an
 implementation following `card_signing.md` produces different bytes (no `senders` key) than one
@@ -959,7 +959,7 @@ on-chain `PressAuthorizations` (authoritative, current-state), the issuance-time
 
 - ~~**`card_updates.md` Preconditions** say the updater needs "a **press** sub-card key available for
   signing" — but the updater signs the intent with their **own** sub-card key (step 4). Drop "press".~~ ✅ RESOLVED 2026-06-16 — `card_updates.md` Preconditions line changed from "a **press** sub-card key available for signing" to "a sub-card key available for signing".
-- ~~**`past_keys` provenance (follow-on to INC-47):** `past_keys` is the *holder's* key history but is "populated by the offerer's wallet service at offer-assembly time" and first-covered by `issuer_signature`. The specs don't say how the offerer obtains the holder's prior-key history, and conceptually the holder is the authority on it (the `holder_signature` is the meaningful attestation). Clarify provenance — likely the holder/wallet supplies `past_keys` during the rotation request.~~ ✅ RESOLVED 2026-06-16 — Provenance clarified in `protocol-objects.md §1` (`past_keys` field note) and `card_protocol_spec.md` Protocol-Required Fields table: during a master-key rotation, the holder/wallet supplies their prior-key history to the offerer as part of the rotation request; the offerer includes it verbatim in the assembled offer; the **holder is the authority on their own key history** — the authoritative attestation is `holder_signature`; `issuer_signature` and `press_signature` also cover the bytes. Signing coverage decision unchanged.
+- ~~**`past_keys` provenance (follow-on to INC-47):** `past_keys` is the *holder's* key history but is "populated by the offerer's wallet service at offer-assembly time" and first-covered by `issuer_signature`. The specs don't say how the offerer obtains the holder's prior-key history, and conceptually the holder is the authority on it (the `holder_signature` is the meaningful attestation). Clarify provenance — likely the holder/wallet supplies `past_keys` during the rotation request.~~ ✅ RESOLVED 2026-06-16 — Provenance clarified in `protocol-objects.md §1` (`past_keys` field note) and `card_protocol_spec.md` Protocol-Required Fields table: during a primary-card-key rotation, the holder/wallet supplies their prior-key history to the offerer as part of the rotation request; the offerer includes it verbatim in the assembled offer; the **holder is the authority on their own key history** — the authoritative attestation is `holder_signature`; `issuer_signature` and `press_signature` also cover the bytes. Signing coverage decision unchanged.
 - ~~**`policy_creation.md` still uses `PolicyMarkDocument`** (×2, lines ~40 and ~122) — the rename
   artifact first noted in §0d hygiene is **still unfixed**; rename to `PolicyCardDocument`.~~ ✅ RESOLVED 2026-06-16 — Both occurrences in `policy_creation.md` (step 1 prose and Related Specs link) renamed to `PolicyCardDocument`. Grep confirms zero `PolicyMarkDocument` remaining in `specs/`.
 - ~~**`mutual_aid_mvp.md`** still contains unfilled `[Product Name]` placeholders throughout, while its
@@ -971,7 +971,7 @@ on-chain `PressAuthorizations` (authoritative, current-state), the issuance-time
 |---|---|---|---|
 | ~~**INC-51**~~ | ~~Medium~~ | ~~`protocol-objects.md §16` "no press in sub-card issuance" contradicts INC-46 press-side app-chain verification + registration~~ ✅ RESOLVED 2026-06-16 — §16 reworded: press verifies app chain off-chain and submits `RegisterSubCard`; holder/wallet is the delegating party. | — |
 | ~~**INC-52**~~ | ~~Medium~~ | ~~`DeregisterSubCard` gas payer stated 3 ways (subcards line ~210 press-pays, line ~287 app-always, contract §4.12 app-with-press-fallback)~~ ✅ RESOLVED 2026-06-16 — Both `subcards.md` statements aligned to `registry_contract.md §4.12`: app pays; press sponsors if app balance insufficient; deregistration never blocked. | — |
-| ~~**INC-53**~~ | ~~Med–High~~ | ~~`card_signing.md` payload omits `senders`, a Required signed field in protocol-objects §5 / messaging §1 (signing-critical; tied to MSG-OQ-2)~~ ✅ RESOLVED 2026-06-16 — `senders` added to `card_signing.md` Phase 1 payload JSON, field-by-field description (master-card pointer(s), parallel to `signatures`, required, part of the signed payload), and Phase 1 local-validation list (step 2). One-line note added that MSG-OQ-2 (drop `senders` for sender-privacy) remains an open future option; current schema includes `senders` in all three specs. Payload field set in `card_signing.md` now matches `protocol-objects.md §5` exactly: `type`, `content`, `senders`, `recipients`, `timestamp`, `in_reply_to`, `edit_of`, `retracts`, `forwards`. | — |
+| ~~**INC-53**~~ | ~~Med–High~~ | ~~`card_signing.md` payload omits `senders`, a Required signed field in protocol-objects §5 / messaging §1 (signing-critical; tied to MSG-OQ-2)~~ ✅ RESOLVED 2026-06-16 — `senders` added to `card_signing.md` Phase 1 payload JSON, field-by-field description (primary-card pointer(s), parallel to `signatures`, required, part of the signed payload), and Phase 1 local-validation list (step 2). One-line note added that MSG-OQ-2 (drop `senders` for sender-privacy) remains an open future option; current schema includes `senders` in all three specs. Payload field set in `card_signing.md` now matches `protocol-objects.md §5` exactly: `type`, `content`, `senders`, `recipients`, `timestamp`, `in_reply_to`, `edit_of`, `retracts`, `forwards`. | — |
 | ~~**INC-54**~~ | ~~Medium~~ | ~~Immutable-field guard omits `ancestry_pubkeys` and `past_keys`~~ ✅ RESOLVED 2026-06-16 — `ancestry_pubkeys` and `past_keys` added to the immutable-field list in `card_updates.md` step 7. A note clarifies that `successor`, `supersedes`, and `supersession_note` are protocol-reserved *updatable* fields and are NOT in the immutable list. `card_protocol_spec.md §5` acceptance criterion updated with a parenthetical enumerating the complete immutable set (`policy_id`, `issuer_card`, `press_card`, `recipient_pubkey`, `issued_at`, `ancestry_pubkeys`, `past_keys`, `issuer_signature`, `holder_signature`, `press_signature`). | — |
 | ~~**INC-55**~~ | ~~Medium~~ | ~~`message_routing.md` body uses on-chain `wallet_service_id` calldata + migration event (don't exist; removed by INC-35) — contradicts its own off-chain status note and the contract~~ ✅ RESOLVED 2026-06-16 — §Local Routing Tables and Card Migration reworked to off-chain binding/announcement model; `MigrateCard` on-chain event removed; `410 Gone` retry kept; Related Specs footnote updated. | — |
 | ~~**INC-56**~~ | ~~Low–Med~~ | ~~`erasure`/`erasable` referenced in spec but undefined in `protocol-objects.md` (§2/§3/§4)~~ ✅ RESOLVED 2026-06-16 — `erasable` added to `PolicyCardDocument §2` (immutable, default false); `erasure` added to `UpdateIntentPayload §4` and `LogEntry §3` (optional, revocation-only, signed, copied verbatim into log entry). *(superseded by INC-60 — erasure removed)* | — |
@@ -1041,7 +1041,7 @@ to a later version if the chain reconciliation is out of scope for v1.~~
 **Minor (this pass):** `card_signing.md` Forwarding — the `forward_envelope` payload requirements list
 (`forwards`, `recipients`, `content`, `timestamp`) omits `senders`, but after INC-53 `senders` is
 Required in every payload; the forward envelope's payload also needs `senders` (the forwarder's
-master-card pointer). Add it for consistency.
+primary-card pointer). Add it for consistency.
 
 | ID | Severity | One-line | Primary docs in conflict |
 |---|---|---|---|
@@ -1062,7 +1062,7 @@ master-card pointer). Add it for consistency.
 |---|---|---|---|
 | ~~**OQ-2**~~ | Contract | ~~**On-chain signature scheme.**~~ ✅ **RESOLVED 2026-06-14 (updated 2026-06-15)** — Phase 1 uses **secp256r1 via RIP-7212 precompile** (~3,450 gas/verify) for all on-chain write authorization (ADR-012 split-signing model). ML-DSA-44 is used for IPFS content signing only. The keccak256 hash of each press's ML-DSA-44 public key is stored on-chain in `PressAuthorizations` to enable a Phase 3 upgrade to full post-quantum on-chain verification without re-registration. Full ML-DSA-44 on-chain verification via Stylus is deferred to Phase 3. (INC-20 resolved 2026-06-15.) | ARCH OQ-2; registry OQ-2; spec Timeline |
 | ~~**OQ-15**~~ | Governance | ~~**Bootstrap of initial governance keysets.**~~ ✅ **RESOLVED 2026-06-14** — Deploy with a 1-of-1 governance keyset (single deployer key). As additional governance members are invited in, `RotateGovernanceKeys` expands the keyset and raises quorum. Once the board has multiple members, quorum is required to add or remove members (via `RotateGovernanceKeys`). The quorum threshold itself is board-updatable via the same operation (self-amending). No deploy-time timelock or external multisig required; the single-key bootstrap is the accepted initial trust anchor. | registry OQ-15 |
-| ~~**OQ-16**~~ | Contract | ~~**Sub-card holder key verification.**~~ ✅ **RESOLVED 2026-06-15** — Press mediates all sub-card registration and verifies the holder's ML-DSA-44 master signature off-chain before submitting `RegisterSubCard`. The holder signature is included in calldata as an auditable proof of holder intent but is not re-verified by the contract (Phase-1 contract has no on-chain ML-DSA-44 verifier). A press submitting without a valid holder signature is detectable and subject to deregistration (press-side E-22). (INC-22 resolved 2026-06-15.) | registry OQ-16 |
+| ~~**OQ-16**~~ | Contract | ~~**Sub-card holder key verification.**~~ ✅ **RESOLVED 2026-06-15** — Press mediates all sub-card registration and verifies the holder's ML-DSA-44 primary card signature off-chain before submitting `RegisterSubCard`. The holder signature is included in calldata as an auditable proof of holder intent but is not re-verified by the contract (Phase-1 contract has no on-chain ML-DSA-44 verifier). A press submitting without a valid holder signature is detectable and subject to deregistration (press-side E-22). (INC-22 resolved 2026-06-15.) | registry OQ-16 |
 | ~~**X-1 / X-2**~~ | Spec | ~~Canonical protocol name; reconcile `CardEntry`/`RegistryEntry`.~~ ✅ Both resolved 2026-06-14 — see §0. | §0 above |
 
 Also effectively blocking the contract (listed as High in source but gate deployment):
@@ -1116,7 +1116,7 @@ The messaging spec carries 18 of its own open questions. The ones that shape cor
 structures (and so should be settled before the envelope schema is frozen) are:
 
 - **MSG-OQ-1** Type-field routing vs. encryption — is a coarse routing category (`system|human|machine`) in an unencrypted outer header, or routing by recipient only?
-- **MSG-OQ-2** Keep the explicit `senders` (master pointer) field, or infer master identity via the sub-card→master link to avoid disclosure?
+- **MSG-OQ-2** Keep the explicit `senders` (primary card pointer) field, or infer primary card identity via the sub-card→primary card link to avoid disclosure?
 - **MSG-OQ-3** Message-type versioning: `min_version`, capability negotiation, or `type` namespacing.
 - **MSG-OQ-6 / OQ-7** Group membership representation across changes; large-audience announcement delivery (shared group key vs per-recipient vs unencrypted).
 - **MSG-OQ-11 / OQ-12** MCP: wrap JSON-RPC verbatim vs translate to envelope; multi-hop delegation model.

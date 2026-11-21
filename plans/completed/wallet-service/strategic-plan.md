@@ -134,7 +134,7 @@ The following questions should be resolved before or during the implementation p
 
 **OQ-WS-1: `service_secret` delivery authentication — RESOLVED**
 
-Resolved (implementation-plan.md CP-1, Phase 2 Step 2.1/2.2): there is no external registration token, because there is no third party in the loop — `open_offer_acceptance_new_wallet.md` and `open_offer_acceptance_existing_wallet.md` both describe the wallet service as the sole, continuous driver of offer display, wallet creation, and claim submission. Two auth paths follow from those two specs: a **new** wallet authenticates `POST /accounts` by having the freshly-generated master card key sign a server-issued challenge, proving control of the key being registered, with a session token returned directly in that response; an **existing** wallet authenticates via a new WebAuthn passkey login endpoint before `service_secret` is released for keyring decryption/update. Post-recovery re-registration continues to use a master-card-key-signed challenge, unchanged.
+Resolved (implementation-plan.md CP-1, Phase 2 Step 2.1/2.2): there is no external registration token, because there is no third party in the loop — `open_offer_acceptance_new_wallet.md` and `open_offer_acceptance_existing_wallet.md` both describe the wallet service as the sole, continuous driver of offer display, wallet creation, and claim submission. Two auth paths follow from those two specs: a **new** wallet authenticates `POST /accounts` by having the freshly-generated primary card key sign a server-issued challenge, proving control of the key being registered, with a session token returned directly in that response; an **existing** wallet authenticates via a new WebAuthn passkey login endpoint before `service_secret` is released for keyring decryption/update. Post-recovery re-registration continues to use a primary-card-key-signed challenge, unchanged.
 
 **OQ-WS-2: WebSocket endpoint for relay bridging — RESOLVED**
 
@@ -154,7 +154,7 @@ Is the initial deployment a single wallet service instance, or is a federated ne
 
 **OQ-WS-6: Recovery cancellation credential format**
 
-The backup/recovery spec states that a cancellation is valid if it is "signed by any registered cancellation credential." What key material constitutes a cancellation credential? Options include: the holder's master card key, a dedicated revocation credential registered at backup time, or a separate one-time code. This must be specified before implementing the 72-hour window logic.
+The backup/recovery spec states that a cancellation is valid if it is "signed by any registered cancellation credential." What key material constitutes a cancellation credential? Options include: the holder's primary card key, a dedicated revocation credential registered at backup time, or a separate one-time code. This must be specified before implementing the 72-hour window logic.
 
 ---
 

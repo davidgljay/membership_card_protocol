@@ -94,7 +94,7 @@ The finding recurs under every adversary type: state actor (targeted de-platform
 
 The 72-hour recovery window is the primary safeguard against full keyring takeover. It fails completely when the adversary also controls the holder's notification channels — which is practical for state actors with telecom legal authority (SIM swap via compulsion), sophisticated criminal organizations (SIM swap fraud, phishing), and individual abusers with cohabitant access or known credentials.
 
-For a state actor with physical custody of a holder (detained at a border crossing or arrested), the attack is entirely practical: seizure of the YubiKey, compulsion of the backup service to bypass the notification window, and coercion of the PIN yields the holder's complete keyring. The holder's master keys, all sub-cards, and the ability to sign messages attributed to their identity are fully compromised — with no evidence visible in the credential logs.
+For a state actor with physical custody of a holder (detained at a border crossing or arrested), the attack is entirely practical: seizure of the YubiKey, compulsion of the backup service to bypass the notification window, and coercion of the PIN yields the holder's complete keyring. The holder's primary card keys, all sub-cards, and the ability to sign messages attributed to their identity are fully compromised — with no evidence visible in the credential logs.
 
 **What must be resolved:** Configurable recovery window (72 hours should be the minimum, not the default, for high-risk deployments; 7+ days recommended); independent backup notification channel not controlled by the device's primary accounts; multi-factor cancellation requiring a pre-registered secondary contact.
 
@@ -244,7 +244,7 @@ The remaining Critical risks are at the governance and trust model layers — wh
 | 2.2-A | Compromised press key enables backdated silent 9xx revocation against any card in scope | High | 2 |
 | 2.2-B | Governance-controlled press revocation adds response latency in fast-moving incident | High | 2 |
 | 2.2-C | Press can issue fake cards with attacker-controlled holder keys | Medium | 2 |
-| 2.3-A | Sub-card key compromise: recovery via master key; gap is press availability | Medium | 2 |
+| 2.3-A | Sub-card key compromise: recovery via primary card key; gap is press availability | Medium | 2 |
 | 2.3-B | Full keyring compromise + notification channel control bypasses 72-hour window | High | 2 |
 | 2.3-C | Physical device access allows keyring blob exfiltration; Secure Enclave limits sub-card key extraction | Medium | 2 |
 | 2.4-A | Auditor key compromise exposes historical issuance record; epoch model bounds damage | High | 2 |

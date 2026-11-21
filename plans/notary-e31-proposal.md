@@ -22,7 +22,7 @@ The stages verify no issuer, press or log-entry signatures. The sub-card's holde
 ### The attack
 
 A hostile host:
-1. generates its own keys for a master card M′, a sub-card S′ and an app card A′;
+1. generates its own keys for a primary card M′, a sub-card S′ and an app card A′;
 2. writes M′ with `policy_id` = the source policy, `ancestry_pubkeys = [P, R]` (a real policy card and a real trusted root), any field values it likes, and `active_subcards = [S′]`. It encrypts M′ under M′'s public-key-derived content key;
 3. writes A′ with `ancestry_pubkeys = [<the pinned app-certification root>]`;
 4. writes S′ holder-signed by M′ and app-signed by A′, with the `notary_input` capability, at level T2;

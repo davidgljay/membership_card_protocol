@@ -53,7 +53,7 @@ A card's **registry address** (its mutable pointer hash in the Arbitrum One card
 
 `protocol_version` is required on every message payload. Senders populate it by calling `getProtocolVersion()` on the logic contract (or using the last known value, which is stable between protocol upgrades). Verifiers reject envelopes whose `protocol_version` is missing or not in their known-versions list.
 
-`senders` lists the card hashes of the cards whose identity is being asserted by this message, parallel to the `signatures` array. A signer sub-card maps to exactly one sender master card. For most message types the sender list has one entry; co-signed messages may have several.
+`senders` lists the card hashes of the cards whose identity is being asserted by this message, parallel to the `signatures` array. A signer sub-card maps to exactly one sender primary card. For most message types the sender list has one entry; co-signed messages may have several.
 
 **The entire envelope is E2E encrypted before delivery.** The routing layer (wallet-service-to-wallet-service transport) sees only the recipient card hash from the outer routing header; it does not see `senders`, `type`, `content`, or any other envelope field. See `process_specs/message_routing.md` for the routing envelope format.
 
@@ -137,7 +137,7 @@ A signed revision to a prior message. Both sender and recipient maintain the ful
 
 **Edit log maintenance.** Both sender and recipient store the complete edit chain locally, keyed by the root message hash (the hash of the original `edit_of`-less payload). The root hash is stable across all edits and serves as the canonical conversation-thread anchor. Clients derive the root hash by following `edit_of` pointers until they reach a payload with no `edit_of` field.
 
-**Authorization.** An edit is valid only if its signers chain to the same master card(s) as the original message's signers. Editing from a different sub-card of the same master is permitted (Alice editing from her phone what she sent from her laptop). Edits from an unrelated card are invalid. For co-signed originals, an edit signed by the full original signer set is a full edit; an edit signed by a subset is a partial amendment and should be displayed differently.
+**Authorization.** An edit is valid only if its signers chain to the same primary card(s) as the original message's signers. Editing from a different sub-card of the same primary card is permitted (Alice editing from her phone what she sent from her laptop). Edits from an unrelated card are invalid. For co-signed originals, an edit signed by the full original signer set is a full edit; an edit signed by a subset is a partial amendment and should be displayed differently.
 
 **Recipient set.** Edits are encrypted and delivered to the same recipient set as the original. Delivery is best-effort — a recipient who received the original but not the edit will see the original only.
 
@@ -183,7 +183,7 @@ The holder sends back the countersigned, completed card document.
 }
 ```
 
-**Notes.** Sent from the holder back to the press (and optionally to an administrator). The press uses this to complete on-chain registration and issue the SCIP. The `senders` list contains the holder's existing master card pointer (not the new card's pointer, which doesn't exist yet on-chain). The `card_cid` in this message references the **completed, registered** `CardDocument` that the press posts to IPFS after registration — the first document that has `recipient_pubkey` present and is therefore content-encrypted under ADR-006 (`content_key = HKDF-SHA3-256(recipient_pubkey, info="card-content-v1")`). The `offer_cid` still references the unencrypted offer-phase document.
+**Notes.** Sent from the holder back to the press (and optionally to an administrator). The press uses this to complete on-chain registration and issue the SCIP. The `senders` list contains the holder's existing primary card pointer (not the new card's pointer, which doesn't exist yet on-chain). The `card_cid` in this message references the **completed, registered** `CardDocument` that the press posts to IPFS after registration — the first document that has `recipient_pubkey` present and is therefore content-encrypted under ADR-006 (`content_key = HKDF-SHA3-256(recipient_pubkey, info="card-content-v1")`). The `offer_cid` still references the unencrypted offer-phase document.
 
 ---
 
@@ -228,13 +228,13 @@ The press notifies a holder of a post-issuance update to one of their cards.
 
 ### 9. `subcard_sibling_added`
 
-The press notifies a subcard that a new sibling has been registered on the same master card.
+The press notifies a subcard that a new sibling has been registered on the same primary card.
 
 ```json
 {
   "type": "subcard_sibling_added",
   "content": {
-    "master_card":    "<mutable pointer of the master card>",
+    "master_card":    "<mutable pointer of the primary card>",
     "new_pubkey":     "<base64url — ML-DSA-44 public key of the newly-added subcard>",
     "log_entry_cid":  "<IPFS CID of the code-510 LogEntry that added it>",
     "timestamp":      "<ISO 8601 — when the addition was recorded>"
@@ -242,19 +242,19 @@ The press notifies a subcard that a new sibling has been registered on the same 
 }
 ```
 
-**Notes.** Sent by the press to all existing subcards listed in the master card's `active_subcards` immediately after a code-510 entry is accepted. Security purpose: alerts the holder's legitimate subcards (on their other devices) that a new sibling has been registered, enabling detection of unauthorized additions. The `senders` list contains the press card's pointer; `recipients` is the registry address of the receiving subcard.
+**Notes.** Sent by the press to all existing subcards listed in the primary card's `active_subcards` immediately after a code-510 entry is accepted. Security purpose: alerts the holder's legitimate subcards (on their other devices) that a new sibling has been registered, enabling detection of unauthorized additions. The `senders` list contains the press card's pointer; `recipients` is the registry address of the receiving subcard.
 
 ---
 
 ### 10. `subcard_sibling_removed`
 
-The press notifies a subcard that a sibling has been deregistered from the same master card.
+The press notifies a subcard that a sibling has been deregistered from the same primary card.
 
 ```json
 {
   "type": "subcard_sibling_removed",
   "content": {
-    "master_card":    "<mutable pointer of the master card>",
+    "master_card":    "<mutable pointer of the primary card>",
     "removed_pubkey": "<base64url — ML-DSA-44 public key of the deregistered subcard>",
     "log_entry_cid":  "<IPFS CID of the code-511 LogEntry that removed it>",
     "timestamp":      "<ISO 8601 — when the removal was recorded>"
@@ -268,13 +268,13 @@ The press notifies a subcard that a sibling has been deregistered from the same 
 
 ### 11. `subcard_sibling_rotated`
 
-The press notifies a subcard that a sibling's key has been rotated on the same master card.
+The press notifies a subcard that a sibling's key has been rotated on the same primary card.
 
 ```json
 {
   "type": "subcard_sibling_rotated",
   "content": {
-    "master_card":    "<mutable pointer of the master card>",
+    "master_card":    "<mutable pointer of the primary card>",
     "old_pubkey":     "<base64url — ML-DSA-44 public key that was rotated out>",
     "new_pubkey":     "<base64url — ML-DSA-44 public key that replaced it>",
     "log_entry_cid":  "<IPFS CID of the code-512 LogEntry that performed the rotation>",
@@ -323,7 +323,7 @@ The user's wallet answers a login request (`process_specs/card_login.md` Phase 5
 }
 ```
 
-**Notes.** `senders` contains the presented card — the card that satisfies the request's DCQL query and the identifier the site binds the account to. `recipients` contains the **login service card** (the server card's `holder_primary_card`), because messages route only to master cards; the login service card's wallet service delivers a copy to each of its active sub-cards, which include the site's server cards. Signed by one of the presented card's device sub-cards (`capabilities` include `auth_response`); verifiers accept sub-card signatures only.
+**Notes.** `senders` contains the presented card — the card that satisfies the request's DCQL query and the identifier the site binds the account to. `recipients` contains the **login service card** (the server card's `holder_primary_card`), because messages route only to primary cards; the login service card's wallet service delivers a copy to each of its active sub-cards, which include the site's server cards. Signed by one of the presented card's device sub-cards (`capabilities` include `auth_response`); verifiers accept sub-card signatures only.
 
 The site verifies with `card_verifier.md §6.3` (`verifyLoginResponse`): signature and sub-card link, chain and revocation, `type`, `state`, `nonce`, `statement`, `request_hash`, `audience`, `recipients`, `timestamp` freshness, then the DCQL match. Error codes: `process_specs/card_login.md §Error Codes`.
 
@@ -633,7 +633,7 @@ A notary's private result, sent to each recipient listed in the notary policy's 
 ```
 
 **Notes.**
-- **Signing and encryption.** Signed by the notary card's enclave-held key (`K_id`), and encrypted inside the enclave to each recipient sub-card (§Sender-Side Fan-out in `message_routing.md`). The ML-KEM-768 key comes from the sub-card's verified `SubCardDocument.kem_pubkey` (`protocol-objects.md §16`); the recipient's master public key comes from the signed job's `output_recipient_keys`. The notary host only relays it.
+- **Signing and encryption.** Signed by the notary card's enclave-held key (`K_id`), and encrypted inside the enclave to each recipient sub-card (§Sender-Side Fan-out in `message_routing.md`). The ML-KEM-768 key comes from the sub-card's verified `SubCardDocument.kem_pubkey` (`protocol-objects.md §16`); the recipient's primary card public key comes from the signed job's `output_recipient_keys`. The notary host only relays it.
 - **Recipient checks.** A recipient checks that `output_hash` matches the notarization, and verifies the notarization (`card_verifier.md §6.5`).
 
 **Capability string `"notary_input"`.** Not a message type. A sub-card whose `capabilities` include it may sign `NotaryInput` objects for notary jobs. Wallets add it to their own device sub-card (`wallet_sdk.md §7b.4`).
@@ -682,7 +682,7 @@ Section 12 is unused; the number is retained so existing cross-references stay v
 
 **MSG-OQ-1: Type field routing vs. encryption.** `type` is inside the payload, covered by the signature. This means a message server cannot route by type without decrypting the envelope. Should `type` (or a coarse routing category like `system | human | machine`) be in an unencrypted outer header, accepting that it leaks traffic metadata? Or should all routing be by recipient address only?
 
-**MSG-OQ-2: `senders` field necessity.** The `signatures` array already implies sender identity via the signing `public_key` (the signer's card hash is `keccak256(public_key)`). The proposed `senders` field (master card pointer) is a convenience, but it requires the sender to include their master card pointer in the plaintext payload — which may be more than they want to reveal. Should `senders` be omitted and clients infer master identity via the sub-card to master link, or is the explicit field worth the disclosure?
+**MSG-OQ-2: `senders` field necessity.** The `signatures` array already implies sender identity via the signing `public_key` (the signer's card hash is `keccak256(public_key)`). The proposed `senders` field (primary card pointer) is a convenience, but it requires the sender to include their primary card pointer in the plaintext payload — which may be more than they want to reveal. Should `senders` be omitted and clients infer primary card identity via the sub-card to primary card link, or is the explicit field worth the disclosure?
 
 **MSG-OQ-3: Message type versioning.** As new types are added, clients that don't recognize a type will fail silently or noisily. Should the envelope include a `min_version` field, a capability negotiation phase, or just rely on `type` namespacing (e.g., `text/v2`)?
 

@@ -10,7 +10,7 @@ All four steps done. Full findings in `plans/wallet-service/spec-discrepancies.m
 | File | Discrepancy | Resolution |
 |---|---|---|
 | `wallet_backup_and_recovery.md` | D-1: backup-registration wire format field names stale (`wrapped_decryption_key`/`cancellation_credentials` vs. actual `wrapped_blob`/`cancellation_pubkey`) | Resolved — direct edit in Phase 4, Step 4.1 |
-| `wallet_backup_and_recovery.md` | D-2: "any registered cancellation credential" doesn't name the master card key as the sole implemented type | Resolved — direct edit in Phase 4, Step 4.1 |
+| `wallet_backup_and_recovery.md` | D-2: "any registered cancellation credential" doesn't name the primary card key as the sole implemented type | Resolved — direct edit in Phase 4, Step 4.1 |
 | `wallet_backup_and_recovery.md` | D-3: Related Specs could add `open_offer_acceptance_existing_wallet.md` | Resolved (optional) — direct edit in Phase 4, Step 4.1 |
 | `message_routing.md` | D-4: "retry with backoff, same UUID" on 5xx/network error contradicts implemented advance-to-next-UUID behavior | Resolved — direct edit in Phase 4, Step 4.1 |
 | `notification_relay.md` | D-5: same stale "retry same UUID" language in Failure Handling table | Resolved — direct edit in Phase 4, Step 4.1 |

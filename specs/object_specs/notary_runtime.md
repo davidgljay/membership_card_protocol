@@ -291,7 +291,7 @@ The transport is vsock, using the framing in §8. **Everything from the host is 
 
 | `kind` | Fields | Host action |
 |---|---|---|
-| `fetch` | `req_id`, `what` | `what` is one of `policy_snapshot:<policy>`, `policy_updates:<policy,since_block>`, `ipfs:<cid>`, `card_head:<address>`, `press_auth:<policy,press>`, `subcard:<address>`, `events:<filter>`. **Per-card kinds are used only** for ancestors of a contributor's chain outside snapshotted policies. A contributor's own master card and signing sub-card must be present in a snapshot of one of the job's contributor policies, or the input is `INPUT_CARD_UNTRUSTED`. |
+| `fetch` | `req_id`, `what` | `what` is one of `policy_snapshot:<policy>`, `policy_updates:<policy,since_block>`, `ipfs:<cid>`, `card_head:<address>`, `press_auth:<policy,press>`, `subcard:<address>`, `events:<filter>`. **Per-card kinds are used only** for ancestors of a contributor's chain outside snapshotted policies. A contributor's own primary card and signing sub-card must be present in a snapshot of one of the job's contributor policies, or the input is `INPUT_CARD_UNTRUSTED`. |
 | `publish` | `object`, `pin` | Pins to IPFS and serves the object (announcements, notarizations, `counted_inputs`, job-log records, derived cards, state blobs) |
 | `announce` | the signed announcement | Serves it at `GET /jobs/{job_hash}/announcement` |
 | `chain_submit` | `op`, `payload`, `signature` | Submits `RegisterCard` or `BatchUpdateCardHeads` from the gas wallet |

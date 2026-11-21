@@ -107,7 +107,7 @@ The host must never learn which source card is presented, and must never learn w
    The enclave checks each object against its CID and the signatures inside it. It never fetches a card by CID through the host.
 2. **Policy snapshot.** For each `source_policy` with a live job, the host supplies a snapshot and keeps it current. The snapshot covers:
    - every card registered under the policy (address, log head CID, last press address);
-   - the `SubCardRegistrations` entries whose master card is one of those cards;
+   - the `SubCardRegistrations` entries whose primary card is one of those cards;
    - the IPFS bytes of each card's current head.
 
    The enclave reads registry state only from its local copy. It never queries one card.

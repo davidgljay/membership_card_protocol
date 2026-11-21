@@ -446,7 +446,7 @@
 - Issuer-initiated recovery rotation (102) has a 72-hour pending window; the holder can cancel it (103). Covered in `key_rotation.md` §2.6.
 
 **G9 [N]** As a holder, I want to move my wallet to a different service provider, so that I'm not locked in.
-- `card_migration.md`. Requires the master key.
+- `card_migration.md`. Requires the primary card key.
 
 **G10 [N]** As a holder, I want to choose which organizations I trust as roots, so that "verified" means something to me.
 - The spec calls trusted-root configuration UX "a dependency" that design work should start on early (Timeline section; §7 open questions).

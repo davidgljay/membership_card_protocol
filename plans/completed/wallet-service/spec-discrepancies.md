@@ -18,8 +18,8 @@ Working log for Phase 2 (cross-spec verification) of the wallet service object-s
 
 **D-2. "Any registered cancellation credential" doesn't state what credential type is actually implemented.**
 - Spec (Process 2a Step 4, Process 2b Step 3): "A cancellation is valid if it is signed by any registered cancellation credential" — doesn't specify what a cancellation credential *is*.
-- Code/plan (OQ-WS-6, resolved): the cancellation credential is specifically the holder's master card key; `cancellation_pubkey` stored at backup-registration time is the master card's ML-DSA-44 public key.
-- **Resolution:** Add a clarifying sentence naming the master card key as the (currently sole) cancellation credential type, cross-referencing the backup registration field. Not a behavior change — a clarity gap. Low risk.
+- Code/plan (OQ-WS-6, resolved): the cancellation credential is specifically the holder's primary card key; `cancellation_pubkey` stored at backup-registration time is the primary card's ML-DSA-44 public key.
+- **Resolution:** Add a clarifying sentence naming the primary card key as the (currently sole) cancellation credential type, cross-referencing the backup registration field. Not a behavior change — a clarity gap. Low risk.
 
 **D-3 (minor).** "Related Specs" omits `open_offer_acceptance_existing_wallet.md`, which also drives keyring-update/service-secret interactions with this spec's model. Optional addition, not required.
 
@@ -56,7 +56,7 @@ Everything else in `notification_relay.md` (UUID pool model, device credential, 
 
 Both predate all wallet-service code (first wallet-service commit is 2026-06-29) and both are stale on the same point:
 
-**D-6a/D-6b — RESOLVED**, plus one additional occurrence found and fixed during Phase 5's consistency pass: `open_offer_acceptance_new_wallet.md` Step 10's wallet-creation summary ("A master card keypair (private key in the keyring on IPFS)") repeated the same stale claim outside the originally-flagged Step 7 — corrected in the same pass, no new checkpoint needed (already in this initiative's direct-edit scope). Original finding:
+**D-6a/D-6b — RESOLVED**, plus one additional occurrence found and fixed during Phase 5's consistency pass: `open_offer_acceptance_new_wallet.md` Step 10's wallet-creation summary ("A primary card keypair (private key in the keyring on IPFS)") repeated the same stale claim outside the originally-flagged Step 7 — corrected in the same pass, no new checkpoint needed (already in this initiative's direct-edit scope). Original finding:
 
 **Both specs describe the keyring blob as posted to IPFS — contradicts `ARCHITECTURE.md` ADR-009-AMEND and the entire wallet-service implementation.**
 - `open_offer_acceptance_new_wallet.md` Step 7: "The keyring blob is posted to IPFS (append-only encrypted blob)."
@@ -140,7 +140,7 @@ All entries below are resolved. This section is the permanent audit trail: origi
 | ID | File | Original text | Corrected text | Justification |
 |---|---|---|---|---|
 | D-1 | `wallet_backup_and_recovery.md` Steps 13-14 | `{ type, wrapped_decryption_key, keyring_id, notification_channels, cancellation_credentials }` | `{ type, wrapped_blob, keyring_id, notification_channels, cancellation_pubkey }` | Matches `POST /accounts/{card_hash}/backups`'s actual implemented field names (`server/routes/accounts/[card_hash]/backups/index.post.ts`). |
-| D-2 | `wallet_backup_and_recovery.md` Process 2a/2b | "signed by any registered cancellation credential" | "signed by the registered cancellation credential — the holder's master card key (`cancellation_pubkey`...)" | OQ-WS-6 resolved the cancellation credential as specifically the master card key; only one type is implemented. |
+| D-2 | `wallet_backup_and_recovery.md` Process 2a/2b | "signed by any registered cancellation credential" | "signed by the registered cancellation credential — the holder's primary card key (`cancellation_pubkey`...)" | OQ-WS-6 resolved the cancellation credential as specifically the primary card key; only one type is implemented. |
 | D-3 | `wallet_backup_and_recovery.md` Related Specs | Omitted `open_offer_acceptance_existing_wallet.md` and `specs/object_specs/wallet.md` | Both added | Both specs interact directly with this one's keyring/recovery model. |
 | D-4 | `message_routing.md` §Message Delivery point 5 | "On 5xx or network error: retry with exponential backoff using the same UUID." | "On 5xx or network error: advance to the next UUID in the pool and retry, the same as step 4... bounded (5 attempts per delivery pass)..." | `server/utils/message-delivery.ts` advances to the next UUID on `server_error`, never retries the same one; `implementation-plan.md §Step 4.4` documents this as deliberate. Independently corroborated by `relay.md §7.2`'s own error-code semantics. |
 | D-5 | `notification_relay.md` §Failure Handling table | "Wallet retries with exponential backoff using the same UUID; UUID not consumed until relay accepts." | "Wallet advances to the next UUID in the subcard's pool and retries (bounded, 5 attempts per delivery pass)..." | Same evidence as D-4. |

@@ -525,7 +525,7 @@ cast send $LOGIC \
 SUB_ADDR=0x$(xxd -p -l 32 /dev/urandom | tr -d '\n')
 SUB_DOC_CID="0x1220$(xxd -p -l 32 /dev/urandom | tr -d '\n')"
 
-# Get master card's current head CID (registration_log_head must match current head)
+# Get primary card's current head CID (registration_log_head must match current head)
 MASTER_CID=$(cast call $LOGIC "get_card_entry(bytes32)(bytes,bytes32,bytes32,bytes32,bool)" \
   $MASTER_CARD --rpc-url "$ARBITRUM_SEPOLIA_RPC" | awk 'NR==1{print $1}')
 

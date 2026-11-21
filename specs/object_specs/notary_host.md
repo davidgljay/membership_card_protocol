@@ -172,7 +172,7 @@ The host stores only ciphertexts, receipts and public objects. It never stores a
 - **Headers.** The host streams new Arbitrum One block headers to each enclave (`chain_headers`). On request (`fetch`) it supplies the headers that link to a wallet's `chain_ref`.
 - **Policy snapshots.** For each policy a live job depends on, the host builds and keeps current a snapshot. Relevant policies are the derived-card job's `source_policy`, and each `issued_under_template` policy in `contributor_predicate`. The snapshot contains:
   - every `CardRegistered` and `CardHeadUpdated` under the policy, giving each card's address, current head CID and last press address, and its head-event history `events: [{ cid, timestamp }]` (the block timestamp of each event, oldest first). Card checks use it for provenance and for authoritative revocation dates;
-  - the `SubCardRegistrations` entries whose master card is in the set, each with `master_card`, `sub_card`, `sub_card_doc_cid` and `active`;
+  - the `SubCardRegistrations` entries whose primary card is in the set, each with `master_card`, `sub_card`, `sub_card_doc_cid` and `active`;
   - the IPFS bytes of each current head.
 
   The snapshot names the policy card's current head (`policy_head_cid`). A job's snapshots are sent as soon as the job exists, and the host serves the job's announcement only after every snapshot has reached the enclaves, so that no input can arrive before the enclave can read its contributor's own cards (`notary_runtime.md §9`, `fetch`). It is sent as `policy_snapshot`, then `policy_updates` every `SNAPSHOT_REFRESH_SECONDS`. `policy_updates` entries also carry `timestamp`.

@@ -21,7 +21,7 @@ This spec defines the rotation flows for each category, the on-log artifacts tho
 
 | Category | Custodian | Storage | Rotation trigger |
 |---|---|---|---|
-| Master card key | Holder | Encrypted keyring blob on IPFS | Periodic hygiene; key compromise |
+| Primary card key | Holder | Encrypted keyring blob on IPFS | Periodic hygiene; key compromise |
 | Sub-card key | Holder / App | Secure device storage (Secure Enclave / TEE / TPM), scoped to app signing identity | Device loss; device replacement; app uninstall; migration; routine rotation |
 | Press sub-card key | Press operator | Operator-managed; hardware-backed recommended | Periodic rotation; operator compromise |
 | Auditor ML-KEM key | Auditor | Auditor-managed | Periodic rotation; key compromise |
@@ -32,7 +32,7 @@ This spec defines the rotation flows for each category, the on-log artifacts tho
 
 ### 1.1 Scope and Motivation
 
-Sub-cards are device-bound, app-specific credentials. Each app on each device holds a sub-card private key in hardware-backed secure storage (Secure Enclave on iOS, StrongBox / TEE-backed Keystore on Android), scoped to the app's signing identity. The wallet is itself an app and holds its own sub-cards for routine operations (message signing, authentication, etc.). This key handles all routine signing operations for that app+device combination. The master card key (primary card key) is never used for routine operations; it is cold except when authorizing new sub-card creation.
+Sub-cards are device-bound, app-specific credentials. Each app on each device holds a sub-card private key in hardware-backed secure storage (Secure Enclave on iOS, StrongBox / TEE-backed Keystore on Android), scoped to the app's signing identity. The wallet is itself an app and holds its own sub-cards for routine operations (message signing, authentication, etc.). This key handles all routine signing operations for that app+device combination. The primary card key (primary card key) is never used for routine operations; it is cold except when authorizing new sub-card creation.
 
 Sub-card keys are rotated when:
 
@@ -93,13 +93,13 @@ See `specs/subcards.md §Sub-Card Key Management` for non-exportability guarante
 
 ---
 
-## 2. Master Card Key Rotation
+## 2. Primary Card Key Rotation
 
 ### 2.1 Motivation and Constraints
 
-The master card key's public key is recorded as `recipient_pubkey` in each card the holder holds. `recipient_pubkey` is a protocol-required field that **cannot be modified by any update after issuance**, regardless of the card's update policy. This immutability is a foundational trust property: verifiers need a stable identity anchor; a mutable public key would allow silent substitution attacks.
+The primary card key's public key is recorded as `recipient_pubkey` in each card the holder holds. `recipient_pubkey` is a protocol-required field that **cannot be modified by any update after issuance**, regardless of the card's update policy. This immutability is a foundational trust property: verifiers need a stable identity anchor; a mutable public key would allow silent substitution attacks.
 
-Master key rotation therefore cannot update existing cards in place. Instead, it uses a **linked-successor** pattern: a new card is issued with the new public key, the old card posts a link to the successor, and the old card is subsequently revoked.
+Primary card key rotation therefore cannot update existing cards in place. Instead, it uses a **linked-successor** pattern: a new card is issued with the new public key, the old card posts a link to the successor, and the old card is subsequently revoked.
 
 ### 2.2 The Linked-Successor Pattern
 
@@ -117,9 +117,9 @@ A card with a `successor` pointer is still considered valid until it receives an
 
 **The `successor` field is appended with a 1xx log entry.** Code **100** (linked successor — planned key rotation) or code **101** (linked successor — emergency, prior key potentially compromised).
 
-### 2.3 Address Transitions on Master Key Rotation
+### 2.3 Address Transitions on Primary Card Key Rotation
 
-Because a card's registry address is `keccak256(recipient_pubkey)`, rotating the master key produces a new address. The old address is not deleted — it remains in the registry as a revoked entry with a `forward_to` field. This section defines the address-level continuity mechanism that complements the card-level `successor` link (§2.2).
+Because a card's registry address is `keccak256(recipient_pubkey)`, rotating the primary card key produces a new address. The old address is not deleted — it remains in the registry as a revoked entry with a `forward_to` field. This section defines the address-level continuity mechanism that complements the card-level `successor` link (§2.2).
 
 **Three-layer continuity chain on key rotation:**
 
@@ -151,15 +151,15 @@ A party who holds the new public key and needs to read historical content can us
 
 ---
 
-### 2.4 Planned Master Key Rotation Flow
+### 2.4 Planned Primary Card Key Rotation Flow
 
-**Prerequisites:** The holder has access to their master card key (keyring is decryptable) and at least one active sub-card.
+**Prerequisites:** The holder has access to their primary card key (keyring is decryptable) and at least one active sub-card.
 
-1. **Generate new master keypair.** The wallet generates a fresh ML-DSA-44 keypair for the new master key. The new private key is stored in the keyring blob.
+1. **Generate new primary card keypair.** The wallet generates a fresh ML-DSA-44 keypair for the new primary card key. The new private key is stored in the keyring blob.
 
 2. **Request new cards.** For each card the holder holds, initiate the full issuance flow to receive a new card with the new public key from the relevant press. The new cards are independent card registry entries and include the `past_keys` array (§2.3) populated from the holder's existing key history.
 
-3. **Produce a rotation statement.** The holder signs a **key rotation statement** with both the old master key and the new master key:
+3. **Produce a rotation statement.** The holder signs a **key rotation statement** with both the old primary card key and the new primary card key:
 
    ```json
    {
@@ -170,8 +170,8 @@ A party who holds the new public key and needs to read historical content can us
      "old_cards": ["<mutable pointer 1>", "<mutable pointer 2>", ...],
      "new_cards": ["<mutable pointer 1>", "<mutable pointer 2>", ...],
      "timestamp": "<ISO 8601>",
-     "old_key_signature": "<ML-DSA-44 sig over canonical RFC 8785 JSON, signed by old master key>",
-     "new_key_signature": "<ML-DSA-44 sig over canonical RFC 8785 JSON, signed by new master key>"
+     "old_key_signature": "<ML-DSA-44 sig over canonical RFC 8785 JSON, signed by old primary card key>",
+     "new_key_signature": "<ML-DSA-44 sig over canonical RFC 8785 JSON, signed by new primary card key>"
    }
    ```
 
@@ -181,30 +181,30 @@ A party who holds the new public key and needs to read historical content can us
    - `code: 100`
    - `field_updates: [{ "field": "successor", "value": "<new card mutable pointer>" }]`
    - Include the rotation statement CID in the update's `updater_message` field.
-   - Sign with the old master key (or an active sub-card, depending on the update policy).
+   - Sign with the old primary card key (or an active sub-card, depending on the update policy).
 
 4a. **Register address forward on-chain.** For each old card, call `RegisterAddressForward` on the registry contract (see `registry_contract.md §4.13`), providing `old_address` and `new_address`. This stores `forward_to` in the old `CardEntry` and emits an `AddressTransition` event. Must be signed with the old secp256r1 key and must be submitted **before** the old card is revoked (step 5). This step is required; failure to complete it before revocation leaves the old address without a registry-level forward.
 
 5. **Revoke old cards.** After all successor links (step 4) and address forwards (step 4a) are posted, revoke each old card with code **801** (voluntary surrender), with an `effective_date` set to the current time.
 
-6. **Update keyring.** Re-encrypt the keyring blob with the new master key added and the old master key flagged as retired. Upload to IPFS. Update backup registration if using YubiKey recovery.
+6. **Update keyring.** Re-encrypt the keyring blob with the new primary card key added and the old primary card key flagged as retired. Upload to IPFS. Update backup registration if using YubiKey recovery.
 
-7. **Re-register sub-cards.** Existing sub-cards are registered to the old master key. Issue new sub-cards from the new master key for each active device. Revoke the old sub-cards.
+7. **Re-register sub-cards.** Existing sub-cards are registered to the old primary card key. Issue new sub-cards from the new primary card key for each active device. Revoke the old sub-cards.
 
 **Ordering note.** Steps 3 → 4 → 4a → 5 must be executed in order: rotation statement first, then successor links and address forwards, then revocations. The address forward (4a) requires the old key and must precede revocation.
 
-### 2.5 Emergency Master Key Rotation (Key Compromised)
+### 2.5 Emergency Primary Card Key Rotation (Key Compromised)
 
-If the master key is believed to be compromised:
+If the primary card key is believed to be compromised:
 
 1. Use any active sub-card (if the device is still secure) or YubiKey recovery to access the keyring.
 2. Immediately revoke all cards with code **810** (signing key compromised). Set `effective_date: <now>` on each revocation. This invalidates all statements signed after `effective_date`.
 3. Proceed with the planned rotation flow (§2.4), but use code **101** (linked successor — emergency) for the `successor` field updates and record the compromise in the rotation statement.
 
 **Address forward under compromise.** If the old key is believed compromised, the address forward written in step 4a is signed by the potentially-compromised key. Parties who discover the old address via chain inspection should treat the `forward_to` registry field with caution and cross-check it against the on-chain `AddressTransition` event timestamp and the rotation statement CID. The dual-signed rotation statement (§2.4 step 3) is the authoritative continuity proof regardless of key compromise status.
-4. Issue a loud revocation 9xx (code **910**: full wallet compromise suspected) only if there is evidence that the compromise extends beyond the master key to the full wallet, including sub-cards.
+4. Issue a loud revocation 9xx (code **910**: full wallet compromise suspected) only if there is evidence that the compromise extends beyond the primary card key to the full wallet, including sub-cards.
 
-**If a device is also compromised:** Treat all sub-cards as compromised. Revoke all sub-cards with code 811 immediately. If recovery requires YubiKey, complete YubiKey recovery first, then proceed with master key rotation.
+**If a device is also compromised:** Treat all sub-cards as compromised. Revoke all sub-cards with code 811 immediately. If recovery requires YubiKey, complete YubiKey recovery first, then proceed with primary card key rotation.
 
 **Statement validity after key compromise.** Statements signed with a compromised key before the revocation's `effective_date` are provisionally valid but should be treated with lower trust by relying parties — the rotation statement's `rotation_code: 101` signals that the prior period's signatures may be at risk. Relying parties with high-stakes decisions may choose to require re-attestation under the new key.
 
@@ -238,7 +238,7 @@ If the master key is believed to be compromised:
 
 5. **72-hour pending window.** During this window:
    - Verifiers who read the old card's log see the code-102 entry but treat the `successor` value as pending and not effective. The old card is still considered active with no successor.
-   - The holder may cancel by submitting a **code-103 log entry** (recovery rotation cancelled) to any approved press, signed by any holder-authorized key (master or active sub-card). The code-103 entry must reference the pending code-102 entry's log CID. A successful cancellation permanently nullifies the pending rotation.
+   - The holder may cancel by submitting a **code-103 log entry** (recovery rotation cancelled) to any approved press, signed by any holder-authorized key (primary card or active sub-card). The code-103 entry must reference the pending code-102 entry's log CID. A successful cancellation permanently nullifies the pending rotation.
 
 6. **After 72 hours without cancellation.** The rotation becomes effective: verifiers treat the code-102 `successor` pointer as equivalent to a code-100 entry. The old card may subsequently be revoked by the issuer with an 8xx or 9xx entry.
 
@@ -253,9 +253,9 @@ If the master key is believed to be compromised:
 ### 2.7 Acceptance Criteria
 
 - [ ] A card with a `successor` pointer and a subsequent 8xx revocation is recognized by verifiers as superseded; verifiers follow the pointer to the successor card.
-- [ ] A dual-signed rotation statement with both old and new master key signatures is verifiable by any party with access to IPFS.
+- [ ] A dual-signed rotation statement with both old and new primary card key signatures is verifiable by any party with access to IPFS.
 - [ ] After emergency rotation (code 810), statements signed by the old key before `effective_date` are treated as provisionally valid; statements at or after `effective_date` are rejected.
-- [ ] The wallet prevents re-use of a retired master key after rotation completes.
+- [ ] The wallet prevents re-use of a retired primary card key after rotation completes.
 - [ ] A verifier who encounters a card with `successor` but no revocation entry treats the card as active and the successor link as advisory only.
 - [ ] `RegisterAddressForward` is rejected if called after the old card has been revoked (8xx or 9xx entry exists in the log).
 - [ ] The `AddressTransition` event is emitted on-chain at the time `RegisterAddressForward` is processed, with the correct `old_address` and `new_address` values.
@@ -305,7 +305,7 @@ Re-encryption does not rotate any card keys. It changes the protection layer aro
 
 A full wallet compromise occurs when an attacker has obtained or may have obtained:
 
-- The master card key, AND
+- The primary card key, AND
 - One or more sub-card keys
 
 This is the highest-severity scenario. Code **910** (loud revocation — full wallet compromise suspected) signals publicly that all cards held by this identity should be treated as untrusted from `effective_date` forward, regardless of whether the attacker has been observed signing anything.
@@ -318,7 +318,7 @@ This is the highest-severity scenario. Code **910** (loud revocation — full wa
 
 3. **Notify relying parties.** The wallet should send notifications to all services and parties where the holder has authenticated using a compromised card, informing them of the revocation and `effective_date`.
 
-4. **Bootstrap new identity.** After revocation is complete, the holder proceeds with full master key rotation (§2.3), issuing new cards under the new key. The new cards have no automatic trust inheritance from the old cards — each issuer must re-issue under the new public key. This is intentional: the compromise may have affected what the holder consented to, and relying parties should make a fresh assessment.
+4. **Bootstrap new identity.** After revocation is complete, the holder proceeds with full primary card key rotation (§2.3), issuing new cards under the new key. The new cards have no automatic trust inheritance from the old cards — each issuer must re-issue under the new public key. This is intentional: the compromise may have affected what the holder consented to, and relying parties should make a fresh assessment.
 
 ### 4.3 Code 9xx Authorization for Self-Revocation
 
@@ -343,9 +343,9 @@ This allows holders to issue 910 (full wallet compromise) but not other 9xx code
 
 ### 4.4 Acceptance Criteria
 
-- [ ] A card revoked with code 910 causes verifiers to reject all statements signed by that card at or after `effective_date`, including sub-card-signed statements that chain to the compromised master card.
+- [ ] A card revoked with code 910 causes verifiers to reject all statements signed by that card at or after `effective_date`, including sub-card-signed statements that chain to the compromised primary card.
 - [ ] A policy that includes the recommended `revocation_permissions` override accepts holder-signed 910 intents.
-- [ ] After a 910 revocation, the wallet blocks all further signing operations using the compromised card's key material until the holder explicitly confirms a new master key has been installed.
+- [ ] After a 910 revocation, the wallet blocks all further signing operations using the compromised card's key material until the holder explicitly confirms a new primary card key has been installed.
 
 ---
 
@@ -524,8 +524,8 @@ All individual section acceptance criteria apply. The following are cross-cuttin
 - [ ] A verifier who walks a card chain that terminates in a revoked card with a `successor` pointer correctly identifies the successor as the current card, provided the rotation statement is dual-signed and verifiable.
 - [ ] The press rejects an attempt to set the `successor` field on a card that already has `successor` set.
 - [ ] A card revoked with code 810 (key compromised) causes all statements signed by that key after `effective_date` to be rejected by compliant verifiers.
-- [ ] A card revoked with code 910 (full wallet compromise) causes verifiers to reject not only the master card's signatures but also all sub-card signatures that chain to the compromised master, for statements at or after `effective_date`.
-- [ ] Rotation flows that require the master card key are blocked by the wallet client if the keyring blob cannot be decrypted (e.g., passkey unavailable).
+- [ ] A card revoked with code 910 (full wallet compromise) causes verifiers to reject not only the primary card's signatures but also all sub-card signatures that chain to the compromised primary card, for statements at or after `effective_date`.
+- [ ] Rotation flows that require the primary card key are blocked by the wallet client if the keyring blob cannot be decrypted (e.g., passkey unavailable).
 - [ ] Key rotation operations produce auditable on-log artifacts (1xx entries, rotation statement CID) such that a post-hoc verifier can reconstruct the full rotation history without contacting the holder or press.
 - [ ] A press rejects a code-102 intent from any party that does not satisfy `{ "is_issuer": true }` for the target card.
 - [ ] A press rejects a code-103 intent that does not include a valid log-CID reference to an open (not yet effective and not previously cancelled) code-102 entry on the same card.

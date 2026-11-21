@@ -37,8 +37,8 @@ The Card Protocol uses a chain-of-trust model. Every card that can sign a messag
 When a message arrives signed by a sub-card, the verifier:
 
 1. Checks the cryptographic signature against the envelope payload.
-2. Decrypts the sub-card's IPFS document and confirms it is properly bound to the holder's primary (master) card.
-3. Walks the chain of ancestor public keys from the master card up to a trusted root.
+2. Decrypts the sub-card's IPFS document and confirms it is properly bound to the holder's primary card.
+3. Walks the chain of ancestor public keys from the primary card up to a trusted root.
 4. Reads the on-chain revocation log for every card in the chain.
 5. Fetches the policy snapshot the card was issued under and confirms the card's fields comply with it.
 
@@ -261,7 +261,7 @@ for (const sig of result.signatures) {
 }
 ```
 
-This is useful for building policy-enforcement logic, auditing, or displaying card details to the user. The chain is ordered from the signer's master card outward toward the trusted root. If the walk fails partway through, `chain` contains a partial list up to the point of failure.
+This is useful for building policy-enforcement logic, auditing, or displaying card details to the user. The chain is ordered from the signer's primary card outward toward the trusted root. If the walk fails partway through, `chain` contains a partial list up to the point of failure.
 
 ---
 
@@ -277,7 +277,7 @@ interface SignatureVerificationResult {
   signature_valid: boolean | null;               // null if Stage 1 was skipped (verifyCard)
 
   // Stage 2
-  scope_clean: boolean | "skipped";              // sub-card properly bound to master card
+  scope_clean: boolean | "skipped";              // sub-card properly bound to primary card
 
   // Stage 3
   chain_reaches_trusted_root: boolean | "skipped";
@@ -331,7 +331,7 @@ interface ChainLink {
 }
 ```
 
-The array is ordered from the signer's master card outward toward the trusted root. If `returnChain: false` (default), the `chain` field is absent from the result. If the chain walk fails partway through, `chain` contains a partial list up to the point of failure.
+The array is ordered from the signer's primary card outward toward the trusted root. If `returnChain: false` (default), the `chain` field is absent from the result. If the chain walk fails partway through, `chain` contains a partial list up to the point of failure.
 
 ### Policy matching (`policy_match`)
 
@@ -362,11 +362,11 @@ Stage 1 — Signature Validity
   Verify the ML-DSA-44 signature.
   → signature_valid: true | false
 
-Stage 2 — Sub-Card to Master Link
+Stage 2 — Sub-Card to Primary Card Link
   Derive the signer's on-chain address (keccak256 of public key).
   Fetch and decrypt the sub-card document from IPFS.
   Confirm the holder_primary_card and app_card binding checks pass.
-  Fetch and decrypt the master card document.
+  Fetch and decrypt the primary card document.
   Confirm on-chain sub-card registration is active.
   Verify the holder's and app's signatures on the sub-card document.
   → scope_clean: true | false
@@ -375,7 +375,7 @@ Stage 2 — Sub-Card to Master Link
   causes scope_clean: false and skips Stage 3–5.
 
 Stage 3 — Chain Walk
-  Starting from the master card's ancestry_pubkeys, walk each ancestor.
+  Starting from the primary card's ancestry_pubkeys, walk each ancestor.
   At each hop: confirm keccak256(pubkey) matches the expected address,
   decrypt the ancestor's card from IPFS, check isPolicyAuthorizer.
   Stop when a trusted root is found or ancestry_pubkeys is exhausted.

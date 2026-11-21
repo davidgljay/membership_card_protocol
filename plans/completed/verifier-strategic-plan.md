@@ -11,7 +11,7 @@
 
 ### 1. Implement a correct, spec-complete 5-stage verification pipeline
 
-The core deliverable is a TypeScript/ESM library that takes a `SignedMessageEnvelope` and returns a structured `EnvelopeVerificationResult` covering all five stages: signature validity, sub-card-to-master link, chain walk to a trusted root, revocation check, and policy compliance. Every stage must behave exactly as specified — including hard rejections, skip propagation, and the non-short-circuiting guarantee.
+The core deliverable is a TypeScript/ESM library that takes a `SignedMessageEnvelope` and returns a structured `EnvelopeVerificationResult` covering all five stages: signature validity, sub-card-to-primary card link, chain walk to a trusted root, revocation check, and policy compliance. Every stage must behave exactly as specified — including hard rejections, skip propagation, and the non-short-circuiting guarantee.
 
 ### 2. Keep the package thin and I/O-agnostic
 

@@ -42,9 +42,9 @@ The verifier's design philosophy throughout the rest of the spec is to independe
 - Existing tests continue to pass when `app_card` chains to the trusted root (no regression on valid sub-cards).
 
 ### Goal 2 — Verifier self-sufficiency
-- `verifyStage2` in `stage2.ts` walks the `app_card` chain using the same IPFS + RPC infrastructure used by Stage 3 for the master card chain walk.
+- `verifyStage2` in `stage2.ts` walks the `app_card` chain using the same IPFS + RPC infrastructure used by Stage 3 for the primary card chain walk.
 - The `app_card` trusted root is configurable in `VerifierConfig` (separate field from `trustedRoots`, which governs the holder card chain), allowing operators to point verifiers at the governance authority's app-certification policy without conflating it with holder-chain trust roots.
-- `SignatureVerificationResult` includes `app_card_chain_valid: boolean | "skipped"` (skipped for non-sub-card signatures, i.e. direct master card signatures).
+- `SignatureVerificationResult` includes `app_card_chain_valid: boolean | "skipped"` (skipped for non-sub-card signatures, i.e. direct primary card signatures).
 
 ### Goal 4 — Document the AppCertificationBody governance structure
 

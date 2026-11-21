@@ -64,7 +64,7 @@ For first-time recipients who need to create a wallet, see `open_offer_acceptanc
 ### Phase 2: Key Generation for the New Card
 
 5. The client generates a fresh ML-DSA-44 keypair specifically for this new card:
-   - **Do not reuse** any existing card keypair, sub-card key, or master key.
+   - **Do not reuse** any existing card keypair, sub-card key, or primary card key.
    - Each card owns a distinct keypair.
 
 6. The client stores the new private key in the existing keyring before proceeding:
@@ -148,7 +148,7 @@ For first-time recipients who need to create a wallet, see `open_offer_acceptanc
 |---|---|---|
 | Wallet setup | Required (Steps 5–9 of that spec) | Skipped entirely |
 | Passkey | Created fresh | Already exists |
-| Master keypair | Generated fresh | Already exists |
+| Primary card keypair | Generated fresh | Already exists |
 | Device sub-card | Generated and registered | Already registered |
 | Keyring for new card key | Initialized, then updated | Updated only |
 | Claim submission | Identical | Identical |

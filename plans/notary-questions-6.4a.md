@@ -91,4 +91,7 @@ The change is under `contracts/`. It has been built and deployed only to the loc
 
 - **2026-11-19, David:** **W5** approved (the `RemovePolicyAddress` press payload fields).
 - **2026-11-19, David:** **W6**: restrict path characters. A path may not contain `"`, `\` or 0x00–0x1F. Setting such a path is refused with E-43; removal doesn't apply the rule. Built in 6.4b (item 6), with a read-only scan of Sepolia and mainnet for existing paths that break the rule before the upgrade (item 7). Spec amended in `registry_contract.md` and `dns_resolution.md`.
-- Still open: W1–W4 (security), W7–W9 (reports, CP7).
+- **2026-11-20, David:** **W1**: 6.4b approved under CP7 for the local devnode only. Deploying elsewhere remains W8, a separate CP7 approval.
+- **2026-11-20, David:** **W2** and **W3** ratified as built. The DNS-client `op` audit is added to the W8 checklist.
+- **2026-11-20, David:** **W4** included in 6.4b (item 5): the press signs `max_acceptances` and `expires_at`, and the contract binds them.
+- Still open: W7–W9 (reports, CP7).

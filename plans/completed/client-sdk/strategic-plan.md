@@ -29,7 +29,7 @@ The client SDK (`@membership-card-protocol/client-sdk`) is the single library th
 
 Four functional areas, per the request that scoped this plan:
 
-1. **Card offer creation and acceptance**, including the keypair generation each flow requires (fresh per-card keypair, device sub-card keypair, master keypair on first wallet setup).
+1. **Card offer creation and acceptance**, including the keypair generation each flow requires (fresh per-card keypair, device sub-card keypair, primary card keypair on first wallet setup).
 2. **Backup encryption, sending, and retrieval** — wrapping the keyring decryption key under a synced passkey and/or YubiKey, registering with the backup service, and running the recovery flow.
 3. **Sending and receiving messages**, including the UUID pool lifecycle needed to receive them privately through the relay.
 4. **Submitting accepted offers to a press** — both targeted (`card_offering_and_acceptance.md`) and open-offer (`open_offer_acceptance_*.md`) claim submission.
@@ -51,7 +51,7 @@ A developer building either the reference web wallet or a React Native wallet ap
 
 ### 2. Correct key generation and custody at every step the specs require it
 
-Every flow that mints a keypair — master card key at first setup, device sub-card key per device, fresh per-card key at each offer acceptance, fresh per-card key at each open-offer claim — must generate the right key at the right time, store it through the right abstraction (keyring for recoverable keys, secure device storage for the sub-card key), and never leave a private key in a state where it could be lost before it's durably recoverable (specs are explicit that the new card's private key must be in the keyring *before* countersigning).
+Every flow that mints a keypair — primary card key at first setup, device sub-card key per device, fresh per-card key at each offer acceptance, fresh per-card key at each open-offer claim — must generate the right key at the right time, store it through the right abstraction (keyring for recoverable keys, secure device storage for the sub-card key), and never leave a private key in a state where it could be lost before it's durably recoverable (specs are explicit that the new card's private key must be in the keyring *before* countersigning).
 
 ### 3. Backup and recovery that matches the spec's security model exactly
 
@@ -87,7 +87,7 @@ Several specs call out a specific ordering constraint: the new card's private ke
 
 ### Why backup/recovery correctness is worth calling out separately from "implement the spec"
 
-The whole security model in `wallet_backup_and_recovery.md` rests on `decryption_key = KDF(device_passkey_output, service_secret)` being computed identically, every time, from primitives that never touch the network in plaintext. The SDK is the only place this computation happens — the wallet service only ever sees `service_secret` and opaque wrapped blobs, never `decryption_key` or the passkey output. Any client-side deviation here (wrong KDF, wrong input order, memory retention beyond the spec's "clear master key from memory after signing" instruction) is invisible to server-side testing and only shows up as a security incident. This is why backup/recovery gets Phase-level attention and its own clarification checkpoint in the implementation plan, not just a spec-to-code translation pass.
+The whole security model in `wallet_backup_and_recovery.md` rests on `decryption_key = KDF(device_passkey_output, service_secret)` being computed identically, every time, from primitives that never touch the network in plaintext. The SDK is the only place this computation happens — the wallet service only ever sees `service_secret` and opaque wrapped blobs, never `decryption_key` or the passkey output. Any client-side deviation here (wrong KDF, wrong input order, memory retention beyond the spec's "clear primary card key from memory after signing" instruction) is invisible to server-side testing and only shows up as a security incident. This is why backup/recovery gets Phase-level attention and its own clarification checkpoint in the implementation plan, not just a spec-to-code translation pass.
 
 ### Why sub-card request handling belongs in the SDK core rather than being left to each host app
 
@@ -123,7 +123,7 @@ Once the oblivious-relay mechanism exists, restricting it to "wallet-service-fac
 
 ### Goal 2: Correct key generation and custody
 
-- Every keypair-generating operation in scope (master keypair, device sub-card keypair, per-card acceptance keypair, per-open-offer-claim keypair) is implemented as a single, spec-cited function with a test asserting it is called exactly once per flow and never reused across cards (per the explicit "do not reuse" instructions in `open_offer_acceptance_existing_wallet.md` step 5 and elsewhere).
+- Every keypair-generating operation in scope (primary card keypair, device sub-card keypair, per-card acceptance keypair, per-open-offer-claim keypair) is implemented as a single, spec-cited function with a test asserting it is called exactly once per flow and never reused across cards (per the explicit "do not reuse" instructions in `open_offer_acceptance_existing_wallet.md` step 5 and elsewhere).
 - A test suite asserts the "persist before sign" ordering: for every keypair generated during offer acceptance, the keyring update (or keyring-blob-pending-write state) completes before the corresponding countersignature is produced.
 - Device sub-card keys are only ever handled through the injected secure-storage provider interface — no code path holds a sub-card private key in a plain JS variable longer than the single signing operation that needs it.
 

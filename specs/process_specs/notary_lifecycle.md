@@ -168,7 +168,7 @@ Each step names its **actor**, what it takes and produces, and how failure is ha
 ### Phase 5: Input submission and receipts
 
 27. **Wallet.** Builds a `NotaryInput` (`protocol-objects.md §23`):
-    - `contributor_card` = the contributor's master card;
+    - `contributor_card` = the contributor's primary card;
     - `payload`, validated locally against `input_schema`;
     - `revision` (0, or the previous revision + 1 under `latest_wins`);
     - `chain_ref` = a recent block the wallet has seen;
@@ -473,7 +473,7 @@ Registry reads are unverified in the enclave (L4). Wallets check R2–R4 with th
 | B4 | `chain_ref` time ≥ `opens_at`, and < `closes_at` (aggregate) | `INPUT_TOO_EARLY`, `INPUT_LATE` |
 | B5 | The signer is a valid sub-card with `"notary_input"` capability (`protocol-objects.md §16` checks) | `INPUT_SIGNER_INVALID` |
 | B6 | `keccak256(contributor_card_pubkey) == contributor_card ==` the sub-card's `holder_primary_card` | `INPUT_BINDING_MISMATCH` |
-| B7 | The master card chains to a trusted root and isn't revoked | `INPUT_CARD_UNTRUSTED`, `INPUT_CARD_REVOKED` |
+| B7 | The primary card chains to a trusted root and isn't revoked | `INPUT_CARD_UNTRUSTED`, `INPUT_CARD_REVOKED` |
 | B8 | `contributor_predicate`, with parameter references resolved | `INPUT_NOT_ELIGIBLE` |
 | B9 | `payload` matches `input_schema` | `INPUT_SCHEMA_INVALID` |
 | B10 | Dedupe by root key (`past_keys[0].pubkey` or `recipient_pubkey`). `reject_duplicates`: `revision` 0 and a new root key. `latest_wins`: a lower revision → `superseded`; the same revision and same signed input → accepted (resubmission); the same revision with different content → `REVISION_CONFLICT`; a higher revision → accepted and supersedes. | `INPUT_DUPLICATE`, `INPUT_REVISION_INVALID`, `REVISION_CONFLICT` |

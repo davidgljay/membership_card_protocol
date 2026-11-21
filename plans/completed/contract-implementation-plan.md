@@ -290,15 +290,15 @@ Sets `CardEntries[old_address].forward_to = new_address` and emits `AddressTrans
 
 ### Step 5.1 — Implement RegisterSubCard (§4.3) and DeregisterSubCard (§4.4)
 
-**What:** Implement both sub-card operations. Key design note: neither operation verifies the ML-DSA-44 master or app signature on-chain — the press verifies these off-chain and retains the signatures in calldata for auditability only. The contract checks only: (a) card existence, (b) press authorization via the write gate, (c) `registration_log_head` matches the current stored head at call time.
+**What:** Implement both sub-card operations. Key design note: neither operation verifies the ML-DSA-44 primary card or app signature on-chain — the press verifies these off-chain and retains the signatures in calldata for auditability only. The contract checks only: (a) card existence, (b) press authorization via the write gate, (c) `registration_log_head` matches the current stored head at call time.
 
 `RegisterSubCard` creates the `SubCardEntry`; `DeregisterSubCard` sets `active = false` and `deregistered_at = block.timestamp`. Both emit their corresponding events. Deregistered entries are retained (not deleted) per the audit trail requirement.
 
 **Who:** David
 
-**Context needed:** `specs/object_specs/registry_contract.md` §4.3 (RegisterSubCard — full spec, press-side-only note for master signature and app-chain verification); §4.4 (DeregisterSubCard — press-side-only note for master signature, sub-card key cannot self-deregister); §7 (SubCardRegistered, SubCardDeregistered); §8 (E-10, E-11); §3.4 (SubCardEntry fields, 64-byte CID limit for `sub_card_doc_cid`).
+**Context needed:** `specs/object_specs/registry_contract.md` §4.3 (RegisterSubCard — full spec, press-side-only note for primary card signature and app-chain verification); §4.4 (DeregisterSubCard — press-side-only note for primary card signature, sub-card key cannot self-deregister); §7 (SubCardRegistered, SubCardDeregistered); §8 (E-10, E-11); §3.4 (SubCardEntry fields, 64-byte CID limit for `sub_card_doc_cid`).
 
-**Done when:** Precondition tests pass: master card not found, sub-card already active (E-11), stale registration_log_head. Sub-card deregistration with retained entry confirmed. Deregistered-at invariant confirmed (§3.7 — write-once-non-zero).
+**Done when:** Precondition tests pass: primary card not found, sub-card already active (E-11), stale registration_log_head. Sub-card deregistration with retained entry confirmed. Deregistered-at invariant confirmed (§3.7 — write-once-non-zero).
 
 ---
 

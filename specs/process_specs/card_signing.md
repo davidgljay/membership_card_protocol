@@ -27,7 +27,7 @@ Card signing is the process by which a card holder signs an arbitrary message us
 ## Preconditions
 
 - The signer holds an active card with a registered sub-card keypair on their device.
-- The signer's master card key is not required for routine signing; only the device sub-card private key is used.
+- The signer's primary card key is not required for routine signing; only the device sub-card private key is used.
 - The signer knows the mutable pointers of the intended recipients' cards.
 
 ---
@@ -41,7 +41,7 @@ Card signing is the process by which a card holder signs an arbitrary message us
    {
      "type":        "<string — see Message Types below>",
      "content":     "<message body — optional when forwards is set>",
-     "senders":     ["<mutable pointer of signer's master card>", ...],
+     "senders":     ["<mutable pointer of signer's primary card>", ...],
      "recipients":  ["<mutable pointer>", "<mutable pointer>", ...],
      "timestamp":   "<ISO 8601 timestamp>",
      "in_reply_to": "<hash of prior payload — optional>",
@@ -52,14 +52,14 @@ Card signing is the process by which a card holder signs an arbitrary message us
    ```
    - `type` is required. It distinguishes human communication from programmatic messages. See [Message Types](#message-types) below.
    - `content` carries the type-specific message body; it is optional only when `forwards` is set (the forwarded envelope provides the content).
-   - `senders` is required. It lists the mutable pointer(s) of the signing party's master card(s) — parallel to `signatures`, identifying the signer's master-card identity in the signed payload. Because `signatures` carries only the sub-card public key (from which only the sub-card's address is derived), `senders` is the explicit link from the signed bytes to the master-card identity. Note: MSG-OQ-2 (whether to drop `senders` for sender-privacy purposes and infer master identity via the sub-card→master link instead) remains an open future option, but the current schema includes `senders` in the payload here, in `protocol-objects.md §5`, and in `messaging_protocol.md §1`.
+   - `senders` is required. It lists the mutable pointer(s) of the signing party's primary card(s) — parallel to `signatures`, identifying the signer's primary-card identity in the signed payload. Because `signatures` carries only the sub-card public key (from which only the sub-card's address is derived), `senders` is the explicit link from the signed bytes to the primary-card identity. Note: MSG-OQ-2 (whether to drop `senders` for sender-privacy purposes and infer primary card identity via the sub-card→primary card link instead) remains an open future option, but the current schema includes `senders` in the payload here, in `protocol-objects.md §5`, and in `messaging_protocol.md §1`.
    - `recipients` must include at least the intended recipient(s)' mutable pointers. Including the signer's own pointer is optional but conventional for self-addressed records.
    - `timestamp` is the signing time; it must be within the acceptable freshness window as defined by the verifying party.
    - `in_reply_to`, `edit_of`, `retracts`, and `forwards` are optional. `edit_of`, `retracts`, and `forwards` are mutually exclusive — a payload with more than one of these set must be rejected at the client before signing.
 
 2. The client validates the payload locally:
    - Confirm `type` is a known value.
-   - Confirm `senders` is non-empty and lists the signer's master card pointer(s).
+   - Confirm `senders` is non-empty and lists the signer's primary card pointer(s).
    - Confirm at most one of `edit_of`, `retracts`, `forwards` is set.
    - Confirm `recipients` is non-empty.
    - Confirm `timestamp` is current.
@@ -72,7 +72,7 @@ Card signing is the process by which a card holder signs an arbitrary message us
 
 ### Phase 3: Signing
 
-4. The client signs the canonical serialization of `payload` using the **current device's sub-card private key**. The master card key is not accessed.
+4. The client signs the canonical serialization of `payload` using the **current device's sub-card private key**. The primary card key is not accessed.
 
 5. The signer constructs a `SignatureEntry`:
    ```json
@@ -197,7 +197,7 @@ The original envelope is not modified; all its signatures remain independently v
 
 ## Edits and Retractions
 
-**Edit:** A new `SignedMessageEnvelope` with `edit_of` set to the hash of the prior payload. The original message is not mutated. The edit is only valid if the signer's master card chains to the same master as the original signer.
+**Edit:** A new `SignedMessageEnvelope` with `edit_of` set to the hash of the prior payload. The original message is not mutated. The edit is only valid if the signer's primary card chains to the same primary card as the original signer.
 
 **Retraction:** A new `SignedMessageEnvelope` with `retracts` set to the hash of the prior payload. No new content is proposed; the sender formally withdraws the original statement.
 
@@ -229,7 +229,7 @@ The `recipients` array is part of the signed `payload`. Modifying it after signi
 | `forwards` hash does not match `original_envelope.payload` | Verifier rejects the ForwardPackage; the hash must be the canonical RFC 8785 JSON hash of the original payload |
 | Original envelope delivered to a party not in its `recipients`, without a ForwardPackage | Verifier rejects as an unauthenticated relay; the receiving party has no verified forwarder identity |
 | `recipients` is empty | Client rejects before signing |
-| Sub-card key not available on device (e.g., device was wiped) | Signer must register a new sub-card from their master key before signing |
+| Sub-card key not available on device (e.g., device was wiped) | Signer must register a new sub-card from their primary card key before signing |
 | Signing key's sub-card has been revoked | Verifiers will flag the signature; signer should rotate to a new sub-card and resign |
 | Co-signer signs a different payload (content mismatch) | Verifiers will detect the divergence; the co-signer must sign the canonical payload as received |
 

@@ -6,7 +6,7 @@
 **Status:** Draft
 
 Decisions locked in during strategic review (see strategic plan's Open Questions for full rationale):
-`active_subcards` is a flat array of bare public keys, entries are deleted outright on removal (history lives in the log, not the field), codes are **510** (addition) / **511** (removal) / **512** (key rotation) on the **master card's** log, sub-card limitations reuse the existing predicate/`field_requirements` grammar, arbitrary card fields are signed-but-unvalidated, no migration is needed (no cards deployed), and holder-only authorization over `active_subcards` is a hard protocol limit (not policy-configurable) for this protocol version.
+`active_subcards` is a flat array of bare public keys, entries are deleted outright on removal (history lives in the log, not the field), codes are **510** (addition) / **511** (removal) / **512** (key rotation) on the **primary card's** log, sub-card limitations reuse the existing predicate/`field_requirements` grammar, arbitrary card fields are signed-but-unvalidated, no migration is needed (no cards deployed), and holder-only authorization over `active_subcards` is a hard protocol limit (not policy-configurable) for this protocol version.
 
 ---
 
@@ -19,19 +19,19 @@ Decisions locked in during strategic review (see strategic plan's Open Questions
 **Done when:** `protocol-objects.md` documents `active_subcards` with type, mutability, authorization rule, and the three codes that touch it, consistent with how `successor` is documented.
 
 ### Step 1.2 — Wire codes 510/511/512 into the update-code system
-**What:** `specs/update_codes.md` already lists 510 (subcard addition), 511 (subcard removal), 512 (subcard key rotation) in the 5xx table — confirm the entries and add the missing **authority rule** for each (hardcoded `is_holder` only, not policy-configurable), plus a note that these three codes are scoped to entries on the **master/parent card's** log, not the sub-card's own log. Cross-reference `specs/process_specs/subcard_creation_policy.md §Update Card Content`, which already prohibits 5xx updates *on the sub-card itself* — add a clarifying sentence there distinguishing "5xx on the sub-card" (prohibited) from "510/511/512 on the parent card" (holder-authorized, this feature).
+**What:** `specs/update_codes.md` already lists 510 (subcard addition), 511 (subcard removal), 512 (subcard key rotation) in the 5xx table — confirm the entries and add the missing **authority rule** for each (hardcoded `is_holder` only, not policy-configurable), plus a note that these three codes are scoped to entries on the **primary card/parent card's** log, not the sub-card's own log. Cross-reference `specs/process_specs/subcard_creation_policy.md §Update Card Content`, which already prohibits 5xx updates *on the sub-card itself* — add a clarifying sentence there distinguishing "5xx on the sub-card" (prohibited) from "510/511/512 on the parent card" (holder-authorized, this feature).
 **Who:** Claude
 **Context needed:** `specs/update_codes.md` §5xx section (already has the three codes listed), `specs/process_specs/subcard_creation_policy.md §Update Card Content`.
 **Done when:** `update_codes.md` states who may post each of 510/511/512 and confirms it's hardcoded; `subcard_creation_policy.md` explicitly disambiguates parent-card-log codes from sub-card-log codes.
 
 ### Step 1.3 — Update the card update/validation process specs
-**What:** `specs/process_specs/card_updates.md` and `specs/process_specs/card_validation.md` need to describe: (a) how a holder submits a 510/511/512 `UpdateIntentPayload` targeting their own master card, what `field_updates` looks like for an `active_subcards` change (add one pubkey / remove one pubkey / atomic swap for rotation), and (b) that verifiers/presses reject any 510/511/512 intent not signed by the card's own holder key, regardless of what the governing policy says.
+**What:** `specs/process_specs/card_updates.md` and `specs/process_specs/card_validation.md` need to describe: (a) how a holder submits a 510/511/512 `UpdateIntentPayload` targeting their own primary card, what `field_updates` looks like for an `active_subcards` change (add one pubkey / remove one pubkey / atomic swap for rotation), and (b) that verifiers/presses reject any 510/511/512 intent not signed by the card's own holder key, regardless of what the governing policy says.
 **Who:** Claude
 **Context needed:** `specs/process_specs/card_updates.md`, `specs/process_specs/card_validation.md`, `protocol-objects.md §4` (`UpdateIntentPayload`), Step 1.1 and 1.2 outputs.
 **Done when:** Both process specs describe the full submit → validate → append flow for all three codes, and state the holder-only rule as a press/verifier MUST, not a SHOULD.
 
 ### Step 1.4 — Sub-card runtime verification: point at real data
-**What:** `specs/protocol-objects.md §16`'s "Verifier chain walk (runtime)" step 8 currently says to "confirm the sub-card appears in the master card's active sub-card list" with no field to check. Update this step to reference `active_subcards` concretely: derive `keccak256(pubkey)` for each entry and confirm the sub-card's own address is among them. Note the failure mode (sub-card not present in the list → reject, distinct from `SubCardEntry.active == false` — a sub-card could in principle be on-chain-active but absent from the directory if the two ever desync; verifiers should treat "not in `active_subcards`" as a hard rejection independent of the on-chain flag).
+**What:** `specs/protocol-objects.md §16`'s "Verifier chain walk (runtime)" step 8 currently says to "confirm the sub-card appears in the primary card's active sub-card list" with no field to check. Update this step to reference `active_subcards` concretely: derive `keccak256(pubkey)` for each entry and confirm the sub-card's own address is among them. Note the failure mode (sub-card not present in the list → reject, distinct from `SubCardEntry.active == false` — a sub-card could in principle be on-chain-active but absent from the directory if the two ever desync; verifiers should treat "not in `active_subcards`" as a hard rejection independent of the on-chain flag).
 **Who:** Claude
 **Context needed:** `protocol-objects.md §16` full verifier chain-walk list (12 steps), Step 1.1 output.
 **Done when:** Step 8 of the chain walk is fully concrete (no forward reference to an undefined structure) and a new acceptance-criterion bullet is added to `specs/subcards.md` Acceptance Criteria reflecting it.
@@ -49,7 +49,7 @@ Decisions locked in during strategic review (see strategic plan's Open Questions
 **Done when:** The spec states unambiguously that cards are never limited to their declared schema, and the issuance-flow language no longer reads as a closed-schema check.
 
 ### Step 1.7 — Update the object/process spec cross-references
-**What:** Sweep `specs/object_specs/card_verifier.md`, `specs/object_specs/press.md`, `specs/object_specs/client_sdk.md`, and `specs/object_specs/registry_contract.md` for any language that assumes a closed field schema or omits the sub-card directory, and align them with Steps 1.1–1.6. In particular, `client_sdk.md` should gain a section describing how the SDK reads `active_subcards` off a decrypted master card and uses each pubkey to derive an address / encryption target for "send to all sub-cards" flows — this is the concrete feature David asked for.
+**What:** Sweep `specs/object_specs/card_verifier.md`, `specs/object_specs/press.md`, `specs/object_specs/client_sdk.md`, and `specs/object_specs/registry_contract.md` for any language that assumes a closed field schema or omits the sub-card directory, and align them with Steps 1.1–1.6. In particular, `client_sdk.md` should gain a section describing how the SDK reads `active_subcards` off a decrypted primary card and uses each pubkey to derive an address / encryption target for "send to all sub-cards" flows — this is the concrete feature David asked for.
 **Who:** Claude
 **Context needed:** The four `object_specs` files listed, Steps 1.1–1.6 outputs.
 **Done when:** No remaining spec document describes card schemas as closed or omits `active_subcards` from the verifier/press/SDK responsibilities that touch it; `client_sdk.md` documents the "message all sub-cards" use case end-to-end.
@@ -67,7 +67,7 @@ Decisions locked in during strategic review (see strategic plan's Open Questions
 ## Phase 2: Smart Contract Updates (`contracts/`)
 
 ### Step 2.1 — Extend the card registry to track `active_subcards` operations
-**What:** `contracts/logic-contract/src/subcard_ops.rs` currently implements `register_sub_card` (line 62) and `deregister_sub_card` (line 209). Confirm the on-chain contract's role here: per the spec, `active_subcards` itself lives in the **IPFS** `CardDocument`/log, not on-chain — the contract's job is unchanged in kind (`RegisterSubCard`/`DeregisterSubCard` still write `SubCardEntry`), but the **authorization check** for any accompanying master-card log update (codes 510/511/512) must be confirmed holder-only at the point the press assembles and signs that `LogEntry`. Add a rotation path: either a new `rotate_sub_card` contract entrypoint (atomic deregister-old + register-new) or confirm rotation is handled entirely off-chain as a paired deregister+register with a single code-512 master-card log entry tying them together. Decide and implement per `contracts/protocol-types/src/lib.rs` conventions.
+**What:** `contracts/logic-contract/src/subcard_ops.rs` currently implements `register_sub_card` (line 62) and `deregister_sub_card` (line 209). Confirm the on-chain contract's role here: per the spec, `active_subcards` itself lives in the **IPFS** `CardDocument`/log, not on-chain — the contract's job is unchanged in kind (`RegisterSubCard`/`DeregisterSubCard` still write `SubCardEntry`), but the **authorization check** for any accompanying primary-card log update (codes 510/511/512) must be confirmed holder-only at the point the press assembles and signs that `LogEntry`. Add a rotation path: either a new `rotate_sub_card` contract entrypoint (atomic deregister-old + register-new) or confirm rotation is handled entirely off-chain as a paired deregister+register with a single code-512 primary-card log entry tying them together. Decide and implement per `contracts/protocol-types/src/lib.rs` conventions.
 **Who:** Claude
 **Context needed:** `contracts/logic-contract/src/subcard_ops.rs` (both functions in full), `contracts/logic-contract/src/write_gate.rs`, `contracts/protocol-types/src/lib.rs`, Phase 1 outputs (especially Step 1.3 on what a 510/511/512 intent looks like).
 **Done when:** The contract-level behavior for add/remove/rotate is implemented or explicitly confirmed as off-chain-only with a clear rationale recorded in code comments; a rotation path exists in some form (on-chain or via the paired-log-entry convention).
@@ -95,10 +95,10 @@ Decisions locked in during strategic review (see strategic plan's Open Questions
 ## Phase 3: Verifier Codebase (`membership_card_verifier/`)
 
 ### Step 3.1 — Implement `active_subcards` membership check
-**What:** In `packages/verifier/src/CardVerifier.ts`, implement the concrete version of §16 chain-walk step 8 (Step 1.4's output): given a decrypted master `CardDocument`, derive `keccak256(pubkey)` for each entry in `active_subcards` and confirm the sub-card under evaluation is present. Add the corresponding error code/type in `packages/verifier/src/errors.ts` and `types.ts` for "sub-card not in active directory."
+**What:** In `packages/verifier/src/CardVerifier.ts`, implement the concrete version of §16 chain-walk step 8 (Step 1.4's output): given a decrypted primary card `CardDocument`, derive `keccak256(pubkey)` for each entry in `active_subcards` and confirm the sub-card under evaluation is present. Add the corresponding error code/type in `packages/verifier/src/errors.ts` and `types.ts` for "sub-card not in active directory."
 **Who:** Claude
 **Context needed:** `packages/verifier/src/CardVerifier.ts`, `packages/verifier/src/types.ts`, `packages/verifier/src/errors.ts`, `packages/verifier/src/crypto.ts` (for the keccak256/address-derivation helper already in use elsewhere), Phase 1 Step 1.4 output.
-**Done when:** A sub-card signature whose pubkey is absent from the master card's `active_subcards` is rejected with a distinct, documented error code, independent of the on-chain `active` flag check.
+**Done when:** A sub-card signature whose pubkey is absent from the primary card's `active_subcards` is rejected with a distinct, documented error code, independent of the on-chain `active` flag check.
 
 ### Step 3.2 — Implement sub-card `limitations` enforcement
 **What:** Extend `CardVerifier.ts`'s sub-card signature validation to evaluate `limitations` (Step 1.5) using the same predicate-evaluation code path already used for policy `update_policy`/`recipient_predicate` evaluation (locate and reuse, don't fork). Reject any statement that violates a stated limitation.
@@ -123,10 +123,10 @@ Decisions locked in during strategic review (see strategic plan's Open Questions
 ## Phase 4: Client SDK (`client-sdk/packages/client-sdk`, `client-sdk-web`, `client-sdk-rn`)
 
 ### Step 4.1 — Read `active_subcards` and expose a "message all sub-cards" helper
-**What:** In `client-sdk/packages/client-sdk`, add a function that takes a decrypted master `CardDocument`, reads `active_subcards`, and returns the set of sub-card public keys (and derived addresses) ready for use by the messaging layer (`messaging_protocol.md`) to encode/encrypt a `SignedMessageEnvelope` addressed to all of a holder's sub-cards. Confirm this composes with the existing message-sending path rather than duplicating it.
+**What:** In `client-sdk/packages/client-sdk`, add a function that takes a decrypted primary card `CardDocument`, reads `active_subcards`, and returns the set of sub-card public keys (and derived addresses) ready for use by the messaging layer (`messaging_protocol.md`) to encode/encrypt a `SignedMessageEnvelope` addressed to all of a holder's sub-cards. Confirm this composes with the existing message-sending path rather than duplicating it.
 **Who:** Claude
 **Context needed:** `client-sdk/packages/client-sdk` (locate existing card-reading and messaging helpers), `specs/messaging_protocol.md`, `specs/object_specs/client_sdk.md` (Step 1.7 output), `packages/verifier` crypto helpers for consistent address derivation.
-**Done when:** A documented, tested SDK function exists that turns a master card into a ready-to-use list of sub-card message targets, with no additional network round trip beyond the single card fetch.
+**Done when:** A documented, tested SDK function exists that turns a primary card into a ready-to-use list of sub-card message targets, with no additional network round trip beyond the single card fetch.
 
 ### Step 4.2 — Propagate to platform SDKs
 **What:** Confirm `client-sdk-web` and `client-sdk-rn` either re-export the new core `client-sdk` helper or wrap it consistently with their existing card-access patterns.
@@ -151,7 +151,7 @@ Decisions locked in during strategic review (see strategic plan's Open Questions
 ## Phase 5: Cross-Cutting Consistency Pass
 
 ### Step 5.1 — Update the red-team plan
-**What:** Revisit `plans/subcard_redteam_plan.md` in light of the new `active_subcards` directory and `limitations` mechanism — both are new attack surfaces (e.g., could a compromised holder key silently rewrite `active_subcards` to insert a rogue sub-card pubkey? Is there a new correlation risk from the directory being visible to anyone who decrypts the master card?). Add findings/mitigations as needed; note that Finding S-5 (note-writing abuse) may now be partially addressable via `limitations`.
+**What:** Revisit `plans/subcard_redteam_plan.md` in light of the new `active_subcards` directory and `limitations` mechanism — both are new attack surfaces (e.g., could a compromised holder key silently rewrite `active_subcards` to insert a rogue sub-card pubkey? Is there a new correlation risk from the directory being visible to anyone who decrypts the primary card?). Add findings/mitigations as needed; note that Finding S-5 (note-writing abuse) may now be partially addressable via `limitations`.
 **Who:** Claude
 **Context needed:** `plans/subcard_redteam_plan.md` (full document), Phase 1–4 summaries.
 **Done when:** The red-team plan reflects the new surfaces with at least a first-pass severity/likelihood/mitigation entry for each; existing findings cross-referenced where the new mechanism changes their status.

@@ -260,7 +260,7 @@ Before reading further, note when Claude should stop and wait for your input:
 
 ### Step 3.8 — Implement sub-card registration/deregistration handlers
 
-**What:** Write `src/handlers/sub-card.ts`. Implement `processSubCardRegistration` (§5.4): verify app signature, holder signature (P-13, P-14); `verifyAppCertificationChain` (P-15); rate limits (P-18); pin `SubCardDocument`; `registerSubCardOnChain`. Implement `processSubCardDeregistration`: verify holder master signature (P-14); gas check with sponsorship for zero-balance apps; `DeregisterSubCard`.
+**What:** Write `src/handlers/sub-card.ts`. Implement `processSubCardRegistration` (§5.4): verify app signature, holder signature (P-13, P-14); `verifyAppCertificationChain` (P-15); rate limits (P-18); pin `SubCardDocument`; `registerSubCardOnChain`. Implement `processSubCardDeregistration`: verify holder primary card signature (P-14); gas check with sponsorship for zero-balance apps; `DeregisterSubCard`.
 
 **Who:** Claude
 

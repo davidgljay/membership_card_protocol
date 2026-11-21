@@ -381,7 +381,7 @@ app_card_chain_valid: "skipped",
 ```typescript
 app_card_chain_valid: "skipped",
 ```
-(`verifyCard` takes a master card address directly; master cards do not have `app_card` fields.)
+(`verifyCard` takes a primary card address directly; primary cards do not have `app_card` fields.)
 
 **`#skippedResult` — add to the return object:**
 ```typescript

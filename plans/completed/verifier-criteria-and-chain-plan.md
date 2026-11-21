@@ -108,8 +108,8 @@ Confirmed reading of "public id": the raw ML-DSA-44 public key (base64url), dist
 ## Status: Complete (2026-07-11)
 
 All 7 steps landed and were independently verified (not just trusted from agent reports), across three commits:
-- `2709e500` — TS implementation (Steps 1–2), plus a pre-existing bug found and fixed during review: the chain walk for a sub-card signer started from the signer's own address paired with the master card's document, mismatching `chain[0]`'s address against its content. Fixed to start from the master's own address.
-- `372d88fc` — TS test/doc completion (Step 3) and the Python port (Steps 4–6), including independently re-deriving and fixing the same master/signer address bug in the Python code (it predated the TS fix).
+- `2709e500` — TS implementation (Steps 1–2), plus a pre-existing bug found and fixed during review: the chain walk for a sub-card signer started from the signer's own address paired with the primary card's document, mismatching `chain[0]`'s address against its content. Fixed to start from the primary card's own address.
+- `372d88fc` — TS test/doc completion (Step 3) and the Python port (Steps 4–6), including independently re-deriving and fixing the same primary card/signer address bug in the Python code (it predated the TS fix).
 - `2258b908` — Step 7: a new kind of interop vector (beyond the existing crypto-primitive ones) — a deterministic multi-card chain replayed through both languages' `CardVerifier`, generated from the real TS package's actual output. 5 cases, all passing on both sides, including the envelope-level OR across two signers.
 
 Notable findings during review, not assumed away:

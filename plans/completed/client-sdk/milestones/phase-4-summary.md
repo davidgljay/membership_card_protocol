@@ -13,7 +13,7 @@ A full loop — one fake "SDK instance" requesting a sub-card, a separate one va
 
 - Full request → validate → consent → countersign → register → revoke loop passes end-to-end against stub press/registry: yes (`phase4EndToEnd.test.ts`).
 - 9xx-exclusion test passes: yes — `SubCardRevocationCode`'s literal type (`800 | 801 | 810 | 811`) makes a 9xx value unconstructable through `revokeSubCard`'s signature; a test force-casts one past TypeScript and confirms the runtime check rejects it before any network call (`revocation.test.ts`).
-- Primary-key-only-deregistration test passes: yes — this was Phase 2 Step 2.5's own deliverable (`wallet/subCardDeregistration.test.ts`), not rebuilt here; `deregisterSubCard` has no signer parameter other than `masterSecretKey`, confirmed by a test verifying the produced signature against the master public key specifically.
+- Primary-key-only-deregistration test passes: yes — this was Phase 2 Step 2.5's own deliverable (`wallet/subCardDeregistration.test.ts`), not rebuilt here; `deregisterSubCard` has no signer parameter other than `masterSecretKey`, confirmed by a test verifying the produced signature against the primary card public key specifically.
 - Phase summary written: this document.
 - `specs/object_specs/client_sdk.md` §9 and its §14 status table updated to mark Steps 4.2–4.4 (and this milestone) **Done**: done as part of this same change.
 

@@ -189,7 +189,7 @@ Every test name starts with the spec section it verifies, e.g. `card_login §AC-
 | Criterion | Test |
 |---|---|
 | `S1` accepted only on server cards | V `stage2.test.ts › S1 on server card / S1 on device sub-card`; P `sub-card.test.ts › P-27` |
-| Login service `app_card` for another master rejected by wallet, press, verifier | W `handleSubCardRequest.test.ts › LOGIN_SERVICE_SCOPE`; P `sub-card.test.ts › P-26`; V `stage2.test.ts › LOGIN_SERVICE_SCOPE`; I `› login service card as wallet rejected` |
+| Login service `app_card` for another primary card rejected by wallet, press, verifier | W `handleSubCardRequest.test.ts › LOGIN_SERVICE_SCOPE`; P `sub-card.test.ts › P-26`; V `stage2.test.ts › LOGIN_SERVICE_SCOPE`; I `› login service card as wallet rejected` |
 
 **`dns_resolution.md` (new criterion)** — `mcard://auth` triggers no CID fetch or chain read: W `handoff.test.ts › mcard://auth parsed as action link` (the wallet SDK is the only `mcard://` parser in the repo that handles `auth`).
 

@@ -12,12 +12,12 @@ The following open questions from the strategic plan are resolved here:
 
 | Question | Decision |
 |---|---|
-| OQ-WS-1: `service_secret` delivery auth | **Resolved (CP-1).** No externally-issued registration token — there is no third party in the loop to issue one. Per `open_offer_acceptance_new_wallet.md` and `open_offer_acceptance_existing_wallet.md`, the wallet service is the sole, continuous driver of offer display, wallet creation, and claim submission; auth is bootstrapped in-flow instead: **new wallet** — `POST /accounts` is authenticated by the freshly-generated master card key signing a server-issued challenge (same challenge/response shape as recovery), proving control of the key being registered; the response includes a session token directly, so no separate login step is needed for the rest of that session. **Existing wallet** — the recipient already holds an account and must authenticate via a new WebAuthn passkey login (Step 2.1) before `GET /service-secret` (Step 2.3) will release the value needed to decrypt and update their keyring. At recovery re-registration (Phase 3), device signs a challenge with the recovered master card key; wallet issues a session token in response — unchanged. |
+| OQ-WS-1: `service_secret` delivery auth | **Resolved (CP-1).** No externally-issued registration token — there is no third party in the loop to issue one. Per `open_offer_acceptance_new_wallet.md` and `open_offer_acceptance_existing_wallet.md`, the wallet service is the sole, continuous driver of offer display, wallet creation, and claim submission; auth is bootstrapped in-flow instead: **new wallet** — `POST /accounts` is authenticated by the freshly-generated primary card key signing a server-issued challenge (same challenge/response shape as recovery), proving control of the key being registered; the response includes a session token directly, so no separate login step is needed for the rest of that session. **Existing wallet** — the recipient already holds an account and must authenticate via a new WebAuthn passkey login (Step 2.1) before `GET /service-secret` (Step 2.3) will release the value needed to decrypt and update their keyring. At recovery re-registration (Phase 3), device signs a challenge with the recovered primary card key; wallet issues a session token in response — unchanged. |
 | OQ-WS-2: WebSocket for relay bridging | **Resolved by relay spec change.** Wallet service no longer exposes a WebSocket endpoint. Relay's `GET /ws/{uuid}` is device-facing only. Outbound messages go device → wallet HTTPS directly. Wallet service is fully stateless with respect to persistent connections — this is what enables the Nitro/serverless deployment model below. |
 | OQ-WS-3: Keyring blob storage | **No IPFS.** Per `ARCHITECTURE.md` ADR-009-AMEND, the keyring blob is stored in traditional, deletable storage (`keyring_blobs` table) and replicated to every wallet service in the federation, keyed by `keyring_id = keccak256(encrypted_blob)`. Rotation triggers a synchronized delete of the superseded version across all federation members. See Step 4.1a. |
 | OQ-WS-4: UMBRAL re-encryption key storage | **Moot — architecture changed in Phase 4.** Originally resolved as "stored in plaintext, no encryption." Phase 4 replaced wallet-side UMBRAL re-encryption with sender-side per-sub-card encryption (`message_routing.md` v0.4): the sender resolves the recipient's current sub-card list from the storage contract and encrypts independently to each one, so the wallet service never holds re-encryption key material at all. This also avoided taking on the only available UMBRAL implementation's GPL-3.0 license. |
 | OQ-WS-5: Federation scope | Single wallet service at launch. Peer list, binding announcements, and startup sync are implemented but tested against a single-instance stub. Federation is validated in Phase 4. |
-| OQ-WS-6: Cancellation credential | Master card key. Holder signs a cancellation challenge with their master card key. The wallet service verifies the ML-DSA-44 signature against the master card's public key (already held from account registration). |
+| OQ-WS-6: Cancellation credential | Primary card key. Holder signs a cancellation challenge with their primary card key. The wallet service verifies the ML-DSA-44 signature against the primary card's public key (already held from account registration). |
 
 **Standing privacy invariant — applies to every phase:**
 
@@ -82,7 +82,7 @@ The wallet service must not be able to determine which cards are held on which d
     type            TEXT NOT NULL CHECK (type IN ('synced_passkey', 'yubikey')),
     wrapped_blob    TEXT NOT NULL,           -- opaque ciphertext; wallet cannot decrypt
     notification_channels  JSONB NOT NULL,  -- { email, sms, webhook, secondary_contact }
-    cancellation_pubkey    TEXT NOT NULL,   -- ML-DSA-44 pubkey for cancellation signing (master card key)
+    cancellation_pubkey    TEXT NOT NULL,   -- ML-DSA-44 pubkey for cancellation signing (primary card key)
     created_at      TIMESTAMPTZ DEFAULT now()
   );
 
@@ -150,7 +150,7 @@ The wallet service must not be able to determine which cards are held on which d
 
 **Step 1.3 — Secrets backend and envelope encryption**
 - What: Implement a `SecretsBackend` interface with two methods:
-  - `wrapDek(dek: Buffer): Promise<string>` — encrypts a 256-bit DEK with the backend's master key, returns ciphertext.
+  - `wrapDek(dek: Buffer): Promise<string>` — encrypts a 256-bit DEK with the backend's primary card key, returns ciphertext.
   - `unwrapDek(dek_enc: string): Promise<Buffer>` — decrypts a wrapped DEK.
 
   And a `SecretsService` built on top of it, used only for `service_secret` (re-encryption keys are stored in plaintext per OQ-WS-4 and need no service):
@@ -167,11 +167,11 @@ The wallet service must not be able to determine which cards are held on which d
 **Step 1.4 — Auth middleware**
 - What: Implement two auth mechanisms:
   - `sessionTokenAuth` — validates short-lived HMAC-SHA256 bearer tokens (issued by `POST /auth/session`); tokens contain `{ card_hash, issued_at, expires_at }`; 15-minute TTL. Revocation list stored via Nitro's `storage` abstraction (already used by the press for KV-backed storage) rather than Redis — defaults to a `cloudflare-kv-binding` driver on the Cloudflare preset, falls back to a Postgres-backed table on `node-server`/`aws-lambda`. No standalone Redis dependency.
-  - `masterCardSignatureAuth` — for recovery re-registration only; holder sends a signed challenge using their ML-DSA-44 master card key; wallet verifies signature against the `master_pubkey` in `holder_accounts`.
+  - `masterCardSignatureAuth` — for recovery re-registration only; holder sends a signed challenge using their ML-DSA-44 primary card key; wallet verifies signature against the `master_pubkey` in `holder_accounts`.
   - Peer wallet service auth: verify ML-DSA-44 signature on `CardBindingAnnouncement` (no middleware needed; handled inline in routing endpoints).
 - Who: Claude
 - Context needed: `specs/process_specs/wallet_backup_and_recovery.md §Actors`, `strategic-plan.md §OQ-WS-1`
-- Done when: Integration tests confirm: valid token passes; expired token fails; tampered token fails; invalid master card signature fails; valid master card signature succeeds.
+- Done when: Integration tests confirm: valid token passes; expired token fails; tampered token fails; invalid primary card signature fails; valid primary card signature succeeds.
 
 **Step 1.5 — Health check and CI**
 - What: `GET /health` returns `{ status: "ok", postgres: "ok", secrets: "ok" }` (or `degraded` with individual component status; `secrets` checks whichever `SecretsBackend` is configured). Add GitHub Actions workflow: lint → test → `nitro build` (default Cloudflare preset) → `npm run build:node` (sanity-check the alternate preset still builds). Add environment variable template (`.env.example`) covering both `SECRETS_BACKEND=webcrypto` (default) and `SECRETS_BACKEND=kms` configs.
@@ -187,14 +187,14 @@ The wallet service must not be able to determine which cards are held on which d
 
 ### Phase 2: Keyring Custody (Primary Service)
 
-**Goal:** Holder accounts can be created, `service_secret` issued, keyring CID stored and updated. Session token authentication works end-to-end for both acceptance paths — master-card-key signature at new-wallet creation, WebAuthn passkey login for existing wallets.
+**Goal:** Holder accounts can be created, `service_secret` issued, keyring CID stored and updated. Session token authentication works end-to-end for both acceptance paths — primary-card-key signature at new-wallet creation, WebAuthn passkey login for existing wallets.
 
 ---
 
 **Step 2.1 — WebAuthn passkey registration and login (CP-1 resolved — see below)**
 - What: Per `open_offer_acceptance_new_wallet.md` and `open_offer_acceptance_existing_wallet.md`, the wallet service is the sole, continuous driver of offer display, wallet creation, and claim submission — there is no third party that mints a registration token (see CP-1 resolution note below). Two distinct auth needs follow from the two specs:
 
-  - **New wallet:** no prior credential exists. `POST /accounts` (Step 2.2) is authenticated directly by the freshly-generated master card key signing a server-issued challenge — folded into Step 2.2, not a separate endpoint.
+  - **New wallet:** no prior credential exists. `POST /accounts` (Step 2.2) is authenticated directly by the freshly-generated primary card key signing a server-issued challenge — folded into Step 2.2, not a separate endpoint.
   - **Existing wallet:** the recipient already has an account and must prove it via a WebAuthn login before the wallet service will release `service_secret` (Step 2.3) so they can decrypt and update their existing keyring (`open_offer_acceptance_existing_wallet.md` Step 6). This is a genuinely new endpoint, not previously in this plan.
 
   `POST /auth/passkey/challenge` — issues a WebAuthn assertion challenge. Unauthenticated, identified by `card_hash`, rate-limited by `card_hash`.
@@ -235,7 +235,7 @@ The wallet service must not be able to determine which cards are held on which d
 
 **⚑ Clarification Checkpoint CP-1 — RESOLVED**
 
-There is no externally-issued registration token. The wallet service hosts and drives the entire offer-display → wallet-creation → claim-submission flow itself (confirmed against `open_offer_acceptance_new_wallet.md` and `open_offer_acceptance_existing_wallet.md`), so there's no third party to issue one. New-wallet account creation authenticates via the freshly-generated master card key (Step 2.2); existing-wallet re-authentication uses WebAuthn passkey login (Step 2.1, above).
+There is no externally-issued registration token. The wallet service hosts and drives the entire offer-display → wallet-creation → claim-submission flow itself (confirmed against `open_offer_acceptance_new_wallet.md` and `open_offer_acceptance_existing_wallet.md`), so there's no third party to issue one. New-wallet account creation authenticates via the freshly-generated primary card key (Step 2.2); existing-wallet re-authentication uses WebAuthn passkey login (Step 2.1, above).
 
 **Step 2.2 — Holder account creation and `service_secret` generation**
 - What: `POST /accounts/challenge` — issues a random challenge. Unauthenticated (there is no account yet to authenticate against), rate-limited by IP.
@@ -245,13 +245,13 @@ There is no externally-issued registration token. The wallet service hosts and d
   Response: { challenge: "<32 random bytes, base64url>", expires_at: "<ISO8601>" }
   ```
 
-  `POST /accounts` — creates a holder account, authenticated by the master card key signing the challenge (proves control of the key being registered; mirrors the challenge/response shape already used for recovery and keyring rotation). Generates a 256-bit `service_secret`, encrypts it via `SecretsService.encryptSecret` (Step 1.3), stores it in `holder_accounts` along with the WebAuthn credential registered in the same call (Step 2.1 schema addendum). Accepts the holder's encrypted keyring blob, computes `keyring_id = keccak256(encrypted_blob)`, stores it in `keyring_blobs`, and broadcasts it to every peer wallet service in the federation (see Step 4.1a). Per `ARCHITECTURE.md` ADR-009-AMEND, this is traditional storage, not IPFS — the wallet service never resolves a CID, it just stores and forwards the ciphertext it's given.
+  `POST /accounts` — creates a holder account, authenticated by the primary card key signing the challenge (proves control of the key being registered; mirrors the challenge/response shape already used for recovery and keyring rotation). Generates a 256-bit `service_secret`, encrypts it via `SecretsService.encryptSecret` (Step 1.3), stores it in `holder_accounts` along with the WebAuthn credential registered in the same call (Step 2.1 schema addendum). Accepts the holder's encrypted keyring blob, computes `keyring_id = keccak256(encrypted_blob)`, stores it in `keyring_blobs`, and broadcasts it to every peer wallet service in the federation (see Step 4.1a). Per `ARCHITECTURE.md` ADR-009-AMEND, this is traditional storage, not IPFS — the wallet service never resolves a CID, it just stores and forwards the ciphertext it's given.
 
   ```
   POST /accounts
   Body: {
     challenge: "<same value as /accounts/challenge>",
-    signature: "<ML-DSA-44 sig over challenge using the new master private key, base64url>",
+    signature: "<ML-DSA-44 sig over challenge using the new primary card private key, base64url>",
     card_hash: "<hex>",
     master_pubkey: "<ML-DSA-44 pubkey, base64url>",
     webauthn_credential_id: "<base64url>",
@@ -289,7 +289,7 @@ There is no externally-issued registration token. The wallet service hosts and d
 - Done when: Returns correct `service_secret` for the authenticated card_hash; returns 403 for mismatched card_hash in token; rate limit enforced.
 
 **Step 2.4 — Keyring update (post-recovery re-registration)**
-- What: `PUT /accounts/{card_hash}/keyring` — replaces the holder's keyring blob after recovery re-registration. Authenticated with `masterCardSignatureAuth` (holder signs a challenge with recovered master card key). Stores the new blob under a new `keyring_id`, broadcasts it to the federation alongside a delete instruction for the previous `keyring_id` (Step 4.1a), and generates/returns a new `service_secret` (old one is invalidated).
+- What: `PUT /accounts/{card_hash}/keyring` — replaces the holder's keyring blob after recovery re-registration. Authenticated with `masterCardSignatureAuth` (holder signs a challenge with recovered primary card key). Stores the new blob under a new `keyring_id`, broadcasts it to the federation alongside a delete instruction for the previous `keyring_id` (Step 4.1a), and generates/returns a new `service_secret` (old one is invalidated).
 
   ```
   POST /accounts/{card_hash}/keyring/challenge
@@ -306,7 +306,7 @@ There is no externally-issued registration token. The wallet service hosts and d
 
 - Who: Claude
 - Context needed: `specs/process_specs/wallet_backup_and_recovery.md §Process 3 Steps 10–11`, `strategic-plan.md §OQ-WS-1`
-- Done when: Valid master card signature → new `service_secret` issued, keyring blob replaced under a new `keyring_id`, delete-previous-version broadcast sent; old session tokens for this card invalidated; invalid signature → 401.
+- Done when: Valid primary card signature → new `service_secret` issued, keyring blob replaced under a new `keyring_id`, delete-previous-version broadcast sent; old session tokens for this card invalidated; invalid signature → 401.
 
 **⬥ Phase 2 Milestone Review**
 - Context needed: Step 2.1–2.4 outputs; `specs/process_specs/open_offer_acceptance_new_wallet.md`, `specs/process_specs/open_offer_acceptance_existing_wallet.md`, `specs/process_specs/wallet_backup_and_recovery.md §Process 1 and §Process 3`; `plans/wallet-service/strategic-plan.md §Goal 1 Objectives`
@@ -336,7 +336,7 @@ There is no externally-issued registration token. The wallet service hosts and d
       webhook?: "<https:// URL>",
       secondary_contact?: { name: string, email?: string, sms?: string }
     },
-    cancellation_pubkey: "<ML-DSA-44 pubkey of master card key, base64url>"
+    cancellation_pubkey: "<ML-DSA-44 pubkey of primary card key, base64url>"
   }
   Response: { backup_id: "<UUID>" }
   ```
@@ -389,7 +389,7 @@ There is no externally-issued registration token. The wallet service hosts and d
 - Done when: Integration test (with stubbed email/SMS providers) confirms all four channels receive notifications within 60 seconds of recovery initiation; failed dispatch retried with exponential backoff; sent_at recorded.
 
 **Step 3.4 — Cancellation handling**
-- What: `POST /recovery/{recovery_id}/cancel` — accepts a cancellation signed by the master card key. Verifies the ML-DSA-44 signature against the `cancellation_pubkey` registered with the backup. If valid: marks `recovery_window.status = 'cancelled'`, enqueues cancellation confirmation notifications to all channels.
+- What: `POST /recovery/{recovery_id}/cancel` — accepts a cancellation signed by the primary card key. Verifies the ML-DSA-44 signature against the `cancellation_pubkey` registered with the backup. If valid: marks `recovery_window.status = 'cancelled'`, enqueues cancellation confirmation notifications to all channels.
 
   ```
   POST /recovery/{recovery_id}/cancel
@@ -645,7 +645,7 @@ Before any production deployment or real user data: conduct an independent revie
 
 | ID | Where | Trigger |
 |---|---|---|
-| CP-1 | Phase 2, Step 2.1 | **Resolved.** No external registration token exists; new-wallet auth is the master card key signing a challenge (Step 2.2), existing-wallet auth is WebAuthn passkey login (Step 2.1). Not a blocker for Phase 2 going forward. |
+| CP-1 | Phase 2, Step 2.1 | **Resolved.** No external registration token exists; new-wallet auth is the primary card key signing a challenge (Step 2.2), existing-wallet auth is WebAuthn passkey login (Step 2.1). Not a blocker for Phase 2 going forward. |
 | CP-2 | Phase 3, Step 3.5 | Not a development blocker — security review of the 72-hour window, cancellation, and key release will happen separately, before any real recovery data is stored in production. |
 | CP-3 | Phase 6, Step 6.4 | Confirmed as the pre-launch gate. Before any production deployment or real user data: independent security review. |
 

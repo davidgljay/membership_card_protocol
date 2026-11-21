@@ -20,13 +20,13 @@ The sub-card flow introduces new attack surfaces not present in the baseline car
 
 **Goal:** Silently modify the sub-card directory to insert unauthorized sub-cards or remove legitimate ones.
 
-**Attacker profile:** An attacker who has compromised the holder's ML-DSA-44 private key (via theft, malware, or social engineering). The holder key controls all signatures over the master card, including the `active_subcards` directory.
+**Attacker profile:** An attacker who has compromised the holder's ML-DSA-44 private key (via theft, malware, or social engineering). The holder key controls all signatures over the primary card, including the `active_subcards` directory.
 
 ### Attack Vectors
 
 #### 0.1 — Silent Sub-Card Directory Insertion via Codes 510/511/512
 
-**Description:** A compromised holder key signs an "add sub-card" (code-510) or "rotate sub-card" (code-512) log entry on the master card, inserting a rogue public key into `active_subcards`. The rogue key belongs to an attacker-controlled device. The verifier now accepts signatures from the rogue device as if they were legitimate sub-cards.
+**Description:** A compromised holder key signs an "add sub-card" (code-510) or "rotate sub-card" (code-512) log entry on the primary card, inserting a rogue public key into `active_subcards`. The rogue key belongs to an attacker-controlled device. The verifier now accepts signatures from the rogue device as if they were legitimate sub-cards.
 
 **Analysis:** Codes 510/511/512 are hardcoded to require holder-only authorization (not policy-configurable). The holder's signature is the sole authorization gate. If the holder key is compromised, the attacker can freely modify `active_subcards`. The entry appears in the IPFS log with the holder's legitimate signature, so a verifier that checks the signature will not detect the insertion as unauthorized — from the verifier's perspective, it is a legitimate holder-initiated update.
 
@@ -36,13 +36,13 @@ The sub-card flow introduces new attack surfaces not present in the baseline car
 
 #### 0.2 — Sub-Card Directory as a Privacy Leak Vector
 
-**Description:** Anyone who decrypts the master card (authorized verifiers, the card holder, or anyone with the decryption key) can see the full list of active sub-cards. This includes the holder's apps, capabilities delegated to each, and the sub-card public keys. An observer who collects multiple snapshots of `active_subcards` over time can build a complete behavioral profile of the holder's app usage and trust relationships.
+**Description:** Anyone who decrypts the primary card (authorized verifiers, the card holder, or anyone with the decryption key) can see the full list of active sub-cards. This includes the holder's apps, capabilities delegated to each, and the sub-card public keys. An observer who collects multiple snapshots of `active_subcards` over time can build a complete behavioral profile of the holder's app usage and trust relationships.
 
-**Analysis:** The `active_subcards` field is part of the master card's encrypted content, so it is not publicly visible on the blockchain. However, anyone who has legitimate access to decrypt the master card (e.g., a verifier walking the chain to check a sub-card, or the wallet itself) can see the full directory. This is more fine-grained than the baseline sub-card correlation risk (Adversary 3, Attack 3.1), which only links sub-cards if they appear in independent signatures. Here, a single decryption reveals the entire active roster.
+**Analysis:** The `active_subcards` field is part of the primary card's encrypted content, so it is not publicly visible on the blockchain. However, anyone who has legitimate access to decrypt the primary card (e.g., a verifier walking the chain to check a sub-card, or the wallet itself) can see the full directory. This is more fine-grained than the baseline sub-card correlation risk (Adversary 3, Attack 3.1), which only links sub-cards if they appear in independent signatures. Here, a single decryption reveals the entire active roster.
 
 **Severity:** High — enables detailed behavioral profiling for anyone with decryption access.
 **Likelihood:** High — decryption happens every time a sub-card is verified.
-**Mitigation:** Users who require strong behavioral privacy should consider using separate master cards for different trust contexts (similar to the "isolated sub-card" option already recommended for Adversary 3). The wallet SHOULD display a summary of active sub-cards and allow the user to revoke them at any time. Verifiers SHOULD minimize the number of times they decrypt the master card (e.g., cache the `active_subcards` entry per verification session if multiple sub-cards are being checked).
+**Mitigation:** Users who require strong behavioral privacy should consider using separate primary cards for different trust contexts (similar to the "isolated sub-card" option already recommended for Adversary 3). The wallet SHOULD display a summary of active sub-cards and allow the user to revoke them at any time. Verifiers SHOULD minimize the number of times they decrypt the primary card (e.g., cache the `active_subcards` entry per verification session if multiple sub-cards are being checked).
 
 ---
 
@@ -251,7 +251,7 @@ The sub-card flow introduces new attack surfaces not present in the baseline car
 | ID | Adversary | Attack | Severity | Likelihood | Current Mitigation | Gap |
 |---|---|---|---|---|---|---|
 | 0.1 | Compromised Holder Key | Silent sub-card injection via 510/511/512 | Critical | Medium | Holder key hygiene | Key rotation + directory monitoring needed |
-| 0.2 | Compromised Holder Key | Sub-card directory as privacy leak | High | High | Encrypted storage | Separate master cards for privacy contexts |
+| 0.2 | Compromised Holder Key | Sub-card directory as privacy leak | High | High | Encrypted storage | Separate primary cards for privacy contexts |
 | 1.1 | Malicious App | Capability escalation | High | Medium | Capability fields in spec | Verification library must enforce |
 | 1.2 | Malicious App | Installation card reuse | Medium | Low | Per-install key design | Wallet warning needed |
 | 1.3 | Malicious App | Version-pinned audit bypass | High | Medium | EAS annotations | Audit must be version-specific |
@@ -286,4 +286,4 @@ The following findings represent the highest-priority gaps to address before the
 
 **Finding S-7 (Critical - Phase 4 Addition):** Compromised holder key can silently inject rogue sub-cards via codes 510/511/512. These codes are hardcoded to require holder-only authorization, and a compromised holder key can freely modify `active_subcards`. Mitigation requires the holder to detect and respond (key rotation on a secure device, `active_subcards` monitoring). The wallet MUST provide a secure recovery flow and the spec MUST document `active_subcards` as a critical security-sensitive field requiring regular review by the holder.
 
-**Finding S-8 (High - Phase 4 Addition):** The `active_subcards` field is a privacy leak vector for anyone with decryption access (verifiers, the wallet, or key-compromised parties). A single master card decryption reveals the holder's entire active sub-card roster and delegated capabilities. Mitigation: users requiring behavioral privacy should use separate master cards for different trust contexts. Verifiers should minimize decryption frequency.
+**Finding S-8 (High - Phase 4 Addition):** The `active_subcards` field is a privacy leak vector for anyone with decryption access (verifiers, the wallet, or key-compromised parties). A single primary card decryption reveals the holder's entire active sub-card roster and delegated capabilities. Mitigation: users requiring behavioral privacy should use separate primary cards for different trust contexts. Verifiers should minimize decryption frequency.

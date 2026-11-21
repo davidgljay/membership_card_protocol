@@ -532,7 +532,7 @@ This behavior will be removed in a future version.
 
 Stateless oblivious-forwarding endpoint. Accepts an opaque HPKE-encapsulated blob from a device and forwards it, unread, to the wallet service or press gateway identified by `target_id`. This is the mechanism `specs/process_specs/oblivious_transport.md` specifies for hiding a device's IP address from wallet services and presses; see that document for the full envelope format, key-configuration discovery, and scope of which calls are routed this way.
 
-**Called by the device.** No `Authorization` header — the relay does not authenticate this call itself; whatever auth the destination's decapsulated handler requires (session token, master-card signature, sub-card signature) travels inside the HPKE ciphertext and is checked by the destination gateway, not the relay.
+**Called by the device.** No `Authorization` header — the relay does not authenticate this call itself; whatever auth the destination's decapsulated handler requires (session token, primary-card signature, sub-card signature) travels inside the HPKE ciphertext and is checked by the destination gateway, not the relay.
 
 #### Request
 

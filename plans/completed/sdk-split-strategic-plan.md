@@ -50,7 +50,7 @@ Based on the module boundaries already in `client_sdk.md`, and your stated split
 | Capability | Module today | Goes to |
 |---|---|---|
 | Provider interfaces, crypto/canonicalization core, `CardVerifier` factory, `ObliviousProtocolTransport` | `providers/`, `crypto/`, `verification/`, `transport/` | **App SDK** (shared foundation both packages build on) |
-| Private key generation (master keypair, per-card keypairs) | `wallet/setupWallet.ts` (master), `offers/*.ts` (per-card) | Split: master-key generation is Wallet SDK only; per-card keypair generation for *offer construction* is App SDK |
+| Private key generation (primary card keypair, per-card keypairs) | `wallet/setupWallet.ts` (primary card), `offers/*.ts` (per-card) | Split: primary-card-key generation is Wallet SDK only; per-card keypair generation for *offer construction* is App SDK |
 | Subcard request + signing (requester side) | `subcards/requestSubCard.ts`, `wallet/deviceSubCard.ts` | **App SDK** |
 | Subcard request *authorization* (granter side: validate, consent, countersign) | `subcards/handleSubCardRequest.ts`, `consent.ts`, `countersign.ts` | **Wallet SDK** |
 | Sign arbitrary data with a subcard | new, thin wrapper over `SecureKeyProvider.sign` | **App SDK** |

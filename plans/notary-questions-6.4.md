@@ -74,7 +74,7 @@ P3 for template-scope handoff says the peer's card "has `issuer_card == T`", whi
 ### D10. Observations outside 6.4 (reported, not fixed, CP10)
 
 - **Verifier Stage 5** reads `field_definitions` as an object keyed by field name; the spec and every template policy use an array, so a policy in the specified form fails every required field ("0", "1", ...). The 6.4 test policy document uses the object form for that reason.
-- **Verifier stages** reach Stage 5 only for sub-card signers; a card signed by its own master key (a derived card) gets Stages 3, 4 and 6 through `verifyCard` and Stage 5 only by calling it directly.
+- **Verifier stages** reach Stage 5 only for sub-card signers; a card signed by its own primary card key (a derived card) gets Stages 3, 4 and 6 through `verifyCard` and Stage 5 only by calling it directly.
 - **Notary card ancestry.** A stage-3 walk goes derived card, notary card, then the notary card's own `ancestry_pubkeys`; the spec's `[K_id, T]` list is read only from the derived card. The test notary card lists `T` so the walk ends there.
 
 ### D11. What "standard verification" covered (Q11)

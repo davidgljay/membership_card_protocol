@@ -67,7 +67,7 @@ So this initiative is mostly **revising §8 and wiring existing primitives toget
   - [x] A developer card with an 8xx/9xx code blocks the login; one with a warning code produces a visible warning; a suspended domain (`DOMAIN_SUSPENDED`) blocks. — `LOGIN_SERVICE_REVOKED`, `LOGIN_WARN_*`, `DOMAIN_SUSPENDED`; live in `integration_tests/suites/core/card_login.spec.ts` › revocation, domain status.
   - [x] Each of the above has a dedicated test, including a "valid card, wrong origin" phishing test. — `verifyServerCard.test.ts` (16 cases); live wrong-origin test in `card_login.spec.ts` › Phase 0 setup.
 - [ ] **G3 (verifiable, session-bound)** — *partly met*
-  - [x] The verifier (TS) verifies a login response end-to-end: signature, sub-card → master link, chain walk, revocation, DCQL `mcard` policy match including `include_children`, nonce, `state`/`session_id`, audience origin, and request hash. — `verifyLoginResponse`; `verifier/test/login/verifyLoginResponse.test.ts`; Python parity in `verifier-py/tests/login/`. `include_children` on the live stack is limited by F13.
+  - [x] The verifier (TS) verifies a login response end-to-end: signature, sub-card → primary card link, chain walk, revocation, DCQL `mcard` policy match including `include_children`, nonce, `state`/`session_id`, audience origin, and request hash. — `verifyLoginResponse`; `verifier/test/login/verifyLoginResponse.test.ts`; Python parity in `verifier-py/tests/login/`. `include_children` on the live stack is limited by F13.
   - [ ] `form_post` and `mcard_message` both complete in the integration stack; a response delivered to the wrong browser session is rejected. — *Partly met:* `form_post` and the wrong-session rejection run live; `mcard_message` + one-time code completes in `card_login.spec.ts` › cross device with in-process delivery, not through the relay — blocked on the missing sub-card ML-KEM key field (F10, checkpoint CP6).
   - [x] Every `mcard_message` login records wallet-send → server-receive latency. — app-sdk `handleLoginMessage` `onLatency`; asserted in `card_login.spec.ts` › cross device.
 - [x] **G4 (services and one-tap login)** — *met*
@@ -88,7 +88,7 @@ So this initiative is mostly **revising §8 and wiring existing primitives toget
 |---|---|
 | 1 | Developer certification is a **branch under the app-certification root**, governed by the AppCertificationBody, with its own governance doc so it can be split off later. G2's "developer-policy root chain" therefore means server card → developer card → developer branch → app-certification root. |
 | 2 | (a) The domain's full-domain DNS admin card co-signs a domain binding for the developer card. |
-| 3 | A developer-branch card may be `app_card` only for sub-cards whose master is itself. |
+| 3 | A developer-branch card may be `app_card` only for sub-cards whose primary card is itself. |
 | 4–8 | Recommended defaults. |
 | 9 | Recommended default; no wallet front-end in scope — wallet UX is exercised through a test harness. |
 | CP1-a | Server cards use a new sub-card attestation level **`"S1"`** (server key, no device proof), accepted only for developer-scoped sub-cards. |
@@ -112,7 +112,7 @@ Original questions, kept for context:
 
 6. **Replacing parts of §8 rather than adding alternatives.** The plan removes CHAPI and the required `callbacks.https` back-channel, replacing them with the router, `form_post`, and `mcard_message`. Nothing implements them, so the cost is spec-only. *Recommended: remove, with a changelog entry; keep `mcard://auth?r=` as the native-wallet / QR deep link.*
 
-7. **Identifier the site sees.** The existing `auth_response` puts the holder's master card pointer in `senders` as the account identifier, so the same card is the same identifier at every service. That's consistent with "cards are unlinkable to each other," but services can correlate a given card across sites. *Recommended: accept for v1 and record per-service identifiers as a P2 item.*
+7. **Identifier the site sees.** The existing `auth_response` puts the holder's primary card pointer in `senders` as the account identifier, so the same card is the same identifier at every service. That's consistent with "cards are unlinkable to each other," but services can correlate a given card across sites. *Recommended: accept for v1 and record per-service identifiers as a P2 item.*
 
 8. **Router hosting and silent-registration trust.** The router is new. *Recommended: a new `login-router/` package in this repo, deployed as a static site (alongside the existing Cloudflare deploys) on a protocol-neutral domain; silent registration allowed only for wallets presenting a registration token signed by a certified app card — which reuses AppCertificationBody as the "vetted wallets" list.*
 

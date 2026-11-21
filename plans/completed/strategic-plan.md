@@ -73,7 +73,7 @@ After reading the full spec, the most interesting attack surfaces are:
 
 ### Goal 2: Map key compromise blast radius
 
-- For each key tier (policy authorizer, press sub-card, holder master, holder sub-card, auditor, backup service), document: what an attacker gains on compromise, what the revocation response is, and what the residual damage is after revocation.
+- For each key tier (policy authorizer, press sub-card, holder primary card, holder sub-card, auditor, backup service), document: what an attacker gains on compromise, what the revocation response is, and what the residual damage is after revocation.
 - Evaluate the 72-hour YubiKey recovery cancellation window against an adversary with simultaneous access to the YubiKey and the target's notification channels.
 - Assess whether a compromised press can forge backdated log entries that survive post-hoc verification.
 

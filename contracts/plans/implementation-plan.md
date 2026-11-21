@@ -197,7 +197,7 @@ Write one test per function in this order (each depends on the previous):
 ### Step 3.4 — Sub-card tests (§4.3, §4.4)
 
 **`test_fork_register_sub_card`**
-- Get current master card head CID from `get_card_entry`
+- Get current primary card head CID from `get_card_entry`
 - Build press payload with op=`register_sub_card`, sequence=current
 - Call `register_sub_card(sub_address, master_address, registration_log_head, sub_doc_cid, press_address, payload, sig, b"", b"")`
   - `master_signature` and `master_sig_payload` can be empty bytes (not verified on-chain)

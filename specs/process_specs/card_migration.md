@@ -6,7 +6,7 @@
 
 **Changelog (spec-consistency Phase 2):** Fix #51 — removed the unsupported "410 Gone with no forwarding hint" branch from §In-Flight Messages During Migration; per §6, the old wallet service only rejects traffic after processing the announcement, so pre-processing it accepts normally, and the `410` response always carries the redirect hint (`object_specs/wallet.md §7.6`/`§8` document only that one shape). See `plans/spec-consistency/inconsistencies/phase-2-consolidated-fixes.md`.
 
-**Changelog (spec-consistency Phase 3, 2026-07-16):** Corrected an over-broad allowance introduced during Phase 2's review of this section: David confirmed migration is a master-card-key-only operation. Removed the sub-card-chain-resolution path for the cardholder's authentication (Prerequisites, Step 1) and for the `cardholder`-role signature on the migration announcement itself (§3, §5). MIG-OQ-1 is resolved (moot — there is no sub-card chain to include or look up). See `plans/spec-consistency/inconsistencies/phase-3-consolidated-fixes.md` Tier 3 item (j) and `code-wallet.md` Finding 1, which found the wallet-service code (`wallet-service/src/federation/binding.ts`) never implemented the sub-card-chain path in the first place — only the direct master-key check.
+**Changelog (spec-consistency Phase 3, 2026-07-16):** Corrected an over-broad allowance introduced during Phase 2's review of this section: David confirmed migration is a primary-card-key-only operation. Removed the sub-card-chain-resolution path for the cardholder's authentication (Prerequisites, Step 1) and for the `cardholder`-role signature on the migration announcement itself (§3, §5). MIG-OQ-1 is resolved (moot — there is no sub-card chain to include or look up). See `plans/spec-consistency/inconsistencies/phase-3-consolidated-fixes.md` Tier 3 item (j) and `code-wallet.md` Finding 1, which found the wallet-service code (`wallet-service/src/federation/binding.ts`) never implemented the sub-card-chain path in the first place — only the direct primary-card-key check.
 
 ---
 
@@ -23,7 +23,7 @@ A valid migration requires dual authorization: the **new wallet service** (confi
 Before migration can proceed:
 
 - The cardholder must hold a valid, unrevoked card.
-- The cardholder must authenticate to the new wallet service by completing a signed challenge-response that proves possession of the card's master private key.
+- The cardholder must authenticate to the new wallet service by completing a signed challenge-response that proves possession of the primary card's private key.
 - The new wallet service must be present in the peer lists of other wallet services.
 
 ---
@@ -32,7 +32,7 @@ Before migration can proceed:
 
 ### 1. Cardholder authenticates to the new wallet service
 
-The new wallet service issues a nonce. The cardholder signs it with their card's master ML-DSA-44 key, proving key possession without revealing the key. The new wallet service verifies the signature resolves directly to the presented card hash (`keccak256(public_key) == card_hash`).
+The new wallet service issues a nonce. The cardholder signs it with their primary card's ML-DSA-44 key, proving key possession without revealing the key. The new wallet service verifies the signature resolves directly to the presented card hash (`keccak256(public_key) == card_hash`).
 
 ### 2. New wallet service constructs the migration announcement payload
 
@@ -69,7 +69,7 @@ Both parties sign the canonical RFC 8785 JSON of the payload above. The assemble
 }
 ```
 
-The cardholder signs with the card's master ML-DSA-44 key only. The `public_key` in the cardholder signature entry must be the master card key, verified directly against `card_hash` (`keccak256(public_key) == card_hash`). Device sub-card keys are not accepted for this signature — migration is a master-key-authorized operation, not delegable to a sub-card.
+The cardholder signs with the primary card's ML-DSA-44 key only. The `public_key` in the cardholder signature entry must be the primary card key, verified directly against `card_hash` (`keccak256(public_key) == card_hash`). Device sub-card keys are not accepted for this signature — migration is a primary-card-key-authorized operation, not delegable to a sub-card.
 
 ### 4. Broadcast to all peers
 
@@ -125,7 +125,7 @@ Messages sent to the old wallet service while the migration announcement is stil
 
 ## Open Questions
 
-~~**MIG-OQ-1: Sub-card chain inclusion in the announcement.**~~ **Resolved 2026-07-16 (spec-consistency Phase 3).** Moot — the cardholder signature on a migration announcement requires the master card key only; there is no sub-card chain to include or look up. See the Phase 3 changelog note above.
+~~**MIG-OQ-1: Sub-card chain inclusion in the announcement.**~~ **Resolved 2026-07-16 (spec-consistency Phase 3).** Moot — the cardholder signature on a migration announcement requires the primary card key only; there is no sub-card chain to include or look up. See the Phase 3 changelog note above.
 
 **MIG-OQ-2: Message queue handoff confidentiality.** When the old wallet service forwards queued messages to the new wallet service, those messages are opaque ciphertext (encrypted to the recipient card's ML-KEM key). The forwarding wallet service cannot read them. However, it does learn the volume and rough timing of queued messages. Is this acceptable, or should the handoff be designed to minimize that signal?
 

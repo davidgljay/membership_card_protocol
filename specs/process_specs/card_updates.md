@@ -135,9 +135,9 @@ Updates are classified by a three-digit code (1xx–9xx) that signals the semant
 
 ## Sub-Card Directory Updates (Codes 510/511/512)
 
-These codes are a special case of the 1xx–7xx field-update flow above (they use `field_updates`, not `revocation`), scoped to the `active_subcards` field on the **holder's own master card** (`protocol-objects.md §1.1`). They follow the same five phases as any other update, with these specifics:
+These codes are a special case of the 1xx–7xx field-update flow above (they use `field_updates`, not `revocation`), scoped to the `active_subcards` field on the **holder's own primary card** (`protocol-objects.md §1.1`). They follow the same five phases as any other update, with these specifics:
 
-- **Updater:** Always the master card's own holder — the `updater_card` in the `UpdateIntentPayload` is the target card itself, and `intent_signature` is produced with the holder's current master-card key. There is no cross-card scenario for these codes: an app or issuer cannot originate a 510/511/512 intent on a holder's behalf.
+- **Updater:** Always the primary card's own holder — the `updater_card` in the `UpdateIntentPayload` is the target card itself, and `intent_signature` is produced with the holder's current primary-card key. There is no cross-card scenario for these codes: an app or issuer cannot originate a 510/511/512 intent on a holder's behalf.
 - **Code 510 (addition):** `field_updates` is `[{ "field": "active_subcards", "value": <full new array, with the new pubkey appended> }]`. If `active_subcards` is not yet present on the card, this entry both adds the field and sets its first element.
 - **Code 511 (removal):** `field_updates` is `[{ "field": "active_subcards", "value": <full new array, with the removed pubkey deleted> }]`. A `note` explaining the removal (e.g., "device lost", "app uninstalled") is recommended but not required.
 - **Code 512 (key rotation):** `field_updates` is `[{ "field": "active_subcards", "value": <full new array, with exactly one pubkey swapped for its replacement> }]` — a single atomic entry, not a paired 511+510.

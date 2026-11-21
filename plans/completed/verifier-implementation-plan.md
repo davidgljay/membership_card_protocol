@@ -176,9 +176,9 @@ Write tests for: valid signature, invalid signature (returns `false`, does not t
 
 ---
 
-### Step 3.2 — Stage 2: Sub-Card to Master Link
+### Step 3.2 — Stage 2: Sub-Card to Primary Card Link
 
-**What:** Implement `verifyStage2(publicKey: Uint8Array, rpc: RpcProvider, ipfs: IpfsProvider): Promise<Stage2Result>` in `packages/verifier/src/stages/stage2.ts`. Steps per spec §7.2. Returns `{ scope_clean: boolean | "skipped", signer_card: string, masterCardDoc?: MasterCardDoc }` (the decoded master card doc is threaded to Stage 3).
+**What:** Implement `verifyStage2(publicKey: Uint8Array, rpc: RpcProvider, ipfs: IpfsProvider): Promise<Stage2Result>` in `packages/verifier/src/stages/stage2.ts`. Steps per spec §7.2. Returns `{ scope_clean: boolean | "skipped", signer_card: string, masterCardDoc?: MasterCardDoc }` (the decoded primary card doc is threaded to Stage 3).
 
 Hard rejection paths: card not found → `scope_clean: false` + stop; AES-GCM failure → `scope_clean: false` + stop; address binding mismatch → `scope_clean: false` + stop.
 
@@ -282,7 +282,7 @@ Write tests for: `fetchAnnotations: false` returns `[]` without any network call
 
 ### Step 4.2 — `verifyEnvelope()`
 
-**What:** Implement `CardVerifier.verifyEnvelope(envelope: SignedMessageEnvelope): Promise<EnvelopeVerificationResult>`. For each entry in `envelope.signatures`: run Stage 1; derive card address; run Stages 2–6 in order, threading outputs (master card doc from Stage 2 to Stage 3, chain addresses from Stage 3 to Stage 4, etc.); assemble `SignatureVerificationResult`. Compute `envelope_id` as SHA-256 of `canonicalize(envelope)`, hex-encoded.
+**What:** Implement `CardVerifier.verifyEnvelope(envelope: SignedMessageEnvelope): Promise<EnvelopeVerificationResult>`. For each entry in `envelope.signatures`: run Stage 1; derive card address; run Stages 2–6 in order, threading outputs (primary card doc from Stage 2 to Stage 3, chain addresses from Stage 3 to Stage 4, etc.); assemble `SignatureVerificationResult`. Compute `envelope_id` as SHA-256 of `canonicalize(envelope)`, hex-encoded.
 
 The `addressed_to_verifier` field is `false` for v1 (verifier card registration is deferred — spec §13 decision 5).
 
@@ -368,7 +368,7 @@ Write a test using a mock client that returns fixed bytes for a given CID.
 
 ### Step 6.1 — Full pipeline integration test
 
-**What:** Write `packages/verifier/test/integration/full-pipeline.test.ts`. Construct a complete mock scenario: a sub-card signing an envelope, with a master card, two ancestors, and a trusted root — all backed by mock `RpcProvider` and `IpfsProvider` that return pre-computed cryptographic fixtures. Verify that `verifyEnvelope` returns `signature_valid: true`, `scope_clean: true`, `chain_reaches_trusted_root: true`, `is_currently_valid: true`, `policy_compliant: true`.
+**What:** Write `packages/verifier/test/integration/full-pipeline.test.ts`. Construct a complete mock scenario: a sub-card signing an envelope, with a primary card, two ancestors, and a trusted root — all backed by mock `RpcProvider` and `IpfsProvider` that return pre-computed cryptographic fixtures. Verify that `verifyEnvelope` returns `signature_valid: true`, `scope_clean: true`, `chain_reaches_trusted_root: true`, `is_currently_valid: true`, `policy_compliant: true`.
 
 **Who:** Claude
 

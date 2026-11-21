@@ -122,7 +122,7 @@ Triggered any time during Phase 1 or 2 that a discrepancy looks like the *code* 
 - Done when: Every table, column, and index in the actual database is documented; nothing appears that isn't in a migration; the historical note about `reencryption_keys` is present and clearly marked as removed.
 
 **Step 3.4 — Authentication section**
-- What: Document each auth mechanism from Step 1.3: session token, master-card-signature, WebAuthn passkey login, peer-wallet-service signature verification, admin bearer token. For each, specify exactly which endpoints require it (cross-reference Step 1.1).
+- What: Document each auth mechanism from Step 1.3: session token, primary-card-signature, WebAuthn passkey login, peer-wallet-service signature verification, admin bearer token. For each, specify exactly which endpoints require it (cross-reference Step 1.1).
 - Who: Claude
 - Context needed: Step 1.3 output
 - Done when: Every endpoint in the Endpoints section (Step 3.5) has its auth mechanism defined here first, no forward references to undefined mechanisms.

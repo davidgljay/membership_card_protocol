@@ -60,7 +60,7 @@ This summary confirms consistency across all touched files. No contradictions fo
 
 | Layer | Authority Model | Consistency |
 |-------|---|---|
-| **Issuance** | Holder (issues sub-card to app via code-510 on master card) | ✅ All specs agree |
+| **Issuance** | Holder (issues sub-card to app via code-510 on primary card) | ✅ All specs agree |
 | **Directory Updates** | Holder only (codes 510/511/512, hardcoded authorization) | ✅ Process specs, verifier, red-team plan aligned |
 | **Issuer Authority** | No role in directory updates; issuer cannot modify `active_subcards` | ✅ `update_codes.md` explicitly excludes issuer; card_validation.md rejects issuer signatures on codes 510/511/512 |
 | **Policy Authority** | No role in directory updates; policy `update_policy` cannot override holder-only rule | ✅ `protocol-objects.md §1.1` and `update_codes.md` both state "not policy-configurable" |
@@ -69,12 +69,12 @@ This summary confirms consistency across all touched files. No contradictions fo
 
 ## Key Design Decisions (Cross-File Consistency)
 
-### 1. **The Three Directory Codes Are Master-Card-Only**
+### 1. **The Three Directory Codes Are Primary-card-Only**
 
-**Decision:** Codes 510/511/512 apply only to the master card's log; posting them to a sub-card's log is an error.
+**Decision:** Codes 510/511/512 apply only to the primary card's log; posting them to a sub-card's log is an error.
 
 **Where Documented:**
-- `update_codes.md`: "These codes apply only to entries on the master (primary) card's own log"
+- `update_codes.md`: "These codes apply only to entries on the primary card's own log"
 - `process_specs/subcard_creation_policy.md §Update Card Content`: Prohibits 5xx updates on sub-card log (and notes distinction from 510/511/512 on parent log)
 - `card_validation.md`: References this distinction in the error-handling table
 
@@ -82,14 +82,14 @@ This summary confirms consistency across all touched files. No contradictions fo
 
 ### 2. **`active_subcards` is NOT Synced to the On-Chain Registry**
 
-**Decision:** The `active_subcards` field lives only in the IPFS master card document. The on-chain `SubCardEntry` for each sub-card records only that individual sub-card, not the roster.
+**Decision:** The `active_subcards` field lives only in the IPFS primary card document. The on-chain `SubCardEntry` for each sub-card records only that individual sub-card, not the roster.
 
 **Where Documented:**
 - `registry_contract.md §2`: "codes 510/511/512 are off-chain and don't require contract changes"
 - `protocol-objects.md §1.1`: Field definition notes codes 510/511/512 update the IPFS log
-- `card_validation.md` Step 9: Verifier walks the IPFS master card, not the contract
+- `card_validation.md` Step 9: Verifier walks the IPFS primary card, not the contract
 
-**Implementation:** Verifier fetches master card from IPFS and searches `active_subcards` array.
+**Implementation:** Verifier fetches primary card from IPFS and searches `active_subcards` array.
 
 ### 3. **`limitations` Reuses the Existing Predicate Grammar**
 
@@ -206,7 +206,7 @@ This summary confirms consistency across all touched files. No contradictions fo
 
 The following are captured as future work and are **out of scope** for this implementation:
 
-1. **Write path for `active_subcards` (codes 510/511/512) — RESOLVED, end to end, including sibling notification.** `client-sdk/packages/client-sdk/src/subcards/activeSubcardsUpdate.ts` exports `addActiveSubCard()` / `removeActiveSubCard()` / `rotateActiveSubCard()`, each constructing and submitting a holder-signed code-510/511/512 `UpdateIntentPayload` against the holder's own master card (15 tests). `press/src/handlers/update.ts`'s `handleUpdate` hard-rejects any such intent unless `updater_card_address === target_card_address` (P-23) and the intent signature's public key binds via `keccak256` to that address (P-13) — this generic chain-validity/`update_policy` gate that every other 1xx–7xx code goes through is explicitly bypassed for these three codes, since authorization here is hardcoded, not policy-derived. After a successful update, `press/src/functions/notifications.ts`'s `diffActiveSubcards`/`notifySubcardSiblings` (wired into `handleUpdate`) sends `subcard_sibling_added`/`_removed`/`_rotated` to the correct recipients with the correct content, matching `messaging_protocol.md` §9–11 exactly (26 tests across `press/test/unit/update-active-subcards.test.ts` and `press/test/unit/notifications.test.ts`, including full encrypt/decrypt round-trips against a real master `CardDocument`). **Known limitation, disclosed rather than hidden:** notification delivery is plaintext JSON POSTed to a per-recipient-address endpoint stub — not full ADR-007 ML-KEM-768 E2E encryption — because no field anywhere in this protocol (`SubCardDocument`, on-chain `SubCardEntry`, or elsewhere) yet records a sub-card's ML-KEM public key for the press to resolve. This mirrors the pre-existing Phase 3 auditor-notification precedent in `appendIssuanceRecord` (`press/src/functions/log.ts`), which has the identical caveat. Resolving ML-KEM key storage/lookup (see item 4 below) is a prerequisite for upgrading this to real E2E encryption.
+1. **Write path for `active_subcards` (codes 510/511/512) — RESOLVED, end to end, including sibling notification.** `client-sdk/packages/client-sdk/src/subcards/activeSubcardsUpdate.ts` exports `addActiveSubCard()` / `removeActiveSubCard()` / `rotateActiveSubCard()`, each constructing and submitting a holder-signed code-510/511/512 `UpdateIntentPayload` against the holder's own primary card (15 tests). `press/src/handlers/update.ts`'s `handleUpdate` hard-rejects any such intent unless `updater_card_address === target_card_address` (P-23) and the intent signature's public key binds via `keccak256` to that address (P-13) — this generic chain-validity/`update_policy` gate that every other 1xx–7xx code goes through is explicitly bypassed for these three codes, since authorization here is hardcoded, not policy-derived. After a successful update, `press/src/functions/notifications.ts`'s `diffActiveSubcards`/`notifySubcardSiblings` (wired into `handleUpdate`) sends `subcard_sibling_added`/`_removed`/`_rotated` to the correct recipients with the correct content, matching `messaging_protocol.md` §9–11 exactly (26 tests across `press/test/unit/update-active-subcards.test.ts` and `press/test/unit/notifications.test.ts`, including full encrypt/decrypt round-trips against a real primary card `CardDocument`). **Known limitation, disclosed rather than hidden:** notification delivery is plaintext JSON POSTed to a per-recipient-address endpoint stub — not full ADR-007 ML-KEM-768 E2E encryption — because no field anywhere in this protocol (`SubCardDocument`, on-chain `SubCardEntry`, or elsewhere) yet records a sub-card's ML-KEM public key for the press to resolve. This mirrors the pre-existing Phase 3 auditor-notification precedent in `appendIssuanceRecord` (`press/src/functions/log.ts`), which has the identical caveat. Resolving ML-KEM key storage/lookup (see item 4 below) is a prerequisite for upgrading this to real E2E encryption.
 
 2. **Step 3.2 (Verifier):** Implement `limitations` enforcement using existing predicate-evaluation logic. (Flagged with TODO in stage2.ts; requires passing message payload through verification pipeline.)
 

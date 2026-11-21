@@ -161,7 +161,7 @@ This may be an intentional scope decision (the npm package might only ever be us
 **Conflicting specs:** `card_verifier.md` §7.2 (Stage 2, steps 1–13) vs. `card_validation.md` Stage 2 step 9 and its Error Paths table.
 
 `card_validation.md` step 9 includes a MUST-level requirement not present anywhere in `card_verifier.md`'s Stage 2:
-> "Verifiers MUST also confirm, whenever they encounter a code-510/511/512 `LogEntry` on the master card's own log..., that the entry's `intent_signature` was produced by the master card's own holder key. A 510/511/512 entry signed by any other party... MUST be rejected — this authorization is hardcoded... and is not subject to the governing policy's `update_policy`."
+> "Verifiers MUST also confirm, whenever they encounter a code-510/511/512 `LogEntry` on the primary card's own log..., that the entry's `intent_signature` was produced by the primary card's own holder key. A 510/511/512 entry signed by any other party... MUST be rejected — this authorization is hardcoded... and is not subject to the governing policy's `update_policy`."
 
 `card_verifier.md`'s Stage 2 (§7.2, steps 1–13) walks `active_subcards` membership (step 9) but never mentions verifying who signed the 510/511/512 log entries that produced the current `active_subcards` state. This looks like a real omission in the npm package spec relative to its own process-spec counterpart, not an intentional scope difference (there's no stated reason auditing this signer check would be out of scope for a general-purpose verifier).
 

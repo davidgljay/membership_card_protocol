@@ -103,7 +103,7 @@ When a card is created or updated a service called a press posts the latest vers
 **Technical.** Keys are two-tier:
 
 - **Sub-card keys** — used for day-to-day signing — are generated and held in the device's Secure Enclave or TPM. They never leave it.
-- **The master card key** — used for creating sub-cards and rotating keys — lives in an **encrypted keyring blob**, encrypted under a key derived from `passkey + service_secret`. Neither factor alone can decrypt it. The blob is append-only: keys are added and never removed, so recoverability survives every rotation.
+- **The primary card key** — used for creating sub-cards and rotating keys — lives in an **encrypted keyring blob**, encrypted under a key derived from `passkey + service_secret`. Neither factor alone can decrypt it. The blob is append-only: keys are added and never removed, so recoverability survives every rotation.
 
 **How a wallet service holds your backup without seeing it.** The wallet service stores the encrypted blob and nothing else. The decryption key is derived from factors the service does not hold — your passkey plus a separate service secret — so possession of the blob is not possession of the keys. Per ADR-009-AMEND, the blob is replicated across the wallet service federation using ordinary deletable storage rather than IPFS, precisely so it can be *changed and deleted*: it's rewritten on every card acceptance and rotation, and it has no third-party verification requirement because only its owner ever decrypts it.
 

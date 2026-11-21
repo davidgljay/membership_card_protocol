@@ -39,8 +39,8 @@ The Card Protocol uses a chain-of-trust model. Every card that can sign a messag
 When a message arrives signed by a sub-card, the verifier:
 
 1. Checks the cryptographic signature against the envelope payload.
-2. Decrypts the sub-card's IPFS document and confirms it is properly bound to the holder's primary (master) card.
-3. Walks the chain of ancestor public keys from the master card up to a trusted root.
+2. Decrypts the sub-card's IPFS document and confirms it is properly bound to the holder's primary card.
+3. Walks the chain of ancestor public keys from the primary card up to a trusted root.
 4. Reads the on-chain revocation log for every card in the chain.
 5. Fetches the policy snapshot the card was issued under and confirms the card's fields comply with it.
 
@@ -239,7 +239,7 @@ for sig in result.signatures:
         print(link.card_content)   # Decrypted card document fields
 ```
 
-This is useful for building policy-enforcement logic, auditing, or displaying card details to the user. The chain is ordered from the signer's master card outward toward the trusted root. If the walk fails partway through, `chain` contains a partial list up to the point of failure.
+This is useful for building policy-enforcement logic, auditing, or displaying card details to the user. The chain is ordered from the signer's primary card outward toward the trusted root. If the walk fails partway through, `chain` contains a partial list up to the point of failure.
 
 ---
 
@@ -256,7 +256,7 @@ class SignatureVerificationResult:
     signature_valid: bool | None                            # None if Stage 1 was skipped (verify_card)
 
     # Stage 2
-    scope_clean: bool | Literal["skipped"]                  # sub-card properly bound to master card
+    scope_clean: bool | Literal["skipped"]                  # sub-card properly bound to primary card
 
     # Stage 3
     chain_reaches_trusted_root: bool | Literal["skipped"]
@@ -296,7 +296,7 @@ class ChainLink:
     card_content: dict[str, Any]        # the decrypted CardDocument's fields
 ```
 
-Ordered from the signer's master card outward toward the trusted root. If the chain walk fails partway through, `chain` contains the partial list up to the point of failure rather than being empty — useful for policy checks that need to know what was actually resolved even when overall verification fails. `verify_card()` never resolves any chain data (no pubkey is available from a bare address alone), so its `chain` is always an empty list.
+Ordered from the signer's primary card outward toward the trusted root. If the chain walk fails partway through, `chain` contains the partial list up to the point of failure rather than being empty — useful for policy checks that need to know what was actually resolved even when overall verification fails. `verify_card()` never resolves any chain data (no pubkey is available from a bare address alone), so its `chain` is always an empty list.
 
 ### Policy matching (`policy_match`)
 
@@ -329,11 +329,11 @@ Stage 1 — Signature Validity
   Verify the ML-DSA-44 signature.
   -> signature_valid: True | False
 
-Stage 2 — Sub-Card to Master Link
+Stage 2 — Sub-Card to Primary Card Link
   Derive the signer's on-chain address (keccak256 of public key).
   Fetch and decrypt the sub-card document from IPFS.
   Confirm the holder_primary_card and app_card binding checks pass.
-  Fetch and decrypt the master card document.
+  Fetch and decrypt the primary card document.
   Confirm on-chain sub-card registration is active.
   Verify the holder's and app's signatures on the sub-card document.
   -> scope_clean: True | False
@@ -342,7 +342,7 @@ Stage 2 — Sub-Card to Master Link
   causes scope_clean: False and skips Stage 3-5.
 
 Stage 3 — Chain Walk
-  Starting from the master card's ancestry_pubkeys, walk each ancestor.
+  Starting from the primary card's ancestry_pubkeys, walk each ancestor.
   At each hop: confirm keccak256(pubkey) matches the expected address,
   decrypt the ancestor's card from IPFS, check is_policy_authorizer.
   Stop when a trusted root is found or ancestry_pubkeys is exhausted.
@@ -434,8 +434,8 @@ Network timeouts, CIDs not found, RPC node failures — these propagate through 
 | `CARD_NOT_FOUND` | 2 | No on-chain `CardEntry` for the derived address |
 | `DECRYPTION_FAILED` | 2, 3 | AES-GCM authentication failure — document is corrupt or key is wrong |
 | `ADDRESS_BINDING_MISMATCH` | 2 | `keccak256(pubkey)` does not match the expected on-chain address |
-| `SUB_CARD_NOT_IN_ACTIVE_DIRECTORY` | 2 | Sub-card is not listed in the master card's `active_subcards` |
-| `INVALID_HOLDER_SIGNATURE` | 2 | Master card holder's signature on the sub-card document is invalid |
+| `SUB_CARD_NOT_IN_ACTIVE_DIRECTORY` | 2 | Sub-card is not listed in the primary card's `active_subcards` |
+| `INVALID_HOLDER_SIGNATURE` | 2 | Primary card holder's signature on the sub-card document is invalid |
 | `SUB_CARD_INACTIVE` | 2 | Sub-card is not active on-chain |
 | `INVALID_APP_SIGNATURE` | 2 | App's signature on the sub-card document is invalid |
 | `APP_CARD_CHAIN_NOT_TRUSTED` | 2 | The app card's ancestry does not reach `app_certification_root` |

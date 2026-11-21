@@ -13,7 +13,7 @@
 
 **Changelog (spec-consistency Phase 2):** Fix #52 — added §6.5.1 documenting cardholder-signature verification (including sub-card-chain resolution) for `card_migration`-type `CardBindingAnnouncement`s, and updated §7.5's `POST /bindings/announce` description to cite it. See `plans/spec-consistency/inconsistencies/phase-2-consolidated-fixes.md`.
 
-**Changelog (spec-consistency Phase 3, 2026-07-16):** Corrected Fix #52 — David confirmed migration is a master-card-key-only operation; the code (`wallet-service/src/federation/binding.ts`) never implemented the sub-card-chain path described in old §6.5.1, and that allowance should not have been added to the spec. Folded §6.5.1 back into §6.5 (now "Peer wallet-service and cardholder signatures") describing only the direct master-key check for the `cardholder` signer, and updated §7.5's cross-reference accordingly. See `plans/spec-consistency/inconsistencies/phase-3-consolidated-fixes.md` Tier 3 item (j).
+**Changelog (spec-consistency Phase 3, 2026-07-16):** Corrected Fix #52 — David confirmed migration is a primary-card-key-only operation; the code (`wallet-service/src/federation/binding.ts`) never implemented the sub-card-chain path described in old §6.5.1, and that allowance should not have been added to the spec. Folded §6.5.1 back into §6.5 (now "Peer wallet-service and cardholder signatures") describing only the direct primary-card-key check for the `cardholder` signer, and updated §7.5's cross-reference accordingly. See `plans/spec-consistency/inconsistencies/phase-3-consolidated-fixes.md` Tier 3 item (j).
 
 **Changelog (spec-consistency Phase 3, Tier 1 items 9–10):** §7.10 gains documentation for two already-implemented, previously-undocumented Matrix endpoints (`POST /matrix/token`, `PUT /matrix/transactions/{txnId}`); §5's migration count corrected from "8" to "10" (two Matrix migrations were added in Phase 1 but the count was never updated). See `plans/spec-consistency/inconsistencies/phase-3-consolidated-fixes.md`.
 
@@ -141,7 +141,7 @@ PostgreSQL, schema managed via `node-pg-migrate` (`server/db/migrations/`, 10 mi
 
 ### `backup_registrations`
 
-`id` (PK), `holder_id` (FK → `holder_accounts`, `ON DELETE CASCADE`), `type` (`synced_passkey` | `yubikey`), `wrapped_blob` (opaque ciphertext — never decrypted by this service), `notification_channels` (jsonb: `email`, `sms`, `webhook`, `secondary_contact`), `cancellation_pubkey` (ML-DSA-44 pubkey — the holder's master card key), `keyring_id` (text — the `keyring_id` this registration can unwrap to, independent of the account's *current* `keyring_id`, since recovery may be initiated against an older registration), `created_at`.
+`id` (PK), `holder_id` (FK → `holder_accounts`, `ON DELETE CASCADE`), `type` (`synced_passkey` | `yubikey`), `wrapped_blob` (opaque ciphertext — never decrypted by this service), `notification_channels` (jsonb: `email`, `sms`, `webhook`, `secondary_contact`), `cancellation_pubkey` (ML-DSA-44 pubkey — the holder's primary card key), `keyring_id` (text — the `keyring_id` this registration can unwrap to, independent of the account's *current* `keyring_id`, since recovery may be initiated against an older registration), `created_at`.
 
 ### `recovery_windows`
 
@@ -212,9 +212,9 @@ Created in the initial schema to hold per-sub-card UMBRAL proxy re-encryption ke
 
 ## 6. Authentication
 
-### 6.1 Master card key signature
+### 6.1 Primary card key signature
 
-Holder signs a server-issued challenge (or, for cancellation, the `recovery_id`'s own bytes) with their ML-DSA-44 master card key. Verified against `master_pubkey` (account creation, keyring rotation) or `cancellation_pubkey` (recovery cancellation — currently always the master card key; no other cancellation credential type is implemented).
+Holder signs a server-issued challenge (or, for cancellation, the `recovery_id`'s own bytes) with their ML-DSA-44 primary card key. Verified against `master_pubkey` (account creation, keyring rotation) or `cancellation_pubkey` (recovery cancellation — currently always the primary card key; no other cancellation credential type is implemented).
 
 Used by: `POST /accounts`, `PUT /accounts/{card_hash}/keyring`, `POST /recovery/{recovery_id}/cancel`.
 
@@ -244,7 +244,7 @@ Used by: `POST /cards/{card_hash}/subcards/{subcard_hash}/uuids`, `DELETE /cards
 
 A peer's `wallet_service_id` is `keccak256(peer_public_key)`. Verification confirms both that the claimed public key hashes to the claimed id and that the message is validly ML-DSA-44-signed by that key. Two independent verification functions implement this pattern for two different message types: `verifyAnnouncementEnvelope` (`src/federation/binding.ts`) for binding announcements, and `verifySignedKeyringMessage` (`src/federation/keyring-sync.ts`) for keyring blob replication/delete messages.
 
-A `card_migration`-type `CardBindingAnnouncement` (`process_specs/card_migration.md §3/§5`) carries two signatures, not one: alongside the peer wallet-service signature above, `verifyAnnouncementEnvelope` also verifies a `cardholder`-role signer over the same canonical RFC 8785 JSON payload. This second signature is mandatory for `card_migration` announcements — an envelope with a valid `wallet_service` signature but a missing or invalid `cardholder` signature is rejected. Verification requires the `cardholder` entry's `public_key` to resolve directly to the payload's `card_hash` (`keccak256(public_key) == card_hash`); there is no sub-card-chain path for this signer — migration is a master-card-key-only operation. `card_registration`-type announcements carry only the `wallet_service` signature.
+A `card_migration`-type `CardBindingAnnouncement` (`process_specs/card_migration.md §3/§5`) carries two signatures, not one: alongside the peer wallet-service signature above, `verifyAnnouncementEnvelope` also verifies a `cardholder`-role signer over the same canonical RFC 8785 JSON payload. This second signature is mandatory for `card_migration` announcements — an envelope with a valid `wallet_service` signature but a missing or invalid `cardholder` signature is rejected. Verification requires the `cardholder` entry's `public_key` to resolve directly to the payload's `card_hash` (`keccak256(public_key) == card_hash`); there is no sub-card-chain path for this signer — migration is a primary-card-key-only operation. `card_registration`-type announcements carry only the `wallet_service` signature.
 
 Used by: `POST /bindings/announce`, `POST /federation/keyrings`, `POST /federation/keyrings/delete`.
 
@@ -266,7 +266,7 @@ Unless noted, request/response bodies are JSON.
 
 **`POST /accounts/challenge`** — No auth. Rate limit: 5 per hashed IP per hour. Issues a random challenge for account creation. Response: `{ challenge, expires_at }`.
 
-**`POST /accounts`** — Authenticated by the freshly generated master card key signing the challenge from the call above (proves control of the key being registered — there is no separate registration token; the wallet service is the sole driver of the new-wallet acceptance flow, per `open_offer_acceptance_new_wallet.md`). Shares the same rate limit bucket as the challenge call.
+**`POST /accounts`** — Authenticated by the freshly generated primary card key signing the challenge from the call above (proves control of the key being registered — there is no separate registration token; the wallet service is the sole driver of the new-wallet acceptance flow, per `open_offer_acceptance_new_wallet.md`). Shares the same rate limit bucket as the challenge call.
 
 Request: `{ challenge, signature, card_hash, master_pubkey, webauthn_credential_id, webauthn_public_key, encrypted_keyring_blob }`. Registers the WebAuthn credential in the same call (no separate registration endpoint). Generates a 256-bit `service_secret`, envelope-encrypts it, computes `keyring_id = keccak256(encrypted_keyring_blob)`, stores the blob, and broadcasts it to the federation.
 
@@ -282,7 +282,7 @@ Response: `{ service_secret, account_id, keyring_id, session_token, expires_at }
 
 **`POST /accounts/{card_hash}/keyring/challenge`** — No auth (the account must exist). Response: `{ challenge, expires_at }`.
 
-**`PUT /accounts/{card_hash}/keyring`** — Master card key signs the challenge above. Replaces the keyring blob under a new `keyring_id`, broadcasts it to the federation alongside a delete instruction for the superseded `keyring_id`.
+**`PUT /accounts/{card_hash}/keyring`** — Primary card key signs the challenge above. Replaces the keyring blob under a new `keyring_id`, broadcasts it to the federation alongside a delete instruction for the superseded `keyring_id`.
 
 Request: `{ challenge, signature, new_encrypted_keyring_blob, rotate_service_secret? }` (`rotate_service_secret` defaults `true`).
 

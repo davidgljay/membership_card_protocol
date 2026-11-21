@@ -12,7 +12,7 @@
 - All with zero custody of any private key or backup material
 
 **What this SDK does NOT do:**
-- Custody the card holder's master key or backup material (see `@membership-card-protocol/wallet-sdk` for that)
+- Custody the card holder's primary card key or backup material (see `@membership-card-protocol/wallet-sdk` for that)
 - Run wallet setup, backup, or recovery flows
 - Perform wallet-service, press, or relay endpoint logic (this SDK provides the client-side half only)
 - Implement trust logic or chain walking (delegated to `@membership-card-protocol/verifier`)
@@ -191,7 +191,7 @@ const result = await requestSubCard({
 });
 
 // 4. Send result.document to the wallet via your app's callback/deep-link channel.
-// The wallet will receive, sign with its master key, and register via the press.
+// The wallet will receive, sign with its primary card key, and register via the press.
 
 console.log('Sub-card requested. Public key:', bytesToBase64Url(result.subCardPublicKey));
 ```
@@ -319,7 +319,7 @@ All modules are in `packages/app-sdk/src/`.
 - **Implementation progress:** See the `Implementation Status` table in `app_sdk.md`
 
 **Other packages:**
-- `@membership-card-protocol/wallet-sdk` — holder-side SDK with master-key custody, setup, and backup (see wallet-sdk's own README)
+- `@membership-card-protocol/wallet-sdk` — holder-side SDK with primary-card-key custody, setup, and backup (see wallet-sdk's own README)
 - `@membership-card-protocol/verifier` — verification, chain walking, and policy enforcement (shared by both SDKs)
 
 ---

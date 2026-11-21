@@ -73,7 +73,7 @@ Every issued card contains a fixed set of immutable protocol-required fields set
 | `recipient_pubkey` | `base64url` | The recipient's ML-DSA-44 public key (1,312 bytes) |
 | `issued_at` | `timestamp` | Timestamp of issuance |
 | `ancestry_pubkeys` | `array of base64url` | Ordered array of ML-DSA-44 public keys (1,312 bytes each) for every ancestor card a verifier must resolve to walk this card's chain to a trusted root — covering the issuer chain and the press/policy chain as applicable. Ordered from immediate parent up toward the root. Set at issuance and covered by all three signatures. **Root base case:** a card whose own address is registered in the on-chain `PolicyAuthorizerKeys` table (a trusted root) carries `ancestry_pubkeys: []` — the empty array. `[]` is a legal, signed value distinct from omission; the field is REQUIRED and always present. A card whose immediate parent is a registered trusted root likewise carries `[]`. **Untrusted hint:** the verifier MUST confirm `keccak256(entry_pubkey)` equals the on-chain address being resolved for each entry; a wrong or forged pubkey yields an address mismatch or undecryptable ciphertext and MUST be rejected. Per-link on-chain addresses remain authoritative. |
-| `past_keys` | `array of objects` *(optional)* | **Present only on cards produced by a master key rotation.** Omitted entirely on cards that have never been the product of a rotation (field omission, not `null` or `[]`, consistent with RFC 8785 absent-field convention). When present, lists all prior public keys held by the same holder, **oldest-first**, each as `{ "pubkey": "<base64url ML-DSA-44 public key>", "valid_from": "<ISO 8601>", "rotated_at": "<ISO 8601>" }`. **Provenance:** `past_keys` is the holder's own key history. During a master-key rotation, the holder/wallet supplies their prior-key history to the offerer as part of the rotation request; the offerer includes it verbatim in the assembled offer. The **holder is the authority on their own key history**: the authoritative attestation is the `holder_signature` — the holder countersigns, confirming the listed keys are theirs; `issuer_signature` and `press_signature` also cover the bytes. Immutable after issuance. **Covered by all three signatures** — not in any exclusion list. See `protocol-objects.md §1` for the formal field definition and `key_rotation.md §2.3` for rotation semantics. |
+| `past_keys` | `array of objects` *(optional)* | **Present only on cards produced by a primary card key rotation.** Omitted entirely on cards that have never been the product of a rotation (field omission, not `null` or `[]`, consistent with RFC 8785 absent-field convention). When present, lists all prior public keys held by the same holder, **oldest-first**, each as `{ "pubkey": "<base64url ML-DSA-44 public key>", "valid_from": "<ISO 8601>", "rotated_at": "<ISO 8601>" }`. **Provenance:** `past_keys` is the holder's own key history. During a primary-card-key rotation, the holder/wallet supplies their prior-key history to the offerer as part of the rotation request; the offerer includes it verbatim in the assembled offer. The **holder is the authority on their own key history**: the authoritative attestation is the `holder_signature` — the holder countersigns, confirming the listed keys are theirs; `issuer_signature` and `press_signature` also cover the bytes. Immutable after issuance. **Covered by all three signatures** — not in any exclusion list. See `protocol-objects.md §1` for the formal field definition and `key_rotation.md §2.3` for rotation semantics. |
 | `expires_at` | `timestamp` *(optional)* | Added 2026-11-11. When present, the card lapses at this chain time. Signatures made before it stay valid, as with an 8xx. Set at genesis, covered by all three signatures, never changed. Used by notary-derived cards (§9). Distinct from a policy's `valid_until`. See `protocol-objects.md §1`. |
 | `protocol_version` | `string` | The protocol version in force at the time of card issuance (e.g. `"0.1"`). Added by the press: the press calls `getProtocolVersion()` on the logic contract and includes the returned string in the assembled card document. Covered by `press_signature`. Verifiers reject cards whose `protocol_version` is missing or not in their known-versions list. |
 | `issuer_signature` | `base64url` | The offerer's ML-DSA-44 signature over the constructed offer (first signature); `ancestry_pubkeys` and `past_keys` (if present) are covered; `protocol_version` and `recipient_pubkey` are excluded (not yet present) |
@@ -575,7 +575,7 @@ This check does not prevent issuance from proceeding if the press is already reg
 2. The press resolves the requester's card chain and evaluates `requester_predicate`. If absent, this step passes automatically.
 3. The press resolves the recipient's card chain and evaluates `recipient_predicate`. If absent, this step passes automatically.
 4. For each card in both chains, the press checks for revocation entries. For each revocation found, the press confirms the effective date is after the current time (i.e., the card was valid when evaluated). If any ancestor is revoked with an effective date at or before now, the press refuses to issue.
-5. The **offerer's wallet service** assembles the proposed card JSON: protocol-required fields populated (`issuer_card`, `press_card`, `policy_id`, `issued_at`, and `ancestry_pubkeys` — the ordered array of ancestor ML-DSA-44 public keys from immediate parent up toward the root; `recipient_pubkey` left empty; `protocol_version` left absent — it is added by the press in step 9 after reading the current version from the contract), plus `past_keys` if this card is the product of a master key rotation (omitted otherwise), and all `field_definitions` fields populated per the policy. (In targeted mode the offerer constructs the offer; the request at step 1 carries the offerer's parameters.)
+5. The **offerer's wallet service** assembles the proposed card JSON: protocol-required fields populated (`issuer_card`, `press_card`, `policy_id`, `issued_at`, and `ancestry_pubkeys` — the ordered array of ancestor ML-DSA-44 public keys from immediate parent up toward the root; `recipient_pubkey` left empty; `protocol_version` left absent — it is added by the press in step 9 after reading the current version from the contract), plus `past_keys` if this card is the product of a primary card key rotation (omitted otherwise), and all `field_definitions` fields populated per the policy. (In targeted mode the offerer constructs the offer; the request at step 1 carries the offerer's parameters.)
 6. The **offerer** signs the canonical serialization of the offer with the **offerer's own card key**, producing `issuer_signature` — the **signed offer**. `ancestry_pubkeys` and `past_keys` (if present) are included in the signed payload. `protocol_version` and `recipient_pubkey` are excluded (not yet present). The press key is not used here.
 7. The offer is delivered to the recipient: as an invitation link (base64 payload in a URL, e.g., `mcard://invite?o=<base64>`) for first-time recipients, or via HTTPS POST to the recipient's wallet service endpoint for existing holders.
 8. The recipient reviews the offer (see §4), generates a keypair, adds their public key, and countersigns → `holder_signature`. `protocol_version` is excluded from the `holder_signature` payload (not yet present). The countersigned card is returned to the offerer, who validates `holder_signature` and forwards it to the press.
@@ -705,7 +705,7 @@ A card holder's private keys are the root of their identity in the protocol. Los
 ### Goals
 
 - Provide a default key management model that is secure, recoverable, and does not require users to manage raw seed phrases.
-- Ensure master card keys are never used for routine operations — sub-card keys handle day-to-day signing.
+- Ensure primary card keys are never used for routine operations — sub-card keys handle day-to-day signing.
 - Make recovery fully independent of the primary service.
 - Resist unauthorized recovery attempts with a time-windowed cancellation mechanism.
 
@@ -717,9 +717,9 @@ A card holder's private keys are the root of their identity in the protocol. Los
 
 ### User Stories
 
-**As a new card holder,** I want my client to create a keyring, generate a master keypair for my first card, and store the private key encrypted with my passkey, so that I do not need to manage raw key material.
+**As a new card holder,** I want my client to create a keyring, generate a primary card keypair for my first card, and store the private key encrypted with my passkey, so that I do not need to manage raw key material.
 
-**As a holder with multiple devices,** I want device-specific sub-card keys stored in secure device storage, so that my master key stays cold while I sign routine operations from any device.
+**As a holder with multiple devices,** I want device-specific sub-card keys stored in secure device storage, so that my primary card key stays cold while I sign routine operations from any device.
 
 **As a holder,** I want a YubiKey-based backup so that if my primary service is unavailable I can recover my full keyring independently.
 
@@ -729,9 +729,11 @@ A card holder's private keys are the root of their identity in the protocol. Los
 
 #### Must-Have (P0)
 
-**Keyring structure.** The keyring is an append-only encrypted blob stored by the wallet service and replicated across the wallet service federation (see `ARCHITECTURE.md` ADR-009-AMEND). It holds the master private key for each card the holder controls, the private keys for any sub-cards registered to those master cards, and metadata associating each key with its corresponding card mutable pointer. The keyring is encrypted with a key derived from `passkey + service_secret`. The primary service holds `service_secret` but never sees plaintext keys or the decryption key. Because the keyring is append-only, new keys are added without destroying prior entries.
+**Keyring structure.** The keyring is an append-only encrypted blob stored by the wallet service and replicated across the wallet service federation (see `ARCHITECTURE.md` ADR-009-AMEND). It holds the primary card private key for each card the holder controls, the private keys for any sub-cards registered to those primary cards, and metadata associating each key with its corresponding card mutable pointer. The keyring is encrypted with a key derived from `passkey + service_secret`. The primary service holds `service_secret` but never sees plaintext keys or the decryption key. Because the keyring is append-only, new keys are added without destroying prior entries.
 
-**Sub-card keys.** Sub-card private keys are held in secure device storage (Secure Enclave on Apple devices, TPM on others). All routine signing operations use sub-card keys. The master card key is accessed only for: creating new sub-cards, performing key rotations, and other high-stakes operations. Sub-cards are registered to their master card: the master key signs each sub-card registration, making the link verifiable.
+**Sub-card keys.** Sub-card private keys are held in secure device storage (Secure Enclave on Apple devices, TPM on others). All routine signing operations use sub-card keys. The primary card key is accessed only for: creating new sub-cards, performing key rotations, and other high-stakes operations. Sub-cards are registered to their primary card: the primary card key signs each sub-card registration, making the link verifiable.
+
+**Terminology (decided by David, 2026-11-20).** The holder's own identity card, which sub-cards are registered to, is called the **primary card**, and its key the **primary card key**. Earlier text called it the "master card". Identifiers already in code, payloads and on-chain storage keep their `master` names (for example `master_card_address` in `SubCardEntry` and `AdminAuthorizeSubCardPayload`, `master_signature`, `masterSecretKey`); they mean the primary card. Renaming the on-chain and signed-payload fields would need a contract and payload-format change.
 
 **YubiKey backup registration.** The holder registers with one or more backup services, presenting their YubiKey. The backup service stores an encrypted blob containing the keyring decryption key, wrapped under the YubiKey-derived key. The backup service never sees the decryption key in plaintext. The backup service returns a card (proof of registration) and records the holder's notification channels and cancellation credentials.
 
@@ -744,7 +746,7 @@ A card holder's private keys are the root of their identity in the protocol. Los
 6. The holder re-registers with a new primary service, creates a new passkey, re-encrypts the keyring, and optionally rotates their YubiKey backup registration.
 
 **Acceptance criteria:**
-- [ ] A new holder's master key is never stored in plaintext anywhere other than secure device storage during setup.
+- [ ] A new holder's primary card key is never stored in plaintext anywhere other than secure device storage during setup.
 - [ ] A passkey + service_secret combination can decrypt the keyring; neither alone is sufficient.
 - [ ] YubiKey recovery completes in under 5 minutes after the 72-hour window closes, assuming network availability.
 - [ ] A stolen YubiKey cannot complete recovery if a valid cancellation is submitted before the window closes.
@@ -1012,14 +1014,14 @@ This suppresses notification for all 5xx entries (programmatic updates). The upd
 
 ### Problem Statement
 
-Card holders need to sign arbitrary messages using their card identity. Signatures must commit to specific recipients and content, support parallel co-signers, prevent replay, and keep the master card key cold.
+Card holders need to sign arbitrary messages using their card identity. Signatures must commit to specific recipients and content, support parallel co-signers, prevent replay, and keep the primary card key cold.
 
 ### Goals
 
 - Produce signed message envelopes verifiable by anyone without network access.
 - Commit the signature to the specific audience to prevent misquotation.
 - Support parallel co-signing for multi-author statements.
-- Keep the master card key cold during all routine signing.
+- Keep the primary card key cold during all routine signing.
 
 ### Non-Goals
 
@@ -1045,7 +1047,7 @@ Card holders need to sign arbitrary messages using their card identity. Signatur
   "payload": {
     "type":        "<message type — see messaging_protocol.md §2>",
     "content":     { "<type-specific fields>" },
-    "senders":     ["<mutable pointer of sender's master card>"],
+    "senders":     ["<mutable pointer of sender's primary card>"],
     "recipients":  ["<mutable pointer>", "<mutable pointer>"],
     "timestamp":   "<ISO 8601>",
     "in_reply_to": "<hash of prior payload — optional>",
@@ -1065,7 +1067,7 @@ Card holders need to sign arbitrary messages using their card identity. Signatur
 **Signing process.**
 1. The sender assembles the payload: content, recipient mutable pointers, timestamp, and optional reply/edit/retraction fields.
 2. The client canonically serializes the payload (canonical RFC 8785 JSON — see Appendix A).
-3. The client signs the canonical serialization using the current device's sub-card private key. The master key is not accessed.
+3. The client signs the canonical serialization using the current device's sub-card private key. The primary card key is not accessed.
 4. The signature and the ML-DSA-44 public key are added to the `signatures` array. The signing sub-card's registry address is not included — verifiers derive it as `keccak256(public_key)`.
 5. For parallel co-signing, each additional signer independently repeats steps 3–4 and appends their entry.
 6. The message ID is the hash of the canonical payload serialization. There is no separate ID field.
@@ -1073,7 +1075,7 @@ Card holders need to sign arbitrary messages using their card identity. Signatur
 **Recipient binding.** The `recipients` array is part of the signed payload; modifying it invalidates all signatures. A message whose recipient list does not include the receiving card MUST NOT be treated as a valid direct message — delivering an original envelope to a party not in its `recipients` is an unauthenticated relay and is rejected. Such a message is only valid when delivered inside a `ForwardPackage` whose `forward_envelope.payload.recipients` includes the receiving card (see Forwarding below).
 
 **Edit and retraction.**
-- An **edit** is a new signed envelope with `edit_of` pointing to the prior payload hash. The original is not mutated. Authorization: signers must chain to the same master card(s) as the original.
+- An **edit** is a new signed envelope with `edit_of` pointing to the prior payload hash. The original is not mutated. Authorization: signers must chain to the same primary card(s) as the original.
 - A **retraction** is a new signed envelope with `retracts` pointing to the prior payload hash. No new content is proposed; the sender formally withdraws the original statement. Same authorization rules as edits.
 - Successive edits form a linked list (`A → A' → A''`). Each is independently verifiable.
 - `edit_of`, `retracts`, and `forwards` are mutually exclusive.
@@ -1084,7 +1086,7 @@ Card holders need to sign arbitrary messages using their card identity. Signatur
 - [ ] Any party with the signed envelope can verify the signature using the inline public key without a network call.
 - [ ] Modifying any field in the payload invalidates all signatures.
 - [ ] Two independent signers over the same canonical payload produce independently-verifiable signatures in the same envelope.
-- [ ] An edit signed by a party who does not chain to the original signer's master card is flagged as unauthorized by verifiers.
+- [ ] An edit signed by a party who does not chain to the original signer's primary card is flagged as unauthorized by verifiers.
 - [ ] A payload with more than one of `edit_of`, `retracts`, `forwards` set is rejected at the client before signing.
 - [ ] An original envelope delivered to a party not in its `recipients` without a `ForwardPackage` is rejected as an unauthenticated relay.
 - [ ] A `ForwardPackage` whose `forward_envelope.payload.forwards` does not match the original payload's message ID is rejected.
@@ -1092,7 +1094,7 @@ Card holders need to sign arbitrary messages using their card identity. Signatur
 
 #### Nice-to-Have (P1)
 
-- Signer state snapshot: each signature entry includes the sub-card's master pointer, version CID, and log root at signing time, enabling retroactive chain-state verification.
+- Signer state snapshot: each signature entry includes the sub-card's primary card pointer, version CID, and log root at signing time, enabling retroactive chain-state verification.
 
 #### Future Considerations (P2)
 
@@ -1139,13 +1141,13 @@ A recipient or service needs to determine: whether each signature is cryptograph
 
 1. **Signature validity.** Verify the signature against the canonical serialization of the payload using the inline public key. No network call required.
 
-2. **Sub-card to master link.** Derive the signing sub-card's registry address as `keccak256(public_key)` from the `SignatureEntry`. Decrypt the leaf sub-card document (content key = `HKDF-SHA3-256(public_key, info="card-content-v1")`). Read `holder_primary_card_pubkey` and `app_card_pubkey` from the decrypted `SubCardDocument` (see `protocol-objects.md §16`); these are untrusted hints — confirm `keccak256(holder_primary_card_pubkey)` equals the `holder_primary_card` pointer address and `keccak256(app_card_pubkey)` equals the `app_card` pointer address before use (a mismatch or an AES-GCM decryption failure on either parent card is a hard rejection). Derive `HKDF-SHA3-256(holder_primary_card_pubkey, info="card-content-v1")` to decrypt the master card and confirm the sub-card's address (`keccak256(public_key)`) appears among the `keccak256`-derived addresses of the master card's `active_subcards` entries (`protocol-objects.md §1.1`) — hard reject if absent, independent of the on-chain `SubCardEntry.active` flag; verify the master card holder's ML-DSA-44 signature on the sub-card registration using `holder_primary_card_pubkey`. See `process_specs/card_validation.md` Stage 2 for the full procedure.
+2. **Sub-card to primary card link.** Derive the signing sub-card's registry address as `keccak256(public_key)` from the `SignatureEntry`. Decrypt the leaf sub-card document (content key = `HKDF-SHA3-256(public_key, info="card-content-v1")`). Read `holder_primary_card_pubkey` and `app_card_pubkey` from the decrypted `SubCardDocument` (see `protocol-objects.md §16`); these are untrusted hints — confirm `keccak256(holder_primary_card_pubkey)` equals the `holder_primary_card` pointer address and `keccak256(app_card_pubkey)` equals the `app_card` pointer address before use (a mismatch or an AES-GCM decryption failure on either parent card is a hard rejection). Derive `HKDF-SHA3-256(holder_primary_card_pubkey, info="card-content-v1")` to decrypt the primary card and confirm the sub-card's address (`keccak256(public_key)`) appears among the `keccak256`-derived addresses of the primary card's `active_subcards` entries (`protocol-objects.md §1.1`) — hard reject if absent, independent of the on-chain `SubCardEntry.active` flag; verify the primary card holder's ML-DSA-44 signature on the sub-card registration using `holder_primary_card_pubkey`. See `process_specs/card_validation.md` Stage 2 for the full procedure.
 
 2a. **Capability check (sub-cards only).** If the signing sub-card has an associated `SubCardDocument` (see `protocol-objects.md §16`), retrieve it and confirm the message's `type` field appears in the sub-card's `capabilities` array. If the message type is absent from the whitelist, reject the signature regardless of cryptographic validity. If no `SubCardDocument` exists (legacy or wallet primary-key signature), skip this step.
 
 2d. **App card chain walk.** Derive the `app_card` content key from `app_card_pubkey` bytes using `HKDF-SHA3-256(app_card_pubkey_bytes, "card-content-v1")`; fetch and decrypt the app card document from IPFS; walk `ancestry_pubkeys` hop by hop until the chain reaches `VerifierConfig.appCertificationRoot`. Hard-reject with `APP_CARD_CHAIN_NOT_TRUSTED` (`scope_clean: false`, abort) if the chain does not reach the configured root within `maxChainDepth` hops.
 
-3. **Chain walk (historical).** The master card was already decrypted in step 2. Read `ancestry_pubkeys` from the decrypted master card (set at master card issuance, ordered from immediate parent up toward root). Using both `ancestry_pubkeys` (for pubkey/content-key derivation) and the cached chain array of version CIDs (for parallel IPFS fetches), walk every ancestor from the master card up to the trusted root. **Walk termination:** the walk terminates successfully when the next on-chain address to resolve is present in the `PolicyAuthorizerKeys` table — i.e., it is a registered trusted root. Equivalently, when a card's `ancestry_pubkeys` is `[]` (the root base case) and the card's own on-chain address is registered in `PolicyAuthorizerKeys`, the walk ends at that card and `chain_reaches_trusted_root` is set to `true`. If `ancestry_pubkeys` is `[]` but the card is **not** registered in `PolicyAuthorizerKeys`, the chain does not reach a trusted root; record `chain_reaches_trusted_root: false`. For each non-empty ancestor entry:
+3. **Chain walk (historical).** The primary card was already decrypted in step 2. Read `ancestry_pubkeys` from the decrypted primary card (set at primary card issuance, ordered from immediate parent up toward root). Using both `ancestry_pubkeys` (for pubkey/content-key derivation) and the cached chain array of version CIDs (for parallel IPFS fetches), walk every ancestor from the primary card up to the trusted root. **Walk termination:** the walk terminates successfully when the next on-chain address to resolve is present in the `PolicyAuthorizerKeys` table — i.e., it is a registered trusted root. Equivalently, when a card's `ancestry_pubkeys` is `[]` (the root base case) and the card's own on-chain address is registered in `PolicyAuthorizerKeys`, the walk ends at that card and `chain_reaches_trusted_root` is set to `true`. If `ancestry_pubkeys` is `[]` but the card is **not** registered in `PolicyAuthorizerKeys`, the chain does not reach a trusted root; record `chain_reaches_trusted_root: false`. For each non-empty ancestor entry:
    a. Take the next entry from `ancestry_pubkeys` (the ancestor's ML-DSA-44 public key, a hint).
    b. Derive the expected on-chain address as `keccak256(entry_pubkey)` and confirm it equals the on-chain address being resolved (the mutable pointer from the prior link). **If the address does not match, reject: the array entry is forged or incorrect.**
    c. Derive the ancestor's content key as `HKDF-SHA3-256(entry_pubkey, info="card-content-v1")` and decrypt the ancestor card document. **If decryption fails (authentication tag mismatch), reject.**

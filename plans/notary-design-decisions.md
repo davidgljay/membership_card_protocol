@@ -26,7 +26,7 @@ These change the shape of the design. Each one is resolved below or put to David
 
 4. **`latest_wins` has to be ordered by the contributor, not by arrival.** The host controls delivery order. If "latest" means "arrived last", the host chooses which of a voter's ballots counts. Inputs therefore carry a contributor-signed `revision` counter (§2.1.5).
 
-5. **Deduplication keys on the master card, not the signing sub-card.** One holder can have several sub-cards. Keying dedupe on the signer would let one member vote once per device. The enclave resolves sub-card → master card and dedupes on the master card's address. Key rotation (`successor`) gives one holder a second master address; §2.6 handles this for derived cards, and §2.5 for ballots.
+5. **Deduplication keys on the primary card, not the signing sub-card.** One holder can have several sub-cards. Keying dedupe on the signer would let one member vote once per device. The enclave resolves sub-card → primary card and dedupes on the primary card's address. Key rotation (`successor`) gives one holder a second primary card address; §2.6 handles this for derived cards, and §2.5 for ballots.
 
 6. **The X-Wing job public key does not fit in the attestation's `public_key` field.** An X-Wing public key is 1,216 bytes (ML-KEM-768's 1,184 plus X25519's 32). The NSM API caps `public_key` at 1,024 bytes and `user_data` and `nonce` at 512 each. (These limits come from the NSM API documentation and are re-confirmed against the real device in step 5.2.) The attestation carries `SHA-256(job public key)`, and the full key travels in the announcement (§2.1.3).
 
@@ -201,8 +201,8 @@ Answers Q1–Q7. Field tables give type, whether required, and notes. Every obje
 | `program_cid` | `cid` | Yes | CIDv1, `raw` codec, sha2-256. `program_hash` is its digest, which equals `SHA-256` of the module bytes. |
 | `mode` | `text` | Yes | `"aggregate"` (one output per epoch's key, then the key is erased; votes are aggregate jobs with a close time) or `"per_input"` (standing job, one output per input, key rotated each `key_period`). |
 | `input_schema` | `field-definition-array` | Yes | The contributor's `payload`, in the existing field type system (`card_protocol_spec.md` §The Field Type System) minus `update_policy`. One grammar for every schema in the protocol. |
-| `input_replacement` | `text` | Yes | `"reject_duplicates"` (first valid input per contributor counts) or `"latest_wins"` (highest `revision` per contributor counts, finding 4). A contributor is identified by their master card's root key (§2.4.7 B10). |
-| `contributor_predicate` | `card-predicate` | Yes | Evaluated on the contributor's **master** card chain (finding 5). |
+| `input_replacement` | `text` | Yes | `"reject_duplicates"` (first valid input per contributor counts) or `"latest_wins"` (highest `revision` per contributor counts, finding 4). A contributor is identified by their primary card's root key (§2.4.7 B10). |
+| `contributor_predicate` | `card-predicate` | Yes | Evaluated on the contributor's **primary card** chain (finding 5). |
 | `job_requester_predicate` | `card-predicate` | No | Evaluated on the job requester's card chain. Absent means anyone may open a job (template policies, D9). `{ "is_holder": true }` means only the policy holder. |
 | `parameter_bounds` | `field-definition-array` | No | Job parameters and their limits, in the same grammar (`min`, `max`, `regex`, `enum`). Absent means the job takes no parameters. |
 | `output_schema` | `field-definition-array` | Yes | The program's output value. Must equal the module's `notary.output_schema` custom section byte for byte after JCS (§2.3). v1 field types are `integer`, `boolean` and `text` with a required `enum` (§2.4.9). Integer fields may carry the privacy transforms below. |
@@ -371,10 +371,10 @@ Answers Q1–Q7. Field tables give type, whether required, and notes. Every obje
 |---|---|---|---|
 | `type` | `text` | Yes | `"notary.input.v1"` |
 | `job_hash` | `base64url` | Yes | |
-| `contributor_card` | `card-pointer` | Yes | The contributor's **master** card. `contributor_predicate` is evaluated on it. Dedupe keys on its **root key**, so a key rotation doesn't create a second identity (§2.4.7 B10). |
+| `contributor_card` | `card-pointer` | Yes | The contributor's **primary card**. `contributor_predicate` is evaluated on it. Dedupe keys on its **root key**, so a key rotation doesn't create a second identity (§2.4.7 B10). |
 | `contributor_card_pubkey` | `base64url` | Yes | Binding hint, as `SubCardDocument.holder_primary_card_pubkey` |
 | `payload` | object | Yes | Validated against `notary.input_schema` |
-| `revision` | `integer` | Yes | ≥ 0. Under `latest_wins` the highest `revision` per master card counts; an equal `revision` with a different payload is rejected as `REVISION_CONFLICT`. Under `reject_duplicates` it must be 0. |
+| `revision` | `integer` | Yes | ≥ 0. Under `latest_wins` the highest `revision` per primary card counts; an equal `revision` with a different payload is rejected as `REVISION_CONFLICT`. Under `reject_duplicates` it must be 0. |
 | `chain_ref` | object | Yes | `{ "block_number": int, "block_hash": base64url }`, a recent block the wallet saw. The enclave rejects processing against chain state older than the newest `chain_ref` it has accepted (strategic plan, chain state). |
 | `signed_at` | `timestamp` | Yes | Informational. Ordering uses `revision`, not this field (finding 4). |
 | `evidence` | array | Yes | `[{ "cid", "bytes" }]`: every IPFS object the broker needs to check the contributor, so it never fetches a card by address (§2.6.1) |
@@ -1001,12 +1001,12 @@ B5–B8 read card documents from the input's `evidence` bundle and registry stat
 | B2 | Parse `NotaryInput`. `type` is correct and `job_hash` matches. | `INPUT_MALFORMED`, `INPUT_WRONG_JOB` |
 | B3 | `chain_ref` names a block on the broker's accepted header chain. If the block is newer, the broker asks for headers and waits up to 60 s. The newest `chain_ref` the broker has accepted becomes its floor: it never processes against chain state older than that. | `INPUT_CHAIN_REF_UNKNOWN`, `INPUT_CHAIN_REF_MISMATCH` |
 | B4 | `chain_ref`'s timestamp is ≥ `opens_at` and, for aggregate jobs, < `closes_at`. | `INPUT_TOO_EARLY`, `INPUT_LATE` |
-| B5 | The signer is a valid sub-card: binding check, `"notary_input"` in its `capabilities`, `valid_until`, and the full sub-card check in `protocol-objects.md §16` (it is in the master card's `active_subcards` and active on-chain). | `INPUT_SIGNER_INVALID` |
+| B5 | The signer is a valid sub-card: binding check, `"notary_input"` in its `capabilities`, `valid_until`, and the full sub-card check in `protocol-objects.md §16` (it is in the primary card's `active_subcards` and active on-chain). | `INPUT_SIGNER_INVALID` |
 | B6 | `keccak256(contributor_card_pubkey) == contributor_card`, which equals the sub-card's `holder_primary_card`. | `INPUT_BINDING_MISMATCH` |
-| B7 | The master card's chain reaches a trusted root, and the card isn't revoked at the broker's current chain state. | `INPUT_CARD_UNTRUSTED`, `INPUT_CARD_REVOKED` |
-| B8 | The master card's chain satisfies `contributor_predicate`, with parameter references resolved (§2.1.1). | `INPUT_NOT_ELIGIBLE` |
+| B7 | The primary card's chain reaches a trusted root, and the card isn't revoked at the broker's current chain state. | `INPUT_CARD_UNTRUSTED`, `INPUT_CARD_REVOKED` |
+| B8 | The primary card's chain satisfies `contributor_predicate`, with parameter references resolved (§2.1.1). | `INPUT_NOT_ELIGIBLE` |
 | B9 | `payload` validates against `input_schema`. | `INPUT_SCHEMA_INVALID` |
-| B10 | **Dedupe**, keyed on the master card's **root key**: `past_keys[0].pubkey` if present, otherwise `recipient_pubkey` (§2.6.0). A key rotation therefore doesn't give a holder a second vote. Under `reject_duplicates`, `revision` must be 0 and the root key must be new. Under `latest_wins`: a lower `revision` than the one held is marked `superseded`; the same `revision` with the same signed input (a resubmission in a new epoch) is accepted and replaces the stored `input_hash`; the same `revision` with a different input is rejected; a higher `revision` is accepted and the earlier input becomes `superseded`. | `INPUT_DUPLICATE`, `INPUT_REVISION_INVALID`, `REVISION_CONFLICT`; status `superseded` |
+| B10 | **Dedupe**, keyed on the primary card's **root key**: `past_keys[0].pubkey` if present, otherwise `recipient_pubkey` (§2.6.0). A key rotation therefore doesn't give a holder a second vote. Under `reject_duplicates`, `revision` must be 0 and the root key must be new. Under `latest_wins`: a lower `revision` than the one held is marked `superseded`; the same `revision` with the same signed input (a resubmission in a new epoch) is accepted and replaces the stored `input_hash`; the same `revision` with a different input is rejected; a higher `revision` is accepted and the earlier input becomes `superseded`. | `INPUT_DUPLICATE`, `INPUT_REVISION_INVALID`, `REVISION_CONFLICT`; status `superseded` |
 | B11 | The job holds fewer than `max_inputs` distinct root keys. | `INPUT_CAPACITY` |
 
 **What the broker keeps.** For each accepted input it keeps one index entry: `root_key_hash → { revision, input_hash, epoch }`. This is not a running tally. It records who has a counted input, not what they chose. It never leaves the enclave except inside a handoff (§2.5). The ciphertexts themselves are stored by the host.
@@ -1302,8 +1302,8 @@ Section 2.4 has the broker fetch every card it checks through its host: the IPFS
 The strategic plan's claim that a derived card "cannot be linked to the source card by the host's records" fails under §2.4 as written.
 
 **Fix: evidence bundles and policy snapshots.**
-1. **Evidence bundle.** Every `NotaryInput` carries an `evidence` field: the bytes of every IPFS object the broker needs to check the contributor. That is the master card's genesis document and current head, its sub-card document, and the documents and heads of its ancestors. The broker checks each object against its CID and the signatures inside, so the bundle is trustworthy whatever the wallet or host does. Nothing is fetched by CID.
-2. **Policy snapshot.** Registry state can't come from the bundle; it has to come from the chain. So the host supplies, and keeps up to date, a **snapshot of every card registered under each policy the job depends on**: the source policy for derived cards, or each `issued_under_template` policy in `contributor_predicate`. A snapshot entry is `{ address, log_head_cid, last_press_address }`, plus the `SubCardRegistrations` entries whose master card is in the set, plus the IPFS bytes of each card's current head. The broker reads from its local copy and never asks for a single card. Snapshots are as trustworthy as any registry read in v1 (§2.4.11), and are recorded through `chain_state`.
+1. **Evidence bundle.** Every `NotaryInput` carries an `evidence` field: the bytes of every IPFS object the broker needs to check the contributor. That is the primary card's genesis document and current head, its sub-card document, and the documents and heads of its ancestors. The broker checks each object against its CID and the signatures inside, so the bundle is trustworthy whatever the wallet or host does. Nothing is fetched by CID.
+2. **Policy snapshot.** Registry state can't come from the bundle; it has to come from the chain. So the host supplies, and keeps up to date, a **snapshot of every card registered under each policy the job depends on**: the source policy for derived cards, or each `issued_under_template` policy in `contributor_predicate`. A snapshot entry is `{ address, log_head_cid, last_press_address }`, plus the `SubCardRegistrations` entries whose primary card is in the set, plus the IPFS bytes of each card's current head. The broker reads from its local copy and never asks for a single card. Snapshots are as trustworthy as any registry read in v1 (§2.4.11), and are recorded through `chain_state`.
 3. **Ancestors outside snapshotted policies** (for example, a steward card that issued the source card) are still fetched by address. That reveals the issuer, which many cards share, not the holder. The spec states this.
 4. **Fallback.** If a `contributor_predicate` names no policy that can be snapshotted (only `chain_includes`, for example), the broker falls back to fetching by address. The wallet's consent screen then says "the operator will learn that your card took part". `notary-lint` warns about such policies.
 
@@ -1347,7 +1347,7 @@ A verifier that wants to check one person per period compares `dup_tag`s.
 
 1. **The wallet** fetches the job's announcement and runs **W**. The consent screen comes from `T` and the job. It shows the source policy, the fields that will be copied, the notary, `expires_at`, and the propagation mode with its disclosure (§2.6.8).
 2. **The wallet** generates the derived key `D`, then builds a `NotaryInput`:
-   - `contributor_card` = the source master card.
+   - `contributor_card` = the source primary card.
    - `payload` = `{ "derived_recipient_pubkey": D_pub, "target_period": p }`.
    - `evidence` = the bundle (§2.6.1).
    It signs with the source card's sub-card and sends it over the double envelope (§2.1.5).
@@ -1482,7 +1482,7 @@ All of these are `T.notary` fields. A template policy may change the defaults wi
 **Checked.** Every field name used across §1–§2.6 against its defining table; that one serialization is used throughout (JCS, `H` = SHA-256, base64url); that the reject-code prefixes are consistent; that every "patch" table was applied; and that no protocol relies on a property another section removes. Terminology: the doc never uses bare "Nitro" except when quoting the term for the Q20 note.
 
 **Fixed in this pass:**
-- §2.1.1: `k_min` counted "master cards"; now root keys, matching B10.
+- §2.1.1: `k_min` counted "primary cards"; now root keys, matching B10.
 - §0.2 finding 1 now notes that D1 resolves it.
 - §1.3 genesis step 5 named a per-community `AuthorizePress`; now the template `T`, once per operator.
 - §2.1.12 Heartbeat lacked the list versions that §2.3.9 says it carries; `list_versions` added.

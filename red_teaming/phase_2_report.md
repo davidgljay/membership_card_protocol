@@ -23,7 +23,7 @@
 
 ## Executive Summary
 
-Phase 2 assessed five key tiers in the Card Protocol's trust hierarchy: the policy authorizer, the press sub-card, the holder (at both sub-card and master key levels), the auditor, and the backup service. Thirteen distinct findings emerged across the five steps, with the following severity distribution:
+Phase 2 assessed five key tiers in the Card Protocol's trust hierarchy: the policy authorizer, the press sub-card, the holder (at both sub-card and primary card key levels), the auditor, and the backup service. Thirteen distinct findings emerged across the five steps, with the following severity distribution:
 
 | Severity | Count |
 |---|---|
@@ -37,7 +37,7 @@ Phase 2 assessed five key tiers in the Card Protocol's trust hierarchy: the poli
 2. **Policy authorizer key**: Can modify the policy's IPFS content (field definitions, predicates, revocation permissions) and escalate to mass 9xx revocation of all cards under the policy. The mass-9xx path is detectable — a flood of evidenceless revocations is immediately suspicious — and the protocol's successor card mechanism enables trust chain reconstruction, but recovery is operationally costly. Cannot authorize or revoke presses on-chain without governance quorum (ADR-011).
 3. **Auditor key**: Exposes the complete issuance history for every card issued under the policy since the auditor was registered. No forward secrecy — all historical entries are decryptable.
 4. **Holder full keyring** (full keyring compromise): Complete identity takeover for one holder, but scoped to that individual. Mitigated by the 72-hour cancellation window — unless the attacker also controls the holder's notification channels.
-5. **Holder sub-card key only** (narrowest): Attacker can sign as the holder from one device. Real holder can recover via master key if it is not also compromised.
+5. **Holder sub-card key only** (narrowest): Attacker can sign as the holder from one device. Real holder can recover via primary card key if it is not also compromised.
 
 **ADR-011 update note:** Between Phase 1 and Phase 2 execution, the author issued ADR-011 (On-Chain Press Authorization and Protocol Governance), which directly addressed Phase 1 Finding 1.1-A. The `approved_presses` gap is closed: press authorization is now enforced via two on-chain tables (`PolicyAuthorizerKeys`, `PressAuthorizations`) rather than the IPFS-stored field. This change also affects Phase 2's analysis: policy authorizer key compromise no longer directly enables new press authorization on-chain (that now requires governance quorum), and press key revocation also requires governance quorum, adding response latency to incidents.
 
@@ -53,7 +53,7 @@ Phase 2 assessed five key tiers in the Card Protocol's trust hierarchy: the poli
 | 2.2 | 2.2-A | Compromised press key enables backdated silent 9xx revocation against any card in scope | **High** | High | High | Medium |
 | 2.2 | 2.2-B | Governance-controlled press revocation adds response latency in fast-moving incident | **High** | High | Medium | Low |
 | 2.2 | 2.2-C | Press can issue cards with attacker-controlled holder keys (fake credentials) | Medium | Medium | High | Low |
-| 2.3 | 2.3-A | Sub-card key compromise: holder can recover via master key; gap is press availability | Medium | Medium | Low | Medium |
+| 2.3 | 2.3-A | Sub-card key compromise: holder can recover via primary card key; gap is press availability | Medium | Medium | Low | Medium |
 | 2.3 | 2.3-B | Full keyring compromise + notification channel control bypasses 72-hour window | **High** | High | High | Medium |
 | 2.3 | 2.3-C | Physical device access allows keyring blob exfiltration; Secure Enclave limits sub-card key extraction | Medium | Low | Low | **High** |
 | 2.4 | 2.4-A | Auditor key compromise exposes complete historical issuance record with no forward secrecy | **High** | High | Low | Low |
@@ -307,13 +307,13 @@ However, many verifiers in practice do not maintain session-level key history. T
 
 ---
 
-## Step 2.3 — Holder Master Key and Sub-Card Key Compromise
+## Step 2.3 — Holder Primary Card Key and Sub-Card Key Compromise
 
 ### Context
 
-The holder's key arcardecture is two-tier: a master card key (cold, stored in an encrypted IPFS keyring blob) and per-device sub-card keys (hot, stored in Secure Enclave on Apple devices, TPM on others). The three compromise scenarios are: sub-card key only, master key only, and the full keyring (passkey + service_secret).
+The holder's key arcardecture is two-tier: a primary card key (cold, stored in an encrypted IPFS keyring blob) and per-device sub-card keys (hot, stored in Secure Enclave on Apple devices, TPM on others). The three compromise scenarios are: sub-card key only, primary card key only, and the full keyring (passkey + service_secret).
 
-### Finding 2.3-A — Sub-Card Key Compromise: Holder Can Recover via Master Key, Gap Is Press Availability
+### Finding 2.3-A — Sub-Card Key Compromise: Holder Can Recover via Primary Card Key, Gap Is Press Availability
 
 **Severity:** Medium  
 **Feasibility:** Practical  
@@ -324,14 +324,14 @@ A holder whose device sub-card key is compromised (via device theft, malware, or
 **What the attacker gains:** The sub-card key can sign messages and authentication responses that appear to come from the holder's device card. The attacker can impersonate the holder for authentication flows. They can sign messages attributed to the holder's identity. For a journalist or activist, this could mean sending fraudulent statements that appear to come from their identity.
 
 **What the attacker cannot do with a sub-card key alone:**
-- Create new sub-cards (requires master key).
+- Create new sub-cards (requires primary card key).
 - Post a self-revocation (810) of this sub-card — because submitting an 810 via the press requires the holder's key to sign the update intent, and the attacker already has that key. So actually: the attacker could submit an 810 for the compromised sub-card, but their incentive is the opposite — they want to keep using the key, not revoke it.
-- Access the master key (which is cold and encrypted separately).
+- Access the primary card key (which is cold and encrypted separately).
 
 **The holder's recovery path:**
-1. Holder accesses their master key (from the encrypted keyring, decrypted with passkey + service_secret).
-2. Holder registers a new sub-card key under the master card (master key signs the sub-card registration).
-3. Holder submits an 810 intent for the compromised sub-card key, signed with the new sub-card key (which satisfies `is_holder: true` for the master card).
+1. Holder accesses their primary card key (from the encrypted keyring, decrypted with passkey + service_secret).
+2. Holder registers a new sub-card key under the primary card (primary card key signs the sub-card registration).
+3. Holder submits an 810 intent for the compromised sub-card key, signed with the new sub-card key (which satisfies `is_holder: true` for the primary card).
 4. Press processes the 810, posts the log entry, notifies other community members.
 
 **Critical dependency:** Step 3 requires an available approved press. If the only approved press is unavailable (Finding 1.4-C), the holder cannot post the 810. The attacker continues to use the compromised key indefinitely. The spec's recommendation to list multiple presses in `approved_presses` is the primary mitigation.
@@ -351,11 +351,11 @@ A holder whose device sub-card key is compromised (via device theft, malware, or
 **Feasibility:** Practical for state actors and sophisticated criminal organizations; Medium for individual abusers with relationship access  
 **Adversary relevance:** State actor (High), Criminal org (High), Individual abuser (Medium)
 
-The full keyring compromise scenario: an attacker obtains both the encrypted keyring blob (from IPFS, publicly accessible for public cards or obtainable from device storage) and the decryption credentials (passkey + service_secret). This gives the attacker the holder's master private keys. To also use the YubiKey recovery path without the holder knowing, the attacker needs the YubiKey and the holder's notification channels suppressed.
+The full keyring compromise scenario: an attacker obtains both the encrypted keyring blob (from IPFS, publicly accessible for public cards or obtainable from device storage) and the decryption credentials (passkey + service_secret). This gives the attacker the holder's primary card private keys. To also use the YubiKey recovery path without the holder knowing, the attacker needs the YubiKey and the holder's notification channels suppressed.
 
 **Keyring blob acquisition:** The keyring is stored on IPFS. For public cards, the keyring's IPFS address may be derivable from the card's public key. For private cards, the keyring address requires the address secret. In either case, a device backup, iCloud sync, or unencrypted device storage may give an attacker the blob without IPFS access.
 
-**Decryption credential acquisition:** The keyring is encrypted with `passkey + service_secret`. The service holds `service_secret` (but not in plaintext). The passkey is held by the holder's device (biometric/PIN-derived). An attacker with device access at an unlocked moment may have access to an active decrypted session — but the master key is not in active memory unless a high-stakes operation (new sub-card, key rotation) was just performed. In practice, this attack requires more than device access: it requires a moment when the master key is in use.
+**Decryption credential acquisition:** The keyring is encrypted with `passkey + service_secret`. The service holds `service_secret` (but not in plaintext). The passkey is held by the holder's device (biometric/PIN-derived). An attacker with device access at an unlocked moment may have access to an active decrypted session — but the primary card key is not in active memory unless a high-stakes operation (new sub-card, key rotation) was just performed. In practice, this attack requires more than device access: it requires a moment when the primary card key is in use.
 
 **The YubiKey recovery path attack:**
 
@@ -369,8 +369,8 @@ Can:
 3. Wait 72 hours without the holder receiving or being able to submit a cancellation.
 4. Receive the wrapped decryption key blob from the backup service.
 5. Present the YubiKey (PIN required); YubiKey unwraps the blob locally.
-6. Decrypt the IPFS keyring → extract master private keys.
-7. Register new sub-cards under the master card, effectively taking over the identity.
+6. Decrypt the IPFS keyring → extract primary card private keys.
+7. Register new sub-cards under the primary card, effectively taking over the identity.
 
 **The PIN barrier:** The YubiKey requires a PIN to unwrap the blob. A simple 4–6 digit PIN is vulnerable to physical coercion (rubber hose attack) or brute force if the YubiKey's attempt limit is not configured. A longer PIN or passphrases significantly raise the bar.
 
@@ -384,7 +384,7 @@ Can:
 
 **What full identity takeover enables:**
 
-With the master key and newly-registered sub-cards, the attacker:
+With the primary card key and newly-registered sub-cards, the attacker:
 - Can sign messages attributed to the holder's identity.
 - Can submit update intents (field updates, self-annotations) for the holder's cards.
 - Can register the holder's cards under a new primary service, potentially locking the original holder out.
@@ -537,7 +537,7 @@ A state actor with legal authority over the backup service and physical custody 
 
 In this scenario, the 72-hour notification window provides no protection because the state has compelled the service to bypass it. The multi-channel notification is effective only if the state cannot also control those channels — which a state with legal compulsion authority over domestic telecom and email providers may be able to do.
 
-**What this gives the state:** The keyring decryption key → decrypt the IPFS keyring blob → all of the holder's master private keys → ability to issue new sub-cards under the holder's identity and sign messages attributed to the holder.
+**What this gives the state:** The keyring decryption key → decrypt the IPFS keyring blob → all of the holder's primary card private keys → ability to issue new sub-cards under the holder's identity and sign messages attributed to the holder.
 
 **The practical limiting factor:** Physical custody of the holder is required for YubiKey seizure. Border crossings and detentions are the realistic scenarios. The attack is therefore targeted and labor-intensive — it cannot be applied at scale without physical confrontation.
 
@@ -562,7 +562,7 @@ Across the five key tiers, the blast-radius ordering (widest to narrowest) is:
 
 4. **Holder full keyring** — Complete identity takeover for one holder. Limited by the 72-hour window (which has a known bypass if notification channels are controlled).
 
-5. **Holder sub-card key only** — Attacker can impersonate one device for the holder. Holder can recover via master key; recovery speed depends on press availability.
+5. **Holder sub-card key only** — Attacker can impersonate one device for the holder. Holder can recover via primary card key; recovery speed depends on press availability.
 
 ### Cross-Phase Notes for Reviewers
 

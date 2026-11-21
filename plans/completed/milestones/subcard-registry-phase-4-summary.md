@@ -11,7 +11,7 @@ Phase 4 successfully implements the client-SDK layer for active-subcards directo
 
 **What was implemented:**
 - New function `resolveActiveSubCardTargets(masterCard: CardDocument): SubCardMessageTarget[]` in `client-sdk/packages/client-sdk/src/subcards/resolveActiveSubcardTargets.ts`.
-- Reads `active_subcards` from a decrypted master card.
+- Reads `active_subcards` from a decrypted primary card.
 - Derives `keccak256(pubkey)` for each entry to produce hex-prefixed address.
 - Returns `SubCardMessageTarget[]` with `{ pubkey, address }` tuples.
 - Pure, synchronous function — no network I/O, composable with existing message-sending paths.
@@ -64,7 +64,7 @@ Phase 4 successfully implements the client-SDK layer for active-subcards directo
 
 ## Integration Point
 
-The `SubCardMessageTarget[]` returned by `resolveActiveSubCardTargets` feeds directly into the existing `fanOutMessageToSubCards` messaging API (once the caller separately resolves the ML-KEM public keys from device registration, per the broader messaging layer design). The function introduces no new RPC round trips — the caller provides the already-decrypted master card, and the function returns pure-synchronous targets.
+The `SubCardMessageTarget[]` returned by `resolveActiveSubCardTargets` feeds directly into the existing `fanOutMessageToSubCards` messaging API (once the caller separately resolves the ML-KEM public keys from device registration, per the broader messaging layer design). The function introduces no new RPC round trips — the caller provides the already-decrypted primary card, and the function returns pure-synchronous targets.
 
 ## Test Results
 

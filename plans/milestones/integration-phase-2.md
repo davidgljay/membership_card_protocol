@@ -111,7 +111,7 @@ stack — the exact failure mode integration testing exists to catch.
 10. **Device sub-card registration was structurally guaranteed to fail.**
     `setupWallet`'s automatic sub-card registration (Steps 7-9) used its
     own freshly-generated, never-on-chain account identity (`cardHash`) as
-    `holder_primary_card` — but `RegisterSubCard`'s on-chain "master must
+    `holder_primary_card` — but `RegisterSubCard`'s on-chain "primary card must
     exist" check requires a real `CardEntry`, and no wallet-sdk code path
     ever registers `cardHash` as one. Per `protocol-objects.md`,
     `holder_primary_card` is meant to be the holder's actual primary

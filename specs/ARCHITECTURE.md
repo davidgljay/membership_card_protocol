@@ -245,7 +245,7 @@ Governance keys follow the same pattern: secp256r1 for on-chain governance opera
 
 ### Multi-Device Delivery
 
-**Revised — no longer UMBRAL-based; see ADR-007 §Message Server.** Multi-device delivery is achieved by the sender encrypting independently to each registered sub-card's public key, not by the message server transforming a single ciphertext via UMBRAL proxy re-encryption. This removes the need for the master key (or any re-encryption key derived from it) to be involved at delivery time at all — the message server never sees plaintext, and now never holds any key material either.
+**Revised — no longer UMBRAL-based; see ADR-007 §Message Server.** Multi-device delivery is achieved by the sender encrypting independently to each registered sub-card's public key, not by the message server transforming a single ciphertext via UMBRAL proxy re-encryption. This removes the need for the primary card key (or any re-encryption key derived from it) to be involved at delivery time at all — the message server never sees plaintext, and now never holds any key material either.
 
 ---
 
@@ -350,7 +350,7 @@ Because card content is encrypted under a key derived from the card's own public
 
 **Policy cards:** Policy cards carry `ancestry_pubkeys` under the same convention (ordered from the immediate parent up toward root). A verifier walking the policy creation chain uses the same array and the same binding check. **Root base case and walk termination:** a self-rooted trusted-root policy card — one whose own on-chain address is registered in `PolicyAuthorizerKeys` — carries `ancestry_pubkeys: []`. The empty array `[]` is a legal, signed value; it is distinct from omission (the field is always present). The chain walk terminates successfully when the next address to resolve is registered in the on-chain `PolicyAuthorizerKeys` table; at that point `chain_reaches_trusted_root` is set to `true`. If `ancestry_pubkeys` is exhausted (or `[]`) and the terminal card's address is **not** in `PolicyAuthorizerKeys`, the chain does not reach a trusted root.
 
-**Sub-card boundary — `holder_primary_card_pubkey` and `app_card_pubkey`:** Because almost all signed statements are produced by a **sub-card** (not a master card), verification enters at a sub-card whose parents are referenced only by their on-chain addresses (one-way keccak256 hashes). To unlock those parent cards and then continue via their `ancestry_pubkeys`, every `SubCardDocument` (see `protocol-objects.md §16`) carries two additional protocol-required fields: `holder_primary_card_pubkey` (ML-DSA-44 public key of the card referenced by `holder_primary_card`) and `app_card_pubkey` (ML-DSA-44 public key of the card referenced by `app_card`). These fields apply the same design as `ancestry_pubkeys` one level down — they are untrusted hints bound by a keccak256 check: the verifier MUST confirm `keccak256(holder_primary_card_pubkey)` equals the `holder_primary_card` pointer address (and likewise for `app_card_pubkey` / `app_card`) before deriving a content key or verifying a signature. A mismatch, or an AES-GCM authentication failure when decrypting the referenced card, is a hard rejection. Once the master and app cards are decrypted, their own `ancestry_pubkeys` fields carry the walk the rest of the way to the trusted root. Both fields are set at sub-card issuance and are covered by both `app_signature` and `holder_signature`.
+**Sub-card boundary — `holder_primary_card_pubkey` and `app_card_pubkey`:** Because almost all signed statements are produced by a **sub-card** (not a primary card), verification enters at a sub-card whose parents are referenced only by their on-chain addresses (one-way keccak256 hashes). To unlock those parent cards and then continue via their `ancestry_pubkeys`, every `SubCardDocument` (see `protocol-objects.md §16`) carries two additional protocol-required fields: `holder_primary_card_pubkey` (ML-DSA-44 public key of the card referenced by `holder_primary_card`) and `app_card_pubkey` (ML-DSA-44 public key of the card referenced by `app_card`). These fields apply the same design as `ancestry_pubkeys` one level down — they are untrusted hints bound by a keccak256 check: the verifier MUST confirm `keccak256(holder_primary_card_pubkey)` equals the `holder_primary_card` pointer address (and likewise for `app_card_pubkey` / `app_card`) before deriving a content key or verifying a signature. A mismatch, or an AES-GCM authentication failure when decrypting the referenced card, is a hard rejection. Once the primary card and app cards are decrypted, their own `ancestry_pubkeys` fields carry the walk the rest of the way to the trusted root. Both fields are set at sub-card issuance and are covered by both `app_signature` and `holder_signature`.
 
 ### Key Separation for Policy Authorizers
 
@@ -444,8 +444,8 @@ A holder's private keys are the root of their identity. Loss means permanent los
 
 **Two-tier key architecture:**
 
-- **Master card key** — high-stakes key for creating sub-cards and key rotations. Stored in an **encrypted keyring blob**, encrypted with a key derived from `passkey + service_secret`. Neither the passkey nor the service secret alone can decrypt it. See ADR-009-AMEND below for where the blob is stored.
-- **Sub-card keys** — day-to-day signing keys, one per device. Stored in **secure device storage** (Secure Enclave on Apple, TPM on others). All routine signing operations use sub-card keys; the master key is cold.
+- **Primary card key** — high-stakes key for creating sub-cards and key rotations. Stored in an **encrypted keyring blob**, encrypted with a key derived from `passkey + service_secret`. Neither the passkey nor the service secret alone can decrypt it. See ADR-009-AMEND below for where the blob is stored.
+- **Sub-card keys** — day-to-day signing keys, one per device. Stored in **secure device storage** (Secure Enclave on Apple, TPM on others). All routine signing operations use sub-card keys; the primary card key is cold.
 
 **The keyring blob** is append-only: new keys are added; old keys are never removed from the blob, preserving recoverability after device loss.
 
@@ -630,15 +630,15 @@ Verifier receives signed message or card pointer
       confirm keccak256(app_card_pubkey) == app_card address
          (binding check — mismatch → hard reject)
       derive content_key = HKDF-SHA3-256(holder_primary_card_pubkey, info="card-content-v1")
-         and decrypt master card (AES-GCM auth failure → hard reject)
-      confirm sub-card's address appears in master card's active_subcards field
+         and decrypt primary card (AES-GCM auth failure → hard reject)
+      confirm sub-card's address appears in primary card's active_subcards field
          (keccak256 of each entry pubkey; hard reject if absent — independent of
           the on-chain SubCardEntry.active flag; see protocol-objects.md §1.1)
-      verify master card holder's ML-DSA-44 signature on sub-card registration
+      verify primary card holder's ML-DSA-44 signature on sub-card registration
       derive content_key = HKDF-SHA3-256(app_card_pubkey, info="card-content-v1")
          and decrypt app card (AES-GCM auth failure → hard reject)
       walk app card's ancestry_pubkeys to confirm chain reaches governance root
-  → read ancestry_pubkeys from decrypted master card (ordered, immediate parent first)
+  → read ancestry_pubkeys from decrypted primary card (ordered, immediate parent first)
   → fetch chain CIDs from IPFS (parallelized via cached chain array + ancestry_pubkeys)
     for each ancestor link:
       1. confirm keccak256(ancestry_pubkeys[i]) == on-chain address being resolved

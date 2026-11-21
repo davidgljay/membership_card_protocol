@@ -39,7 +39,7 @@ Steps 2.1–2.7 of the implementation plan. Only `plans/` files changed: no spec
 2. The write-gate gap lets a host reuse enclave-signed payloads with different calldata. This led to D5.
 3. On-chain anchoring can't give rollback protection in v1, and isn't needed. This led to D4.
 4. "Latest ballot wins" must be ordered by a contributor-signed `revision`, not by arrival.
-5. Dedupe must key on the master card's original key, not on the signing sub-card or a rotated address.
+5. Dedupe must key on the primary card's original key, not on the signing sub-card or a rotated address.
 6. The X-Wing public key (1,216 bytes) doesn't fit the attestation's `public_key` field, so the field carries its hash.
 7. Replicas need per-instance keys to sign heartbeats and handoffs.
 8. A replica closing alone lets a partitioning host choose the result. Close now needs a quorum of cosigners who each recompute.

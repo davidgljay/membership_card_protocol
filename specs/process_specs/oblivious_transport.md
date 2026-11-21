@@ -93,7 +93,7 @@ Destination gateway (wallet service or press)
   → dispatch in-process (a direct function call, not a second network hop) to the
       handler that path/method would normally route to
   → apply the same auth/validation logic that handler applies when reached directly
-      (session token, master-card-signature, subcard-signature — whichever the
+      (session token, primary-card-signature, subcard-signature — whichever the
       route requires)
   → encapsulate the handler's result through the same HPKE context
   → return the encapsulated response

@@ -14,11 +14,11 @@ The implementation plan says all strategic-plan open questions were resolved on 
 |---|---|---|---|
 | 1 | Developer policy governance | A **developer branch under the app-certification root**, governed by the AppCertificationBody (not a separate root). Wallet apps and login services are siblings under one root. | Impl plan 1.2(a), 2.5 |
 | 2 | Domain binding | (a) DNS admin card **co-signs** developer card issuance; the developer card records the domain. | Impl plan 1.2(c), 4.3 |
-| 3 | Server card as sub-card | A developer-branch card may be `app_card` **only for sub-cards whose master is itself**. | Impl plan 1.2(b) |
+| 3 | Server card as sub-card | A developer-branch card may be `app_card` **only for sub-cards whose primary card is itself**. | Impl plan 1.2(b) |
 | 4 | OpenID4VP depth | Default: OpenID4VP-shaped, protocol-native (DCQL + parameter names; RFC 8785 + ML-DSA-44, no JWT). | Impl plan 1.1 |
 | 5 | `required_predicate` | Default: `mcard` DCQL `meta.policies` required, optional `meta.predicate`. | Impl plan 1.3, 2.1 |
 | 6 | Remove CHAPI / `callbacks.https` | Default: remove with changelog; keep `mcard://auth?r=` for native/QR. | Impl plan 2.3, 2.4 |
-| 7 | Identifier the site sees | Default: master card pointer in `senders`; per-service identifiers P2. | — |
+| 7 | Identifier the site sees | Default: primary card pointer in `senders`; per-service identifiers P2. | — |
 | 8 | Router hosting & registration trust | Default: new `login-router/` static package; registration token signed by a **wallet-branch** app card. | Impl plan 2.2, 4.7 |
 | 9 | Where code goes / wallet UI | Default package split; **no wallet front-end in scope** — wallet UX is exercised through a test harness. | Impl plan 4.8 |
 
@@ -90,11 +90,11 @@ Also: `protocol-objects.md §8` header says the request is "fetched by the walle
 | `content.nonce` | keep | |
 | *(new)* `content.request_hash` | **add** | See A.2. |
 | *(new)* `content.audience` | **add** | The `response_uri` origin. The verifier checks it equals its own origin (G3 "audience origin"). |
-| `senders` (holder master pointer) | keep | Q7: same identifier at every service in v1. |
-| `recipients` (`requester_card`) | **change → developer card** | Messages route to master cards only; the server card is a sub-card with no routing binding. Wallet takes it from the server card's `holder_primary_card`. See D.3. |
+| `senders` (holder primary card pointer) | keep | Q7: same identifier at every service in v1. |
+| `recipients` (`requester_card`) | **change → developer card** | Messages route to primary cards only; the server card is a sub-card with no routing binding. Wallet takes it from the server card's `holder_primary_card`. See D.3. |
 | `timestamp` | keep | Freshness window defined in `card_login.md`. |
 | signature by device sub-card | keep | Unchanged envelope rules. |
-| `card_pointer` | **change (clarify)** | Spec says "the card used to sign" but the signer is a device sub-card and `senders` already holds the master. Define it as the **master card pointer of the presented card** (so it must equal `senders[0]`) or remove it as redundant. Recommend remove; flag in §F. |
+| `card_pointer` | **change (clarify)** | Spec says "the card used to sign" but the signer is a device sub-card and `senders` already holds the primary card. Define it as the **primary card pointer of the presented card** (so it must equal `senders[0]`) or remove it as redundant. Recommend remove; flag in §F. |
 | `vp_token` naming | not adopted | Q4: OpenID4VP-shaped, not conformant; keep `signed_statement`. |
 
 ### A.4 Flow steps (`card_protocol_spec §8` "Direct fetch flow", steps 1–9)
@@ -112,7 +112,7 @@ Also: `protocol-objects.md §8` header says the request is "fetched by the walle
 | 8. Send response, receive `confirmation_code` | **change** | `form_post`: auto-submitting form in the browser to `response_uri`. `mcard_message`: card message to the server card; site replies with `auth_confirmation`. Record send time for latency (G3). |
 | 9. Redirect with `{code}` | **change** | `form_post`: site redirects. `mcard_message`: browser redeems one-time code. |
 | Transport options (OHTTP > HTTPS) | **remove** | Replaced by response modes. |
-| Verification paragraph | change | Becomes the verifier's login-response entry point (`card_verifier.md §6`): signature, sub-card→master, chain, revocation, DCQL match, nonce, `state`, audience, request hash, freshness. |
+| Verification paragraph | change | Becomes the verifier's login-response entry point (`card_verifier.md §6`): signature, sub-card→primary card, chain, revocation, DCQL match, nonce, `state`, audience, request hash, freshness. |
 
 ### A.5 Acceptance criteria (`card_protocol_spec §8`)
 
@@ -200,7 +200,7 @@ How the branch is identified (by address of a node in `ancestry_pubkeys`) needs 
 | `messaging_protocol.md` / `subcards.md` Capabilities | | Server card `capabilities` must include the login message types it sends (`auth_confirmation`, `error`). `auth_request` is not an envelope in the `form_post` path, so Stage 2 step 7's capability check doesn't run on it — `card_login.md` must say the wallet checks the server card's `capabilities` include `auth_request` explicitly. |
 
 **Problem found — attestation (needs David, likely CP1).** Every sub-card carries `attestation_level` `"T2"` (App Attest / Play Integrity proof over a device key) or `"T1"` (hardware keystore). A server card runs on a server and can produce neither. Verifier Stage 2 step 14 and press §5.4 step 6 reject anything that isn't T2 unless the policy accepts T1. Options:
-1. **New level `"S1"` (server key)**, accepted only when the B.2 scope rule holds (developer-branch `app_card` == master). No device proof; optional HSM attestation later. *Recommended* — keeps the T1/T2 meaning intact and makes server keys visibly different.
+1. **New level `"S1"` (server key)**, accepted only when the B.2 scope rule holds (developer-branch `app_card` == primary card). No device proof; optional HSM attestation later. *Recommended* — keeps the T1/T2 meaning intact and makes server keys visibly different.
 2. Treat server cards as `"T1"` and require `acceptedAttestationLevels` to include T1 for login. Muddies T1's meaning ("hardware-backed device keystore") and weakens every wallet-branch check on the same verifier instance.
 Adding an enum value to `SubCardDocument.attestation_level` is additive (existing cards unaffected), so CP3 is likely not triggered, but it's a change to a shared object.
 
@@ -311,7 +311,7 @@ Sources: `object_specs/app_sdk.md`, `object_specs/wallet_sdk.md`, `object_specs/
 |---|---|---|
 | New §"Login (Site-Side)" and `login/` in §3 module list | new section after §9 | Functions: create and sign `AuthenticationRequest` with the server card; host it single-use; issue `state`/`nonce` and set the `state` cookie; `form_post` handler; `mcard_message` receiver; `auth_confirmation` + one-time code issue/redeem; wallet-initiated start URL; `/.well-known/membership-login` generator; latency recording; browser button helper (builds the router link). Same discriminated-union result convention as §12. |
 | **Server key custody** | §1 "does NOT do", §2, §4.2 | §1 says no function touches a private key except via hardware-backed `SecureKeyProvider`. Server cards fit that if the server supplies a `SecureKeyProvider` (KMS, HSM, or file-backed for dev). Only web and React Native provider packages exist. Phase 3 must decide: a Node provider package, or "integrator supplies one" plus a dev-only file provider in `testing/`. |
-| **Server card creation** | §7 | `requestSubCard` (§7.1) signs `app_signature` with "the app's own card key", but for a server card that key is the **developer card's master key**, which lives in the developer's wallet, not on the server. Flow must be: server generates the key → sends an unsigned `SubCardDocument` to the developer's wallet → wallet signs both `app_signature` and `holder_signature` → registers. Needs a new app-sdk "server card request" helper (unsigned doc) and a wallet-sdk counterpart (D.2). |
+| **Server card creation** | §7 | `requestSubCard` (§7.1) signs `app_signature` with "the app's own card key", but for a server card that key is the **developer card's own key**, which lives in the developer's wallet, not on the server. Flow must be: server generates the key → sends an unsigned `SubCardDocument` to the developer's wallet → wallet signs both `app_signature` and `holder_signature` → registers. Needs a new app-sdk "server card request" helper (unsigned doc) and a wallet-sdk counterpart (D.2). |
 | Messaging type union | §9.1 | Add `auth_confirmation` to `MessageType`; `auth_request`/`auth_response` already listed. |
 | Server card receiving messages | §9.2–9.5 | The server must run the inbound pipeline (UUID registration with a wallet service, realtime delivery, `handleInboundRoutingEnvelope`) as a long-lived process. Already in scope for "server-side integrators" per §1, but nothing documents it for a web server; the login section should say so. |
 
@@ -320,17 +320,17 @@ Sources: `object_specs/app_sdk.md`, `object_specs/wallet_sdk.md`, `object_specs/
 | Change | Section | Notes |
 |---|---|---|
 | New §"Login (Wallet-Side)" and `login/` module | new section | Parse router handoff / `mcard://auth?r=`; fetch and validate request (all A.4 step 3–4 checks, §B chain + domain binding, §C.6 warn/block); DCQL `mcard` match over held cards; build `auth_response`; deliver by `form_post` (return form data for the host to auto-submit) or `mcard_message` (send via §9.1 fan-out); pending wallet-initiated logins (create, match by `wallet_nonce`, single-use, short TTL); router registration (build registration token, produce `/register` URL); effective `preferred_services` resolution + `.well-known` filter. |
-| **Authorize a server card** | §6 | New function to sign a server card `SubCardDocument` with the developer card key in both roles, skipping consent (wallet self-signing analogue) and enforcing the B.2 scope rule on the wallet side too. `handleSubCardRequest` (§6.1) today checks the app card reaches the app-cert root — must not accept a developer-branch app card for any master other than itself. |
+| **Authorize a server card** | §6 | New function to sign a server card `SubCardDocument` with the developer card key in both roles, skipping consent (wallet self-signing analogue) and enforcing the B.2 scope rule on the wallet side too. `handleSubCardRequest` (§6.1) today checks the app card reaches the app-cert root — must not accept a developer-branch app card for any primary card other than itself. |
 | Attestation reality | §5.4 | Device sub-cards are hard-coded to `attestation_level: 'T1'` today (no App Attest provider), and §6.1 does no attestation-proof check. So in practice every deployed verifier already accepts T1. Doesn't change the B.2 recommendation (a distinct server level), but lowers the urgency. |
 | Offer acceptance hook | §7.3, §7.4, §7.5 | After a successful acceptance, call router registration (D.4). |
 | Annotation check | §6.1 | "No annotation-board check … in scope". Login's warn/block table (§C.6) uses EAS annotations on the developer card; either bring the annotation check into scope for login, or drop annotations from C.6 for v1. *(Flag in §F.)* |
 
 ### D.3 Messaging and routing (`message_routing.md`, `messaging_protocol.md`)
 
-**Problem found — the response can't be addressed to the server card.** Routing is by **master card**: the routing header `to` is a card hash whose wallet service holds the card, and the sender fans out to that card's `active_subcards`. A sub-card (the server card) has no `active_subcards` and no routing-table binding. So for `mcard_message`:
-- `auth_response.recipients` must be the **developer card** (the server card's master), not `requester_card` as `protocol-objects §9` says today. The wallet derives it from the server card's `holder_primary_card`.
+**Problem found — the response can't be addressed to the server card.** Routing is by **primary card**: the routing header `to` is a card hash whose wallet service holds the card, and the sender fans out to that card's `active_subcards`. A sub-card (the server card) has no `active_subcards` and no routing-table binding. So for `mcard_message`:
+- `auth_response.recipients` must be the **developer card** (the server card's primary card), not `requester_card` as `protocol-objects §9` says today. The wallet derives it from the server card's `holder_primary_card`.
 - Fan-out delivers a copy to **every** active sub-card of the developer card — all server instances' cards, and any personal device sub-cards the developer holds on the same card. Recommend `card_login.md` tell developers to keep a dedicated developer card for login (no personal devices on it); any server card that receives the response may process it, and single-use `state` makes duplicates harmless.
-- This also fixes the `senders`/`recipients` convention: both are master pointers everywhere else.
+- This also fixes the `senders`/`recipients` convention: both are primary card pointers everywhere else.
 
 Other routing facts that shape the design:
 - The cross-device latency path is wallet → wallet service A → wallet service B → relay → server (realtime transport). The G3 latency metric should record wallet-send time in the signed `timestamp` and server-receive time locally; no protocol change needed beyond `card_login.md` saying where each timestamp comes from.

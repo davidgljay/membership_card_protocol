@@ -4,7 +4,7 @@
 **Date:** 2026-07-06
 **Status:** Split from unified `client_sdk.md` (Phase 5 milestone) — represents the wallet-side, key-custody half of holder-side functionality
 
-> **Provenance note.** This spec is derived from `specs/object_specs/client_sdk.md` via the split described in `plans/sdk-split-strategic-plan.md`. It represents all holder-side capabilities that require access to the wallet's master key and backup material, plus the authorization/countersigning side of flows that are initiated by App SDK code. This package imports and depends on `@membership-card-protocol/app-sdk`; see that spec for the app-side capabilities.
+> **Provenance note.** This spec is derived from `specs/object_specs/client_sdk.md` via the split described in `plans/sdk-split-strategic-plan.md`. It represents all holder-side capabilities that require access to the wallet's primary card key and backup material, plus the authorization/countersigning side of flows that are initiated by App SDK code. This package imports and depends on `@membership-card-protocol/app-sdk`; see that spec for the app-side capabilities.
 
 ---
 
@@ -51,17 +51,17 @@
 
 ## 1. Overview
 
-`@membership-card-protocol/wallet-sdk` is the library a wallet integrator (a mobile app that holds cards, a native or web wallet app, or a wallet-service backend) links against to perform on-device functions the protocol specs assign to "the wallet" — the entity that holds custody of the master key. It is the wallet-side counterpart to `@membership-card-protocol/app-sdk` (which it imports and depends on) and together they form the complete holder-side SDK.
+`@membership-card-protocol/wallet-sdk` is the library a wallet integrator (a mobile app that holds cards, a native or web wallet app, or a wallet-service backend) links against to perform on-device functions the protocol specs assign to "the wallet" — the entity that holds custody of the primary card key. It is the wallet-side counterpart to `@membership-card-protocol/app-sdk` (which it imports and depends on) and together they form the complete holder-side SDK.
 
 This SDK handles:
 
-1. **Master key generation and wallet setup** — creating the initial `decryption_key`, keyring, and backup registrations (passkey and/or YubiKey wrapping).
+1. **Primary card key generation and wallet setup** — creating the initial `decryption_key`, keyring, and backup registrations (passkey and/or YubiKey wrapping).
 2. **Keyring and backup/recovery** — encrypting/decrypting the `decryption_key` and card private keys, running the full recovery flow across wallet services and synced passphrases, and re-registering after recovery.
-3. **Sub-card request authorization** — validating third-party apps' requests, assembling consent screens, and countersigning authorized requests with the master key.
+3. **Sub-card request authorization** — validating third-party apps' requests, assembling consent screens, and countersigning authorized requests with the primary card key.
 4. **Card offer acceptance** — reviewing offers (the pre-display verification gate, built on App SDK's `CardVerifier`), generating and persisting new per-card keypairs, countersigning acceptance, and submitting claims to the press.
 5. **Sub-card lifecycle** — revoking sub-cards, deregistering them from relay pools, and managing active sub-card state.
 
-**What this SDK explicitly does NOT do:** delegate key custody to any third party; run wallet-service backend endpoints (`plans/wallet-service/`); use the `decryption_key` or master key outside of the functions that directly require them; or expose those keys to untrusted code paths.
+**What this SDK explicitly does NOT do:** delegate key custody to any third party; run wallet-service backend endpoints (`plans/wallet-service/`); use the `decryption_key` or primary card key outside of the functions that directly require them; or expose those keys to untrusted code paths.
 
 **Dependency relationship:** This package imports `@membership-card-protocol/app-sdk`. Every wallet integrator depends on `wallet-sdk` (which transitively brings in `app-sdk`). App-side integrators that do not run wallet code should depend only on `app-sdk`.
 
@@ -73,7 +73,7 @@ This SDK handles:
 
 **One SDK, two runtimes, no forked protocol logic.** Protocol logic (key derivation, canonicalization, signing order, backup/recovery orchestration) contains no platform branches. Platform differences (passkey APIs, secure enclave access, keyring storage) are isolated behind App SDK's provider interfaces.
 
-**Never leave a private key recoverable-but-unpersisted, or persisted-but-inaccessible.** The master key is a local variable in `setupWallet` and `recoverWallet` only — never returned, never logged, cleared in a `finally` block (§5.3, §5.6). Per-card acceptance keys generated during offer countersigning (§7.2, this package's own `offers/countersign.ts`) go through the recoverable keyring, with a non-exported helper structurally enforcing "persist before sign." Requester-side sub-card keys go through hardware-backed secure storage (App SDK's `SecureKeyProvider`). §10 security invariants list the structural guarantees.
+**Never leave a private key recoverable-but-unpersisted, or persisted-but-inaccessible.** The primary card key is a local variable in `setupWallet` and `recoverWallet` only — never returned, never logged, cleared in a `finally` block (§5.3, §5.6). Per-card acceptance keys generated during offer countersigning (§7.2, this package's own `offers/countersign.ts`) go through the recoverable keyring, with a non-exported helper structurally enforcing "persist before sign." Requester-side sub-card keys go through hardware-backed secure storage (App SDK's `SecureKeyProvider`). §10 security invariants list the structural guarantees.
 
 **No independently re-derived trust logic.** Chain walking, revocation checking, policy-compliance evaluation, and app-card certification validation all go through App SDK's shared `CardVerifier` instance; this package never re-derives or duplicates that logic.
 
@@ -122,7 +122,7 @@ This package imports all six provider interfaces, the `ObliviousProtocolTranspor
 - `YubiKeyProvider` — optional, for YubiKey-backed backup wrapping (§5.5) and recovery (§5.6).
 - `StorageProvider` — used for keyring and backup state persistence.
 
-**Not used by this package:** `SecureKeyProvider` — the master key bypasses any provider abstraction entirely. Per §10, every master-key-consuming function in this package (offer countersigning, sub-card authorization, deregistration, etc.) takes `masterSecretKey: Uint8Array` as a direct parameter, never an opaque `keyId` resolved through `SecureKeyProvider`'s contract. (`SecureKeyProvider` is still used elsewhere — by App SDK, for requester-side sub-card keys.) `RealtimeTransportProvider` is also not consumed directly by this package — per §12's Implementation Status table, messaging delivery (including SSE/WebSocket) is implemented entirely in `app_sdk.md` §9.5, not here.
+**Not used by this package:** `SecureKeyProvider` — the primary card key bypasses any provider abstraction entirely. Per §10, every primary-card-key-consuming function in this package (offer countersigning, sub-card authorization, deregistration, etc.) takes `masterSecretKey: Uint8Array` as a direct parameter, never an opaque `keyId` resolved through `SecureKeyProvider`'s contract. (`SecureKeyProvider` is still used elsewhere — by App SDK, for requester-side sub-card keys.) `RealtimeTransportProvider` is also not consumed directly by this package — per §12's Implementation Status table, messaging delivery (including SSE/WebSocket) is implemented entirely in `app_sdk.md` §9.5, not here.
 
 Platform-specific default implementations are provided by `@membership-card-protocol/sdk-providers-web` and `@membership-card-protocol/sdk-providers-rn` (renamed from `client-sdk-web`/`client-sdk-rn` as part of the split). Both depend on App SDK, not on this package — this package has no dependency on either platform package, same as App SDK. A wallet integrator depends on this package *and*, separately, on whichever platform package matches its runtime.
 
@@ -145,7 +145,7 @@ function passkeyOutputFromPrf(prfOutput: Uint8Array): Uint8Array;
 
 ### 5.2 Keyring
 
-`wallet/keyring.ts`: `encryptKeyring(entries, decryptionKey)` / `decryptKeyring(blob, decryptionKey)` — AES-256-GCM, fresh random 12-byte nonce prepended to ciphertext (self-contained blob). `computeKeyringId(blob) = keccak256(blob)`. `KeyringEntry = { cardAddress: string; privateKey: Uint8Array }` — one entry per card private key the holder controls (master key at genesis; per-offer-acceptance keys appended during acceptance flows, §7).
+`wallet/keyring.ts`: `encryptKeyring(entries, decryptionKey)` / `decryptKeyring(blob, decryptionKey)` — AES-256-GCM, fresh random 12-byte nonce prepended to ciphertext (self-contained blob). `computeKeyringId(blob) = keccak256(blob)`. `KeyringEntry = { cardAddress: string; privateKey: Uint8Array }` — one entry per card private key the holder controls (primary card key at genesis; per-offer-acceptance keys appended during acceptance flows, §7).
 
 ### 5.3 setupWallet
 
@@ -155,9 +155,9 @@ function passkeyOutputFromPrf(prfOutput: Uint8Array): Uint8Array;
 function setupWallet<T = void>(options: WalletSetupOptions<T>): Promise<WalletSetupResult<T>>;
 ```
 
-Implements `wallet_backup_and_recovery.md §Process 1` Steps 1–14 as one continuous function: master ML-DSA-44 keypair generation → device-bound passkey → the two-call `service_secret` bootstrap (`POST /accounts/challenge` → `POST /accounts`) → re-encrypt under the real `decryption_key` → `PUT /accounts/{card_hash}/keyring` with `rotate_service_secret: false` → keyring persistence → device sub-card generation and registration (§5.4, Steps 7–10) → synced-passkey backup registration (always) → optional YubiKey backup (Steps 14–15).
+Implements `wallet_backup_and_recovery.md §Process 1` Steps 1–14 as one continuous function: primary card ML-DSA-44 keypair generation → device-bound passkey → the two-call `service_secret` bootstrap (`POST /accounts/challenge` → `POST /accounts`) → re-encrypt under the real `decryption_key` → `PUT /accounts/{card_hash}/keyring` with `rotate_service_secret: false` → keyring persistence → device sub-card generation and registration (§5.4, Steps 7–10) → synced-passkey backup registration (always) → optional YubiKey backup (Steps 14–15).
 
-`decryption_key` and the master private key are local variables scoped to this function's body only — never returned, logged, or exposed. An optional generic `postSetupHook?: (decryptionKey) => Promise<T>` runs inside this same scope, after keyring/backups/sub-card are established but before the master key is cleared — the mechanism that open-offer new-wallet flows (§7.3) use to "invoke wallet setup inline" without duplicating this function or exposing `decryption_key` to a second function.
+`decryption_key` and the primary card private key are local variables scoped to this function's body only — never returned, logged, or exposed. An optional generic `postSetupHook?: (decryptionKey) => Promise<T>` runs inside this same scope, after keyring/backups/sub-card are established but before the primary card key is cleared — the mechanism that open-offer new-wallet flows (§7.3) use to "invoke wallet setup inline" without duplicating this function or exposing `decryption_key` to a second function.
 
 **Known gap, tracked (found during Step 3.2c scenario testing):** `setupWallet` requires `registration.prfOutput` to be truthy immediately after the device-bound passkey `register()` call, and throws a named error otherwise (`kdf.ts`'s `passkeyOutputFromPrf` has no fallback derivation). The shipped default web `PasskeyProvider` (`sdk-providers-web`'s `WebAuthnPasskeyProvider`) never populates `prfOutput` — see `app_sdk.md` §4.3 for the full gap description. In practice, **`setupWallet` cannot complete against the default web provider today**; a caller must supply a `PasskeyProvider` implementation that actually requests and extracts the WebAuthn PRF extension until `sdk-providers-web` closes this gap. Same applies to `recoverWallet` (§5.6), which has the identical requirement.
 
@@ -171,7 +171,7 @@ The wallet's own "self-signing" sub-card path, per `subcards.md`'s wallet-self-s
 
 **Implementation:** This function is a thin wrapper over App SDK's ordinary request/consent/countersign pipeline:
 
-1. Calls App SDK's `requestSubCard` with the wallet's own master card (`issuer_card`) and app identity, obtaining an `AppSignedSubCardDocument`.
+1. Calls App SDK's `requestSubCard` with the wallet's own primary card (`issuer_card`) and app identity, obtaining an `AppSignedSubCardDocument`.
 2. Validates the request via this package's own `handleSubCardRequest` (same wallet-side checks any third-party sub-card would go through).
 3. Assembles consent via this package's own `assembleSubCardConsent` — the wallet is both requester and granter, so it self-authorizes the request with `decision.approvedCapabilities === requestedCapabilities` (no actual UI/consent step).
 4. Countersigns via this package's own `countersignSubCardRequest` with the wallet's `masterSecretKey`.
@@ -199,7 +199,7 @@ function recoverWallet(options: RecoverWalletOptions): Promise<RecoverWalletResu
 
 `recoverWallet` is the large orchestrator, mirroring `setupWallet`'s structure: unwrap the released `wrapped_blob` → fetch keyring by ID → decrypt → (optionally) batch-deregister previously-active sub-cards (§5.7) → re-register (new device-bound passkey, new `decryption_key`, new `keyring_id`, via the same provisional/final two-call bootstrap §5.3 uses) → new device sub-card.
 
-`cancelRecovery` takes `masterSecretKey` as a direct parameter — this package has no general "unlock the wallet again after initial setup" primitive, so the caller is responsible for however it reconstructs its own master key to authorize a cancellation.
+`cancelRecovery` takes `masterSecretKey` as a direct parameter — this package has no general "unlock the wallet again after initial setup" primitive, so the caller is responsible for however it reconstructs its own primary card key to authorize a cancellation.
 
 ### 5.7 Post-Recovery Sub-Card Deregistration
 
@@ -275,7 +275,7 @@ function deregisterSubCardsAfterRecovery(transport, masterSecretKey, previouslyA
 
 Per `subcards.md §Authorization for Deregistration`: deregistration requires and is signed by the **primary card key only**, structurally enforced — `deregisterSubCard` has no "signer" callback parameter, only a direct `masterSecretKey: Uint8Array` argument, so there is no code path that could sign with anything else.
 
-**This is the on-chain, master-key-signed sub-card deregistration.** `deregisterSubCard` calls `POST /sub-card/deregister`, matching `press.md` §5.4's `processSubCardDeregistration`: the press verifies `masterSignature` against the master card's on-chain public key, then calls `DeregisterSubCard(sub_card_address, sig_payload, master_signature)` on the registry contract — an actual on-chain state change. (Per `press.md` §5.4's own note, this call alone does not update the holder's `active_subcards` field; that requires the separate code-511 update intent, §6.6.)
+**This is the on-chain, primary-card-key-signed sub-card deregistration.** `deregisterSubCard` calls `POST /sub-card/deregister`, matching `press.md` §5.4's `processSubCardDeregistration`: the press verifies `masterSignature` against the primary card's on-chain public key, then calls `DeregisterSubCard(sub_card_address, sig_payload, master_signature)` on the registry contract — an actual on-chain state change. (Per `press.md` §5.4's own note, this call alone does not update the holder's `active_subcards` field; that requires the separate code-511 update intent, §6.6.)
 
 **Distinct from App SDK's §9.6 `deregisterCardUuids`.** That function (`DELETE /cards/{card_hash}/subcards/{subcard_hash}`) empties only the wallet service's local UUID pool for the sub-card — no shared code, no on-chain effect, and no relationship to sub-card revocation (8xx/9xx codes) or to this on-chain deregistration. The two are easy to conflate by name but operate at entirely different layers: this section's `deregisterSubCard` changes on-chain registry state; `app_sdk.md` §9.6's `deregisterCardUuids` only clears wallet-service-local relay bookkeeping.
 
@@ -283,7 +283,7 @@ Per `subcards.md §Authorization for Deregistration`: deregistration requires an
 
 *(Codes 510/511 posting; distinct from §8.1's read-only `resolveActiveSubCardTargets` helper.)*
 
-Per `update_codes.md §5xx` and `card_updates.md §Sub-Card Directory Updates`: the holder posts code-510 (add) and code-511 (remove) update-intent entries against their own master card to maintain the `active_subcards` field. Both are implemented via two exported functions in `subcards/activeSubcardsUpdate.ts`:
+Per `update_codes.md §5xx` and `card_updates.md §Sub-Card Directory Updates`: the holder posts code-510 (add) and code-511 (remove) update-intent entries against their own primary card to maintain the `active_subcards` field. Both are implemented via two exported functions in `subcards/activeSubcardsUpdate.ts`:
 
 ```ts
 function postSubCardAddedToDirectory(options: PostSubCardAddedOptions): Promise<ActiveSubcardsUpdateResult>;
@@ -291,9 +291,9 @@ function postSubCardRemovedFromDirectory(options: PostSubCardRemovedOptions): Pr
 ```
 
 Both:
-- **Sign with the master key only** — `masterSecretKey: Uint8Array` is a direct parameter (no injectable signer callback), mirroring `deregisterSubCard`'s structural enforcement of primary-key-only signing.
+- **Sign with the primary card key only** — `masterSecretKey: Uint8Array` is a direct parameter (no injectable signer callback), mirroring `deregisterSubCard`'s structural enforcement of primary-key-only signing.
 - **Use the `POST /update` code-update-intent path** — same transport pattern as §6.4's `revokeSubCard`, with `field_updates: [{ field: 'active_subcards', value: <full new array> }]` payload shape per the spec.
-- **Target the master card itself** — `target_card === updater_card`, both pointing at the holder's own card.
+- **Target the primary card itself** — `target_card === updater_card`, both pointing at the holder's own card.
 
 Code-510 appends one pubkey; code-511 filters out exactly one pubkey (no-op if absent, allowing idempotent resubmission). Code-512 (atomic rotation) is out of scope for this step.
 
@@ -593,9 +593,9 @@ function resolveActiveSubCardTargets(masterCard: CardDocument): SubCardMessageTa
 // SubCardMessageTarget = { pubkey: string; address: string /* keccak256(pubkey), lowercase hex without 0x prefix */ }
 ```
 
-Given an already-decrypted master `CardDocument`, reads `active_subcards` (`protocol-objects.md §1.1`) and returns one `SubCardMessageTarget` per entry, deriving `address = keccak256(pubkey)` for each. `pubkey` is the base64url-encoded public key exactly as stored in `active_subcards`, not raw bytes — matching how every other signature/pubkey field in this SDK's protocol documents is represented on the wire. A card with no `active_subcards` field, or a non-array value in that field, returns `[]` rather than throwing.
+Given an already-decrypted primary card `CardDocument`, reads `active_subcards` (`protocol-objects.md §1.1`) and returns one `SubCardMessageTarget` per entry, deriving `address = keccak256(pubkey)` for each. `pubkey` is the base64url-encoded public key exactly as stored in `active_subcards`, not raw bytes — matching how every other signature/pubkey field in this SDK's protocol documents is represented on the wire. A card with no `active_subcards` field, or a non-array value in that field, returns `[]` rather than throwing.
 
-This function bridges wallet state (master card ownership) with App SDK's `fanOutMessageToSubCards` (app_sdk.md §9.1) — a wallet can pass `resolveActiveSubCardTargets(masterCard)` directly as the `subCards` parameter to fan-out a message to all active sub-cards.
+This function bridges wallet state (primary card ownership) with App SDK's `fanOutMessageToSubCards` (app_sdk.md §9.1) — a wallet can pass `resolveActiveSubCardTargets(masterCard)` directly as the `subCards` parameter to fan-out a message to all active sub-cards.
 
 This is the **read side** of the `active_subcards` directory only. §6.6's code-510/511 posting primitives (the **write side**, maintaining `active_subcards` on registration/deregistration) now exist and are tested, but per §6.6's own caller-composes-explicitly note, nothing in this package invokes them automatically yet — until some caller wires them into the actual registration/deregistration call sites, `active_subcards` still isn't reliably populated in practice, even though both the read-side helper and the write-side primitives are individually complete. Both sides are tracked together in `subcard-registry-implementation-plan.md` Steps 4.1–4.2.
 
@@ -605,7 +605,7 @@ This is the **read side** of the `active_subcards` directory only. §6.6's code-
 
 *(SDK-split implementation plan Step 3.2, substeps a–g. Scope narrowed from the original Phase 6 description — see `plans/sdk-split-implementation-plan.md`'s Phase 3 scope-correction note: validation against real *platform providers* is in scope; validation against real, deployed wallet-service/press/relay *infrastructure* is not — that belongs to the follow-on integration plan.)*
 
-Covered: cross-platform scenario tests against real (non-stub) `SecureKeyProvider`/`StorageProvider`/`PasskeyProvider` implementations from `sdk-providers-web`/`sdk-providers-rn` (§6.1); integrator documentation, `wallet-sdk/README.md` (§6.3); and Clarification Checkpoint CP-2, a pre-production security review — covering the persist-before-sign invariant's bypass-resistance, the master key's confinement to `setupWallet`/`recoverWallet`, `SecureKeyProvider` non-exportability on both platforms, the sub-card 9xx-exclusion and primary-key-only-deregistration checks, and confirming no transient secrets appear in any log output — complete, see `plans/sdk-split/milestones/cp2-security-review.md`. Not covered, and explicitly out of this split's scope: validating `ObliviousProtocolTransport` against real deployed OHTTP endpoints (§6.2), which requires live wallet-service/press infrastructure.
+Covered: cross-platform scenario tests against real (non-stub) `SecureKeyProvider`/`StorageProvider`/`PasskeyProvider` implementations from `sdk-providers-web`/`sdk-providers-rn` (§6.1); integrator documentation, `wallet-sdk/README.md` (§6.3); and Clarification Checkpoint CP-2, a pre-production security review — covering the persist-before-sign invariant's bypass-resistance, the primary card key's confinement to `setupWallet`/`recoverWallet`, `SecureKeyProvider` non-exportability on both platforms, the sub-card 9xx-exclusion and primary-key-only-deregistration checks, and confirming no transient secrets appear in any log output — complete, see `plans/sdk-split/milestones/cp2-security-review.md`. Not covered, and explicitly out of this split's scope: validating `ObliviousProtocolTransport` against real deployed OHTTP endpoints (§6.2), which requires live wallet-service/press infrastructure.
 
 ---
 
@@ -613,14 +613,14 @@ Covered: cross-platform scenario tests against real (non-stub) `SecureKeyProvide
 
 Cross-cutting properties this package maintains:
 
-- **`decryption_key` and the master private key never cross a function's return boundary.** `setupWallet` and `recoverWallet` are the *only* functions that ever hold them, and both clear the master key in a `finally` block. Every other function that needs `decryption_key` or `masterSecretKey` (e.g., offer countersigning, sub-card authorization) receives it as a direct parameter from a caller that obtained it some other way — this package has no general "unlock the wallet again after initial setup" primitive (documented gap, not silently assumed away).
+- **`decryption_key` and the primary card private key never cross a function's return boundary.** `setupWallet` and `recoverWallet` are the *only* functions that ever hold them, and both clear the primary card key in a `finally` block. Every other function that needs `decryption_key` or `masterSecretKey` (e.g., offer countersigning, sub-card authorization) receives it as a direct parameter from a caller that obtained it some other way — this package has no general "unlock the wallet again after initial setup" primitive (documented gap, not silently assumed away).
 - **Persist before sign**, for every per-card keypair generated during offer acceptance — structurally enforced via a non-exported helper in this package's own `offers/countersign.ts` (§7.2), not a call-site convention and not imported from App SDK.
 - **No verification logic is re-derived outside `CardVerifier` calls** (one stated exception: enclave attestation verification for notaries lives in per-platform `AttestationVerifier` modules, §7b — it is not card-chain logic) — chain walking, revocation checking, and policy-compliance evaluation are delegated to the shared verifier instance inherited from App SDK.
 - **No key derivation input is ever also transmitted to a party the derivation must stay secret from.** The `passkeyOutputFromPrf` correction from the unified spec's CP-1 security review — neither the device passkey's PRF output nor the synced-passkey PRF output is ever sent to the wallet service or any other server (§5.1 reiterates this property).
 - **Deregistration requires the primary card key, structurally, not just by policy** (§6.5) — no signer-substitution is possible via any exported function's type signature.
-- **`SecureKeyProvider` never returns private key material**, on any platform — requester-side sub-card keys (App SDK) and master key usage (this package) both go through hardware-backed or scoped-local key material.
+- **`SecureKeyProvider` never returns private key material**, on any platform — requester-side sub-card keys (App SDK) and primary card key usage (this package) both go through hardware-backed or scoped-local key material.
 
-Two lower-severity, explicitly tracked gaps from the CP-1 review (not yet closed): transient secrets other than the master key (`decryptionKey`, wrapping keys, `serviceSecret`) are not explicitly zeroed after use in every function that handles them (relies on GC); and if the keyring ever grows to hold more than one entry that needs clearing on a given code path, only the entry aliased by whatever local variable gets `.fill(0)`-ed is actually cleared.
+Two lower-severity, explicitly tracked gaps from the CP-1 review (not yet closed): transient secrets other than the primary card key (`decryptionKey`, wrapping keys, `serviceSecret`) are not explicitly zeroed after use in every function that handles them (relies on GC); and if the keyring ever grows to hold more than one entry that needs clearing on a given code path, only the entry aliased by whatever local variable gets `.fill(0)`-ed is actually cleared.
 
 **CP-2 (pre-production security review, Step 3.2f) — complete, see `plans/sdk-split/milestones/cp2-security-review.md` for full detail.** No CRITICAL/HIGH finding. Re-confirmed the "persist before sign" invariant (`offers/countersign.ts`), `SecureKeyProvider` non-exportability on both platforms, and the 9xx-exclusion/primary-key-only-deregistration checks (including the new §6.6 primitives) all hold by direct code reading, not just passing tests. Confirmed no secret material appears in any log output. Two new/extended findings: (1) MEDIUM, **resolved** — `sdk-providers-rn`'s `SecureEnclaveKeyProvider` doc comment overstated its hardware-confinement guarantee (the wrapping key is retrieved into JS-accessible plaintext via `Keychain.getGenericPassword()` on every `sign()` call — a real, disclosed limitation that was stated inaccurately, not an undisclosed defect); corrected to accurately describe that hardware backing is device-dependent and the norm on RN but never available on web. (2) LOW, tracked and accepted as-is — both platform packages' `SecureKeyProvider.sign()` implementations don't explicitly zero the transiently-reconstructed secret key, extending CP-1 Finding 2's already-tracked pattern to code CP-1 predates.
 
@@ -662,7 +662,7 @@ Functions that gate on a verification step return a discriminated union (`{ appr
 | 6 | CP-2 pre-production security review | **Done** — see `plans/sdk-split/milestones/cp2-security-review.md`; no CRITICAL/HIGH finding, one MEDIUM finding resolved, one LOW finding tracked and accepted as-is (§10) |
 | — | §6.6 `active_subcards` directory maintenance (code-510/511 posting, caller-composed) | **Implemented** |
 | — | §8.1 `resolveActiveSubCardTargets` helper (read side) | **Implemented** — salvaged during Step 2.4 platform-package reconciliation |
-| — | Card migration, client-side initiation (`process_specs/card_migration.md`) | **Not started** — no module in this package's `src/` tree implements it yet. Client-side initiation (the cardholder's half of the dual-signature migration announcement, and the challenge-response authentication to the new wallet service, `card_migration.md` Steps 1 and 3) requires master-key or device-sub-card-key signing over a `CardBindingAnnouncement` payload — the same shape of operation (direct `masterSecretKey`/device-sub-card-key parameter, no provider abstraction) this package already performs for recovery (§5.6) and offer countersigning (§7.2). No other object spec claims this capability, so pending an explicit decision otherwise, this package is the natural owner; tracked here as an unimplemented gap rather than silently out of scope. |
+| — | Card migration, client-side initiation (`process_specs/card_migration.md`) | **Not started** — no module in this package's `src/` tree implements it yet. Client-side initiation (the cardholder's half of the dual-signature migration announcement, and the challenge-response authentication to the new wallet service, `card_migration.md` Steps 1 and 3) requires primary-card-key or device-sub-card-key signing over a `CardBindingAnnouncement` payload — the same shape of operation (direct `masterSecretKey`/device-sub-card-key parameter, no provider abstraction) this package already performs for recovery (§5.6) and offer countersigning (§7.2). No other object spec claims this capability, so pending an explicit decision otherwise, this package is the natural owner; tracked here as an unimplemented gap rather than silently out of scope. |
 
 As of this writing: 105 tests pass (plus 1 documented `it.todo` for the confirmed-blocked RN `setupWallet` scenario) in `wallet-sdk` alone, against the original unified `client-sdk`'s 243 total (spanning what's now split across four packages — see `plans/sdk-split/milestones/phase-2-summary.md` for the full cross-package reconciliation: combined total across all four packages is 326, above the original 243).
 
@@ -673,7 +673,7 @@ As of this writing: 105 tests pass (plus 1 documented `it.todo` for the confirme
 | Package | Used for |
 |---|---|
 | `@membership-card-protocol/app-sdk` | Provider interfaces, `CardVerifier` factory, offer construction, offerer-side press finalization, messaging, UUID/relay, sub-card request (requester side), sub-card press submission, crypto primitives |
-| `@noble/post-quantum` | ML-DSA-44 (via app-sdk, used directly for master key operations) |
+| `@noble/post-quantum` | ML-DSA-44 (via app-sdk, used directly for primary card key operations) |
 | `@noble/hashes` | keccak256, HKDF-SHA3-256 (via app-sdk, used directly for KDF) |
 | `@noble/ciphers` | AES-256-GCM (keyring, backup wrapping) |
 | `@membership-card-protocol/verifier` | `CardVerifier` (inherited from app-sdk) |
@@ -734,6 +734,6 @@ Carried forward from `plans/sdk-split-strategic-plan.md`'s resolved decisions an
 
 - Added `card_migration.md` as a Related Spec (§15) and an unimplemented-gap row in Implementation Status (§12), naming this package as client-side migration-initiation's natural owner pending a firmer decision (`plans/spec-consistency/inconsistencies/phase-1-consolidated-fixes.md` fix #14).
 - §4: removed the `SecureKeyProvider` and `RealtimeTransportProvider` bullets from "Key providers for wallet-specific flows," which contradicted §10/§12 of this same file; added a "Not used by this package" note explaining why (fix #30).
-- §6.5: restored the `// POST /sub-card/deregister` endpoint annotation and rewrote the description to correctly identify `deregisterSubCard` as the on-chain, master-key-signed operation (matching `press.md` §5.4), distinguishing it from App SDK §9.6's unrelated wallet-service-local UUID-pool `deregisterCardUuids` (fix #31).
+- §6.5: restored the `// POST /sub-card/deregister` endpoint annotation and rewrote the description to correctly identify `deregisterSubCard` as the on-chain, primary-card-key-signed operation (matching `press.md` §5.4), distinguishing it from App SDK §9.6's unrelated wallet-service-local UUID-pool `deregisterCardUuids` (fix #31).
 - §5.3: reordered `setupWallet`'s prose so device sub-card generation/registration (Steps 7–10) precedes synced-passkey/YubiKey backup registration (Steps 11–13), matching `wallet_backup_and_recovery.md §Process 1`'s numbered step order (fix #32).
 - §5.3: corrected the optional YubiKey backup step's citation from "(Steps 11–13)" (synced-passkey backup registration) to "(Steps 14–15)" (the actual YubiKey steps in `wallet_backup_and_recovery.md`), per `plans/spec-consistency/inconsistencies/phase-2-consolidated-fixes.md` fix #58.

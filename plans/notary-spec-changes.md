@@ -69,7 +69,7 @@ David asked whether notaries could issue cards from validated HTTPS responses, a
 | Check | Method | Result |
 |---|---|---|
 | Terminology | Searched the new files and the added lines of changed files for "Nitro" not followed by "Enclaves" | Clean. Two intentional quoted uses: in the `ARCHITECTURE.md` key, and in `notary_host.md` explaining what `press.md` calls "Nitro". |
-| Stale names from the design phase | `validity`, `64 KiB`, "without nonce", "per master card", "distinct master", "notary sub-card" | None remain in specs |
+| Stale names from the design phase | `validity`, `64 KiB`, "without nonce", "per primary card", "distinct primary card", "notary sub-card" | None remain in specs |
 | Object numbers | Every `protocol-objects.md §N` reference in the touched files, checked against the object it should name | All 2.1, 2.2 and 20–34 references are correct |
 | Cross-spec section links | Every `<notary or changed spec>.md §N` reference, checked against headings | All resolve |
 | File links | Every spec path in the README and the notary specs | All exist |

@@ -42,7 +42,7 @@ Entries with codes 1xx–7xx use `field_updates` and do not carry an `effective_
 **Notes on 1xx:**
 - Codes 100 and 101 are holder-initiated; code 102 is issuer-initiated; code 103 is holder cancellation of a pending issuer-initiated rotation.
 - A code-102 entry carries a `pending_until` field and is not effective until that timestamp elapses without a code-103 cancellation.
-- Codes 100 and 101 are used for master card key rotation; see `key_rotation.md §2.3` and `§2.4`. Codes 102 and 103 are used for the issuer-recovery flow; see `key_rotation.md §2.6`.
+- Codes 100 and 101 are used for primary card key rotation; see `key_rotation.md §2.3` and `§2.4`. Codes 102 and 103 are used for the issuer-recovery flow; see `key_rotation.md §2.6`.
 
 ### 2xx — Positive Context
 
@@ -76,7 +76,7 @@ Entries with codes 1xx–7xx use `field_updates` and do not carry an `effective_
 
 **Notes on 510/511/512:**
 - These three codes are **hardcoded to holder-only authorization** — `{ "is_holder": true }` — and are **not policy-configurable**. No policy's `update_policy` may loosen, tighten, or reassign authority over these codes; this is a hard protocol limit for this version of the protocol (see `subcard-registry-strategic-plan.md`'s resolved open questions for rationale). This distinguishes 510/511/512 from code 500, whose authority is policy-defined.
-- These codes apply **only to entries on the master (primary) card's own log** — they record changes the holder makes to their own `active_subcards` directory (`protocol-objects.md §1.1`). They are never posted to a **sub-card's** own log: 5xx updates targeting a sub-card's log remain prohibited per `process_specs/subcard_creation_policy.md §Update Card Content`. A press or verifier encountering a 510/511/512 entry on a sub-card's log rejects it as malformed; encountering one on the master card's log not signed by that card's own holder key rejects it as unauthorized.
+- These codes apply **only to entries on the primary card's own log** — they record changes the holder makes to their own `active_subcards` directory (`protocol-objects.md §1.1`). They are never posted to a **sub-card's** own log: 5xx updates targeting a sub-card's log remain prohibited per `process_specs/subcard_creation_policy.md §Update Card Content`. A press or verifier encountering a 510/511/512 entry on a sub-card's log rejects it as malformed; encountering one on the primary card's log not signed by that card's own holder key rejects it as unauthorized.
 - Code 512 is a single atomic entry (one old pubkey out, one new pubkey in), not a 511+510 pair — this preserves rotation as one logical operation with one log entry rather than a brief window where the directory reflects neither the old nor the intended final state.
 - **Code 520** follows the same hardcoded holder-only pattern, applies only to cards under the login service branch, and may be posted at most once per card (`press.md §5.3` step 4a, error `P-28`). It is how a login service card gets bound to a domain for card login (`process_specs/card_login.md` Phase 0).
 - See `protocol-objects.md §1.1` for the `active_subcards` field definition and `subcards.md` for the sub-card lifecycle these codes support.
@@ -109,7 +109,7 @@ Within the 7xx range, lower subcodes indicate more honorable circumstances; high
 
 **Notes on 8xx:**
 - Code 811 applies to a specific sub-card (device-bound, app-specific credential). It does not revoke the holder's primary card or other sub-cards. See `key_rotation.md §1.3`.
-- Code 810 applies when the master signing key of a card is believed compromised. See `key_rotation.md §2.5`.
+- Code 810 applies when the primary card signing key of a card is believed compromised. See `key_rotation.md §2.5`.
 - Code 801 is holder-initiated voluntary surrender, e.g. when performing a planned key rotation (the old card is surrendered after the successor is established).
 
 ### 9xx — Loud Revocations
@@ -125,7 +125,7 @@ Within the 7xx range, lower subcodes indicate more honorable circumstances; high
 **Notes on 820 and 920:** These are posted only on notary-derived cards (`protocol-objects.md §2.2`), by the issuing notary card, as permitted by the template policy's `revocation_permissions`. They keep whether the source revocation was quiet or loud, but never the reason, which a reduced card is meant to withhold. A template policy may instead fix one code for all propagated revocations (`revocation_propagation.derived_code`). Historical semantics follow the range: 820 like 8xx, 920 like 9xx.
 
 **Notes on 9xx:**
-- Code 910 signals that both the master key and one or more sub-card keys may be compromised. See `key_rotation.md §5`.
+- Code 910 signals that both the primary card key and one or more sub-card keys may be compromised. See `key_rotation.md §5`.
 - 9xx revocations are a signal, not an automatic action, against other cards held by the same identity. Propagation is a social protocol, not cryptographic enforcement.
 - The default `revocation_permissions` allows issuers to issue any 9xx code; holders may only issue 910 (self-compromise) if the policy explicitly permits it. See `card_protocol_spec.md §1`.
 
@@ -156,6 +156,6 @@ To define a new code:
 - `card_protocol_spec.md §Background Concepts — The Update & Revocation Code System` — range descriptions, verification semantics, and historical signature semantics
 - `key_rotation.md §8.2` — 1xx codes (100–103) for key rotation
 - `key_rotation.md §1.3` — code 811 for sub-card emergency rotation
-- `key_rotation.md §2.5` — code 810 for master key compromise
+- `key_rotation.md §2.5` — code 810 for primary card key compromise
 - `key_rotation.md §5` — code 910 for full wallet compromise
 - `process_specs/derived_card_revocation_propagation.md §6` — codes 820 and 920 for propagated revocations

@@ -62,7 +62,7 @@ actual fix lands on Phase 2/out-of-scope files, not on the Phase 1 object spec i
 **Change:**
 - `press.md` §5.4 `processSubCardRegistration`: add a step to call/read `DnsAdminCardKeys[master_card_address]` before submission.
 - If non-zero: obtain the domain admin card holder's `AdminAuthorizeSubCardPayload` + secp256r1 signature (this needs a new input field somewhere upstream — e.g. the `/sub-card/register` request body — since no current field carries this signature into the press).
-- `registerSubCardOnChain`'s call: old (6 args) `RegisterSubCard(sub_card_address, master_card_address, registration_log_head, sub_card_doc_cid, master_sig_payload, master_signature)` → new (8 args, matching `registry_contract.md` §4.3): add `admin_secp_payload, admin_secp_signature` (explicit zero values when the master is not a DNS admin card).
+- `registerSubCardOnChain`'s call: old (6 args) `RegisterSubCard(sub_card_address, master_card_address, registration_log_head, sub_card_doc_cid, master_sig_payload, master_signature)` → new (8 args, matching `registry_contract.md` §4.3): add `admin_secp_payload, admin_secp_signature` (explicit zero values when the primary card is not a DNS admin card).
 - `press.md` §7: add `E-47` to the error table.
 **Soundness check:** the recommendation is sound on the contract-call-signature side, but **not fully mechanical** — it requires a small design decision on where the admin's secp256r1 signature is collected/carried in the press's intake flow (both source reviews flag this explicitly). Recommend Step C treat this as "add the field/step; if the intake-flow design isn't obvious from `subcard_creation_policy.md`, escalate rather than invent an API shape." Also cross-check `dns_governance_verifier.md` (Phase 2) for the same gap since it currently doesn't mention `RegisterSubCard`/`admin_secp`/`DnsAdminCardKeys` at all.
 
@@ -251,7 +251,7 @@ actual fix lands on Phase 2/out-of-scope files, not on the Phase 1 object spec i
 ### 25. [LOW] `card_verifier.md` Stage 2 is missing the 510/511/512 log-entry-signer check that `card_validation.md` step 9 requires as a MUST
 **Consolidates:** `obj-verifier-sdk.md` #9.
 **File(s):** `specs/object_specs/card_verifier.md` §7.2 (Stage 2).
-**Change:** Add a check to Stage 2 confirming that any code-510/511/512 `LogEntry` on the master card's own log was signed (`intent_signature`) by the master card's own holder key, matching `card_validation.md` step 9's language — reject otherwise, regardless of the governing policy's `update_policy`.
+**Change:** Add a check to Stage 2 confirming that any code-510/511/512 `LogEntry` on the primary card's own log was signed (`intent_signature`) by the primary card's own holder key, matching `card_validation.md` step 9's language — reject otherwise, regardless of the governing policy's `update_policy`.
 **Soundness check:** sound and appears to be a genuine omission (not an intentional scope difference per the reviewer's read) — recommend including in the fix batch rather than treating as optional.
 
 ---
@@ -290,18 +290,18 @@ actual fix lands on Phase 2/out-of-scope files, not on the Phase 1 object spec i
 
 ---
 
-### 30. [MEDIUM] `wallet_sdk.md` §4 misattributes `SecureKeyProvider` (master-key signing) and `RealtimeTransportProvider` (messaging delivery) to capabilities its own later sections say it doesn't use them for
+### 30. [MEDIUM] `wallet_sdk.md` §4 misattributes `SecureKeyProvider` (primary-card-key signing) and `RealtimeTransportProvider` (messaging delivery) to capabilities its own later sections say it doesn't use them for
 **Consolidates:** `obj-wallet-sdk.md` Finding 1.
 **File(s):** `specs/object_specs/wallet_sdk.md` §4.
-**Change:** In the "Key providers for wallet-specific flows" bullets: drop or reword the `SecureKeyProvider` bullet (master key is handled outside any provider abstraction per §10 — every master-key-consuming function takes `masterSecretKey: Uint8Array` as a direct parameter, structurally incompatible with `SecureKeyProvider`'s opaque-`keyId` contract). Drop or reword the `RealtimeTransportProvider` bullet — Wallet SDK doesn't consume it directly; messaging delivery is implemented entirely in `app_sdk.md` §9.5 per Wallet SDK's own §12 Implementation Status table.
+**Change:** In the "Key providers for wallet-specific flows" bullets: drop or reword the `SecureKeyProvider` bullet (primary card key is handled outside any provider abstraction per §10 — every primary-card-key-consuming function takes `masterSecretKey: Uint8Array` as a direct parameter, structurally incompatible with `SecureKeyProvider`'s opaque-`keyId` contract). Drop or reword the `RealtimeTransportProvider` bullet — Wallet SDK doesn't consume it directly; messaging delivery is implemented entirely in `app_sdk.md` §9.5 per Wallet SDK's own §12 Implementation Status table.
 **Soundness check:** sound — this is an internal self-contradiction (§4 vs. §10/§12 of the same document), so the fix removes the contradiction without touching any other spec.
 
 ---
 
-### 31. [MEDIUM] `wallet_sdk.md` §6.5 (`deregisterSubCard`) conflates its own on-chain, master-key-signed operation with `app_sdk.md`'s unrelated wallet-service-local UUID-pool deregistration
+### 31. [MEDIUM] `wallet_sdk.md` §6.5 (`deregisterSubCard`) conflates its own on-chain, primary-card-key-signed operation with `app_sdk.md`'s unrelated wallet-service-local UUID-pool deregistration
 **Consolidates:** `obj-wallet-sdk.md` Finding 2.
 **File(s):** `specs/object_specs/wallet_sdk.md` §6.5.
-**Change:** Restore the `// POST /sub-card/deregister` endpoint annotation (present in the archived `client_sdk.md` §9.5, dropped here). Remove or rewrite the paragraph "Explicitly not sub-card revocation... wallet-service-local UUID pool... no impact on the sub-card's on-chain status" — that describes `app_sdk.md` §9.6's `deregisterCardUuids`, not this function. Replace with: "distinct from App SDK's §9.6 `deregisterCardUuids`, which empties only the wallet service's local UUID pool and has no on-chain effect and no relationship to sub-card revocation or to this on-chain deregistration," consistent with `press.md` §5.4's `processSubCardDeregistration` (master-key-signed, on-chain `DeregisterSubCard` call).
+**Change:** Restore the `// POST /sub-card/deregister` endpoint annotation (present in the archived `client_sdk.md` §9.5, dropped here). Remove or rewrite the paragraph "Explicitly not sub-card revocation... wallet-service-local UUID pool... no impact on the sub-card's on-chain status" — that describes `app_sdk.md` §9.6's `deregisterCardUuids`, not this function. Replace with: "distinct from App SDK's §9.6 `deregisterCardUuids`, which empties only the wallet service's local UUID pool and has no on-chain effect and no relationship to sub-card revocation or to this on-chain deregistration," consistent with `press.md` §5.4's `processSubCardDeregistration` (primary-card-key-signed, on-chain `DeregisterSubCard` call).
 **Soundness check:** sound — cross-checked against three independent sources (`press.md` §5.4, `app_sdk.md` §9.6, archived `client_sdk.md` §9.5) that all agree on the corrected description; no new conflict introduced.
 
 ---

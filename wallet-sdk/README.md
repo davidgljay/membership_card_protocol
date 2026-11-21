@@ -6,7 +6,7 @@
 
 This package provides everything a wallet integrator needs:
 
-- **Wallet setup** — initialize a new wallet with a master key, keyring, and backup registrations
+- **Wallet setup** — initialize a new wallet with a primary card key, keyring, and backup registrations
 - **Backup and recovery** — passkey/YubiKey wrapped backup and full wallet recovery flows
 - **Sub-card authorization** — validate third-party app requests for sub-cards and sign authorization grants
 - **Card offer acceptance** — review, verify, and countersign received card offers
@@ -45,15 +45,15 @@ const wallet = {
 
 For React Native, replace `sdk-providers-web` with `@membership-card-protocol/sdk-providers-rn` and instantiate the RN-specific providers instead.
 
-### Master Key Custody Invariants
+### Primary Card Key Custody Invariants
 
 **Critical:** Understand these invariants before integrating:
 
-1. **The master private key never leaves `setupWallet`/`recoverWallet`** — once setup is complete, there is no general "unlock the wallet" primitive that re-derives or returns the master key. The wallet-holder must re-derive it through their own authentication flow (asserting their passkey, fetching the current service secret from the service endpoint) whenever it's needed, and keep it scoped to the minimal function call that requires it.
+1. **The primary card private key never leaves `setupWallet`/`recoverWallet`** — once setup is complete, there is no general "unlock the wallet" primitive that re-derives or returns the primary card key. The wallet-holder must re-derive it through their own authentication flow (asserting their passkey, fetching the current service secret from the service endpoint) whenever it's needed, and keep it scoped to the minimal function call that requires it.
 
 2. **Per-card acceptance keys are "persist before sign"** — when a wallet accepts a new card offer, a fresh keypair is generated, the keyring is updated and persisted to storage first, and only then is the acceptance signed. If the wallet crashes between these two steps, the keypair exists (recoverable from the keyring); it's never left in a signed-but-unpersisted state.
 
-3. **The master key is cleared after use** — all functions that handle the master key clear it in a `finally` block. The wallet integrator is responsible for keeping the decryption key scoped and cleared as well.
+3. **The primary card key is cleared after use** — all functions that handle the primary card key clear it in a `finally` block. The wallet integrator is responsible for keeping the decryption key scoped and cleared as well.
 
 4. **Sub-card keys are hardware-backed** — device sub-cards use the same non-exportable hardware-backed storage (`SecureKeyProvider`) as offer construction; they cannot be extracted or compromised via the SDK's interface.
 
@@ -94,7 +94,7 @@ const setupResult = await WalletSDK.setupWallet({
   capabilities: ['send-mail', 'receive-mail'],
 });
 
-console.log('Master card:', setupResult.masterCardHash);
+console.log('Primary card:', setupResult.masterCardHash);
 console.log('Keyring ID:', setupResult.keyringId);
 console.log('Device sub-card:', setupResult.deviceSubCard.subCardPublicKey);
 

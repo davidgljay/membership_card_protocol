@@ -16,13 +16,13 @@
 | `src/handlers/issue.ts` | `handleIssue` (validate, verify issuer sig, stale timestamp P-22, store offer in KV); `handleIssueFinalize` (retrieve offer, verify holder sig, assemble+sign+publish+register+SCIP) |
 | `src/handlers/open-offer.ts` | `handleOpenOfferClaim` (issuer binding check P-05, issuer/recipient sig verify, evaluatePredicates, on-chain use-count pre-flight P-07/P-08, claimOpenOffer, SCIP) |
 | `src/handlers/update.ts` | `handleUpdate` (intent sig verify P-09, staleness check, appendLogEntry, rate limit for 1xx codes) |
-| `src/handlers/sub-card.ts` | `handleSubCardRegister` (app sig P-13, binding checks P-13, holder sig P-14, app cert chain P-15, gas check P-16, rate limits, pin + registerSubCard); `handleSubCardDeregister` (active check, master sig P-14, gas sponsor path) |
+| `src/handlers/sub-card.ts` | `handleSubCardRegister` (app sig P-13, binding checks P-13, holder sig P-14, app cert chain P-15, gas check P-16, rate limits, pin + registerSubCard); `handleSubCardDeregister` (active check, primary card sig P-14, gas sponsor path) |
 | `server/plugins/startup.ts` | Fully initializes PressContext: config, ipfs, registry, KV, CardVerifier, GasManager, press public key derivation |
 | `server/api/*.ts` | All route stubs wired to real handlers (replaced 501 stubs) |
 
 ## Error codes covered
 
-P-01 (missing fields / not in approved_presses), P-02 (requester chain/predicate), P-03 (recipient chain/predicate), P-04 (revoked card), P-05 (invalid issuer/app/binding signature), P-06 (invalid recipient signature), P-07 (open offer expired), P-08 (open offer at capacity), P-09 (invalid intent signature), P-13 (pubkey binding check), P-14 (holder/master signature), P-15 (app cert chain), P-16 (app gas insufficient), P-17 (stale revocation data), P-18 (entity rate limit), P-19 (policy rate limit), P-20 (press ETH balance), P-21 (policy expired), P-22 (stale offer/intent timestamp)
+P-01 (missing fields / not in approved_presses), P-02 (requester chain/predicate), P-03 (recipient chain/predicate), P-04 (revoked card), P-05 (invalid issuer/app/binding signature), P-06 (invalid recipient signature), P-07 (open offer expired), P-08 (open offer at capacity), P-09 (invalid intent signature), P-13 (pubkey binding check), P-14 (holder/primary card signature), P-15 (app cert chain), P-16 (app gas insufficient), P-17 (stale revocation data), P-18 (entity rate limit), P-19 (policy rate limit), P-20 (press ETH balance), P-21 (policy expired), P-22 (stale offer/intent timestamp)
 
 ## Known Phase 3 limitations (deferred to Phase 4)
 

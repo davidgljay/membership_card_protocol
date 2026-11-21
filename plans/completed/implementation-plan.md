@@ -127,13 +127,13 @@ This plan is organized into three phases corresponding to the three attack categ
 
 ---
 
-### Step 2.3 — Model holder master key and sub-card key compromise
+### Step 2.3 — Model holder primary card key and sub-card key compromise
 
-**What:** Evaluate the consequence to a holder whose keys are compromised. Three sub-scenarios: (a) **sub-card key only** — attacker has the device sub-card key but not the master key. What can they sign, and how does the holder revoke? (Note: 810 self-revocation requires the holder's key, which may be the compromised key.); (b) **master key only** — attacker has the master key. What can they do that they couldn't with a sub-card key? (c) **full keyring compromise** — attacker obtains the keyring blob and the decryption key (passkey + service secret). What is the complete scope of the breach, and what is the recovery path via YubiKey? Evaluate the 72-hour cancellation window: what if the attacker also has the holder's notification channels (email, phone) — can they suppress all cancellation signals?
+**What:** Evaluate the consequence to a holder whose keys are compromised. Three sub-scenarios: (a) **sub-card key only** — attacker has the device sub-card key but not the primary card key. What can they sign, and how does the holder revoke? (Note: 810 self-revocation requires the holder's key, which may be the compromised key.); (b) **primary card key only** — attacker has the primary card key. What can they do that they couldn't with a sub-card key? (c) **full keyring compromise** — attacker obtains the keyring blob and the decryption key (passkey + service secret). What is the complete scope of the breach, and what is the recovery path via YubiKey? Evaluate the 72-hour cancellation window: what if the attacker also has the holder's notification channels (email, phone) — can they suppress all cancellation signals?
 
 **Who:** Reviewer
 
-**Context needed:** `specs/card_protocol_spec.md` §3 (keychain setup, YubiKey recovery flow); `specs/ARCHITECTURE.md` §ADR-009; `specs/card_protocol_spec.md` §5 (810 self-revocation code). Key facts: "All routine signing operations use sub-card keys; the master key is cold." The 72-hour window sends notifications "to all configured channels (Nym gateway, email, SMS, secondary contacts)." Recovery is via YubiKey + PIN.
+**Context needed:** `specs/card_protocol_spec.md` §3 (keychain setup, YubiKey recovery flow); `specs/ARCHITECTURE.md` §ADR-009; `specs/card_protocol_spec.md` §5 (810 self-revocation code). Key facts: "All routine signing operations use sub-card keys; the primary card key is cold." The 72-hour window sends notifications "to all configured channels (Nym gateway, email, SMS, secondary contacts)." Recovery is via YubiKey + PIN.
 
 **Done when:** A finding maps the full capability set at each compromise level, rates the feasibility of the 72-hour bypass attack for each adversary type, and evaluates whether the recovery flow is sufficient given realistic attacker capabilities.
 

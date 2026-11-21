@@ -4,7 +4,7 @@
 **Date:** 2026-07-06
 **Status:** Split from unified `client_sdk.md` (Phase 5 milestone) — represents the app-side, key-independent half of holder-side functionality
 
-> **Provenance note.** This spec is derived from `specs/object_specs/client_sdk.md` via the split described in `plans/sdk-split-strategic-plan.md`. It represents all holder-side capabilities that do not require access to the wallet's master key or backup material. The wallet-side counterpart, which imports and depends on this package, is `specs/object_specs/wallet_sdk.md`.
+> **Provenance note.** This spec is derived from `specs/object_specs/client_sdk.md` via the split described in `plans/sdk-split-strategic-plan.md`. It represents all holder-side capabilities that do not require access to the wallet's primary card key or backup material. The wallet-side counterpart, which imports and depends on this package, is `specs/object_specs/wallet_sdk.md`.
 
 ---
 
@@ -55,12 +55,12 @@
 
 This SDK handles:
 
-1. **Card offer construction** — targeted and open offers, from the issuer side only (constructing an offer to send, and the offerer-side press finalization once a recipient countersigns). Reviewing a received offer prior to acceptance (the pre-display verification gate) and countersigning it (which produces a new keypair, signed with the wallet's master key) are both entirely wallet-side — see `wallet_sdk.md` §7.
+1. **Card offer construction** — targeted and open offers, from the issuer side only (constructing an offer to send, and the offerer-side press finalization once a recipient countersigns). Reviewing a received offer prior to acceptance (the pre-display verification gate) and countersigning it (which produces a new keypair, signed with the wallet's primary card key) are both entirely wallet-side — see `wallet_sdk.md` §7.
 2. **Sub-card requests** — acting as a requesting app (constructing a request to send to a wallet for authorization), and the provider-interface definitions for wallet-side validation/authorization (see `wallet_sdk.md` for the granter-side implementation).
 3. **Messaging and private relay** — constructing and verifying envelopes, fanout to subcards, and the complete UUID/relay lifecycle *without* touching any wallet's private key.
 4. **Verification delegation** — all chain-walking, revocation checking, and policy-compliance evaluation goes through `@membership-card-protocol/verifier`; this package never re-implements trust logic.
 
-**What this SDK explicitly does NOT do:** hold any card holder's private key or master key on any device; run backup/recovery; perform wallet setup; countersign offers or sub-card requests (those operations require the wallet's master key); or implement wallet-service/press/relay endpoint logic. Every function in this package can be called without ever touching a private key, and every piece of cryptographic material this SDK generates or stores on behalf of a caller is either non-secret (like public keys) or hardware-backed/non-exportable (like device sub-card keys).
+**What this SDK explicitly does NOT do:** hold any card holder's private key or primary card key on any device; run backup/recovery; perform wallet setup; countersign offers or sub-card requests (those operations require the wallet's primary card key); or implement wallet-service/press/relay endpoint logic. Every function in this package can be called without ever touching a private key, and every piece of cryptographic material this SDK generates or stores on behalf of a caller is either non-secret (like public keys) or hardware-backed/non-exportable (like device sub-card keys).
 
 **Dependency relationship:** `@membership-card-protocol/wallet-sdk` imports and depends on this package. App-side integrators should depend only on `app-sdk`. Server-side integrators that do not run Wallet SDK code (e.g., a relay, a press, a wallet-service that outsources holder-side operations) also depend only on `app-sdk`.
 
@@ -287,7 +287,7 @@ function createPressSubCardRegistrar(options: SubmitSubCardRegistrationOptions):
 
 `offers/openOffer.ts`: `assembleAndSignOpenOffer(options): Promise<AssembleOpenOfferResult>` — `OpenCardOffer` (`open_offer_creation.md §Phase 1–2`), plus `offerId = keccak256(canonicalize(complete signed document))` and the short-form claim link (`mcard://claim?o=<base64url of canonical offer bytes>`). Enforces `expires_at` must be future if set, and requires `acknowledgeUnconstrained: true` when both `max_acceptances`/`expires_at` are unconstrained.
 
-Both functions accept a `SecureKeyProvider` + `keyId` for "the offerer's own card key," rather than assuming a specific card — matching the pattern that routine signing never touches a master key.
+Both functions accept a `SecureKeyProvider` + `keyId` for "the offerer's own card key," rather than assuming a specific card — matching the pattern that routine signing never touches a primary card key.
 
 **Wallet SDK responsibility:** Reviewing a received offer (the pre-display verification gate: keccak256 binding check, `issuer_signature` verification, chain/revocation status via `CardVerifier.verifyCard()`, and authoritative on-chain press authorization) and countersigning it (creating the new keypair, persisting it via the "persist before sign" invariant, and signing back to the press) are both fully wallet-owned — see `wallet_sdk.md` §7 (`offers/offerVerification.ts` and `offers/countersign.ts`, both Wallet SDK modules, not App SDK ones).
 
@@ -542,7 +542,7 @@ function buildLoginServiceMetadata(options: {
 
 Covered: cross-platform scenario tests against real (non-stub) `SecureKeyProvider` implementations from `sdk-providers-web`/`sdk-providers-rn` — sub-card request + signing, offer construction (§7.1, §7.2, §8.1); integrator documentation, `app-sdk/README.md`. Not covered, and explicitly out of this split's scope: validating `ObliviousProtocolTransport` against real deployed OHTTP endpoints, which requires live relay/press/wallet-service infrastructure.
 
-**No separate CP-2 review for this package.** This package holds no long-lived custody surface (App SDK never touches a master key, a keyring, or backup material — see §1, §2), so the CP-2-equivalent security review (persist-before-sign, `SecureKeyProvider` non-exportability, log-safety) was scoped to `wallet-sdk` (Step 3.2f, `plans/sdk-split/milestones/cp2-security-review.md`), which covers this package's own `SecureKeyProvider` usage as part of reviewing both platform packages' real provider implementations — those same providers are the ones App SDK's requester-side sub-card flow (§7.1) uses.
+**No separate CP-2 review for this package.** This package holds no long-lived custody surface (App SDK never touches a primary card key, a keyring, or backup material — see §1, §2), so the CP-2-equivalent security review (persist-before-sign, `SecureKeyProvider` non-exportability, log-safety) was scoped to `wallet-sdk` (Step 3.2f, `plans/sdk-split/milestones/cp2-security-review.md`), which covers this package's own `SecureKeyProvider` usage as part of reviewing both platform packages' real provider implementations — those same providers are the ones App SDK's requester-side sub-card flow (§7.1) uses.
 
 ---
 
@@ -552,7 +552,7 @@ Cross-cutting properties this package maintains:
 
 - **No verification logic is re-derived outside `CardVerifier` calls** (§6) — chain walking, revocation checking, and policy-compliance evaluation are delegated entirely to the shared verifier instance.
 - **`SecureKeyProvider` never returns private key material**, on any platform, for any key it manages (requester-side sub-card, offer-construction key).
-- **No part of this SDK ever touches a card's master private key, backup material, or `decryption_key`** — these are purely Wallet SDK concerns. This includes offer *countersigning*: this package never generates, persists, or signs with a per-card acceptance keypair — that entire flow, including the "persist before sign" invariant, is implemented in `offers/countersign.ts`, which lives in Wallet SDK, not here. See `wallet_sdk.md` §7.1 and §10.
+- **No part of this SDK ever touches the primary card private key, backup material, or `decryption_key`** — these are purely Wallet SDK concerns. This includes offer *countersigning*: this package never generates, persists, or signs with a per-card acceptance keypair — that entire flow, including the "persist before sign" invariant, is implemented in `offers/countersign.ts`, which lives in Wallet SDK, not here. See `wallet_sdk.md` §7.1 and §10.
 - **No key derivation input is ever also transmitted to a party the derivation must stay secret from** — see `wallet_sdk.md` §10 for the full analysis.
 
 ---

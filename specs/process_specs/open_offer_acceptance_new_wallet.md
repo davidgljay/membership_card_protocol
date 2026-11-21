@@ -72,27 +72,27 @@ For recipients who already have a wallet, see `open_offer_acceptance_existing_wa
    - The wallet service generates a `service_secret` — a random value retained by the service.
    - The **keyring decryption key** is derived as: `KDF(passkey_output, service_secret)`. Neither alone is sufficient to decrypt the keyring.
 
-7. The client generates the recipient's **master card keypair** (ML-DSA-44):
+7. The client generates the recipient's **primary card keypair** (ML-DSA-44):
    - The private key is stored in the keyring encrypted with the keyring decryption key.
    - The keyring blob (append-only encrypted store) is sent to the wallet service, which stores it and replicates it to every other wallet service in the federation (see `wallet_backup_and_recovery.md §Keyring Storage and Replication`).
-   - The master private key is never stored in plaintext outside secure storage.
+   - The primary card private key is never stored in plaintext outside secure storage.
 
 8. The client generates a **device sub-card keypair**:
    - The sub-card private key is stored in secure device storage (Secure Enclave on Apple devices, TPM on others), scoped to this application.
-   - The master card key signs a sub-card registration, binding the sub-card to the master.
+   - The primary card key signs a sub-card registration, binding the sub-card to the primary card.
    - The sub-card registration is posted on Arbitrum One.
 
 9. The wallet service prompts the recipient to optionally set up a YubiKey backup (see `wallet_backup_and_recovery.md`). This step is strongly recommended but may be deferred.
 
 10. Wallet creation is complete. The recipient now has:
-    - A master card keypair (private key in the keyring, stored with the wallet service and replicated across the wallet service federation).
+    - A primary card keypair (private key in the keyring, stored with the wallet service and replicated across the wallet service federation).
     - A device sub-card keypair (private key in secure device storage).
     - A passkey for re-deriving the keyring decryption key.
 
 ### Phase 3: Claim Submission
 
 11. The client generates a fresh ML-DSA-44 keypair specifically for this new card:
-    - **Do not reuse** the master or sub-card keys for issued card ownership.
+    - **Do not reuse** the primary card or sub-card keys for issued card ownership.
     - The private key is stored in the keyring before proceeding (ensuring recoverability).
 
 12. The client assembles the `claim_payload`:
@@ -151,7 +151,7 @@ For recipients who already have a wallet, see `open_offer_acceptance_existing_wa
 
 ## Postconditions
 
-- The recipient holds a complete wallet: master keypair in the encrypted keyring, device sub-card for routine signing.
+- The recipient holds a complete wallet: primary card keypair in the encrypted keyring, device sub-card for routine signing.
 - The recipient holds the private key for the new card in their keyring.
 - The wallet is registered with the login router in this browser, unless storage was unavailable (`process_specs/card_login.md §Router Registration`).
 - The card is pinned on IPFS and registered on Arbitrum One.

@@ -45,7 +45,7 @@
    - 6.5 [verifyNotarization](#65-verifynotarization)
 7. [Verification Pipeline](#7-verification-pipeline)
    - 7.1 [Stage 1 — Signature Validity](#71-stage-1--signature-validity)
-   - 7.2 [Stage 2 — Sub-Card to Master Link](#72-stage-2--sub-card-to-master-link)
+   - 7.2 [Stage 2 — Sub-Card to Primary Card Link](#72-stage-2--sub-card-to-primary card-link)
    - 7.3 [Stage 3 — Chain Walk](#73-stage-3--chain-walk)
    - 7.4 [Stage 4 — Revocation Check](#74-stage-4--revocation-check)
    - 7.5 [Stage 5 — Policy Compliance](#75-stage-5--policy-compliance)
@@ -562,7 +562,7 @@ type LoginVerificationResult =
 5. `content.audience == expectedOrigin == origin(request.response_uri)` → else `LOGIN_AUDIENCE_MISMATCH`.
 6. Resolve the login service card as the `holder_primary_card` of `request.requester_card`'s `SubCardDocument`; `payload.recipients` is exactly `[login service card]` → else `LOGIN_RECIPIENT_MISMATCH`. `payload.senders` has exactly one entry → else `LOGIN_SENDER_MISMATCH`.
 7. `payload.timestamp` ≤ `request.expires_at` + skew, ≥ `request.expires_at` − 10 minutes − skew, and `now − timestamp` ≤ `maxResponseAgeSeconds` + skew → else `LOGIN_RESPONSE_STALE`.
-8. `verifyEnvelope(signed_statement)` (§6.1). Require for the signature: `signature_valid`, `scope_clean`, `chain_reaches_trusted_root`, and `is_currently_valid` all `true` → else `LOGIN_PRESENTED_CARD_INVALID` with the first `VerificationError` code in `reason`. The signing card — or, for a sub-card signature, its master card from Stage 2 — equals `senders[0]` → else `LOGIN_SENDER_MISMATCH`.
+8. `verifyEnvelope(signed_statement)` (§6.1). Require for the signature: `signature_valid`, `scope_clean`, `chain_reaches_trusted_root`, and `is_currently_valid` all `true` → else `LOGIN_PRESENTED_CARD_INVALID` with the first `VerificationError` code in `reason`. The signing card — or, for a sub-card signature, its primary card from Stage 2 — equals `senders[0]` → else `LOGIN_SENDER_MISMATCH`.
 9. DCQL match (`protocol-objects.md §8.1`) of `senders[0]` against `request.dcql_query` — the card's own policy is the `policy_address` recorded in its on-chain `CardEntry`; `include_children` walks the issuance chain — → else `LOGIN_CARD_NOT_ACCEPTED`. A query carrying `meta.predicate` does not match yet (`PREDICATE_NOT_SUPPORTED`): the predicate engine is not available to the verifier. `matched_policy` is the `policies[].id` that matched.
 
 This entry point does not use `VerifierConfig.conditions` (§5), which matches by CID; login matches by registry address so that policy updates don't break it.
@@ -640,10 +640,10 @@ Stages run in order. A hard rejection within a stage skips remaining steps in th
 
 A `signature_valid: false` result does not abort subsequent stages. The chain walk may still produce useful context (e.g., for audit logging).
 
-### 7.2 Stage 2 — Sub-Card to Master Link
+### 7.2 Stage 2 — Sub-Card to Primary Card Link
 
 **Input:** `public_key` from `SignatureEntry`  
-**Network:** Arbitrum One (`getCardEntry`, `getSubCardEntry`), IPFS (sub-card doc, master card doc).
+**Network:** Arbitrum One (`getCardEntry`, `getSubCardEntry`), IPFS (sub-card doc, primary card doc).
 
 1. Derive the signer's on-chain address: `keccak256(public_key)` (bytes32 hex).
 2. Locate the sub-card document. `RegisterSubCard` records a `SubCardEntry` whose `sub_card_doc_cid` points at the document, and creates no `CardEntry` for the sub-card. Use `CardEntry.log_head_cid` if a `CardEntry` exists, otherwise `getSubCardEntry(address).sub_card_doc_cid`. If neither exists, **hard reject** with `CARD_NOT_FOUND` (`scope_clean: false`). *(Corrected 2026-11-10: this step previously required a `CardEntry`, which the contract never creates for sub-cards.)*
@@ -655,12 +655,12 @@ A `signature_valid: false` result does not abort subsequent stages. The chain wa
    - `keccak256(app_card_pubkey)` must equal the `app_card` pointer address in the sub-card document.
 7. **Capability check** (`protocol-objects.md §16` step 1): confirm the message type being verified (`envelope.payload.message`) appears in the sub-card's `capabilities` array. **Hard reject** with error code `CAPABILITY_NOT_GRANTED` and record `scope_clean: false` if it does not. This check applies only when verifying a `SignedMessageEnvelope` (`verifyEnvelope`) — there is no message type to check against when running `verifyCard()`, so this check is skipped (not evaluated, not treated as a pass) in that path.
 8. **Expiry check** (`protocol-objects.md §16` step 2): if `valid_until` is present on the sub-card document, confirm it has not passed as of now. **Hard reject** with error code `SUBCARD_EXPIRED` and record `scope_clean: false` if it has. Absent `valid_until` means no expiry.
-9. Derive the master card content key: `HKDF-SHA3-256(holder_primary_card_pubkey, info="card-content-v1")`.
-10. Fetch and decrypt the master card document from IPFS. AES-GCM auth failure is a **hard reject** (`scope_clean: false`).
-11. Confirm the sub-card address appears in the master card's `active_subcards` field (`protocol-objects.md §1.1`): for each entry, derive `keccak256(entry_pubkey)` and confirm one matches the sub-card's own address (from step 1). **Hard reject** (`scope_clean: false`) if absent — this check is independent of the on-chain `SubCardRegistrations[sub_card_address].active` flag checked in step 13; either failing alone is sufficient to reject. If `active_subcards` is absent from the master card entirely, treat it as an empty directory (no sub-card passes this check).
+9. Derive the primary card content key: `HKDF-SHA3-256(holder_primary_card_pubkey, info="card-content-v1")`.
+10. Fetch and decrypt the primary card document from IPFS. AES-GCM auth failure is a **hard reject** (`scope_clean: false`).
+11. Confirm the sub-card address appears in the primary card's `active_subcards` field (`protocol-objects.md §1.1`): for each entry, derive `keccak256(entry_pubkey)` and confirm one matches the sub-card's own address (from step 1). **Hard reject** (`scope_clean: false`) if absent — this check is independent of the on-chain `SubCardRegistrations[sub_card_address].active` flag checked in step 13; either failing alone is sufficient to reject. If `active_subcards` is absent from the primary card entirely, treat it as an empty directory (no sub-card passes this check).
 
-    When processing any code-510/511/512 `LogEntry` encountered on the master card's own log while resolving `active_subcards` (e.g., during an audit of how the directory reached its current state), confirm the entry's `intent_signature` was produced by the master card's own holder key — i.e., `keccak256` of the `intent_signature`'s public key must equal the master card's own on-chain address. This authorization is hardcoded per `protocol-objects.md §1.1` and is **not** subject to the governing policy's `update_policy`. **Hard reject that log entry** (do not apply it) if the check fails, regardless of any policy predicate — this is a MUST, matching `card_validation.md` step 9.
-12. Verify the master card holder's ML-DSA-44 signature on the sub-card registration using `holder_primary_card_pubkey`.
+    When processing any code-510/511/512 `LogEntry` encountered on the primary card's own log while resolving `active_subcards` (e.g., during an audit of how the directory reached its current state), confirm the entry's `intent_signature` was produced by the primary card's own holder key — i.e., `keccak256` of the `intent_signature`'s public key must equal the primary card's own on-chain address. This authorization is hardcoded per `protocol-objects.md §1.1` and is **not** subject to the governing policy's `update_policy`. **Hard reject that log entry** (do not apply it) if the check fails, regardless of any policy predicate — this is a MUST, matching `card_validation.md` step 9.
+12. Verify the primary card holder's ML-DSA-44 signature on the sub-card registration using `holder_primary_card_pubkey`.
 13. Check on-chain: `SubCardRegistrations[sub_card_address].active == true`. If `false`, record `scope_clean: false`.
 14. **Attestation-level check** (`protocol-objects.md §16` step 11): confirm `attestation_level` is `"T2"`, unless it is `"T1"` and `"T1"` appears in `config.acceptedAttestationLevels` (default `["T2"]` — see §5), or it is `"S1"` (server card — provisionally accepted here, and confirmed or rejected at step 16f). **Hard reject** with error code `ATTESTATION_LEVEL_INSUFFICIENT` and record `scope_clean: false` otherwise.
 15. Verify `app_signature` using `app_card_pubkey`. **Hard reject** with error code `INVALID_APP_SIGNATURE` and record `scope_clean: false` if the signature does not verify — this is a MUST, matching the hard-reject pattern of every other check in this stage; verification must not fall through to step 16 or reach a `scope_clean: true` conclusion (step 17) when this check fails.
@@ -678,17 +678,17 @@ A `signature_valid: false` result does not abort subsequent stages. The chain wa
 
 *(2026-11-10)* A card that is itself a trusted root reaches a trusted root at once, whatever its own `ancestry_pubkeys` say (a root minted by an issuer still has ancestry). Card heads that are `LogEntry` objects are read as the genesis document overlaid with the entry's `card_state` (`protocol-objects.md §3`), here and in Stage 2.
 
-**Input:** Decrypted master card from Stage 2 (if successful); falls back to the signer's card if Stage 2 was skipped (e.g., in `verifyCard`).  
+**Input:** Decrypted primary card from Stage 2 (if successful); falls back to the signer's card if Stage 2 was skipped (e.g., in `verifyCard`).  
 **Network:** Arbitrum One (`getCardEntry`, `isPolicyAuthorizer`), IPFS (ancestor card docs).
 
-1. Read `ancestry_pubkeys` from the master card. This array is ordered from immediate parent toward the trusted root. As the walk proceeds, append each resolved on-chain address (starting with the card itself, then each successfully resolved ancestor) to `chain_card_addresses` in the result (§8) — ordered from the card itself up to the trusted root.
+1. Read `ancestry_pubkeys` from the primary card. This array is ordered from immediate parent toward the trusted root. As the walk proceeds, append each resolved on-chain address (starting with the card itself, then each successfully resolved ancestor) to `chain_card_addresses` in the result (§8) — ordered from the card itself up to the trusted root.
 2. Before each iteration, check whether the next on-chain address is present in `PolicyAuthorizerKeys` (via `isPolicyAuthorizer`) or in `config.trustedRoots`. If yes, the chain has reached a trusted root — terminate successfully.
 3. For each entry in `ancestry_pubkeys`:
    a. Derive expected on-chain address: `keccak256(entry_pubkey)`. If this does not match the on-chain address being resolved from the prior link, **hard reject** the walk (`chain_reaches_trusted_root: false`).
    b. Derive the ancestor's content key: `HKDF-SHA3-256(entry_pubkey, info="card-content-v1")`.
    c. Fetch and decrypt the ancestor card from IPFS. AES-GCM auth failure is a **hard reject**.
    d. Verify the issuer's ML-DSA-44 signature on the ancestor document using `entry_pubkey`.
-   e. Confirm scope attenuation: the sub-card's registered scope does not exceed the master card's scope at registration time (using `registration_log_head` from the on-chain `SubCardEntry`).
+   e. Confirm scope attenuation: the sub-card's registered scope does not exceed the primary card's scope at registration time (using `registration_log_head` from the on-chain `SubCardEntry`).
 4. If `ancestry_pubkeys` is exhausted (`[]`) and the current card's address is in `PolicyAuthorizerKeys`, record `chain_reaches_trusted_root: true`.
 5. If `ancestry_pubkeys` is exhausted and the current card's address is **not** in `PolicyAuthorizerKeys`, record `chain_reaches_trusted_root: false`.
 6. If the walk exceeds `config.maxChainDepth`, abort and record `chain_reaches_trusted_root: false` with error code `CHAIN_DEPTH_EXCEEDED`.

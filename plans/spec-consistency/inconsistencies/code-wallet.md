@@ -11,8 +11,8 @@ Overall: the spec is unusually well-verified — its own header is accurate that
 **Spec says** (§6.5.1, added today in this initiative):
 
 > Verification confirms the `cardholder` entry's `public_key` resolves to the payload's `card_hash`, either directly or via a sub-card:
-> - **Direct (master key):** `keccak256(public_key)` must equal `card_hash`.
-> - **Sub-card chain:** if `public_key` is a device sub-card key rather than the master key, the verifying wallet service follows the sub-card chain (per `process_specs/card_migration.md §3` and `subcards.md`) to confirm it resolves to `card_hash`, then verifies the ML-DSA-44 signature against that sub-card key.
+> - **Direct (primary card key):** `keccak256(public_key)` must equal `card_hash`.
+> - **Sub-card chain:** if `public_key` is a device sub-card key rather than the primary card key, the verifying wallet service follows the sub-card chain (per `process_specs/card_migration.md §3` and `subcards.md`) to confirm it resolves to `card_hash`, then verifies the ML-DSA-44 signature against that sub-card key.
 
 **Code has only the direct path.** `wallet-service/src/federation/binding.ts`'s `verifyAnnouncementEnvelope` (lines 91–104):
 
@@ -29,9 +29,9 @@ if (payload.type === 'card_migration') {
 }
 ```
 
-This unconditionally requires `keccak256(public_key) === card_hash` — i.e., only a direct master-key signature is ever accepted. There is no branch that resolves a sub-card key through the registry/IPFS chain (`getSubCardEntry` → `fetchSubCardDocument` → `recipient_pubkey`) the way §6.4's sub-card UUID registration path does. Confirmed by:
+This unconditionally requires `keccak256(public_key) === card_hash` — i.e., only a direct primary-card-key signature is ever accepted. There is no branch that resolves a sub-card key through the registry/IPFS chain (`getSubCardEntry` → `fetchSubCardDocument` → `recipient_pubkey`) the way §6.4's sub-card UUID registration path does. Confirmed by:
 - `src/federation/binding.ts` and `src/federation/keyring-sync.ts` have zero references to `getSubCardEntry`, `fetchSubCardDocument`, or any sub-card chain-walk utility — those only appear in `src/auth/subcard-uuid-signature.ts`, `src/auth/subcard-deregistration-signature.ts`, `src/matrix/card-chain-verifier.ts` (a different, Matrix-only verifier), and `src/chain/subcard-registry.ts` itself.
-- `test/binding.test.ts` only has two cardholder-signature tests (`requires a cardholder signature for card_migration, matching keccak256(pubkey) == card_hash` and `rejects a card_migration where the cardholder pubkey does not match card_hash`) — both exercise only the direct-master-key path. No test constructs a sub-card-signed migration announcement.
+- `test/binding.test.ts` only has two cardholder-signature tests (`requires a cardholder signature for card_migration, matching keccak256(pubkey) == card_hash` and `rejects a card_migration where the cardholder pubkey does not match card_hash`) — both exercise only the direct-primary-card-key path. No test constructs a sub-card-signed migration announcement.
 
 **Which side is correct:** Code is the actual, current behavior; the spec's sub-card-chain clause describes a capability that does not exist. This matters because `process_specs/card_migration.md §3` (which §6.5.1 itself cites as the source of the sub-card-chain requirement) apparently intends sub-card-initiated migration announcements to be valid — if so, any such migration announcement will be rejected by the current code with `401 Invalid announcement: cardholder public key does not match card_hash`, a functional gap, not just a documentation gap. Alternatively, if sub-card-initiated migration was never actually meant to work this way, then §6.5.1 (written today) overclaims and needs to be walked back to match the direct-only implementation.
 

@@ -76,7 +76,7 @@ This document is retained as a historical reference; future changes should targe
 
 Functional areas, per `strategic-plan.md`'s scoping:
 
-1. **Card offer creation and acceptance** — targeted and open-offer, including every keypair generation each flow requires (fresh per-card keypair, device sub-card keypair, master keypair at first setup). **Implemented.**
+1. **Card offer creation and acceptance** — targeted and open-offer, including every keypair generation each flow requires (fresh per-card keypair, device sub-card keypair, primary card keypair at first setup). **Implemented.**
 2. **Backup encryption, sending, and retrieval** — wrapping the keyring decryption key under a synced passkey and/or YubiKey, registering with the backup service, and running the recovery flow. **Implemented.**
 3. **Requesting, accepting, and revoking sub-cards** — both directions the wallet plays: acting as *a* requesting app (the wallet's own device sub-card, self-signing path) and acting as *the* wallet of record for third-party apps' sub-card requests (validate, consent, countersign, revoke/deregister). **Partially implemented** — see §9.
 4. **Sending and receiving messages**, including UUID pool lifecycle management for private relay delivery. **Implemented** — see §10.
@@ -99,7 +99,7 @@ A sixth, cross-cutting concern applies to nearly every wallet-service- and press
 
 **Injected providers for every platform seam.** Six provider interfaces (§4.1–4.6) plus the oblivious-relay transport (§4.7) are the *only* points where platform-specific or transport-specific behavior enters; every other module in this package is pure, platform-independent TypeScript.
 
-**Never leave a private key recoverable-but-unpersisted, or persisted-but-inaccessible.** Per-card keys (offer acceptance, sub-card requests) go through the recoverable keyring; the device sub-card key and any requester-side sub-card key go through hardware-backed, non-exportable secure storage. Neither kind of key is ever returned from any SDK-facing API as raw private-key material, and the wallet's `decryption_key` / master private key never cross a function's return boundary (§12).
+**Never leave a private key recoverable-but-unpersisted, or persisted-but-inaccessible.** Per-card keys (offer acceptance, sub-card requests) go through the recoverable keyring; the device sub-card key and any requester-side sub-card key go through hardware-backed, non-exportable secure storage. Neither kind of key is ever returned from any SDK-facing API as raw private-key material, and the wallet's `decryption_key` / primary card private key never cross a function's return boundary (§12).
 
 ---
 
@@ -285,7 +285,7 @@ function passkeyOutputFromPrf(prfOutput: Uint8Array): Uint8Array;
 
 ### 7.2 Keyring
 
-`wallet/keyring.ts`: `encryptKeyring(entries, decryptionKey)` / `decryptKeyring(blob, decryptionKey)` — AES-256-GCM, fresh random 12-byte nonce prepended to ciphertext (self-contained blob). `computeKeyringId(blob) = keccak256(blob)`. `KeyringEntry = { cardAddress: string; privateKey: Uint8Array }` — one entry per card private key the holder controls (master key at genesis; per-offer-acceptance keys appended later, §8.3).
+`wallet/keyring.ts`: `encryptKeyring(entries, decryptionKey)` / `decryptKeyring(blob, decryptionKey)` — AES-256-GCM, fresh random 12-byte nonce prepended to ciphertext (self-contained blob). `computeKeyringId(blob) = keccak256(blob)`. `KeyringEntry = { cardAddress: string; privateKey: Uint8Array }` — one entry per card private key the holder controls (primary card key at genesis; per-offer-acceptance keys appended later, §8.3).
 
 ### 7.3 setupWallet
 
@@ -295,13 +295,13 @@ function passkeyOutputFromPrf(prfOutput: Uint8Array): Uint8Array;
 function setupWallet<T = void>(options: WalletSetupOptions<T>): Promise<WalletSetupResult<T>>;
 ```
 
-Implements `wallet_backup_and_recovery.md §Process 1` Steps 1–14 as one continuous function: master ML-DSA-44 keypair generation → device-bound passkey → the two-call `service_secret` bootstrap (`POST /accounts/challenge` → `POST /accounts` with a provisional passkey-only-encrypted blob → re-encrypt under the real `decryption_key` → `PUT /accounts/{card_hash}/keyring` with `rotate_service_secret: false`, so the account's authoritative secret matches what the client actually encrypted with — a real protocol bug found and fixed during Phase 2, not present in the original wallet-service design) → keyring persistence via `StorageProvider` → synced-passkey backup registration (always) → optional YubiKey backup → device sub-card generation and registration (§7.4).
+Implements `wallet_backup_and_recovery.md §Process 1` Steps 1–14 as one continuous function: primary card ML-DSA-44 keypair generation → device-bound passkey → the two-call `service_secret` bootstrap (`POST /accounts/challenge` → `POST /accounts` with a provisional passkey-only-encrypted blob → re-encrypt under the real `decryption_key` → `PUT /accounts/{card_hash}/keyring` with `rotate_service_secret: false`, so the account's authoritative secret matches what the client actually encrypted with — a real protocol bug found and fixed during Phase 2, not present in the original wallet-service design) → keyring persistence via `StorageProvider` → synced-passkey backup registration (always) → optional YubiKey backup → device sub-card generation and registration (§7.4).
 
-`decryption_key` and the master private key are local variables scoped to this function's body only — never returned, logged, or exposed via any field of `WalletSetupResult`. An optional generic `postSetupHook?: (decryptionKey) => Promise<T>` runs inside this same scope, after the keyring/backups/sub-card are established but before the master key is cleared — the mechanism §8.4's new-wallet acceptance flow uses to "invoke wallet setup inline" without duplicating this function's body or exposing `decryption_key` to a second function.
+`decryption_key` and the primary card private key are local variables scoped to this function's body only — never returned, logged, or exposed via any field of `WalletSetupResult`. An optional generic `postSetupHook?: (decryptionKey) => Promise<T>` runs inside this same scope, after the keyring/backups/sub-card are established but before the primary card key is cleared — the mechanism §8.4's new-wallet acceptance flow uses to "invoke wallet setup inline" without duplicating this function's body or exposing `decryption_key` to a second function.
 
 ### 7.4 Device Sub-Card
 
-`wallet/deviceSubCard.ts`: `registerDeviceSubCard(options): Promise<DeviceSubCardResult>` — the wallet's own "self-signing" sub-card path (`subcards.md`'s wallet-self-signing exception: the requesting app *is* the wallet, so the user-consent step, §9.3, is skipped). Assembles and dual-signs a `SubCardDocument` (`app_signature` via the injected `WalletAppCardIdentity`, `holder_signature` via the in-scope master key), hardcoding `attestation_level: 'T1'` (no App Attest/Play Integrity provider exists yet in this package). `registerSubCard: RegisterSubCardFn` is an injected stub standing in for Phase 4's real press-submission primitive (§9.4).
+`wallet/deviceSubCard.ts`: `registerDeviceSubCard(options): Promise<DeviceSubCardResult>` — the wallet's own "self-signing" sub-card path (`subcards.md`'s wallet-self-signing exception: the requesting app *is* the wallet, so the user-consent step, §9.3, is skipped). Assembles and dual-signs a `SubCardDocument` (`app_signature` via the injected `WalletAppCardIdentity`, `holder_signature` via the in-scope primary card key), hardcoding `attestation_level: 'T1'` (no App Attest/Play Integrity provider exists yet in this package). `registerSubCard: RegisterSubCardFn` is an injected stub standing in for Phase 4's real press-submission primitive (§9.4).
 
 ### 7.5 Backup Registration
 
@@ -319,7 +319,7 @@ function fetchKeyringBlob(transport, keyringId): Promise<Uint8Array>;           
 function recoverWallet(options: RecoverWalletOptions): Promise<RecoverWalletResult>;
 ```
 
-`recoverWallet` is the one large orchestrator, mirroring `setupWallet`'s structure: unwrap the released `wrapped_blob` → fetch the keyring by ID → decrypt → (optionally) batch-deregister previously-active sub-cards (§7.7) → re-register (new device-bound passkey, new `decryption_key`, new `keyring_id`, via the same provisional/final two-call bootstrap §7.3 uses) → new device sub-card. `cancelRecovery` takes `masterSecretKey` as a direct caller-supplied parameter — this package has no general "unlock the wallet's master key again after initial setup" primitive (an acknowledged, documented gap; see §14), so the caller is responsible for however it reconstructs its own master key to authorize a cancellation.
+`recoverWallet` is the one large orchestrator, mirroring `setupWallet`'s structure: unwrap the released `wrapped_blob` → fetch the keyring by ID → decrypt → (optionally) batch-deregister previously-active sub-cards (§7.7) → re-register (new device-bound passkey, new `decryption_key`, new `keyring_id`, via the same provisional/final two-call bootstrap §7.3 uses) → new device sub-card. `cancelRecovery` takes `masterSecretKey` as a direct caller-supplied parameter — this package has no general "unlock the wallet's primary card key again after initial setup" primitive (an acknowledged, documented gap; see §14), so the caller is responsible for however it reconstructs its own primary card key to authorize a cancellation.
 
 ### 7.7 Post-Recovery Sub-Card Deregistration
 
@@ -337,7 +337,7 @@ function recoverWallet(options: RecoverWalletOptions): Promise<RecoverWalletResu
 
 `offers/openOffer.ts`: `assembleAndSignOpenOffer(options): Promise<AssembleOpenOfferResult>` — `OpenCardOffer` (`open_offer_creation.md §Phase 1–2`), plus `offerId = keccak256(canonicalize(complete signed document))` and the short-form claim link (`mcard://claim?o=<base64url of canonical offer bytes>`). Enforces `expires_at` must be future if set, and requires `acknowledgeUnconstrained: true` when both `max_acceptances`/`expires_at` are unconstrained.
 
-Both accept a `SecureKeyProvider` + `keyId` for "the offerer's own card key," rather than assuming a specific card — matching the "routine signing never touches the master key" pattern established in §7.4.
+Both accept a `SecureKeyProvider` + `keyId` for "the offerer's own card key," rather than assuming a specific card — matching the "routine signing never touches the primary card key" pattern established in §7.4.
 
 ### 8.2 Offer Verification
 
@@ -452,7 +452,7 @@ function revokeSubCard(options: RevokeSubCardOptions): Promise<RevokeSubCardResu
 
 Deregistration is already built — see §9.5, not duplicated here.
 
-**Gap: `active_subcards` directory maintenance (Planned, `subcard-registry-implementation-plan.md` Steps 4.1–4.2).** `subcards.md §Step 5b` and `§Authorization for Deregistration` require the holder to post a code-510 entry (on registration) and a code-511 entry (on deregistration) against their own master card, maintaining `active_subcards`. Neither `subCardRegistration`'s registrar nor `subcards/revocation.ts`/`wallet/subCardDeregistration.ts` currently constructs or submits these entries — both were built before `active_subcards` existed as a protocol-reserved field. Closing this gap means composing the existing `POST /update` code-update-intent path (already used by `subcards/revocation.ts` for 8xx codes) with codes 510/511 instead, signed by the same primary/master key already required for deregistration (§9.5) and available at registration time (§7.4/§9.3's `holder_signature` key).
+**Gap: `active_subcards` directory maintenance (Planned, `subcard-registry-implementation-plan.md` Steps 4.1–4.2).** `subcards.md §Step 5b` and `§Authorization for Deregistration` require the holder to post a code-510 entry (on registration) and a code-511 entry (on deregistration) against their own primary card, maintaining `active_subcards`. Neither `subCardRegistration`'s registrar nor `subcards/revocation.ts`/`wallet/subCardDeregistration.ts` currently constructs or submits these entries — both were built before `active_subcards` existed as a protocol-reserved field. Closing this gap means composing the existing `POST /update` code-update-intent path (already used by `subcards/revocation.ts` for 8xx codes) with codes 510/511 instead, signed by the same primary card key already required for deregistration (§9.5) and available at registration time (§7.4/§9.3's `holder_signature` key).
 
 ### 9.5 Deregistration (Implemented, Ahead of Schedule)
 
@@ -463,7 +463,7 @@ function deregisterSubCard(options: DeregisterSubCardOptions): Promise<Deregiste
 function deregisterSubCardsAfterRecovery(transport, masterSecretKey, previouslyActiveSubCards): Promise<SubCardDeregistrationOutcome[]>;
 ```
 
-`subcards.md §Authorization for Deregistration`'s requirement — deregistration requires and is signed by the **primary card key only**, never the sub-card key or the app's installation card — is enforced structurally: `deregisterSubCard` has no "signer" callback parameter at all (unlike `registerSubCard`'s injected-callback shape), only a direct `masterSecretKey: Uint8Array` argument, so there is no SDK-exposed code path that could construct a deregistration request signed by anything else. `deregisterSubCardsAfterRecovery` batches this across multiple sub-cards (each potentially registered through a different press), continuing past a per-item failure rather than aborting the whole batch. Wired into `recoverWallet` (§7.6) as an optional step, run immediately after the master key is recovered and before re-registration.
+`subcards.md §Authorization for Deregistration`'s requirement — deregistration requires and is signed by the **primary card key only**, never the sub-card key or the app's installation card — is enforced structurally: `deregisterSubCard` has no "signer" callback parameter at all (unlike `registerSubCard`'s injected-callback shape), only a direct `masterSecretKey: Uint8Array` argument, so there is no SDK-exposed code path that could construct a deregistration request signed by anything else. `deregisterSubCardsAfterRecovery` batches this across multiple sub-cards (each potentially registered through a different press), continuing past a per-item failure rather than aborting the whole batch. Wired into `recoverWallet` (§7.6) as an optional step, run immediately after the primary card key is recovered and before re-registration.
 
 ---
 
@@ -496,7 +496,7 @@ function resolveActiveSubCardTargets(masterCard: DecryptedCardDocument): SubCard
 // SubCardMessageTarget = { pubkey: Uint8Array; address: string /* keccak256(pubkey) */ }
 ```
 
-Given an already-decrypted master `CardDocument` (obtained however the caller already resolves master cards — this helper performs no fetch or decryption itself), reads `active_subcards` (`protocol-objects.md §1.1`) and returns one `SubCardMessageTarget` per entry, deriving `address = keccak256(pubkey)` for each. A card with no `active_subcards` field returns `[]`, not a throw, matching the field's "absence = no active sub-cards" convention. This is a pure, synchronous function with no network round trip beyond whatever single card fetch the caller already performed to obtain `masterCard` — composing directly with `fanOutMessageToSubCards` (`resolveActiveSubCardTargets(masterCard)` feeds `subCards` above) and re-exported identically from `client-sdk-web` and `client-sdk-rn` with no platform-specific duplication of the address-derivation logic, per Steps 4.1–4.2 of the sub-card registry implementation plan.
+Given an already-decrypted primary card `CardDocument` (obtained however the caller already resolves primary cards — this helper performs no fetch or decryption itself), reads `active_subcards` (`protocol-objects.md §1.1`) and returns one `SubCardMessageTarget` per entry, deriving `address = keccak256(pubkey)` for each. A card with no `active_subcards` field returns `[]`, not a throw, matching the field's "absence = no active sub-cards" convention. This is a pure, synchronous function with no network round trip beyond whatever single card fetch the caller already performed to obtain `masterCard` — composing directly with `fanOutMessageToSubCards` (`resolveActiveSubCardTargets(masterCard)` feeds `subCards` above) and re-exported identically from `client-sdk-web` and `client-sdk-rn` with no platform-specific duplication of the address-derivation logic, per Steps 4.1–4.2 of the sub-card registry implementation plan.
 
 Since ML-KEM is a KEM, not an AEAD, the actual envelope bytes are encrypted with AES-256-GCM under a key derived via HKDF-SHA3-256 from the ML-KEM shared secret (mirroring the encapsulate-then-derive-then-AEAD shape `HpkeObliviousProtocolTransport` already uses via HPKE's native `export()`, adapted here since ML-KEM has no built-in equivalent). The resulting blob is self-contained (length-prefixed KEM ciphertext + AEAD nonce + AEAD ciphertext) so a recipient holding only the sub-card's ML-KEM secret key can decrypt with no additional side-channel metadata.
 
@@ -599,14 +599,14 @@ Will cover: running every prior phase's scenario against real (non-stub) local w
 
 Cross-cutting properties this package maintains, independent of which module is involved:
 
-- **`decryption_key` and the master private key never cross a function's return boundary.** `setupWallet` and `recoverWallet` are the only functions that ever hold them, and both clear the master key in a `finally` block. Every other function that needs `decryption_key` (§8.3, §8.5) receives it as a direct parameter from a caller that obtained it some other way — this package has no general "unlock the wallet again after initial setup" primitive (documented gap, not silently assumed away).
+- **`decryption_key` and the primary card private key never cross a function's return boundary.** `setupWallet` and `recoverWallet` are the only functions that ever hold them, and both clear the primary card key in a `finally` block. Every other function that needs `decryption_key` (§8.3, §8.5) receives it as a direct parameter from a caller that obtained it some other way — this package has no general "unlock the wallet again after initial setup" primitive (documented gap, not silently assumed away).
 - **Persist before sign**, for every per-card keypair generated during offer acceptance (§8.3) — structurally enforced via a non-exported helper, not a call-site convention.
 - **No key derivation input is ever also transmitted to a party the derivation must stay secret from.** The corrected form of §4.3/§7.1's `passkeyOutputFromPrf` — the CP-1 finding this session's security review caught and fixed.
 - **Deregistration requires the primary card key, structurally, not just by policy** (§9.5) — no signer-substitution is possible via any exported function's type signature.
 - **No verification logic is re-derived outside `CardVerifier` calls** (§6) — confirmed by code-search at the Phase 3 milestone (`plans/client-sdk/milestones/phase-3-summary.md`), and re-checked whenever a new verification-adjacent module is added (§9.2 will need the same confirmation once built).
 - **`SecureKeyProvider` never returns private key material**, on any platform, for any key it manages (device sub-card, requester-side sub-card).
 
-Two lower-severity, explicitly tracked gaps from the CP-1 review (not yet closed): transient secrets other than the master key (`decryptionKey`, wrapping keys, `serviceSecret`) are not explicitly zeroed after use in every function that handles them (relies on GC); and if the keyring ever grows to hold more than one entry that needs clearing on a given code path, only the entry aliased by whatever local variable gets `.fill(0)`-ed is actually cleared.
+Two lower-severity, explicitly tracked gaps from the CP-1 review (not yet closed): transient secrets other than the primary card key (`decryptionKey`, wrapping keys, `serviceSecret`) are not explicitly zeroed after use in every function that handles them (relies on GC); and if the keyring ever grows to hold more than one entry that needs clearing on a given code path, only the entry aliased by whatever local variable gets `.fill(0)`-ed is actually cleared.
 
 ---
 
