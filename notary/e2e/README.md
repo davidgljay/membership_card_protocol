@@ -8,7 +8,7 @@ One aggregate job runs through the real code end to end. Only the chain, IPFS an
    - The requester calls `POST /jobs`.
    - The wallet fetches the announcement through the OHTTP gateway and runs algorithm W.
    - Three contributors seal their inputs to the job key and submit them. Each checks the host receipt and the sealed validation receipt.
-4. **Close.** After `closes_at`, the host sends the stored ciphertexts in `close_chunk`. The enclave runs the tally program and publishes the notarization. Algorithm N then verifies it, and the public output is `{ "no": 1, "yes": 2 }`.
+4. **Close.** After `closes_at`, the host sends the stored ciphertexts in `close_chunk`. The enclave runs the committed `aggregate` template (`templates/modules/aggregate.wasm`, step 6.1) over the three values (3, 7, 12) and publishes the notarization. The result is private: the notarization carries only its recipient, and the count, sum and buckets (`{ "count": 3, "sum": 22, … }`) reach the listed recipient's sub-card as a `notary_output` message. Algorithm N verifies the notarization. The driver also restarts the job at epoch 1 after the inputs (a total loss) and the three wallets resubmit their stored ballots (G4).
 
 The parties:
 
@@ -44,4 +44,3 @@ The host is not restarted: it serves the card it creates through `/genesis` (`no
 To regenerate the fixtures:
 
 - `fixtures/pins.json`: `node --experimental-strip-types src/world.ts --pins fixtures/pins.json --root "$(../target/debug/fake-enclave --print-root)"`
-- `fixtures/tally.wasm`: `UPDATE_E2E_FIXTURE=1 cargo test -p notary-broker --test broker e2e_tally_fixture`

@@ -37,16 +37,20 @@ export async function handleSubmitInput(ctx: HostContext, jobHash: string, body:
   await ctx.receipts.put(inputHash, host_receipt);
   // 3. forward to the enclave holding the job
   const session = liveSession(ctx, job.replicas);
+  // per-input jobs (derived cards): the ciphertext is kept only until the input's run completes, i.e. until the enclave
+  // has answered (host §7: "or the input's run completes. Then deleted."). The host receipt stays (30 days).
+  const perInput = (job.job as { ends_at?: string }).ends_at !== undefined;
   let reply;
   // with q > 1 the enclave answers once q replicas acknowledged, or after 60 s with INPUT_ACK_TIMEOUT (6.3): 75 s at the default 30 s
   try { reply = await session.call("submit_input", { job_hash: jobHash, sealed_input: sealed }, session.timeoutMs * 2.5); }
   catch (e) {
     if (e instanceof EnclaveError) {
       // an input the enclave cannot decrypt cannot be counted: do not keep it, and no receipt is returned
-      if (e.code === "INPUT_UNDECRYPTABLE") { await ctx.inputs.remove(jobHash, sealed.epoch, inputHash); }
+      if (e.code === "INPUT_UNDECRYPTABLE" || (perInput && e.code !== "NH_ENCLAVE_UNAVAILABLE")) { await ctx.inputs.remove(jobHash, sealed.epoch, inputHash); }
       throw new HostError(e.code, e.message, e.code === "NH_ENCLAVE_UNAVAILABLE" ? 503 : 422);
     }
     throw e;
   }
+  if (perInput) await ctx.inputs.remove(jobHash, sealed.epoch, inputHash);
   return { host_receipt, receipt_sealed: String(reply["receipt_sealed"]) };
 }

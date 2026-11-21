@@ -45,18 +45,38 @@ fn template(over: Value) -> (Vec<u8>, Value) {
 /// A source card the oracle will show: `member` byte, the field values, and the root key (the same root key under two
 /// card pointers is one master card across a key rotation).
 fn source(root: u8, fields: Value) -> SourceCard {
-    let root_key = vec![root; 1312];
+    let root_key = root_key_of(root);
     SourceCard { address: pointer(root), pubkey: source_pubkey(root), root_key_hash: notary_crypto::sha256(&root_key), root_key, policy_id: SOURCE.into(), fields: fields.as_object().unwrap().clone() }
 }
 use notary_broker::env::SourceCard;
 
 /// The source card's `recipient_pubkey` (its content key decrypts the card's log entries).
 fn source_pubkey(member: u8) -> Vec<u8> {
-    vec![member ^ 0x5a; 1312]
+    expand("source-recipient-pubkey", member, 1312)
+}
+
+/// A source card's root key. High-entropy on purpose (6.6): repeated-byte test values alias with other repeated data
+/// once base64-encoded, which would make a "the host's records never name this card" scan meaningless.
+fn root_key_of(member: u8) -> Vec<u8> {
+    expand("source-root-key", member, 1312)
 }
 
 fn pointer(member: u8) -> String {
-    format!("{member:02x}").repeat(32)
+    expand("source-card-pointer", member, 32).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn expand(label: &str, member: u8, len: usize) -> Vec<u8> {
+    let mut out = vec![];
+    let mut counter = 0u32;
+    while out.len() < len {
+        let mut input = label.as_bytes().to_vec();
+        input.push(member);
+        input.extend_from_slice(&counter.to_be_bytes());
+        out.extend_from_slice(&notary_crypto::sha256(&input));
+        counter += 1;
+    }
+    out.truncate(len);
+    out
 }
 
 /// A derived-card job under `T` for the notary card served by node `i`, signed by `requester`.
@@ -1236,4 +1256,67 @@ fn only_updates_signed_by_a_certified_press_count() {
     assert_eq!(w.net.registry.batches.len(), 1);
     let codes: Vec<Option<u64>> = hs.iter().map(|h| w.revocation_of(h).and_then(|r| r["code"].as_u64())).collect();
     assert_eq!(codes, vec![Some(820), Some(820), None, None]);
+}
+
+/// G1 (derived cards, `sealed_link`): "cannot be linked to the source card by the host's records". The operator who logs
+/// everything its enclave sends it, everything it stores and everything it publishes or registers, through issuance and
+/// then a propagated revocation, still holds nothing that names a source card: no card pointer, no root key, no
+/// `recipient_pubkey`, no root-key hash. (Timing, the batch size and the successor rule's codes are the disclosed
+/// residue: replication §6–§7, L8.) Added in the 6.6 review; the objective was only covered indirectly before.
+#[test]
+fn the_hosts_records_never_name_a_source_card() {
+    let mut w = World::with(sealed(json!({})), &["level"], |_| {});
+    let hs = w.issue(&[1, 2, 3, 4]);
+    let nb = (w.net.now / HOUR + 1) * HOUR;
+    w.net.advance(nb - 10 * 60_000 - w.net.now, 300_000);
+    w.source_update(0, 1, 803, json!({}));
+    w.source_update(0, 2, 905, json!({}));
+    w.net.advance(3 * HOUR, 300_000);
+    assert_eq!(w.net.registry.batches.len(), 1, "the propagation ran, so its traffic is in what is scanned");
+    assert!(!w.net.nodes[0].seen.is_empty() && !w.net.registry.submissions.is_empty());
+
+    // everything the operator holds, as bytes: the enclave's messages in full, the stored ciphertexts, the chain
+    // submissions and batches, every pinned object, the public anchors
+    let mut held: Vec<Vec<u8>> = vec![];
+    for n in &w.net.nodes {
+        held.push(serde_json::to_vec(&n.seen).unwrap());
+        held.push(serde_json::to_vec(&n.store).unwrap());
+    }
+    held.push(serde_json::to_vec(&w.net.registry.submissions).unwrap());
+    held.push(serde_json::to_vec(&w.net.registry.batches).unwrap());
+    held.push(serde_json::to_vec(&w.net.registry.cards).unwrap());
+    held.push(serde_json::to_vec(&w.net.anchors).unwrap());
+    held.extend(w.net.ipfs.values().cloned());
+    let contains = |hay: &[u8], needle: &[u8]| !needle.is_empty() && hay.windows(needle.len()).any(|x| x == needle);
+
+    let mut checked = 0;
+    for h in &hs {
+        let m = h.member;
+        let root_key = root_key_of(m);
+        let needles: Vec<(&str, Vec<u8>)> = vec![
+            ("source card pointer", pointer(m).into_bytes()),
+            ("source card pointer (base64url)", b64u::encode(&hex_bytes(&pointer(m))).into_bytes()),
+            ("source card pointer (raw)", hex_bytes(&pointer(m))),
+            ("source recipient_pubkey", b64u::encode(&source_pubkey(m)).into_bytes()),
+            ("source recipient_pubkey (raw)", source_pubkey(m)),
+            ("root key", b64u::encode(&root_key).into_bytes()),
+            ("root key (raw)", root_key.clone()),
+            ("root-key hash (base64url)", b64u::encode(&notary_crypto::sha256(&root_key)).into_bytes()),
+            ("root-key hash (hex)", notary_crypto::sha256(&root_key).iter().map(|b| format!("{b:02x}")).collect::<String>().into_bytes()),
+            ("root-key hash (raw)", notary_crypto::sha256(&root_key).to_vec()),
+        ];
+        for (what, needle) in &needles {
+            for (i, hay) in held.iter().enumerate() {
+                if let Some(at) = hay.windows(needle.len()).position(|x| x == needle.as_slice()) {
+                    let from = at.saturating_sub(120);
+                    panic!("member {m}: the operator's records contain the {what} (record set {i}): …{}…", String::from_utf8_lossy(&hay[from..(at + needle.len() + 40).min(hay.len())]));
+                }
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 100, "the scan ran over every needle and every record set ({checked})");
+    // and the scan can fail: the derived key of a holder IS public (the card is registered under it), so it is found
+    let d_addr = formats::card_pointer(hs[0].d.public_key());
+    assert!(held.iter().any(|hay| contains(hay, d_addr.as_bytes())), "negative control: a public identifier is found by the same scan");
 }

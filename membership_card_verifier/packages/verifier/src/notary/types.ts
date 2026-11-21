@@ -105,7 +105,7 @@ export interface Notarization {
   rejected: number; suppressed: boolean; type: "notary.notarization.v1";
 }
 
-export type JobLogKind = "opened" | "epoch_started" | "handoff" | "replica_lost" | "replicated" | "closed" | "notarized" | "issued" | "aborted";
+export type JobLogKind = "opened" | "epoch_started" | "handoff" | "replica_lost" | "replicated" | "notarized" | "issued" | "aborted";
 
 export interface JobLogRecord {
   at: Timestamp; body: Record<string, unknown>; instance: Base64Url; instance_signature: SignatureEntry;

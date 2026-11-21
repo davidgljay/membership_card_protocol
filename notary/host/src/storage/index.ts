@@ -37,7 +37,7 @@ export function jobStore(kv: KvStore) {
     list: async () => (await kv.getKeys("job:")).map((k) => k.replace(/^job:/, "")),
     put: (j: StoredJob) => kv.setItem(`job:${j.jobHash}`, j),
     /** On finalize or end, the job record stays for 30 days. */
-    retire: async (j: StoredJob, state: "finalized" | "ended" | "aborted") => kv.setItem(`job:${j.jobHash}`, { ...j, state }, { ttlSeconds: 30 * DAY }),
+    retire: async (j: StoredJob, state: "finalized" | "ended" | "aborted", ttlSeconds = 30 * DAY) => kv.setItem(`job:${j.jobHash}`, { ...j, state }, { ttlSeconds }),
   };
 }
 

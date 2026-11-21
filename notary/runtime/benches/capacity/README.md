@@ -1,6 +1,6 @@
 # notary-capacity: step 5.6 capacity benchmark
 
-The benchmark drives the real broker under the simulator. Every input gets the real card checks, X-Wing opening and signed receipts, and every close re-checks and runs the tally program. It measures, per enclave core:
+The benchmark drives the real broker under the simulator. Every input gets the real card checks, X-Wing opening and signed receipts, and every close re-checks and runs the aggregate template program (`templates/modules/aggregate.wasm`; changed from the step 5.5 tally program on 2026-11-21, so the 2026-11-13 results file used a different program). It measures, per enclave core:
 - inputs per second;
 - per-job memory;
 - close time.

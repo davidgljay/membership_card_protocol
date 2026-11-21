@@ -376,11 +376,12 @@ Goal: one end-to-end path running in the simulator: a job is announced with an a
     - the consent lines appear, with tests for each;
     - all suites pass.
 
-- [ ] **6.6 Phase 6 Milestone Review**
+- [x] **6.6 Phase 6 Milestone Review**
   - **What**: Check the four use cases for consistency (shared runtime paths, objects and receipts), and map tests to the strategic-plan objectives under G1 and G4.
   - **Who**: Claude
   - **Context needed**: Phase 6 code and tests; strategic plan §Key Objectives
   - **Done when**: `milestones/notary-phase-6-summary.md` lists each objective with its covering tests, and any gaps are fixed.
+  - **Done 2026-11-21.** `milestones/notary-phase-6-summary.md` maps each G1 and G4 objective to tests and compares the four use cases. Both end-to-end scenarios and all suites were run and pass. Two gaps fixed: the host never deleted per-input ciphertexts or ended per-input jobs (`notary_host.md §7`), and the unlinkability objective had no direct test (`the_hosts_records_never_name_a_source_card`). Open decisions R1–R6 for David: `plans/notary-questions-6.6.md`. 6.5a is still open and is not part of this review.
 
 ---
 
@@ -391,6 +392,9 @@ Goal: one end-to-end path running in the simulator: a job is announced with an a
   - **Who**: Claude, then David
   - **Context needed**: Phase 6 summary; `integration_tests/README.md`
   - **Done when**: every question has an answer recorded.
+  - **Carried from the 6.6 review (decided 2026-11-21, `plans/notary-questions-6.6.md`):**
+    - **R5, first task of Phase 7:** add `notary-ci.yml` (Linux; `cargo test --workspace`, host, attestation, verifier-notary and e2e tests, `check-aws-isolation.sh`). This also covers the Linux isolation tests (E27). Design it with David (runners, caching, whether the compose scenarios run on every push).
+    - **R3, a dependency of 7.1:** wallet `derived.ts` (`requestDerivedCard`, the holder countersign, `renewDerivedCards`) and a real-process derived-card scenario in `notary/e2e`.
 
 - [ ] **7.1 Spec-derived integration suite**
   - **What**: Add `integration_tests/suites/notary/` against the docker-compose stack, with one test per acceptance criterion in the `card_protocol_spec.md` Notaries section, following `integration-testing-strategic-plan.md`. Add the governance and EAS scripts (`notary-code-plan.md` §3.6) and run them against the devnode only. Deploy EAS into the stack, with a test-only mock anchor if EAS won't deploy *(added at CP4)*.

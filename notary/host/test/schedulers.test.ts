@@ -141,3 +141,85 @@ describe("private outputs (6.1)", () => {
     expect(h.svc.delivered).toEqual(envs);
   });
 });
+
+describe("per-input jobs: ciphertext retention and the end of the job (notary_host.md §7; 6.6 review)", () => {
+  const perInputJob = { ...job, ends_at: "2027-01-10T00:00:00.000Z", key_period: "PT1H", parameters: { source_policy: "bafkreisrc" } } as Record<string, unknown>;
+  delete (perInputJob as { closes_at?: string }).closes_at;
+  const ENDS = Date.parse(String(perInputJob["ends_at"]));
+  const setup = async (script = { submitInput: () => ({ input_hash: "x", receipt_sealed: "AA" }) } as never, mode = "expiry_only", period = "P1D") => {
+    const h = await harness(script);
+    h.svc.policies.set(job["policy_id"], { notary: { contributor_predicate: {}, derived_card: { nullifier_period: period }, revocation_propagation: { mode } } as never, approvedNotaries: [] });
+    await h.ctx.jobs.put({ job: perInputJob, jobHash: JOB_HASH, programCid: "p", announcement: {}, epoch: 0, replicas: [kEnclaveInst], state: "open", logHead: null });
+    return h;
+  };
+
+  it("a per-input input's ciphertext is deleted once the enclave has answered it; the host receipt is kept", async () => {
+    const { handleSubmitInput } = await import("../src/handlers/inputs.js");
+    const { H } = await import("@membership-card-protocol/wallet-sdk/notary-types");
+    const h = await setup();
+    const r = await handleSubmitInput(h.ctx, JOB_HASH, sealed);
+    expect(r.receipt_sealed).toBe("AA");
+    expect(await h.ctx.inputs.list(JOB_HASH)).toHaveLength(0);
+    expect(await h.ctx.receipts.get(H(sealed))).not.toBeNull();
+  });
+
+  it("an enclave refusal also completes the run (the ciphertext goes); an unavailable enclave keeps it for the retry", async () => {
+    const { handleSubmitInput } = await import("../src/handlers/inputs.js");
+    const refused = await setup({ submitInput: () => ({ error: "DERIVE_DUPLICATE" }) } as never);
+    await expect(handleSubmitInput(refused.ctx, JOB_HASH, sealed)).rejects.toMatchObject({ code: "DERIVE_DUPLICATE" });
+    expect(await refused.ctx.inputs.list(JOB_HASH)).toHaveLength(0);
+    const down = await setup();
+    down.session.closed = true;
+    await expect(handleSubmitInput(down.ctx, JOB_HASH, sealed)).rejects.toMatchObject({ code: "NH_ENCLAVE_UNAVAILABLE" });
+    expect(await down.ctx.inputs.list(JOB_HASH)).toHaveLength(1);
+  });
+
+  it("negative control: an aggregate job keeps its ciphertexts until the close (they ARE the input to the recomputation)", async () => {
+    const { handleSubmitInput } = await import("../src/handlers/inputs.js");
+    const h = await harness({ submitInput: () => ({ input_hash: "x", receipt_sealed: "AA" }) });
+    await openJob(h);
+    await handleSubmitInput(h.ctx, JOB_HASH, sealed);
+    expect(await h.ctx.inputs.list(JOB_HASH)).toHaveLength(1);
+  });
+
+  it("at ends_at by chain time the job is ended: inputs refused, leftovers deleted; before it, nothing happens", async () => {
+    const { handleSubmitInput } = await import("../src/handlers/inputs.js");
+    const { endTick } = await import("../src/schedulers/index.js");
+    const h = await setup();
+    await h.ctx.inputs.put(JOB_HASH, 0, "leftover", { sealedInput: sealed, receivedAt: "x" });
+    const st = newSchedulerState();
+    st.chainTimeMs = ENDS - 1;
+    await endTick(h.ctx, st);
+    expect((await h.ctx.jobs.get(JOB_HASH))!.state).toBe("open");
+    expect(await h.ctx.inputs.list(JOB_HASH)).toHaveLength(1);
+    st.chainTimeMs = ENDS;
+    await endTick(h.ctx, st);
+    expect((await h.ctx.jobs.get(JOB_HASH))!.state).toBe("ended");
+    expect(await h.ctx.inputs.list(JOB_HASH)).toHaveLength(0);
+    await expect(handleSubmitInput(h.ctx, JOB_HASH, sealed)).rejects.toMatchObject({ code: "NH_JOB_CLOSED" });
+  });
+
+  it("an aggregate job is not ended by this scheduler (it closes through closeTick)", async () => {
+    const { endTick } = await import("../src/schedulers/index.js");
+    const h = await harness();
+    await openJob(h);
+    const st = newSchedulerState();
+    st.chainTimeMs = CLOSES_MS + 10 * 86_400_000;
+    await endTick(h.ctx, st);
+    expect((await h.ctx.jobs.get(JOB_HASH))!.state).toBe("open");
+  });
+
+  it("the ended record outlives the sealed-link watch: kept for ends_at + 2 periods + a day even when that exceeds 30 days (periods up to 90 days)", async () => {
+    const { endTick } = await import("../src/schedulers/index.js");
+    for (const [mode, period, days] of [["expiry_only", "P90D", 30], ["sealed_link", "P90D", 181], ["sealed_link", "P1D", 30]] as const) {
+      const h = await setup(undefined, mode, period);
+      const set: number[] = [];
+      const orig = h.ctx.jobs.retire;
+      (h.ctx as { jobs: { retire: typeof orig } }).jobs.retire = async (j, state, ttl) => { set.push(ttl ?? 30 * 86_400); return orig(j, state, ttl); };
+      const st = newSchedulerState();
+      st.chainTimeMs = ENDS;
+      await endTick(h.ctx, st);
+      expect(set[0], `${mode} ${period}`).toBe(days * 86_400);
+    }
+  });
+});

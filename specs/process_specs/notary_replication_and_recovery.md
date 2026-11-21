@@ -283,6 +283,11 @@ Even colluding, they **cannot** read inputs or keys, forge or alter a result, or
 | `HANDOFF_COMPAT_MISMATCH` | P4 | Refuse the handoff; move the job by a `runtime_migration` epoch instead |
 | `HANDOFF_KEY_EXPOSED` | P5 | Refuse the handoff; the key is never used again (§3, Runtime upgrades) |
 | `HANDOFF_OVER_CAPACITY` | Sender, step 7 | Refuse; the operator already runs its allowed instance count |
+| `HANDOFF_ALREADY_HELD` | Receiver | The receiver already holds the job key (at that epoch) or identity being handed over; refuse (added 2026-11-21, notary step 6.6, decided by David: `plans/notary-questions-6.6.md` R2) |
+| `HANDOFF_PAYLOAD_INVALID` | Receiver | The handed-over secret does not form a key (an X-Wing secret or an ML-DSA seed); refuse (added 2026-11-21, notary step 6.6, decided by David: `plans/notary-questions-6.6.md` R2) |
+| `HANDOFF_PROGRAM_UNAVAILABLE` | Receiver | The receiver cannot fetch the job's program from its host by CID, or the bytes do not match; refuse (added 2026-11-21, notary step 6.6, decided by David: `plans/notary-questions-6.6.md` R2) |
+| `HANDOFF_RECORD_INVALID` | Sender or receiver | The `HandoffRecord` is malformed or its `receiver_signature` does not verify; refuse (added 2026-11-21, notary step 6.6, decided by David: `plans/notary-questions-6.6.md` R2) |
+| `STATE_VERSION_REGRESSION` | Receiver, step 9 | Same as the row "State version regression" below, as raised by the broker; it also raises an alert (added 2026-11-21, notary step 6.6, decided by David: `plans/notary-questions-6.6.md` R2) |
 | State version regression | Receiver, step 9; holders, step 31 | Refuse the state; raise an alert |
 | Fewer than q acknowledgments | Receiver, step 13 | No receipt; the wallet retries |
 | `close_mismatch` | Peer, step 19 | Close stalls; operators are alerted |

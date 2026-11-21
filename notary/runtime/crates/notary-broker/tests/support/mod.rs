@@ -218,6 +218,8 @@ pub struct Node {
     pub replies: Vec<Value>,
     /// Kinds of every enclave request this host saw, in order.
     pub saw: Vec<String>,
+    /// Every message this host's enclave sent it, in full (what an operator who logged everything would hold).
+    pub seen: Vec<Value>,
     pub clock: i64,
     pub headers_fed: usize,
     /// The notary card's `K_chain` public key (x || y), from genesis: what the simulated registry verifies against.
@@ -371,7 +373,7 @@ impl Net {
         let instance = broker.instance_id();
         let node = Node {
             name: name.into(), broker, enclave, inst_pubkey: vec![], instance, card: String::new(), up: true, store: BTreeMap::new(), alerts: vec![],
-            announcements: vec![], need_replica: vec![], replies: vec![], saw: vec![], clock: self.now, headers_fed: 0, chain_pubkey: vec![],
+            announcements: vec![], need_replica: vec![], replies: vec![], saw: vec![], seen: vec![], clock: self.now, headers_fed: 0, chain_pubkey: vec![],
         };
         self.nodes.push(node);
         let i = self.nodes.len() - 1;
@@ -500,6 +502,7 @@ impl Net {
     fn route(&mut self, i: usize, m: Value) -> Option<Value> {
         let kind = m["kind"].as_str().unwrap_or_default().to_string();
         self.nodes[i].saw.push(kind.clone());
+        self.nodes[i].seen.push(m.clone());
         match kind.as_str() {
             "publish" => {
                 let b = b64u::decode(m["object"].as_str().unwrap()).unwrap();

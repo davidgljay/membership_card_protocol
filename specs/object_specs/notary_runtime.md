@@ -448,6 +448,11 @@ The host can't read enclave memory in any case. Zeroization limits what a later 
 | `LIST_APPROVAL_*` | §12 | A list version isn't validly approved by members (`notary_lifecycle.md` Appendix A.5); refused, and the last verified version is kept |
 | `LINT_WEAK_GRANULARITY` | `notary-lint` | Warning |
 | `ADM_CONTRIBUTOR_SET_OPEN` | A12 | The contributor predicate doesn't restrict contributors to a finite list of policies (`notary-lint` reports it as an error) |
+| `JOB_KEY_MISSING` | §9 attestation request | An attestation was requested for a job key this enclave does not hold (added 2026-11-21, notary step 6.6, decided by David: `plans/notary-questions-6.6.md` R2) |
+| `RECIPIENT_UNREADABLE` | §11 private output | A recipient's primary card, or its head, cannot be read or decrypted; no output is sealed for it (added 2026-11-21, notary step 6.6, decided by David: `plans/notary-questions-6.6.md` R2) |
+| `STATE_BLOB_UNKNOWN_CARD` | state blob load | A blob load for a notary card whose identity this enclave does not hold (added 2026-11-21, notary step 6.6, decided by David: `plans/notary-questions-6.6.md` R2) |
+| `STATE_BLOB_INVALID`, `STATE_BLOB_UNAVAILABLE`, `STATE_ROLLBACK` | state blob load | Internal results, not on the wire: the blob does not verify, cannot be fetched, or is older than a version this holder has seen (`notary_replication_and_recovery.md` step 9) (added 2026-11-21, notary step 6.6, decided by David: `plans/notary-questions-6.6.md` R2) |
+| `TEMPLATE_KEY_NOT_EXPOSED` | template re-seed | A re-seed was requested for a template key that is not marked exposed (added 2026-11-21, notary step 6.6, decided by David: `plans/notary-questions-6.6.md` R2) |
 
 ---
 

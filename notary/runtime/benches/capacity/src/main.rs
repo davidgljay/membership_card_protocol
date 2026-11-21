@@ -2,7 +2,7 @@
 //!
 //! Drives the real broker (`notary-broker`) under the simulator, exactly as the host does, with the real card checks
 //! (`SnapshotOracle` over `notary-cards`: B5–B8 on every input, and again at close), real X-Wing sealing and opening,
-//! real ML-DSA receipts and the real worker engine (wasmi, the tally program from `notary/e2e/fixtures`).
+//! real ML-DSA receipts and the real worker engine (wasmi, the aggregate template program from `notary/templates/modules`).
 //!
 //! Measured per scenario: inputs per second through `submit_input` (one broker = one enclave core), resident memory
 //! with N inputs held, and the close (`close_chunk` → `job_closed`: re-open, re-check and run over every input).
@@ -138,7 +138,7 @@ fn signed_lists(program_cid: &str) -> (Vec<ListVersion>, Vec<ListVersion>, Keyse
     };
     let rt = json!([{ "accepted_from": "2026-01-01T00:00:00Z", "build_recipe_cid": "bafkreirecipe", "close_compat": "c1", "pcr0": b64u::encode(&notary_sim::pcr0_of(0x42)),
         "platform": "simulator", "source_commit": "abc", "version": "1" }]);
-    let progs = json!([{ "accepted_from": "2026-01-01T00:00:00Z", "audit_report_cid": "bafkreiaudit", "name": "tally", "program_cid": program_cid,
+    let progs = json!([{ "accepted_from": "2026-01-01T00:00:00Z", "audit_report_cid": "bafkreiaudit", "name": "aggregate", "program_cid": program_cid,
         "source_commit": "abc", "toolchain": "wat", "version": "1" }]);
     (
         vec![ListVersion { approval_text: Some(sign("accepted_runtimes", "runtimes", &rt)), value: rt }],
@@ -191,7 +191,7 @@ fn main() {
     let n_jobs: usize = arg(&args, "--jobs").and_then(|v| v.parse().ok()).unwrap_or(1);
     // `dedicated` admits one job per runtime (admission A11), so concurrent jobs need `shared` (allowlisted programs)
     let isolation = arg(&args, "--isolation").unwrap_or_else(|| "shared".into());
-    let program_path = arg(&args, "--program").unwrap_or_else(|| concat!(env!("CARGO_MANIFEST_DIR"), "/../../../e2e/fixtures/tally.wasm").into());
+    let program_path = arg(&args, "--program").unwrap_or_else(|| concat!(env!("CARGO_MANIFEST_DIR"), "/../../../templates/modules/aggregate.wasm").into());
 
     let t = Instant::now();
     let w: Value = serde_json::from_slice(&std::fs::read(&world_path).expect("world file")).expect("world json");
@@ -211,14 +211,13 @@ fn main() {
     let t0 = now_ms - now_ms % 1000;
     let enclave = FakeEnclave::start_tcp("127.0.0.1:0", EnclaveConfig { pcr0_seed: 0x42, debug: false, clock_ms: Some(t0 as u64) }).unwrap();
     let (rt, progs, keyset) = signed_lists(&program_cid);
-    let policy = json!({
-        "contributor_predicate": { "issued_under_template": w["source_policy"] }, "input_replacement": "latest_wins",
-        "input_schema": [{ "name": "choice", "type": "text", "required": true, "enum": ["yes", "no"] }],
-        "isolation": isolation, "mode": "aggregate", "output_action": "statement",
-        "output_recipients": { "cards": [], "job_requester": false, "public": true },
-        "output_schema": [{ "name": "no", "type": "integer", "required": true, "clamp": [0, 1000000] }, { "name": "yes", "type": "integer", "required": true, "clamp": [0, 1000000] }],
-        "platform": "simulator", "privacy": { "k_min": 2 }, "program_cid": program_cid, "retention": "none",
-    });
+    // The aggregate template's own policy (its input and output schemas), with the placeholders filled in.
+    let mut policy: Value = serde_json::from_str::<Value>(include_str!("../../../../templates/aggregate/policy.json")).expect("aggregate policy.json")["notary"].clone();
+    policy["contributor_predicate"] = json!({ "issued_under_template": w["source_policy"] });
+    policy["isolation"] = json!(isolation);
+    policy["platform"] = json!("simulator");
+    policy["privacy"] = json!({ "k_min": 2 });
+    policy["program_cid"] = json!(program_cid);
     let strs = |k: &str| w[k].as_array().unwrap().iter().map(|x| x.as_str().unwrap().to_string()).collect::<Vec<_>>();
     let card_pins = CardPins {
         trusted_roots: strs("trusted_roots"), app_certification_root: w["app_certification_root"].as_str().unwrap().into(),
@@ -296,7 +295,7 @@ fn main() {
         for (j, o) in jobs.iter().enumerate() {
             let input = json!({ "chain_ref": { "block_hash": b64u::encode(&chain_ref.0), "block_number": chain_ref.1 }, "contributor_card": c["card"],
                 "contributor_card_pubkey": c["card_pubkey"], "evidence": [], "job_hash": b64u::encode(&o.job_hash),
-                "payload": { "choice": if i % 3 == 2 { "no" } else { "yes" } }, "revision": 0, "signed_at": formats::format_timestamp(t0), "type": "notary.input.v1" });
+                "payload": { "value": (i % 7) as i64 }, "revision": 0, "signed_at": formats::format_timestamp(t0), "type": "notary.input.v1" });
             let sig = key.sign(&jcs::canonical(&input).unwrap());
             let mut signed = input.clone();
             signed["contributor_signature"] = json!({ "public_key": b64u::encode(key.public_key()), "signature": b64u::encode(&sig) });
@@ -330,7 +329,7 @@ fn main() {
     let per_input_fetches = (b.io.fetches - fetches_before) as f64 / total as f64;
     let (rss_held, _) = rss_mib();
 
-    // close every job: re-open, re-check, run the tally (replication §5)
+    // close every job: re-open, re-check, run the program (replication §5)
     let close_at = jobs.iter().map(|o| o.closes_ms).max().unwrap();
     b.push_header(close_at + 1000);
     b.enclave.set_clock_ms(Some((close_at + 1000) as u64));

@@ -185,6 +185,25 @@ export async function closeTick(ctx: HostContext, st: SchedulerState): Promise<v
   }
 }
 
+/**
+ * Per-input jobs (derived cards) end at `ends_at` by chain time: the enclave has erased every key, so the host marks the
+ * job `ended`, refuses further inputs (`NH_JOB_CLOSED`) and deletes any ciphertext it still holds (host §7). The job
+ * record is kept 30 days, and for a `sealed_link` job at least until the last card it issued can lapse (`ends_at` + 2
+ * periods: the watch in `sealedLinkJobs` reads it), whichever is later.
+ */
+export async function endTick(ctx: HostContext, st: SchedulerState): Promise<void> {
+  for (const j of await liveJobs(ctx)) {
+    const job = j.job as { policy_id: string; policy_state_cid: string; ends_at?: string };
+    if (job.ends_at === undefined || !(st.chainTimeMs >= Date.parse(job.ends_at))) continue;
+    const p = await ctx.policies.notary(job.policy_id, job.policy_state_cid);
+    const n = p?.notary as { derived_card?: { nullifier_period?: string }; revocation_propagation?: { mode?: string } } | undefined;
+    const period = durationMs(n?.derived_card?.nullifier_period ?? "P7D") ?? 7 * 86_400_000;
+    const keepMs = Math.max(30 * 86_400_000, n?.revocation_propagation?.mode === "sealed_link" ? 2 * period + 86_400_000 : 0);
+    await ctx.jobs.retire(j, "ended", Math.ceil(keepMs / 1000));
+    await ctx.inputs.deleteAll(j.jobHash);
+  }
+}
+
 /** Runs the three schedulers on timers. Returns a stop function. */
 export function startSchedulers(ctx: HostContext, feed: ChainFeed, o: { headerMs?: number; snapshotSeconds: number; closeMs?: number; tickMs?: number; directoryMs?: number }): () => void {
   const st = newSchedulerState();
@@ -194,6 +213,7 @@ export function startSchedulers(ctx: HostContext, feed: ChainFeed, o: { headerMs
     setInterval(guard(() => snapshotsTick(ctx, feed, st)), o.snapshotSeconds * 1000),
     setInterval(guard(() => snapshotsTick(ctx, feed, st, true)), o.headerMs ?? 1000),
     setInterval(guard(() => closeTick(ctx, st)), o.closeMs ?? 2000),
+    setInterval(guard(() => endTick(ctx, st)), o.closeMs ?? 2000),
     // 6.3: ticks (Q6) and the peer directory (Q5)
     setInterval(guard(() => tickTick(ctx)), o.tickMs ?? 1000),
     setInterval(guard(() => directoryTick(ctx)), o.directoryMs ?? 5000),

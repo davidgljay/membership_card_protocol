@@ -1624,7 +1624,7 @@ The public, hash-chained history of a job. An enclave refuses to sign record `se
 | `job_hash` | `base64url` | Yes | The notary card address, for the identity log |
 | `seq` | `integer` | Yes | 0, 1, 2, … with no gaps |
 | `prev` | `cid` | If `seq` > 0 | |
-| `kind` | `text` | Yes | `opened`, `epoch_started`, `handoff`, `replica_lost`, `replicated`, `closed`, `notarized`, `issued`, `aborted` |
+| `kind` | `text` | Yes | `opened`, `epoch_started`, `handoff`, `replica_lost`, `replicated`, `notarized`, `issued`, `aborted` |
 | `body` | object | Yes | Per kind, listed below |
 | `at` | `timestamp` | Yes | The enclave's attested time when it signed the record. Not chain time: the enclave's chain view is hash-linked headers from the host, and the attested clock is AWS-signed (assumption T9). No verifier decision reads `at`. |
 | `instance` | `base64url` | Yes | `SHA-256(K_inst)` |
