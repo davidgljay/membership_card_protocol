@@ -521,10 +521,13 @@ type NotaryConsent = {
   disclosures: string[];                             // derived_card_revocation_propagation.md §8;
                                                      // participation disclosure (lifecycle step 31);
                                                      // single-operator quorum disclosure (lifecycle step 25)
+                                                     // 6.5a: who can end the card, and what the source issuer sees (§8)
   singleOperatorQuorum: boolean;                     // L4: one operator's replicas reach q
   requesterText?: string;                            // shown only as labelled requester text
 };
 ```
+
+*(6.5a)* Algorithm W step 6b: for a derived-card job the wallet reads the source policy's `derivable` flags and refuses the job (`JOB_FIELD_NOT_DERIVABLE`) if a projected field is not derivable. The consent shows the "who can end this card" line for the template's `propagated_codes` (`derived_card_revocation_propagation.md` §8).
 
 The consent is built **only** from the policy (at its current head) and the job's signed fields. `requesterText` is never merged into any other field.
 

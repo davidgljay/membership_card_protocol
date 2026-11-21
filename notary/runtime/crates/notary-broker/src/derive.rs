@@ -289,8 +289,8 @@ impl Broker {
         let ends_ms = ts(typed.ends_at.as_deref().ok_or(e("JOB_MALFORMED", "ends_at is required"))?)?;
         let source_policy = text_field(&typed.parameters, "source_policy").ok_or(e("JOB_PARAMETERS_OUT_OF_BOUNDS", "source_policy is required"))?.to_string();
         let fields: Vec<String> = typed.parameters.get("projected_fields").and_then(Value::as_array).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
-        if fields.is_empty() || fields.iter().any(|f| RESERVED_FIELDS.contains(&f.as_str())) {
-            return Err(e("JOB_PARAMETERS_OUT_OF_BOUNDS", "projected_fields must name policy-defined fields of the source card, never protocol fields"));
+        if fields.iter().any(|f| RESERVED_FIELDS.contains(&f.as_str())) {
+            return Err(e("JOB_PARAMETERS_OUT_OF_BOUNDS", "projected_fields must name policy-defined fields of the source card, never protocol fields (none at all is a bare membership claim)"));
         }
         Ok(DeriveJob { params, prop, template: typed.policy_id.clone(), source_policy, projected_fields: fields, key_period_ms, ends_ms, next_rotation_ms: opens_ms + key_period_ms, rotation: None, grace: BTreeMap::new() })
     }
@@ -376,14 +376,14 @@ impl Broker {
         };
         let rev = core.revision;
         let Some(src) = core.source else { return Outcome::reject("INPUT_NOT_ELIGIBLE", rev) };
-        match self.derive_checks(hash, &core.input, &core.digest, core.block, src) {
+        match self.derive_checks(io, hash, &core.input, &core.digest, core.block, src) {
             Ok(offer) => Outcome { status: "accepted", reason: None, revision: rev, offer: Some(offer) },
             Err(code) => Outcome::reject(code, rev),
         }
     }
 
     /// The input is valid as a contributor's (B1–B9). D1–D4 and the offer.
-    fn derive_checks(&mut self, hash: &[u8; 32], input: &Value, digest: &[u8; 32], block: [u8; 32], src: SourceCard) -> Result<Value, &'static str> {
+    fn derive_checks(&mut self, io: &mut dyn HostIo, hash: &[u8; 32], input: &Value, digest: &[u8; 32], block: [u8; 32], src: SourceCard) -> Result<Value, &'static str> {
         let job = &self.jobs[hash];
         let dj = job.derive.clone().expect("derive job");
         let (card, template) = (job.card.clone(), dj.template.clone());
@@ -415,6 +415,13 @@ impl Broker {
             return Err("INPUT_NOT_ELIGIBLE");
         }
         let projected_in = projected_input(&src.fields, &dj.projected_fields).ok_or("INPUT_NOT_ELIGIBLE")?;
+        // D5 (6.5a): every projected field is still derivable at the source policy's current head. A bare claim always passes.
+        if !dj.projected_fields.is_empty() {
+            let blocked = self.oracle.non_derivable_fields(io, &dj.source_policy, now)?;
+            if dj.projected_fields.iter().any(|f| blocked.contains(f)) {
+                return Err("DERIVE_FIELD_NOT_DERIVABLE");
+            }
+        }
         // D2
         let d_hash = notary_crypto::sha256(&d_pub);
         if self.derive[&(card.clone(), template.clone())].seen_d.contains(&d_hash) {

@@ -119,6 +119,8 @@ pub struct OracleState {
     /// Public keys of certified, approved presses of the source policy (step 6.5, E4). Which keys count is
     /// `notary_cards::policy::entry_press_certified`'s job (its own tests); here the signature is checked for real.
     pub certified_presses: BTreeSet<Vec<u8>>,
+    /// Fields the source policy's current head marks `derivable: false` (step 6.5a).
+    pub non_derivable: BTreeSet<String>,
 }
 
 /// A deterministic test press key.
@@ -155,6 +157,9 @@ impl CardOracle for Oracle {
             c.address = card.to_string();
             c
         }).ok_or("INPUT_NOT_ELIGIBLE")
+    }
+    fn non_derivable_fields(&mut self, _: &mut dyn HostIo, _: &str, _: i64) -> Result<Vec<String>, &'static str> {
+        Ok(self.0.lock().unwrap().non_derivable.iter().cloned().collect())
     }
     fn card_policy(&self, card: &str) -> Option<String> {
         self.0.lock().unwrap().card_policies.get(card).cloned()

@@ -9,6 +9,8 @@
 
 **Amended 2026-11-19 (6.5), for David's review** (`plans/notary-questions-6.5.md`): §3 step 6 the sealed link is made when the card is released (E7); §6 step 2 a source update counts only if it decrypts under the source card's content key **and** a certified press of the source policy signed it (E4, decided by David 2026-11-19); §6 step 3, after the holder names a successor under the same source policy, only 801 and 810 end the link without propagating; every other revocation is propagated (E2, decided by David 2026-11-19); §6 a source-policy snapshot runs through the same test as an update; §7 step 1 eligibility counts from the later of the block time and the enclave's receipt of the update (E3).
 
+**Amended 2026-11-21 (notary step 6.5a), approved by David** (`plans/notary-spec-6.5a.md`, Q1–Q6): §3 check D5 and the consent lines, §8 two new disclosure lines, §9 note, new §10 "member as of date" template, error `DERIVE_FIELD_NOT_DERIVABLE`.
+
 **Amended 2026-11-14 (6.3):** §1 and §3: periods, issuance batch boundaries and renewal windows are judged on the enclave's attested clock. David approved 2026-11-14 (`plans/notary-questions-phase-6.md`, Q5–Q9).
 
 > **Terminology.** "The enclave" means an AWS Nitro Enclaves enclave. See `ARCHITECTURE.md`, terminology note.
@@ -129,7 +131,7 @@ The host must never learn which source card is presented, and must never learn w
    - the field names to be copied, and their values;
    - the issuing notary;
    - `expires_at`;
-   - the disclosure lines in §8.
+   - the disclosure lines in §8, including (6.5a) who can end the card and what the source issuer can see.
    - *Threat note:* the host learns that some device fetched the announcement, through the relay, not which one.
 2. **Wallet.** Generates a fresh derived key `D`. Builds a `NotaryInput`:
    - `contributor_card` = the source card;
@@ -147,6 +149,7 @@ The host must never learn which source card is presented, and must never learn w
    | D2 | `D_pub` has never appeared in any input this notary accepted | `DERIVE_KEY_REUSED` |
    | D3 | `dup_tag` for (root source key, `source_policy`, `target_period`) has not been issued | `DERIVE_DUPLICATE` |
    | D4 | The `derive` program, run on the source card's fields named in `parameters.projected_fields`, returns output that passes the output checks | `OUTPUT_SCHEMA_VIOLATION` |
+   | D5 | *(Added 2026-11-21, 6.5a.)* Every field in `parameters.projected_fields` is `derivable` at the source policy's **current head** (`notary_lifecycle.md` A.7, step R6, cached at most 10 minutes). An empty list always passes. Renewals are inputs, so they run D5 too. Cards already pooled or released are not recalled. | `DERIVE_FIELD_NOT_DERIVABLE` |
 
    - *Threat note:* the host learns nothing about which source card was checked (§2).
 4. **Enclave.** Builds the derived card offer (`protocol-objects.md §2.2`):
@@ -276,6 +279,8 @@ The wallet builds these lines from `T` and the job, and shows them before the ho
 |---|---|
 | `expiry_only` | "This card lasts until {expires_at}. If your {source policy name} card is revoked, this card won't be renewed." |
 | `sealed_link` | "The notary keeps a sealed link between this card and your {source policy name} card, so it can revoke this card if that one is revoked. The link is held only inside the secure enclave and is lost if every copy of the notary fails. In small communities, the timing of a revocation may hint at the link." |
+| `expiry_only`, or `sealed_link` whose `propagated_codes` include an 8xx code | "{source policy name} can end this card by ending your {source policy name} card. It can see that this job exists, but not who took part." |
+| `sealed_link` whose `propagated_codes` name 9xx codes only | "{source policy name} cannot end this card by ending your card (leaving, being let go). It can end it only by revoking your card for fraud or compromise. It can see that this job exists, but not who took part." |
 | any | "Cards are issued in batches every {issuance_batch_interval}, and only once at least {min_anonymity_set} people share the same values. Yours may take longer." |
 | any | "Anyone who sees this card learns: {source policy name}, {projected field names and values}, the issuing notary, and the expiry date." |
 
@@ -298,7 +303,7 @@ These are `T.notary` fields (`protocol-objects.md §2.1`). A template may change
 | Parameter | Field | Default | Bounds | Defends against |
 |---|---|---|---|---|
 | Source kind | `derived_card.source_kind` | `"card"` | `"card"` only in v1; `"web_evidence"` reserved | Not a defense. It fixes what this document applies to: source-card templates only |
-| Period (also the card's validity) | `derived_card.nullifier_period` | `P7D` | 1–90 days | Long-lived linkability; how long a card stays valid after its source is revoked under `expiry_only` |
+| Period (also the card's validity) | `derived_card.nullifier_period` | `P7D` | 1–90 days | Long-lived linkability; how long a card stays valid after its source is revoked under `expiry_only`. For a "member as of date" card (§10) it is also the longest a fired holder keeps the card |
 | Renewal window | `derived_card.renewal_window` | `P2D` | ≤ half the period | Gaps at period boundaries |
 | Issuance batch interval | `derived_card.issuance_batch_interval` | `PT6H` | 1–24 h | Linking request time to registration time |
 | Minimum batch size | `derived_card.min_batch_size` | 5 | ≥ 2 | Same |
@@ -308,6 +313,26 @@ These are `T.notary` fields (`protocol-objects.md §2.1`). A template may change
 | Revocation minimum delay | `revocation_propagation.min_delay` | `PT24H` | ≥ 1 h | Timing correlation of revocations |
 | Revocation batch window | `revocation_propagation.batch_window` | `PT24H` | 1 h – 7 days | Same |
 | Minimum revocation batch | `revocation_propagation.min_revocation_batch` | 3 | ≥ 1 | Same |
+
+---
+
+## §10 Field control and the "member as of date" template
+
+*(Added 2026-11-21, 6.5a; decided by David, `plans/notary-derived-card-issuer-control.md` options C and D.)*
+
+**Field control (C).** A source policy's field definitions may mark a field `derivable: false` (`card_protocol_spec.md §1`). A job may project only derivable fields, checked at job open (W6b, step 17) and on every input (D5). The bare claim "holds a card under this policy" (an empty `projected_fields`) can't be refused by the source issuer.
+
+**"Member as of date" template (D).** A governance-registered template over the same `derive` program whose card shows past membership and that a source issuer can't end by ending the card for a reason other than fraud:
+
+| Parameter | Value |
+|---|---|
+| `revocation_propagation.mode` | `sealed_link` |
+| `revocation_propagation.propagated_codes` | `["9xx"]` |
+| `revocation_propagation.derived_code` | `"range"` |
+| `derived_card.nullifier_period` | `P90D` |
+| `derived_card.renewal_window` | `P30D` |
+
+The other fields are those of the default template. A relying party reads `issued_at` and `expires_at`: the card shows membership as of `issued_at`, not current membership, and it lapses at `expires_at` whatever happens to the source card. A fired holder therefore keeps it for at most one period (90 days), unless they renewed before being let go.
 
 ---
 
@@ -333,6 +358,8 @@ These are `T.notary` fields (`protocol-objects.md §2.1`). A template may change
 | Registration withheld | Host | The holder has receipts. Attributable to the operator (L1). |
 | Snapshot updates withheld | Host | Propagation is delayed, and expiry bounds the delay (L1) |
 | Identity total loss | Replication §8 | Links are lost; affected cards fall back to `expiry_only` |
+| `DERIVE_FIELD_NOT_DERIVABLE` | D5 | Rejected; the holder's wallet shows the field is no longer available. Issued cards run to expiry |
+| `JOB_FIELD_NOT_DERIVABLE` | W6b, job open | Job refused (`notary_lifecycle.md`) |
 | `escrowed_link` policy | Runtime | Refused in v1 |
 
 ---

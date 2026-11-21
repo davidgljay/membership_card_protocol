@@ -5,6 +5,8 @@
 **Status:** In Review
 **Changes from v0.3:** Corrected §3's keyring structure description and YubiKey recovery flow to describe wallet-service keyring storage and federation replication, replacing an earlier IPFS-based description (approved via CP-SPEC-2, `plans/wallet-service/spec-discrepancies.md` D-8; second passage found during the Phase 5 consistency pass).
 
+**Amended 2026-11-21 (notary step 6.5a), approved by David** (`plans/notary-spec-6.5a.md`, Q1–Q6): §1 `field_definitions` entries may carry `derivable`.
+
 **Amended 2026-11-12 (notaries):** §9 Replication and close: single-operator quorums are a disclosed bootstrap allowance, retired by governance. Source: `plans/notary-spec-wording-e31.md`, approved by David 2026-11-12.
 **Amended 2026-11-11 (notaries, ADR-013):**
 - New §9 Notaries.
@@ -148,9 +150,12 @@ All card fields — whether in policy cards or in issued cards — use a common 
   "required": true | false,
   "description": "<human-readable description>",
   "<validation options for this type>": ...,
-  "update_policy": <predicate expression>
+  "update_policy": <predicate expression>,
+  "derivable": true | false
 }
 ```
+
+`derivable` is optional and defaults to `true` *(added 2026-11-21, notary step 6.5a)*. It says whether a notary may copy this field's value into a **derived card** (`protocol-objects.md §2.2`). Unlike the rest of a policy, which is anchored to the `policy_id` snapshot, `derivable` is read from the policy's **current head** (like `approved_notaries`), so an issuer can change it later with a `field_definitions` update (default update policy: `{ "is_issuer": true }`). It limits only what a job may *project*. It never limits the bare claim "holds a card under this policy", which no policy can prevent a holder from deriving. Cards already derived are not affected. Protocol-reserved fields can't be projected whatever this says.
 
 ### The Predicate System
 

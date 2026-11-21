@@ -143,6 +143,36 @@ pub fn requester_allowed(src: &dyn CardSource, job: &Value, predicate: &Value, p
 /// 2. the press card is registered, and its current head chains to a pinned trusted root and isn't revoked (Stages 3
 ///    and 4).
 ///
+/// 6.5a (C): the names of the source policy's fields with `derivable: false` at its **current head** (default `true`;
+/// `card_protocol_spec.md §1`). Same reads as `certified_press_keys`: the genesis, then the registry head, whose chain must
+/// reach a trusted root. Through the host, so unverified against a lying host (L4).
+pub fn non_derivable_fields(src: &dyn CardSource, policy_id: &str, roots: &Roots<'_>, now_ms: i64) -> Result<Vec<String>, &'static str> {
+    let genesis = src.fetch(policy_id).and_then(|b| parse_object(&b)).ok_or("SOURCE_POLICY_UNREADABLE")?;
+    let policy_pk = genesis
+        .get("recipient_pubkey")
+        .and_then(Value::as_str)
+        .and_then(|k| b64u::decode_len(k, notary_crypto::MLDSA44_PUBLIC_KEY_LEN).ok())
+        .ok_or("SOURCE_POLICY_UNREADABLE")?;
+    let addr = address_of(&policy_pk);
+    let entry = src.card(&addr).ok_or("SOURCE_POLICY_UNREADABLE")?;
+    let head = read_head(src, &entry.log_head_cid, &content_key(&policy_pk)).ok_or("SOURCE_POLICY_UNREADABLE")?;
+    let names = non_derivable_in(&head);
+    chain_ok(src, head, &addr, roots, now_ms).ok_or("SOURCE_POLICY_UNREADABLE")?;
+    Ok(names)
+}
+
+/// The `derivable: false` field names in a policy document's `field_definitions` (an array of definitions).
+pub fn non_derivable_in(policy: &Doc) -> Vec<String> {
+    policy
+        .get("field_definitions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|d| d.get("derivable").and_then(Value::as_bool) == Some(false))
+        .filter_map(|d| d.get("name").and_then(Value::as_str).map(String::from))
+        .collect()
+}
+
 /// Every read here is per policy, never per update: what the enclave asks the host for must not depend on which cards are
 /// linked (§6 step 2). A forger needs a governance-certified press key, not just the source card's public key (from which
 /// its content key is derived). The policy head and the registry reads come through the host (L4).
@@ -246,4 +276,35 @@ pub fn template_notary(src: &dyn CardSource, id_pubkey: &[u8], template_id: &str
     let chain_pubkey = head.get("chain_pubkey").and_then(Value::as_str).map(crate::support::b64_lenient).filter(|k| k.len() == 64).ok_or(DENIED)?;
     chain_ok(src, head, &card_address, roots, now_ms).ok_or(DENIED)?;
     Ok(TemplateNotary { template_address, card_address, chain_pubkey })
+}
+
+#[cfg(test)]
+mod field_control_tests {
+    use super::*;
+
+    #[test]
+    fn only_an_explicit_false_blocks_a_field() {
+        let doc: Doc = serde_json::from_value(serde_json::json!({ "field_definitions": [
+            { "name": "a", "type": "text" },
+            { "name": "b", "type": "text", "derivable": true },
+            { "name": "c", "type": "text", "derivable": false },
+            { "name": "d", "type": "text", "derivable": "no" },
+        ] })).unwrap();
+        assert_eq!(non_derivable_in(&doc), vec!["c".to_string()], "absent, true and junk values leave a field derivable");
+        assert!(non_derivable_in(&Doc::new()).is_empty(), "a policy with no field_definitions blocks nothing");
+    }
+
+    /// The shared vectors (`notary/vectors/field_control/cases.json`).
+    #[test]
+    fn the_shared_vectors_hold() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../vectors/field_control/cases.json");
+        let v: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let cases = v["cases"].as_array().unwrap();
+        assert!(cases.len() >= 5);
+        for c in cases {
+            let doc: Doc = serde_json::from_value(c["policy"].clone()).unwrap();
+            let want: Vec<String> = c["non_derivable"].as_array().unwrap().iter().map(|x| x.as_str().unwrap().to_string()).collect();
+            assert_eq!(non_derivable_in(&doc), want, "{}", c["name"]);
+        }
+    }
 }

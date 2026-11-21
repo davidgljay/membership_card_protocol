@@ -62,12 +62,17 @@ pub struct SnapshotOracle {
     policy_keys: BTreeMap<String, Vec<u8>>,
     /// source policy → (when read, the certified presses' ML-DSA-44 keys): step 6.5, E4.
     source_presses: BTreeMap<String, (i64, Vec<Vec<u8>>)>,
+    /// source policy → (when read, its `derivable: false` field names): step 6.5a.
+    field_control: BTreeMap<String, (i64, Vec<String>)>,
     cache: RefCell<IpfsCache>,
 }
 
 /// How often a watched source policy's certified presses are read again (E4). Press changes are rare; a refresh costs a
 /// few registry reads.
 pub const PRESS_REFRESH_MS: i64 = 10 * 60_000;
+
+/// How old a source policy's field control (`derivable`) may be when a job or an input is checked (6.5a, Q3).
+pub const FIELD_CONTROL_REFRESH_MS: i64 = 10 * 60_000;
 
 impl SnapshotOracle {
     /// Number of verified IPFS objects held for reuse across inputs.
@@ -76,7 +81,7 @@ impl SnapshotOracle {
     }
 
     pub fn new(pins: CardPins) -> Self {
-        Self { pins, snap: Snapshots::default(), policy_addresses: BTreeMap::new(), policy_keys: BTreeMap::new(), source_presses: BTreeMap::new(), cache: RefCell::new(IpfsCache::default()) }
+        Self { pins, snap: Snapshots::default(), policy_addresses: BTreeMap::new(), policy_keys: BTreeMap::new(), source_presses: BTreeMap::new(), field_control: BTreeMap::new(), cache: RefCell::new(IpfsCache::default()) }
     }
 }
 
@@ -250,6 +255,23 @@ impl CardOracle for SnapshotOracle {
         entry.0 = now_ms;
         if let Some(k) = keys {
             entry.1 = k;
+        }
+    }
+
+    fn non_derivable_fields(&mut self, io: &mut dyn HostIo, policy_id: &str, now_ms: i64) -> Result<Vec<String>, &'static str> {
+        if let Some((at, names)) = self.field_control.get(policy_id) {
+            if now_ms - at < FIELD_CONTROL_REFRESH_MS {
+                return Ok(names.clone());
+            }
+        }
+        let src = Source { cache: &self.cache, io: RefCell::new(io), evidence: BTreeMap::new(), snap: &self.snap };
+        match notary_cards::policy::non_derivable_fields(&src, policy_id, &self.roots(), now_ms) {
+            Ok(names) => {
+                self.field_control.insert(policy_id.to_string(), (now_ms, names.clone()));
+                Ok(names)
+            }
+            // a refresh the host withheld keeps the last good answer (L4: it can only delay a change)
+            Err(e) => self.field_control.get(policy_id).map(|(_, n)| n.clone()).ok_or(e),
         }
     }
 

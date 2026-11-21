@@ -52,6 +52,13 @@ export interface NotaryChainReads {
   /** Algorithm E (A.6) at `t = now`. */
   keyExposed(pointer: string, atMs: number): Promise<boolean>;
   fetchAttestation(cid: string): Promise<Uint8Array>;
+  /**
+   * 6.5a (W6b): the names of the source policy's fields marked `derivable: false` at its **current head**, read over the
+   * wallet's own chain connection; `null` if the policy chain does not reach a trusted root. Optional until the Phase 7
+   * wiring: without it the wallet cannot pre-check a derived-card job and warns `FIELD_CONTROL_UNCHECKED` (the enclave
+   * enforces the rule regardless).
+   */
+  nonDerivableFields?(sourcePolicyId: string): Promise<string[] | null>;
 }
 
 export interface VerifiedLists {
@@ -120,6 +127,21 @@ export async function verifyNotaryJob(o: VerifyJobOptions): Promise<VerifyJobRes
     const keyOk = given.every((p) => { try { return cardPointer(b64uDecode(keys[p]!, 1312)) === p; } catch { return false; } });
     if (listed.length !== given.length || listed.some((p, i) => p !== given[i]) || !keyOk)
       return bad("JOB_RECIPIENT_KEYS_INVALID", "output_recipient_keys must be exactly the policy's recipient cards, each key hashing to its pointer");
+  }
+  // W6b (6.5a): a derived-card job projects only fields the source policy leaves derivable. An empty list always passes.
+  const extraWarnings: string[] = [];
+  if (notary.output_action === "card") {
+    const projected = Array.isArray(job.parameters["projected_fields"]) ? (job.parameters["projected_fields"] as unknown[]).map(String) : [];
+    const sourcePolicy = typeof job.parameters["source_policy"] === "string" ? (job.parameters["source_policy"] as string) : "";
+    if (projected.length > 0) {
+      if (!reads.nonDerivableFields) extraWarnings.push("FIELD_CONTROL_UNCHECKED");
+      else {
+        const blocked = await reads.nonDerivableFields(sourcePolicy);
+        if (blocked === null) return bad("JOB_POLICY_UNTRUSTED", "the source policy's chain does not reach a trusted root");
+        const hit = projected.find((f) => blocked.includes(f));
+        if (hit !== undefined) return bad("JOB_FIELD_NOT_DERIVABLE", `the source policy does not allow deriving the field ${hit}`);
+      }
+    }
   }
   // W7
   const n = job.replica_set.reduce((a, r) => a + r.instances, 0);
@@ -203,7 +225,7 @@ export async function verifyNotaryJob(o: VerifyJobOptions): Promise<VerifyJobRes
   // W15
   if (passed.warnings.includes("runtime_retired_vulnerable")) return bad("ATT_RUNTIME_NOT_ACCEPTED", "runtime retired as vulnerable");
   void cidOfBytes; void b64uEncode;
-  return { valid: true, jobHash, epoch: ann.epoch, consent: buildConsent({ job, notary, allowlisted: allow, notaries: [...idKeys.keys()].map((c) => ({ notaryCard: c })) as never, operatorCards: await operatorCards(reads, [...idKeys.keys()]), platform: notary.platform, singleOperatorQuorum: soq.single }), warnings: passed.warnings };
+  return { valid: true, jobHash, epoch: ann.epoch, consent: buildConsent({ job, notary, allowlisted: allow, notaries: [...idKeys.keys()].map((c) => ({ notaryCard: c })) as never, operatorCards: await operatorCards(reads, [...idKeys.keys()]), platform: notary.platform, singleOperatorQuorum: soq.single }), warnings: [...passed.warnings, ...extraWarnings] };
 }
 
 async function operatorCards(reads: NotaryChainReads, cards: string[]): Promise<Record<string, string>> {

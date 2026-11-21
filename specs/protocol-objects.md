@@ -7,6 +7,8 @@
 
 **Amended 2026-11-19 (notaries, 6.5), for David's review** (`plans/notary-questions-6.5.md` E6, E9): §30 Heartbeat gains optional `identity_states: [{ notary_card, version, header_cid?, serving, holders }]`; the identity-scope handoff payload gains `state_header_cid` and `holders`.
 
+**Amended 2026-11-21 (notary step 6.5a), approved by David** (`plans/notary-spec-6.5a.md`, Q1–Q6): §2.2 `projected_fields` may be empty (a bare membership claim) and every named field must be `derivable` at the source policy's current head.
+
 **Amended 2026-11-15 (notaries, 6.4), for David's review; security items D1, D2, D4 and D8 approved by David 2026-11-19, the rest still for review** (`plans/notary-questions-6.4.md`): §2.1 and §2.2 `parameter_bounds` may declare `append-only-array` of `text` (`item_type`, `min_count`, `max_count`, and the item's `regex` or `enum`), which is how `projected_fields` is bounded.
 
 **Amended 2026-11-14 (notaries, 6.1):** §16 SubCardDocument gains optional `kem_pubkey`; §21 NotaryJob gains `output_recipient_keys`. David approved 2026-11-14 (`plans/notary-questions-phase-6.md`, Q4; the KEM key's home chosen in the 6.1 session).
@@ -399,7 +401,7 @@ A template policy `T`:
 - has `notary.output_action: "card"` and `notary.mode: "per_input"`;
 - omits `job_requester_predicate`;
 - has `contributor_predicate: { "issued_under_template": { "param": "source_policy" } }`;
-- has `parameter_bounds` defining `source_policy` (`cid`) and `projected_fields` (an array of source field names, bounded per template);
+- has `parameter_bounds` defining `source_policy` (`cid`) and `projected_fields` (an array of source field names, bounded per template; `min_count` is 0, so a **bare membership claim** with no projected fields is allowed, and then `projected` is `"{}"`). Every named field must be `derivable` at the source policy's **current head** (`card_protocol_spec.md §1`; `derived_card_revocation_propagation.md` §3, D5). The bare claim is never subject to that check;
 - has fixed `field_definitions`:
 
 | Field | Type | Notes |

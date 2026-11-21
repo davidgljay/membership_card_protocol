@@ -4,6 +4,8 @@
 **Date:** 2026-11-11  
 **Status:** Draft  
 **Architecture:** `ARCHITECTURE.md` ADR-013 · **Objects:** `protocol-objects.md` §2.1, §2.2, §20–§34 · **Design record:** `plans/notary-design-decisions.md` (approved at CP2)
+**Amended 2026-11-21 (notary step 6.5a), approved by David** (`plans/notary-spec-6.5a.md`, Q1–Q6): A.2 step 6b, step 17, A.7 step R6, Appendix B D5, the codes `JOB_FIELD_NOT_DERIVABLE` and `DERIVE_FIELD_NOT_DERIVABLE`.
+
 **Amended 2026-11-12:** new Appendix A.7, algorithm R (policy and requester reads, over vsock only); step 17 and W3–W5 point to it. L4 and T7 restated (a single-operator quorum can count forged contributors), with a consent disclosure (step 25), the `SINGLE_OPERATOR_QUORUM` warning in N, and the governance switch in W7 (`JOB_SINGLE_OPERATOR_REFUSED`) and in N (`NOT_SINGLE_OPERATOR_REFUSED`); enclaves don't enforce it (E34). Source: `plans/notary-spec-wording-e31.md`, approved by David 2026-11-12.
 
 **Amended 2026-11-13 (5.7 review):** Appendix B, B3: no wait for headers; the wallet retries (Q3). Source: `plans/notary-questions-5.7.md`, David approved 2026-11-13 (`plans/notary-questions-5.7.md`).
@@ -133,7 +135,7 @@ Each step names its **actor**, what it takes and produces, and how failure is ha
     It computes `job_hash = H(job)` and pins the job to IPFS.
 15. **Requester → operator hosts.** Sends the job to the host of each operator in `replica_set`.
 16. **Host → enclave.** Sends `create_job` with the job and the program bytes.
-17. **Enclave (originator).** Repeats the wallet's job checks W2–W10 (Appendix A.2), plus a check that its own notary card is in `replica_set`. It reads the policy with **algorithm R** (Appendix A.7) and, when `job_requester_predicate` is present, the requester's chain the same way. Everything comes over vsock (`fetch`), checked by CID, and the enclave makes no network connection. Runs program admission (algorithm A). **Only then** generates the job key `K_job,0` (X-Wing) and requests a purpose-`0x02` attestation (`public_key` = `SHA-256(K_job public key)`, `nonce = job_hash`).
+17. **Enclave (originator).** Repeats the wallet's job checks W2–W10 (Appendix A.2), plus a check that its own notary card is in `replica_set`. It reads the policy with **algorithm R** (Appendix A.7) and, for a derived-card job, the source policy's field control (step R6, check W6b) and, when `job_requester_predicate` is present, the requester's chain the same way. Everything comes over vsock (`fetch`), checked by CID, and the enclave makes no network connection. Runs program admission (algorithm A). **Only then** generates the job key `K_job,0` (X-Wing) and requests a purpose-`0x02` attestation (`public_key` = `SHA-256(K_job public key)`, `nonce = job_hash`).
     - *Failure:* `job_rejected` with the W or `ADM_` code. No key is created.
 18. **Enclaves.** The originator hands `K_job,0` to the other replicas until a quorum q holds it (`notary_replication_and_recovery.md`, forming the replica set). Each receiver attests with purpose `0x02` for the same key.
 19. **Job leader enclave.** Writes the `opened` job-log record listing the attestations, and waits for its EAS anchor.
@@ -271,6 +273,8 @@ Each step names its **actor**, what it takes and produces, and how failure is ha
 | `ATT_PLATFORM_NOT_ALLOWED` | V | Simulator root or platform where the simulator isn't enabled | Reject |
 | `ANN_MALFORMED`, `ANN_SIGNATURE_INVALID`, `ANN_EPOCH_REGRESSION` | W | The announcement is invalid, or older than one already seen | Reject |
 | `JOB_SIGNATURE_INVALID`, `JOB_MALFORMED` | W | The job is invalid | Reject |
+| `JOB_FIELD_NOT_DERIVABLE` | W6b, step 17 | A projected field is not derivable at the source policy's current head | Reject; the requester drops the field or asks the source issuer |
+| `DERIVE_FIELD_NOT_DERIVABLE` | D5 | The field became non-derivable after the job opened | Rejected in the receipt; cards already issued run to expiry |
 | `JOB_POLICY_UNTRUSTED`, `JOB_POLICY_CHANGED` | W | Policy chain invalid, or `notary` / `approved_notaries` changed since the job was signed | Reject; the requester re-issues the job |
 | `JOB_REQUESTER_NOT_PERMITTED`, `JOB_PARAMETERS_OUT_OF_BOUNDS`, `JOB_NOTARY_NOT_APPROVED`, `JOB_KEM_UNSUPPORTED`, `JOB_PROGRAM_NOT_ALLOWLISTED` | W | The job isn't allowed by the policy or the wallet | Reject |
 | `JOB_RECIPIENT_KEYS_INVALID` | W (step 6a), job checks | `output_recipient_keys` doesn't match `output_recipients.cards`, or a key doesn't hash to its pointer | Reject; the requester re-issues the job |
@@ -371,6 +375,7 @@ The wallet uses its **own** chain reads, never data from the notary host. Config
 5. The requester satisfies `job_requester_predicate` (absent means anyone) → `JOB_REQUESTER_NOT_PERMITTED`. The requester's chain is read as in algorithm R, step R5. `is_holder` holds iff `requester_card` is the policy card's holder (`keccak256` of the policy's `recipient_pubkey`).
 6. `parameters` are within `parameter_bounds` → `JOB_PARAMETERS_OUT_OF_BOUNDS`.
     - 6a. `output_recipient_keys` names exactly the cards in `output_recipients.cards` (absent when that list is empty), and `keccak256(key)` equals each pointer → `JOB_RECIPIENT_KEYS_INVALID`.
+    - 6b. *(Added 2026-11-21, 6.5a.)* For a derived-card job (`output_action: "card"`), every name in `parameters.projected_fields` is a field of the source policy with `derivable` not `false` at the source policy's **current head**, read over the wallet's own chain connection as in algorithm R step R6. An empty `projected_fields` always passes → `JOB_FIELD_NOT_DERIVABLE`.
 7. The mode-specific fields are consistent, and q ≤ `min_live` ≤ N → `JOB_MALFORMED`. If the verified program allowlist's `single_operator_quorums` is `"refused"`, the replicas whose notary cards share one `operator_card` number fewer than q → `JOB_SINGLE_OPERATOR_REFUSED`.
 8. Chain time is before `closes_at` / `ends_at` → `JOB_CLOSED`.
 9. `kem` is accepted → `JOB_KEM_UNSUPPORTED`.
@@ -457,6 +462,8 @@ Used by the enclave at step 17, and by wallets and verifiers through the same lo
 4. **R4. Notaries.** Every `replica_set` card is in `approved_notaries` at the current head. → `JOB_NOTARY_NOT_APPROVED`.
 5. **R5. Requester** (only with `job_requester_predicate`). Read `requester_card`'s head from its registry entry, decrypted under `HKDF-SHA3-256(requester_pubkey, "card-content-v1")`. The binding is already checked in W2. Run Stages 3–4 on its chain, then the predicate with the parameters resolved, with `is_holder` as in W5. → `JOB_REQUESTER_NOT_PERMITTED`.
 
+6. **R6. Source policy fields** *(added 2026-11-21, 6.5a; derived-card jobs only)*. Fetch the head of `parameters.source_policy` as in R1–R2 and check its chain as in R3. Return each field definition's `derivable` (default `true`). The enclave reads this over vsock, so it is unverified (L4): a host can hide a change, which delays a veto but never invents one. The enclave caches the result for at most 10 minutes per source policy. → `JOB_FIELD_NOT_DERIVABLE` when a projected field is not derivable.
+
 Registry reads are unverified in the enclave (L4). Wallets check R2–R4 with their own chain reads before contributing, so a host that misreports policy state can stop a job but can't mislead a contributor.
 
 ---
@@ -478,6 +485,8 @@ Registry reads are unverified in the enclave (L4). Wallets check R2–R4 with th
 | B9 | `payload` matches `input_schema` | `INPUT_SCHEMA_INVALID` |
 | B10 | Dedupe by root key (`past_keys[0].pubkey` or `recipient_pubkey`). `reject_duplicates`: `revision` 0 and a new root key. `latest_wins`: a lower revision → `superseded`; the same revision and same signed input → accepted (resubmission); the same revision with different content → `REVISION_CONFLICT`; a higher revision → accepted and supersedes. | `INPUT_DUPLICATE`, `INPUT_REVISION_INVALID`, `REVISION_CONFLICT` |
 | B11 | The job holds fewer than `max_inputs` contributors | `INPUT_CAPACITY` |
+
+**Derived-card jobs** then run D1–D5 (`derived_card_revocation_propagation.md` §3). *D5, added 2026-11-21 (6.5a):* every projected field is `derivable` at the source policy's current head (R6) → `DERIVE_FIELD_NOT_DERIVABLE`.
 
 **What the broker keeps per accepted input:** `root_key_hash → { revision, input_hash, epoch }`. That records who has a counted input, not what they chose, and is not a running tally.
 

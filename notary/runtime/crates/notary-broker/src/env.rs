@@ -71,6 +71,12 @@ pub trait CardOracle {
     fn card_policy(&self, _card: &str) -> Option<String> {
         None
     }
+    /// 6.5a (C): the fields of source policy `policy_id` whose definition has `derivable: false` at the policy's current head
+    /// (derived_card_revocation_propagation §3, D5; lifecycle A.7 R6). Read through the host, so unverified (L4); the answer
+    /// may be up to `FIELD_CONTROL_REFRESH_MS` old. Fails closed when nothing could be read.
+    fn non_derivable_fields(&mut self, _io: &mut dyn HostIo, _policy_id: &str, _now_ms: i64) -> Result<Vec<String>, &'static str> {
+        Ok(vec![])
+    }
     /// 6.5 E4: reads the certified presses of source policy `policy_id` (`notary_cards::policy::certified_press_keys`),
     /// at most every `PRESS_REFRESH_MS`. Called for every watched source-policy message, whatever is linked, so the reads
     /// never depend on the link set (propagation §6 step 2). `now_ms` is the attested time.

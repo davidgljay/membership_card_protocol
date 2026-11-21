@@ -552,8 +552,8 @@ fn refusals_at_job_creation() {
         let out = new_job(&mut w, &|j| j["parameters"]["projected_fields"] = json!([bad]), 2);
         assert_eq!(code(&out).as_deref(), Some("JOB_PARAMETERS_OUT_OF_BOUNDS"), "{bad}");
     }
-    // the bounds: at most three fields, names in the field-name form, distinct, at least one
-    for fields in [json!([]), json!(["a", "b", "c", "d"]), json!(["Level"]), json!(["a", "a"]), json!("level")] {
+    // the bounds: at most three fields, names in the field-name form, distinct (none at all is a bare claim since 6.5a)
+    for fields in [json!(["a", "b", "c", "d"]), json!(["Level"]), json!(["a", "a"]), json!("level")] {
         let out = new_job(&mut w, &|j| j["parameters"]["projected_fields"] = fields.clone(), 3);
         assert_eq!(code(&out).as_deref(), Some("JOB_PARAMETERS_OUT_OF_BOUNDS"), "{fields}");
     }
@@ -938,6 +938,7 @@ fn sealed(over: Value) -> (Vec<u8>, Value) {
 }
 
 const HOUR: i64 = 3_600_000;
+const HOUR_MS: i64 = HOUR;
 
 impl World {
     /// Holders `members` obtain cards for this period, and the batch is released and registered.
@@ -1319,4 +1320,111 @@ fn the_hosts_records_never_name_a_source_card() {
     // and the scan can fail: the derived key of a holder IS public (the card is registered under it), so it is found
     let d_addr = formats::card_pointer(hs[0].d.public_key());
     assert!(held.iter().any(|hay| contains(hay, d_addr.as_bytes())), "negative control: a public identifier is found by the same scan");
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Step 6.5a: field control (`derivable`) and the "member as of date" template
+
+fn rejection(out: &[Value]) -> Option<String> {
+    out.iter().find(|m| m["kind"] == "job_rejected" || m["kind"] == "error").map(|m| m["code"].as_str().unwrap().to_string())
+}
+
+/// C: a job may project only fields the source policy's current head leaves derivable. Refused at job open (W6b, step 17),
+/// and, when the issuer changes the policy later, at the next input (D5). Cards already issued are left alone. The bare
+/// claim (no fields) can't be refused by the issuer, whatever it marks.
+#[test]
+fn a_non_derivable_field_is_refused_at_job_open_and_at_the_next_input() {
+    let mut w = World::new();
+    let p = w.period();
+    // a card issued while the field was derivable
+    let first = Holder::new(1);
+    w.obtain(&first, p);
+
+    // the issuer marks `level` non-derivable at its current head
+    w.net.oracle.0.lock().unwrap().non_derivable.insert("level".to_string());
+    let card = w.card.clone();
+    let req = &w.requester;
+    // job open: a new job projecting `level` is refused with no key; one projecting `team` is not
+    let blocked = derive_job(&card, req, 9, &["level"], "PT1H");
+    let out = w.net.create_job(0, &blocked);
+    assert_eq!(rejection(&out).as_deref(), Some("JOB_FIELD_NOT_DERIVABLE"), "{out:?}");
+    assert!(w.net.announcement(&hex_job(&jcs::h_bytes(&blocked).unwrap())).is_none(), "no job, no announcement");
+    let other = derive_job(&card, req, 10, &["team"], "PT1H");
+    assert!(find(&w.net.create_job(0, &other), "job_keyed").is_some(), "another field is still derivable");
+    // the bare claim is never vetoable: nothing is projected, so nothing is checked
+    let bare = derive_job(&card, req, 11, &[], "PT1H");
+    assert!(find(&w.net.create_job(0, &bare), "job_keyed").is_some(), "a bare membership job opens");
+
+    // per input: the job opened while the field was derivable now refuses new inputs
+    let r = w.request(&Holder::new(2), p);
+    assert_eq!((r["status"].as_str(), r["reject_reason"].as_str()), (Some("rejected"), Some("DERIVE_FIELD_NOT_DERIVABLE")));
+    // a renewal is an input too
+    w.net.advance(PERIOD - 3 * HOUR_MS - w.net.now % PERIOD, 300_000);
+    let r = w.request(&first, p + 1);
+    assert_eq!(r["reject_reason"], "DERIVE_FIELD_NOT_DERIVABLE", "no renewal of a card that projects a non-derivable field");
+
+    // the issuer relents: the same holder is served again (negative control for the check)
+    w.net.oracle.0.lock().unwrap().non_derivable.clear();
+    assert_eq!(w.request(&Holder::new(2), w.period())["status"], "accepted");
+}
+
+/// A bare membership claim: no projected fields, `projected` is `"{}"`, and it issues even when every field is non-derivable.
+#[test]
+fn a_bare_membership_claim_issues_whatever_the_issuer_marks() {
+    let mut w = World::with(template(json!({})), &[], |_| {});
+    {
+        let mut s = w.net.oracle.0.lock().unwrap();
+        for f in ["level", "team"] {
+            s.non_derivable.insert(f.to_string());
+        }
+    }
+    let p = w.period();
+    let hs: Vec<Holder> = (1..=4u8).map(Holder::new).collect();
+    for h in &hs {
+        w.obtain(h, p);
+    }
+    let b = w.boundary_after(w.net.now);
+    w.net.advance(b - w.net.now + 1000, 300_000);
+    for h in &hs {
+        let cid = registered(&w, h).unwrap_or_else(|| panic!("member {} registered", h.member));
+        let enc = w.net.ipfs.get(&cid).unwrap();
+        let plain = notary_cards::support::aes_gcm_decrypt(&notary_cards::support::content_key(h.d.public_key()), enc).unwrap();
+        let card: Value = serde_json::from_slice(&plain).unwrap();
+        assert_eq!(card["projected"], "{}", "a bare claim");
+        assert_eq!(card["source_policy"], SOURCE);
+    }
+}
+
+/// D: the "member as of date" template propagates fraud (9xx) only: a source card ended for another reason (8xx) leaves
+/// the derived card alone, a 9xx revokes it as 920. The real policy file carries those parameters.
+#[test]
+fn the_member_as_of_date_card_survives_an_8xx_but_not_a_9xx() {
+    // the shipped template policy
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../templates/derive/policy-member-as-of.json");
+    let t: Value = serde_json::from_str(&std::fs::read_to_string(root).unwrap()).unwrap();
+    let n = &t["notary"];
+    assert_eq!(n["revocation_propagation"], json!({ "derived_code": "range", "mode": "sealed_link", "propagated_codes": ["9xx"] }));
+    assert_eq!((n["derived_card"]["nullifier_period"].as_str(), n["derived_card"]["renewal_window"].as_str()), (Some("P90D"), Some("P30D")));
+    assert_eq!(n["parameter_bounds"][1]["min_count"], 0);
+
+    // the behaviour, with the test timing
+    let mut w = World::with(sealed(json!({ "propagated_codes": ["9xx"] })), &["level"], |_| {});
+    let hs = w.issue(&[1, 2, 3, 4]);
+    let genesis: Vec<String> = hs.iter().map(|h| registered(&w, h).unwrap()).collect();
+    let nb = (w.net.now / HOUR + 1) * HOUR;
+    w.net.advance(nb - 10 * 60_000 - w.net.now, 300_000);
+    w.source_update(0, 1, 801, json!({}));
+    w.source_update(0, 2, 800, json!({}));
+    w.source_update(0, 3, 905, json!({}));
+    w.source_update(0, 4, 910, json!({}));
+    w.net.advance(3 * HOUR, 300_000);
+    for (i, h) in hs.iter().enumerate() {
+        let rev = w.revocation_of(h);
+        if i < 2 {
+            assert!(rev.is_none(), "member {} (source 8xx): the card stands", h.member);
+            assert_eq!(registered(&w, h).as_ref(), Some(&genesis[i]));
+        } else {
+            assert_eq!(rev.as_ref().and_then(|r| r["code"].as_u64()), Some(920), "member {} (source 9xx)", h.member);
+        }
+    }
 }

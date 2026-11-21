@@ -1,0 +1,10 @@
+{
+  "about": "derivable (card_protocol_spec.md §1, step 6.5a): the source policy's field names a job may not project. Only an explicit boolean false blocks a field; absent, true or any other value leaves it derivable. Read by notary-cards policy.rs (non_derivable_in).",
+  "cases": [
+    { "name": "no field_definitions", "policy": {}, "non_derivable": [] },
+    { "name": "absent and true", "policy": { "field_definitions": [{ "name": "a", "type": "text" }, { "name": "b", "type": "text", "derivable": true }] }, "non_derivable": [] },
+    { "name": "one blocked", "policy": { "field_definitions": [{ "name": "a", "type": "text" }, { "name": "c", "type": "text", "derivable": false }] }, "non_derivable": ["c"] },
+    { "name": "several blocked, order kept", "policy": { "field_definitions": [{ "name": "z", "type": "text", "derivable": false }, { "name": "y", "type": "integer" }, { "name": "x", "type": "text", "derivable": false }] }, "non_derivable": ["z", "x"] },
+    { "name": "junk values do not block", "policy": { "field_definitions": [{ "name": "d", "type": "text", "derivable": "no" }, { "name": "e", "type": "text", "derivable": 0 }, { "name": "f", "type": "text", "derivable": null }] }, "non_derivable": [] }
+  ]
+}

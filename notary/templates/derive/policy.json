@@ -1,5 +1,5 @@
 {
-  "about": "The derive template policy T (protocol-objects.md §2.2). Governance registers it (RegisterPolicy) and replaces the placeholder `program_cid`; the PressRegistryBody holds it. Anyone may open a job under it (no job_requester_predicate): the job names `source_policy` and `projected_fields`. `field_definitions` is the derived card's shape. The values in `derived_card` are the defaults of derived_card_revocation_propagation.md §9; a template may change them within the bounds there. `revocation_propagation.mode` is `expiry_only` until sealed_link lands (step 6.5).",
+  "about": "The derive template policy T (protocol-objects.md \u00a72.2). Governance registers it (RegisterPolicy) and replaces the placeholder `program_cid`; the PressRegistryBody holds it. Anyone may open a job under it (no job_requester_predicate): the job names `source_policy` and `projected_fields`. `field_definitions` is the derived card's shape. The values in `derived_card` are the defaults of derived_card_revocation_propagation.md \u00a79; a template may change them within the bounds there. `revocation_propagation.mode` is `expiry_only` here; `policy-member-as-of.json` is the \"member as of date\" variant (6.5a).",
   "field_definitions": [
     {
       "name": "source_policy",
@@ -67,10 +67,10 @@
         "type": "append-only-array",
         "item_type": "text",
         "required": true,
-        "min_count": 1,
+        "min_count": 0,
         "max_count": 3,
         "regex": "[a-z][a-z0-9_]{0,63}",
-        "description": "Names of source-card fields to copy, at most three"
+        "description": "Names of source-card fields to copy, at most three. Empty is a bare membership claim, which the source issuer can't veto (6.5a)"
       }
     ],
     "platform": "aws-nitro-enclaves",

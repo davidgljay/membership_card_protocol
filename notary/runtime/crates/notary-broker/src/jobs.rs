@@ -338,6 +338,14 @@ impl Broker {
             }
         }
         let c = self.check_job(io, &job, program, None)?;
+        // 6.5a (C), W6b / step 17: a derived-card job may project only fields the source issuer leaves derivable
+        if let Some(d) = &c.derive {
+            let now = self.attested_now_ms().map_err(|_| ("ATT_UNAVAILABLE", "the attested clock is unavailable".to_string()))?;
+            let blocked = self.oracle.non_derivable_fields(io, &d.source_policy, now).map_err(|code| (code, "the source policy's field control could not be read".to_string()))?;
+            if let Some(f) = d.projected_fields.iter().find(|f| blocked.contains(f)) {
+                return Err(("JOB_FIELD_NOT_DERIVABLE", format!("the source policy does not allow deriving the field {f}")));
+            }
+        }
         // K_job,0 and the purpose-0x02 attestation (§33)
         let epoch = 0u64;
         let job_pk = self.keys.create_job_key(&c.admitted, c.job_hash, epoch).map_err(|x| (x, String::new()))?.public_key().to_vec();

@@ -215,3 +215,55 @@ describe("consent model (wallet_sdk.md §7b.3)", () => {
     expect(c.disclosures.some((l) => l.includes("at least 10 people"))).toBe(true);
   });
 });
+
+describe("6.5a: field control and who can end a derived card", () => {
+  const derivedNotary = (rp: Record<string, unknown>): NotarySection => ({ ...notarySection, output_action: "card", mode: "per_input", derived_card: { min_anonymity_set: 10 }, revocation_propagation: rp as never });
+  it("says the issuer can end the card by ending the source card, and what it can see", async () => {
+    const { buildConsent } = await import("../../src/notary/consent.js");
+    for (const rp of [{ mode: "expiry_only" }, { mode: "sealed_link" }, { mode: "sealed_link", propagated_codes: ["8xx", "9xx"] }]) {
+      const c = buildConsent({ job: { ...baseAnn.job, parameters: { source_policy: "bafk-source" } }, notary: derivedNotary(rp), allowlisted: allowlist[0], notaries: [], operatorCards: {}, platform: "simulator", singleOperatorQuorum: false });
+      expect(c.disclosures.some((l) => l.includes("can end this card by ending your bafk-source card") && l.includes("not who took part"))).toBe(true);
+      expect(c.disclosures.some((l) => l.includes("cannot end this card"))).toBe(false);
+    }
+  });
+  it("a template that propagates 9xx only says the issuer can end it only for fraud or compromise", async () => {
+    const { buildConsent } = await import("../../src/notary/consent.js");
+    const c = buildConsent({ job: { ...baseAnn.job, parameters: { source_policy: "bafk-source" } }, notary: derivedNotary({ mode: "sealed_link", propagated_codes: ["9xx"] }), allowlisted: allowlist[0], notaries: [], operatorCards: {}, platform: "simulator", singleOperatorQuorum: false });
+    expect(c.disclosures.some((l) => l.includes("cannot end this card by ending your") && l.includes("only by revoking your card for fraud or compromise") && l.includes("not who took part"))).toBe(true);
+    expect(c.disclosures.some((l) => l.includes("can end this card by ending"))).toBe(false);
+  });
+});
+
+describe("W6b (6.5a): a derived-card job projects only derivable fields", () => {
+  const bounds = [
+    { name: "source_policy", type: "cid", required: true },
+    { name: "projected_fields", type: "append-only-array", item_type: "text", required: true, min_count: 0, max_count: 3, regex: "[a-z][a-z0-9_]{0,63}" },
+  ];
+  const derived = { ...notarySection, output_action: "card", parameter_bounds: bounds } as unknown as NotarySection;
+  const run = (fields: string[], nonDerivableFields?: NotaryChainReads["nonDerivableFields"]) =>
+    code(opts({ announcement: announcement(requesterSigned({ parameters: { source_policy: "bafk-source", projected_fields: fields } })), reads: reads(nonDerivableFields ? { nonDerivableFields } : {}, { notary: derived }) }));
+  it("refuses a projected field the source policy marks non-derivable", async () => {
+    expect(await run(["level"], async () => ["level"])).toBe("JOB_FIELD_NOT_DERIVABLE");
+    expect(await run(["team", "level"], async () => ["level"])).toBe("JOB_FIELD_NOT_DERIVABLE");
+  });
+  it("negative controls: another field, or a flag that is not set, is not refused", async () => {
+    expect(await run(["team"], async () => ["level"])).not.toBe("JOB_FIELD_NOT_DERIVABLE");
+    expect(await run(["level"], async () => [])).not.toBe("JOB_FIELD_NOT_DERIVABLE");
+  });
+  it("a bare membership claim (no fields) is never refused, and needs no read", async () => {
+    let reads = 0;
+    expect(await run([], async () => { reads++; return ["level", "team"]; })).not.toBe("JOB_FIELD_NOT_DERIVABLE");
+    expect(reads).toBe(0);
+  });
+  it("an unreadable source policy is JOB_POLICY_UNTRUSTED; a statement job is not checked", async () => {
+    expect(await run(["level"], async () => null)).toBe("JOB_POLICY_UNTRUSTED");
+    let called = false;
+    await code(opts({ reads: reads({ nonDerivableFields: async () => { called = true; return ["x"]; } }) }));
+    expect(called).toBe(false);
+  });
+  it("without the read, the wallet only warns", async () => {
+    const r = await verifyNotaryJob(opts({ announcement: announcement(requesterSigned({ parameters: { source_policy: "bafk-source", projected_fields: ["level"] } })), reads: reads({}, { notary: derived }) }));
+    if (r.valid) expect(r.warnings).toContain("FIELD_CONTROL_UNCHECKED");
+    else expect(r.code).not.toBe("JOB_FIELD_NOT_DERIVABLE");
+  });
+});

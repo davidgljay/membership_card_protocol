@@ -60,6 +60,13 @@ export function buildConsent(o: {
     const d = notary.derived_card, r = notary.revocation_propagation;
     const source = String(job.parameters["source_policy"] ?? "the source");
     if (r.mode === "expiry_only") disclosures.push(`This card lasts until the end of its period. If your ${source} card is revoked, this card won't be renewed.`);
+    // 6.5a (propagation §8): who can end the card, and what the source issuer can see. A template that propagates 9xx only
+    // (the "member as of date" kind) says the issuer can end it only for fraud or compromise.
+    const codes = r.propagated_codes;
+    const fraudOnly = r.mode === "sealed_link" && Array.isArray(codes) && codes.length > 0 && codes.every((c) => /^9/.test(String(c)));
+    disclosures.push(fraudOnly
+      ? `${source} cannot end this card by ending your ${source} card (leaving, being let go). It can end it only by revoking your card for fraud or compromise. It can see that this job exists, but not who took part.`
+      : `${source} can end this card by ending your ${source} card. It can see that this job exists, but not who took part.`);
     if (r.mode === "sealed_link")
       disclosures.push(`The notary keeps a sealed link between this card and your ${source} card, so it can revoke this card if that one is revoked. The link is held only inside the secure enclave and is lost if every copy of the notary fails. In small communities, the timing of a revocation may hint at the link.`);
     disclosures.push(`Cards are issued in batches every ${d.issuance_batch_interval ?? "PT6H"}, and only once at least ${d.min_anonymity_set ?? 10} people share the same values. Yours may take longer.`);

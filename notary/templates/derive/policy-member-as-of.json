@@ -1,0 +1,90 @@
+{
+  "about": "The \"member as of date\" template policy (derived_card_revocation_propagation.md \u00a710; step 6.5a, option D). The same `derive` program and shape as `policy.json`: the card shows membership as of its `issued_at`, and the source issuer can end it only by a fraud revocation (9xx), not by ending the source card for any other reason. It lapses at `expires_at`, at most 90 days after issue. Governance registers it (RegisterPolicy) and replaces the placeholder `program_cid`.",
+  "field_definitions": [
+    {
+      "name": "source_policy",
+      "type": "cid",
+      "required": true,
+      "description": "The policy the presented source card was issued under"
+    },
+    {
+      "name": "projected",
+      "type": "text",
+      "required": true,
+      "description": "RFC 8785 JSON of the source card's projected fields, under their source names, values verbatim"
+    },
+    {
+      "name": "dup_tag",
+      "type": "base64url",
+      "required": true,
+      "description": "HMAC-SHA256 under the template key for the period: equal for any two cards derived from the same source card in one period"
+    }
+  ],
+  "notary": {
+    "contributor_predicate": {
+      "issued_under_template": {
+        "param": "source_policy"
+      }
+    },
+    "derived_card": {
+      "issuance_batch_interval": "PT6H",
+      "min_anonymity_set": 10,
+      "min_batch_size": 5,
+      "nullifier_period": "P90D",
+      "renewal_window": "P30D",
+      "source_kind": "card"
+    },
+    "input_replacement": "reject_duplicates",
+    "input_schema": [
+      {
+        "name": "derived_recipient_pubkey",
+        "type": "base64url",
+        "required": true,
+        "description": "The holder's fresh key for the derived card (ML-DSA-44, 1312 bytes)"
+      },
+      {
+        "name": "target_period",
+        "type": "integer",
+        "required": true,
+        "description": "The period index the card is for: the current one, or the next inside the renewal window",
+        "min": 0,
+        "max": 1000000
+      }
+    ],
+    "isolation": "shared",
+    "mode": "per_input",
+    "output_action": "card",
+    "output_schema": [],
+    "parameter_bounds": [
+      {
+        "name": "source_policy",
+        "type": "cid",
+        "required": true,
+        "description": "The policy whose cards may be presented"
+      },
+      {
+        "name": "projected_fields",
+        "type": "append-only-array",
+        "item_type": "text",
+        "required": true,
+        "min_count": 0,
+        "max_count": 3,
+        "regex": "[a-z][a-z0-9_]{0,63}",
+        "description": "Names of source-card fields to copy, at most three. Empty is a bare membership claim, which the source issuer can't veto (6.5a)"
+      }
+    ],
+    "platform": "aws-nitro-enclaves",
+    "privacy": {
+      "k_min": 1
+    },
+    "program_cid": "<CID of modules/derive.wasm>",
+    "retention": "none",
+    "revocation_propagation": {
+      "derived_code": "range",
+      "mode": "sealed_link",
+      "propagated_codes": [
+        "9xx"
+      ]
+    }
+  }
+}
