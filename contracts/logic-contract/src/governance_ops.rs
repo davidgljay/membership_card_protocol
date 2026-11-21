@@ -31,6 +31,7 @@ use stylus_sdk::{
 
 use alloc::string::String;
 
+use protocol_types::calldata_binding as bind;
 use crate::{
     errors,
     IStorage,
@@ -38,7 +39,7 @@ use crate::{
     MethodError,
     static_call_ctx,
     current_timestamp,
-    write_gate::verify_governance_quorum,
+    write_gate::{require_bound, verify_governance_quorum},
 };
 use protocol_types::MIN_GOVERNANCE_KEYS;
 
@@ -77,6 +78,8 @@ pub fn register_policy(
     }
 
     // Quorum verification (marks nonce as used).
+    // §6.2 step 0 (E-49): the payload binds this call.
+    require_bound(bind::gov_register_policy(&governance_payload, policy_address.as_slice(), &authorizer_pubkey))?;
     verify_governance_quorum(contract, ROOT_POLICY_BODY, &governance_payload, &governance_sigs)?;
 
     // Write the policy authorizer key.
@@ -142,6 +145,8 @@ pub fn deregister_policy(
     }
 
     // Quorum verification (marks nonce as used).
+    // §6.2 step 0 (E-49): the payload binds this call.
+    require_bound(bind::gov_deregister_policy(&governance_payload, policy_address.as_slice()))?;
     verify_governance_quorum(contract, ROOT_POLICY_BODY, &governance_payload, &governance_sigs)?;
 
     // Delete the policy authorizer key.
@@ -198,6 +203,8 @@ pub fn authorize_press(
     }
 
     // Pre-check 2: Quorum verification (marks nonce as used).
+    // §6.2 step 0 (E-49): the payload binds this call.
+    require_bound(bind::gov_authorize_press(&governance_payload, policy_address.as_slice(), press_address.as_slice(), &press_pubkey, mldsa44_key_hash.as_slice()))?;
     verify_governance_quorum(contract, PRESS_REGISTRY_BODY, &governance_payload, &governance_sigs)?;
 
     // Write the press authorization entry.
@@ -262,6 +269,8 @@ pub fn revoke_press(
     }
 
     // Quorum verification.
+    // §6.2 step 0 (E-49): the payload binds this call.
+    require_bound(bind::gov_revoke_press(&governance_payload, policy_address.as_slice(), press_address.as_slice()))?;
     verify_governance_quorum(contract, PRESS_REGISTRY_BODY, &governance_payload, &governance_sigs)?;
 
     // Write the updated entry with active = false and revoked_at = now.
@@ -323,6 +332,8 @@ pub fn rotate_authorizer_key(
     }
 
     // Pre-check 2: Quorum verification.
+    // §6.2 step 0 (E-49): the payload binds this call.
+    require_bound(bind::gov_rotate_authorizer_key(&governance_payload, policy_address.as_slice(), &new_authorizer_key))?;
     verify_governance_quorum(contract, ROOT_POLICY_BODY, &governance_payload, &governance_sigs)?;
 
     // Overwrite the policy authorizer key.
@@ -393,6 +404,8 @@ pub fn rotate_governance_keys(
 
     // ── Pre-check 4: Quorum verification using CURRENT keyset ────────────────
     // Critical: signatures are verified against the current keyset, not the new one.
+    // §6.2 step 0 (E-49): the payload binds this call.
+    require_bound(bind::gov_rotate_governance_keys(&governance_payload, body_id, &new_keys_flat, new_key_count, new_quorum))?;
     verify_governance_quorum(contract, body_id, &governance_payload, &governance_sigs)?;
 
     // ── Get current version for the increment ─────────────────────────────────
@@ -462,6 +475,8 @@ pub fn set_protocol_version(
     };
 
     // Quorum verification (marks nonce as used).
+    // §6.2 step 0 (E-49): the payload binds this call.
+    require_bound(bind::gov_set_protocol_version(&governance_payload, new_version.as_bytes()))?;
     verify_governance_quorum(contract, ROOT_POLICY_BODY, &governance_payload, &governance_sigs)?;
 
     // Write the new protocol version.
@@ -504,6 +519,8 @@ pub fn disable_policy_delete_permanently(
     }
 
     // Quorum verification (marks nonce as used).
+    // §6.2 step 0 (E-49): the payload binds this call.
+    require_bound(bind::gov_disable_policy_delete_permanently(&governance_payload))?;
     verify_governance_quorum(contract, ROOT_POLICY_BODY, &governance_payload, &governance_sigs)?;
 
     // Set the permanent disable flag in the storage contract.

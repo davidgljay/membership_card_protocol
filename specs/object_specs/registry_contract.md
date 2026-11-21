@@ -53,6 +53,7 @@ ever verified on-chain, in any of these operations. See also v0.5→v0.6: DNS ad
    - 4.4 [DeregisterSubCard](#44-deregistersubcard)
    - 4.5 [ClaimOpenOffer](#45-claimopenoffer)
    - 4.6 [RegisterPolicy](#46-registerpolicy)
+   - 4.6a [DeregisterPolicy](#46a-deregisterpolicy)
    - 4.7 [AuthorizePress](#47-authorizepress)
    - 4.8 [RevokePress](#48-revokepress)
    - 4.9 [RotateAuthorizerKey](#49-rotateauthorizerkey)
@@ -61,6 +62,7 @@ ever verified on-chain, in any of these operations. See also v0.5→v0.6: DNS ad
    - 4.12 [Gas Payment and Rate Limiting](#412-gas-payment-and-rate-limiting)
    - 4.13 [RegisterAddressForward](#413-registeraddressforward)
    - 4.14 [UpgradeLogic](#414-upgradelogic)
+   - 4.14a [UpgradeVerifier](#414a-upgradeverifier)
    - 4.15 [BatchUpdateCardHeads](#415-batchupdatecardheads)
    - 4.16 [DisablePolicyDeletePermanently](#416-disablepolicydeletepermanently)
    - 4.17 [RegisterDomain](#417-registerdomain)
@@ -751,6 +753,25 @@ ClaimOpenOffer(
 
 > **Known gap, 2026-11-15 (notary step 6.4a, `plans/notary-questions-6.4a.md` W4), for David's review.** The press payload for `ClaimOpenOffer` carries `offer_id`, `card_address`, `initial_log_cid`, `policy_address` and `press_address`, which step 8 (§6.1) binds. It does not carry `max_acceptances` or `expires_at`, so a submitter holding a valid signature can pass `max_acceptances = type(uint64).max` and `expires_at = 0` and claim past the offer's limits. The proposed fix adds both to the signed payload and to step 8.
 
+> *Amended 2026-11-20 (notary step 6.4b), decided by David (`plans/notary-questions-6.4b.md`).* W4 is closed. The press signs both limits, and step 8 binds them. `ClaimOpenOfferPayload`:
+>
+> ```json
+> {
+>   "op":              "claim_open_offer",
+>   "offer_id":        "<base64url — bytes32>",
+>   "max_acceptances": <uint64, or null when unconstrained>,
+>   "expires_at":      <uint64 Unix seconds, or null when unconstrained>,
+>   "card_address":    "<base64url — bytes32>",
+>   "initial_log_cid": "<base64url — CID bytes>",
+>   "policy_address":  "<base64url — bytes32>",
+>   "press_address":   "<base64url — bytes32>",
+>   "sequence":        <uint64>,
+>   "timestamp":       "<ISO 8601>"
+> }
+> ```
+>
+> `null` means the offer document's `null`: it equals the calldata sentinel (`type(uint64).max` for `max_acceptances`, 0 for `expires_at`) and nothing else. A number must equal the calldata, must not be the sentinel, and must not exceed 2^53−1, so that every value a JavaScript press writes is exact. A calldata value above 2^53−1 other than the sentinel therefore can't be signed, and is refused with E-49.
+
 > **Issuer signature verification is press-side only.** The press verifies the ML-DSA-44 issuer signature on the `OpenCardOffer` document before submitting `ClaimOpenOffer`. The contract does not receive or re-verify the issuer signature. A press submitting a claim for an offer with an invalid issuer signature is detectable by observers and constitutes a press policy violation (press-side error E-14).
 
 **State changes (all atomic):**
@@ -797,6 +818,45 @@ RegisterPolicy(
 **State changes:**
 
 - Creates `PolicyAuthorizerKeys[policy_address] = authorizer_pubkey`.
+
+---
+
+### 4.6a DeregisterPolicy
+
+*Amended 2026-11-20 (notary step 6.4b), decided by David (`plans/notary-questions-6.4b.md`).* The operation was implemented and confirmed as intended (§9 OQ-20) but had no section.
+
+**Called by:** Root Policy Governance Body (quorum required)
+**Purpose:** Remove a policy from `PolicyAuthorizerKeys`. Every press authorized under it loses write authority, and every card under it becomes permanently non-writable. There is no re-registration path, so governance needs a migration plan for affected cards first.
+
+```
+DeregisterPolicy(
+    policy_address      bytes32,
+    governance_payload  bytes,
+    governance_sigs     bytes[]    — RootPolicyBody quorum
+) → void
+```
+
+**`DeregisterPolicyPayload`:**
+
+```json
+{
+  "op":                 "deregister_policy",
+  "policy_address":     "<base64url — bytes32>",
+  "governance_version": <uint32>,
+  "nonce":              "<base64url>",
+  "timestamp":          "<ISO 8601>"
+}
+```
+
+**Preconditions:**
+
+1. `PolicyDeleteDisabled == false` (§4.16).
+2. `policy_address` exists in `PolicyAuthorizerKeys`.
+3. Quorum signature check (§6.2, `RootPolicyBody` keyset).
+
+**State changes:**
+
+- Deletes `PolicyAuthorizerKeys[policy_address]`.
 
 ---
 
@@ -860,6 +920,19 @@ RevokePress(
 ) → void
 ```
 
+**`RevokePressPayload`** (*Amended 2026-11-20 (notary step 6.4b), decided by David (`plans/notary-questions-6.4b.md`).*):
+
+```json
+{
+  "op":                 "revoke_press",
+  "policy_address":     "<base64url>",
+  "press_address":      "<base64url>",
+  "governance_version": <uint32>,
+  "nonce":              "<base64url>",
+  "timestamp":          "<ISO 8601>"
+}
+```
+
 **Preconditions:**
 
 1. `PressAuthorizations[policy_address][press_address]` exists and `active == true`.
@@ -919,15 +992,34 @@ RotateAuthorizerKey(
 
 ```
 RotateGovernanceKeys(
-    body_id            GovernanceBodyId,
-    new_keys           bytes[64][],   — secp256r1 public keys (x||y, 64 bytes each);
-                                        bytes[1312][] after on-chain key scheme upgrade
+    body_id            uint8,         — GovernanceBodyId: 0 Root, 1 PressRegistry, 2 Dns
+    new_keys_flat      bytes,         — new_key_count secp256r1 public keys (x||y, 64 bytes each),
+                                        concatenated; 1312 bytes each after the key scheme upgrade
+    new_key_count      uint8,
     new_quorum         uint8,
     governance_payload bytes,
     governance_sigs    bytes[]        — secp256r1 signatures (r||s, 64 bytes each) from existing
                                         keyset, not the new one
 ) → void
 ```
+
+*Amended 2026-11-20 (notary step 6.4b), decided by David (`plans/notary-questions-6.4b.md`).* The signature above now matches the deployed ABI (it showed `new_keys bytes[64][]`). `new_keys` below means `new_keys_flat` split into `new_key_count` keys.
+
+**`RotateGovernanceKeysPayload`:**
+
+```json
+{
+  "op":                 "rotate_governance_keys",
+  "body_id":            <uint8>,
+  "new_keys":           ["<base64url — 64 bytes>", "..."],
+  "new_quorum":         <uint8>,
+  "governance_version": <uint32>,
+  "nonce":              "<base64url>",
+  "timestamp":          "<ISO 8601>"
+}
+```
+
+`body_id` names the body being rotated; it is the one operation whose `op` doesn't imply the body. `new_keys` must have exactly `new_key_count` elements, in calldata order. The payload has no `key_scheme`: the contract writes 0 (Phase 1 note below), and Phase 2 will add the field.
 
 **Preconditions:**
 
@@ -1212,10 +1304,25 @@ CancelLogicUpgrade(
 ) → void
 ```
 
+**`CancelLogicUpgradePayload`** (*Amended 2026-11-20 (notary step 6.4b), decided by David (`plans/notary-questions-6.4b.md`).*):
+
+```json
+{
+  "op":                     "cancel_logic_upgrade",
+  "proposed_logic_address": "<base64url — 20 bytes, EVM address>",
+  "governance_version":     <uint32>,
+  "nonce":                  "<base64url>",
+  "timestamp":              "<ISO 8601>"
+}
+```
+
+`proposed_logic_address` names the proposal being cancelled. Without it, a signed cancellation that was never submitted would cancel whatever proposal was pending when it was finally used.
+
 **Preconditions:**
 
 1. `PendingLogicUpgrade.proposed_address != address(0)` (a proposal exists).
-2. Quorum signature check (`RootPolicyBody` keyset).
+2. `proposed_logic_address` in the payload equals `PendingLogicUpgrade.proposed_address`. Error: E-49.
+3. Quorum signature check (`RootPolicyBody` keyset).
 
 **State changes:**
 
@@ -1235,6 +1342,42 @@ CancelLogicUpgrade(
 - [ ] After a logic upgrade, the storage contract's setter access control rejects calls from the old logic contract address.
 - [ ] `CancelLogicUpgrade` clears `PendingLogicUpgrade` and emits `LogicUpgradeCancelled`.
 - [ ] All storage invariants (§3.7) are enforced after a logic upgrade — the new logic contract cannot bypass them.
+
+---
+
+### 4.14a UpgradeVerifier
+
+*Amended 2026-11-20 (notary step 6.4b), decided by David (`plans/notary-questions-6.4b.md`).* This documents the verifier upgrade as built (`upgrade_ops.rs`), which §6.3 named but no section defined. It is the logic upgrade's two-step shape with a **48-hour** timelock. The verifier address lives in the logic contract, so confirmation takes effect immediately.
+
+```
+ProposeVerifierUpgrade(new_verifier_address address, governance_payload bytes, governance_sigs bytes[]) → void
+ConfirmVerifierUpgrade(proposed_verifier_address address, governance_payload bytes, governance_sigs bytes[]) → void
+CancelVerifierUpgrade(governance_payload bytes, governance_sigs bytes[]) → void
+```
+
+All three require a `RootPolicyBody` quorum (§6.2). Payload action fields:
+
+| Operation | `op` | Action field (base64url, 20 bytes) |
+|---|---|---|
+| `ProposeVerifierUpgrade` | `propose_verifier_upgrade` | `new_verifier_address` |
+| `ConfirmVerifierUpgrade` | `confirm_verifier_upgrade` | `proposed_verifier_address` |
+| `CancelVerifierUpgrade` | `cancel_verifier_upgrade` | `proposed_verifier_address` (the pending proposal) |
+
+Each payload also carries `governance_version`, `nonce` and `timestamp`, as in §4.14.
+
+**Preconditions and errors (as §4.14):**
+
+- **Propose:** no verifier proposal pending (E-30). The new address is non-zero and differs from the current verifier (`INVALID_PAYLOAD`).
+- **Confirm:**
+  - a proposal is pending (`NO_UPGRADE_PENDING`);
+  - the address equals it (E-32);
+  - 48 hours have elapsed (E-31);
+  - the `RootPolicyBody` version is unchanged since the proposal (E-15).
+- **Cancel:** a proposal is pending, and the payload's `proposed_verifier_address` equals it (E-49).
+
+**State changes:**
+- **Confirm** sets `VerifierModule` to the proposed address and clears the pending proposal.
+- **Cancel** clears the pending proposal.
 
 ---
 
@@ -1338,6 +1481,17 @@ DisablePolicyDeletePermanently(
     governance_payload  bytes,
     governance_sigs     bytes[]   — RootPolicyBody quorum
 ) → void
+```
+
+**`DisablePolicyDeletePermanentlyPayload`** (*Amended 2026-11-20 (notary step 6.4b), decided by David (`plans/notary-questions-6.4b.md`).*). There is no calldata to bind, so `op` is the binding:
+
+```json
+{
+  "op":                 "disable_policy_delete_permanently",
+  "governance_version": <uint32>,
+  "nonce":              "<base64url>",
+  "timestamp":          "<ISO 8601>"
+}
 ```
 
 **Preconditions:**
@@ -1589,7 +1743,7 @@ RemovePolicyAddress(
 
 **`RemovePolicyAddressPayload` (signed by press; path A only):**
 
-> *Amended 2026-11-15 (notary step 6.4a), for David's review (`plans/notary-questions-6.4a.md` W5).* The section named `press_sig_payload` but defined no payload. Write-gate step 8 (§6.1) binds these fields to the calldata.
+> *Amended 2026-11-15 (notary step 6.4a); approved by David 2026-11-19 (`plans/notary-questions-6.4a.md` W5).* The section named `press_sig_payload` but defined no payload. Write-gate step 8 (§6.1) binds these fields to the calldata.
 
 ```json
 {
@@ -1609,9 +1763,22 @@ RemovePolicyAddress(
 - `governance_sigs` must be an empty array.
 
 **Path B — Governance-authorized removal (DNS governance body initiated, e.g., fraud response):**
-- `DnsGovernanceBody` quorum signature check (§6.2) over `governance_payload`.
+- `DnsGovernanceBody` quorum signature check (§6.2) over `governance_payload`, a `GovernanceRemovePolicyAddressPayload` (below).
 - `card_address` is ignored (set to `bytes32(0)` by convention); `press_sig_payload` and `press_signature` are ignored.
 - `press_signature` must be `bytes[64](0)`.
+
+**`GovernanceRemovePolicyAddressPayload` (path B)** (*Amended 2026-11-20 (notary step 6.4b), decided by David (`plans/notary-questions-6.4b.md`).*). Its `op` differs from path A's, so no signed payload can satisfy both paths. `domain` and `path` are compared byte for byte (§6.1 encoding):
+
+```json
+{
+  "op":                 "governance_remove_policy_address",
+  "domain":             "<domain string>",
+  "path":               "<path string>",
+  "governance_version": <uint32>,
+  "nonce":              "<base64url>",
+  "timestamp":          "<ISO 8601>"
+}
+```
 
 **Shared preconditions (both paths):**
 
@@ -1891,6 +2058,18 @@ SetProtocolVersion(
 ) → void
 ```
 
+**`SetProtocolVersionPayload`** (*Amended 2026-11-20 (notary step 6.4b), decided by David (`plans/notary-questions-6.4b.md`).*). `new_version` is compared byte for byte, written without escapes:
+
+```json
+{
+  "op":                 "set_protocol_version",
+  "new_version":        "<string>",
+  "governance_version": <uint32>,
+  "nonce":              "<base64url>",
+  "timestamp":          "<ISO 8601>"
+}
+```
+
 **Preconditions:**
 
 1. `new_version` is non-empty. Error: `INVALID_PAYLOAD`.
@@ -1987,7 +2166,7 @@ The following check is applied on every call to `RegisterCard`, `UpdateCardHead`
 > - **Fields per operation.**
 >   - `RegisterCard`: `card_address`, `initial_log_cid`, `policy_address`, `press_address`.
 >   - `UpdateCardHead`: `card_address`, `prev_log_cid`, `new_log_cid`, `press_address`.
->   - `ClaimOpenOffer`: `offer_id` plus the `RegisterCard` fields (see the §4.5 gap note).
+>   - `ClaimOpenOffer`: `offer_id`, `max_acceptances` and `expires_at` (`null` for the sentinel, §4.5), plus the `RegisterCard` fields. *Limits added 2026-11-20 (6.4b, W4).*
 >   - `BatchUpdateCardHeads`: `policy_address`, `press_address`, and `updates` (same length, same order, each item's `card_address`, `prev_log_cid` and `new_log_cid`).
 >   - `RegisterSubCard`: `sub_card_address`, `master_card_address`, `registration_log_head`, `sub_card_doc_cid`, `press_address`.
 >   - `DeregisterSubCard`: `sub_card_address`, `press_address`.
@@ -2006,11 +2185,23 @@ The following check is applied on every call to `RegisterCard`, `UpdateCardHead`
 
 ### 6.2 Governance Quorum Verification
 
-Applied on every governance operation (§4.6–4.10). The signed `governance_payload` includes the operation name, all action parameters, a `governance_version` equal to the current keyset version, and a replay-prevention nonce.
+Applied on every governance operation (§4.6–4.10, §4.14–4.14a, §4.16–4.25). The signed `governance_payload` includes the operation name, all action parameters, a `governance_version` equal to the current keyset version, and a replay-prevention nonce.
 
-> **Known gap, found 2026-11-15 (notary step 6.4a, `plans/notary-questions-6.4a.md` W1), reported to David, not fixed.** The implementation (`write_gate.rs::verify_governance_quorum`) checks `governance_version`, the nonce and the signatures. It checks neither `op` nor any action parameter against the calldata. A quorum-signed payload can therefore be submitted once with any calldata, for any quorum-gated operation of the same body. This is the governance counterpart of the gap §6.1 step 8 closes. The deployed contracts have it.
+> **Known gap, found 2026-11-15 (notary step 6.4a, `plans/notary-questions-6.4a.md` W1), reported to David, not fixed.** The implementation (`write_gate.rs::verify_governance_quorum`) checks `governance_version`, the nonce and the signatures. It checks neither `op` nor any action parameter against the calldata. A quorum-signed payload can therefore be submitted once with any calldata, for any quorum-gated operation of the same body. This is the governance counterpart of the gap §6.1 step 8 closes. The deployed contracts have it. *Closed 2026-11-20 by step 0 above (notary step 6.4b), deployed only to the local devnode. The Sepolia and mainnet contracts keep the gap until the W8 upgrade.*
 
 ```
+0. (Added 2026-11-20, notary step 6.4b, decided by David.) Confirm the payload binds the call:
+   - "op" equals the operation's op name (its payload definition in §4);
+   - every action field of that payload is present once at the top level and equals the
+     calldata, encoded as in §6.1 step 8: bytes32 values, EVM addresses, keys and CIDs as
+     unpadded base64url; integers as JSON numbers in shortest decimal form; domain, path
+     and other strings byte for byte, without escapes; arrays element by element, with
+     the same length and order;
+   - for CancelLogicUpgrade and CancelVerifierUpgrade, the payload's proposed address
+     equals the pending proposal.
+   timestamp is signed but not checked. Other fields are ignored.
+   → Error: PAYLOAD_CALLDATA_MISMATCH (E-49)
+
 1. Confirm governance_version in payload matches GovernanceKeysets[body_id].version.
    → Error: GOVERNANCE_VERSION_MISMATCH
 
@@ -2329,7 +2520,7 @@ ProtocolVersionUpdated(
 | E-46 | `ADMIN_CARD_MISMATCH` | `admin_card_address` in `SetPolicyAddress` does not match `DomainRegistrations[domain].admin_card_address`. The caller supplied an admin card that is not the registered admin for this domain. |
 | E-47 | `INVALID_ADMIN_CARD_SIGNATURE` | `RegisterSubCard` failed the admin card secp256r1 check (§4.3 precondition 5). Covers: missing signature when primary card is a DNS admin card; payload field mismatch (`sub_card_address` or `sub_card_doc_cid` inconsistent with calldata); RIP-7212 signature verification failure; and spurious non-zero signature when primary card is not a DNS admin card. |
 | E-48 | `SUB_CARD_ADDRESS_RETIRED` | `RegisterSubCard` called for a `sub_card_address` that was previously registered and later deregistered (`SubCardRegistrations[sub_card_address].deregistered_at != 0`). Deregistered sub-card addresses can never be reused — `deregistered_at` is write-once-non-zero (§3.7), so a fresh registration attempt (which would write `deregistered_at = 0`) is rejected by the storage contract's invariant check before it can silently resurrect a retired entry. Added 2026-07-16, Phase 3 Tier 1 item 3 — this behavior was already implemented and intentional (audit-trail preserving); this error code was previously undocumented. |
-| E-49 | `PAYLOAD_CALLDATA_MISMATCH` | A signed write payload's operation-specific fields don't equal the calldata (§6.1 step 8). Added 2026-11-11 as required (notaries, ADR-013). Implemented 2026-11-15 (notary step 6.4a); deployed only to the local devnode. |
+| E-49 | `PAYLOAD_CALLDATA_MISMATCH` | A signed payload's `op` or operation-specific fields don't equal the calldata: a press payload (§6.1 step 8) or, from 2026-11-20, a governance payload (§6.2 step 0, notary step 6.4b). Added 2026-11-11 as required (notaries, ADR-013). Implemented 2026-11-15 (notary step 6.4a); deployed only to the local devnode. |
 
 ---
 

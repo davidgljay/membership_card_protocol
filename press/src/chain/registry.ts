@@ -657,12 +657,27 @@ export function createRegistryClient(config: PressConfig): RegistryClient {
       cardAddress: normalizeHex(params.cardAddress),
       policyAddress: normalizeHex(params.policyAddress),
     };
+    // registry_contract.md §4.5 (6.4b, W4): the limits are signed and bound to the
+    // calldata. An unconstrained limit is signed as null (the offer document's own
+    // value), never as the sentinel number, and a limit above 2^53 − 1 is refused:
+    // a JSON number that large isn't exact here, so its payload couldn't match.
+    const signedLimit = (v: bigint, sentinel: bigint, name: string): number | null => {
+      if (v === sentinel) return null;
+      if (v > BigInt(Number.MAX_SAFE_INTEGER)) {
+        throw new Error(`${name} ${v} exceeds 2^53 - 1 and can't be signed exactly`);
+      }
+      return Number(v);
+    };
+    const maxAcceptances = signedLimit(params.maxAcceptances, 18446744073709551615n, 'max_acceptances');
+    const expiresAt = signedLimit(params.expiresAt, 0n, 'expires_at');
     return submitWithRetry(
       'claimOpenOffer',
       (seq) => {
         const { payloadBytes, pressSignature } = buildAndSignPayload(
           'claim_open_offer',
           {
+            max_acceptances: maxAcceptances,
+            expires_at: expiresAt,
             offer_id: toBase64url(hexToBytes(params.offerId)),
             card_address: toBase64url(hexToBytes(params.cardAddress)),
             initial_log_cid: toBase64url(params.initialLogCid),

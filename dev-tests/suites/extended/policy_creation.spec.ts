@@ -94,15 +94,19 @@ describe('policy_creation.md (live dev deployment)', () => {
     // test's only subject is the governance registration mechanic itself.
     const policyAddress = ('0x' + Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('hex')) as Hex;
 
-    const { payload, signatures } = await buildAndSignGovernanceOp('policy', ['--op', 'register_policy']);
-
-    const REGISTER_POLICY_ABI = parseAbi([
-      'function registerPolicy(bytes32 policy_address, uint8[] policy_authorizer_pubkey, uint8[] governance_payload, uint8[][] governance_sigs) external',
-    ]);
     // Placeholder authorizer pubkey -- registerPolicy requires the arg but
     // this test doesn't exercise policy-authorizer-key rotation.
     const placeholderPubkey = new Array(64).fill(0);
 
+    const { payload, signatures } = await buildAndSignGovernanceOp('policy', [
+      '--op', 'register_policy',
+      '--b64', `policy_address=${policyAddress}`,
+      '--b64', `authorizer_pubkey=0x${'00'.repeat(64)}`,
+    ]);
+
+    const REGISTER_POLICY_ABI = parseAbi([
+      'function registerPolicy(bytes32 policy_address, uint8[] policy_authorizer_pubkey, uint8[] governance_payload, uint8[][] governance_sigs) external',
+    ]);
     await submitGovernanceTx('registerPolicy', REGISTER_POLICY_ABI, [
       policyAddress,
       placeholderPubkey,

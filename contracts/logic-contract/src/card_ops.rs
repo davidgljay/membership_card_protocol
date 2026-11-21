@@ -273,9 +273,12 @@ pub fn claim_open_offer(
     )?;
 
     // Write-gate step 8 (E-49).
-    require_bound(bind::claim_open_offer(
+    // The signed limits (6.4b, W4): null for the sentinel, otherwise equal.
+    require_bound(bind::claim_open_offer_with_limits(
         &press_sig_payload,
         offer_id.as_slice(),
+        max_acceptances,
+        expires_at,
         card_address.as_slice(),
         &initial_log_cid,
         policy_address.as_slice(),

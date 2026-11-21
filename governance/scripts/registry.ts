@@ -455,7 +455,7 @@ export function createDnsGovRegistryClient(config: GovScriptConfig): DnsGovRegis
   async function removePolicyAddressGov(domain: string, path: string): Promise<Hex> {
     const domainBytes = bytesToUint8Array(new TextEncoder().encode(domain));
     const pathBytes = bytesToUint8Array(new TextEncoder().encode(path));
-    const { payloadBytes, sig } = await buildGovPayload('remove_policy_address', { domain, path });
+    const { payloadBytes, sig } = await buildGovPayload('governance_remove_policy_address', { domain, path }); // §4.20 path B op (6.4b)
     // Governance path: card_address = zero, press fields = empty
     return submitGovTx('removePolicyAddress', [
       domainBytes, pathBytes,

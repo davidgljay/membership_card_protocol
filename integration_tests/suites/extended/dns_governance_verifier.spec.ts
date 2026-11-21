@@ -296,7 +296,7 @@ describe('dns_governance_verifier.md (live stack)', () => {
     // suite in this stack exercising DNS governance at all. ──────────────
     dnsGovVersion = await readGovVersion();
     {
-      const payload = buildGovernancePayload(['--op', 'set_dns_governance_policy_address', '--version', String(dnsGovVersion), '--address', dnsPolicyAddress]);
+      const payload = buildGovernancePayload(['--op', 'set_dns_governance_policy_address', '--version', String(dnsGovVersion), '--b64', `new_policy_address=${dnsPolicyAddress}`]);
       const sigHex = signPayload(devGovernanceKeypair.private_key, payload);
       await submitDnsGovTx('setDnsGovernancePolicyAddress', [dnsPolicyAddress, utf8BytesArg(payload), [hexToBytesArg(sigHex)]]);
     }
@@ -337,9 +337,9 @@ describe('dns_governance_verifier.md (live stack)', () => {
     const payload = buildGovernancePayload([
       '--op', 'register_domain',
       '--version', String(dnsGovVersion),
-      '--policy', domain, // build_governance_payload.rs maps --policy -> domain for this op
-      '--press', adminCardAddress, // --press -> admin_card_address
-      '--press-pubkey', '0x' + Buffer.from(adminSecpPubkeyXY).toString('hex'), // --press-pubkey -> admin_secp256r1_key
+      '--str', `domain=${domain}`,
+      '--b64', `admin_card_address=${adminCardAddress}`,
+      '--b64', `admin_secp256r1_key=0x${Buffer.from(adminSecpPubkeyXY).toString('hex')}`,
     ]);
     const sigHex = signPayload(devGovernanceKeypair.private_key, payload);
 
@@ -484,7 +484,7 @@ describe('dns_governance_verifier.md (live stack)', () => {
     const payload = buildGovernancePayload([
       '--op', 'deregister_domain',
       '--version', String(dnsGovVersion),
-      '--policy', domain,
+      '--str', `domain=${domain}`,
     ]);
     const sigHex = signPayload(devGovernanceKeypair.private_key, payload);
 

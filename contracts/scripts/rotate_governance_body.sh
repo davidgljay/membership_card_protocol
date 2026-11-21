@@ -122,8 +122,9 @@ for PK in "${NEW_PUBKEYS[@]}"; do
   NEW_KEYS_FLAT_HEX="${NEW_KEYS_FLAT_HEX}${STRIPPED}"
 done
 
-PAYLOAD=$(build_gov_payload --op rotate_governance_keys --body "$BODY_ID" --version "$CURRENT_VERSION" \
-  --new-key-count "$NEW_KEY_COUNT" --new-quorum "$NEW_QUORUM" --new-keys-hex "$NEW_KEYS_FLAT_HEX")
+# Every action field is bound to the calldata (registry_contract.md §6.2 step 0).
+PAYLOAD=$(build_gov_payload --op rotate_governance_keys --version "$CURRENT_VERSION" \
+  --num body_id="$BODY_ID" --keys new_keys="$NEW_KEYS_FLAT_HEX:$NEW_KEY_COUNT" --num new_quorum="$NEW_QUORUM")
 SIG=$(sign_gov_payload "$PAYLOAD")
 PAYLOAD_ARR=$(to_uint8_array "0x$(hex_encode "$PAYLOAD")")
 SIG_ARR=$(to_uint8_array "$SIG")

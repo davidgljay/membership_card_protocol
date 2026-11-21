@@ -40,6 +40,7 @@ use stylus_sdk::{
     evm,
 };
 
+use protocol_types::calldata_binding as bind;
 use crate::{
     errors,
     IStorage,
@@ -47,7 +48,7 @@ use crate::{
     MethodError,
     static_call_ctx,
     current_timestamp,
-    write_gate::verify_governance_quorum,
+    write_gate::{require_bound, verify_governance_quorum},
 };
 use protocol_types::{LOGIC_UPGRADE_TIMELOCK_SECS, VERIFIER_UPGRADE_TIMELOCK_SECS};
 
@@ -91,6 +92,8 @@ pub fn propose_logic_upgrade(
     }
 
     // Pre-check 3: Quorum verification.
+    // §6.2 step 0 (E-49): the payload binds this call.
+    require_bound(bind::gov_propose_logic_upgrade(&governance_payload, new_logic_address.as_slice()))?;
     verify_governance_quorum(contract, ROOT_POLICY_BODY, &governance_payload, &governance_sigs)?;
 
     // Get current governance version for the proposal record.
@@ -180,6 +183,8 @@ pub fn confirm_logic_upgrade(
     // (a) the proposal nonce was already marked as used.
     // (b) the confirmation payload has a different nonce field.
     // The quorum verifier will reject a reused nonce with E-07G.
+    // §6.2 step 0 (E-49): the payload binds this call.
+    require_bound(bind::gov_confirm_logic_upgrade(&governance_payload, proposed_logic_address.as_slice()))?;
     verify_governance_quorum(contract, ROOT_POLICY_BODY, &governance_payload, &governance_sigs)?;
 
     // ── State changes ─────────────────────────────────────────────────────────
@@ -232,6 +237,8 @@ pub fn cancel_logic_upgrade(
     }
 
     // Quorum verification.
+    // §6.2 step 0 (E-49): the payload binds this call.
+    require_bound(bind::gov_cancel_logic_upgrade(&governance_payload, pending_addr.as_slice()))?;
     verify_governance_quorum(contract, ROOT_POLICY_BODY, &governance_payload, &governance_sigs)?;
 
     // Clear the pending upgrade.
@@ -277,6 +284,8 @@ pub fn propose_verifier_upgrade(
     }
 
     // Pre-check 3: Quorum verification.
+    // §6.2 step 0 (E-49): the payload binds this call.
+    require_bound(bind::gov_propose_verifier_upgrade(&governance_payload, new_verifier_address.as_slice()))?;
     verify_governance_quorum(contract, ROOT_POLICY_BODY, &governance_payload, &governance_sigs)?;
 
     // Get governance version and nonce.
@@ -343,6 +352,8 @@ pub fn confirm_verifier_upgrade(
     }
 
     // Pre-check 5: Fresh quorum signature.
+    // §6.2 step 0 (E-49): the payload binds this call.
+    require_bound(bind::gov_confirm_verifier_upgrade(&governance_payload, proposed_verifier_address.as_slice()))?;
     verify_governance_quorum(contract, ROOT_POLICY_BODY, &governance_payload, &governance_sigs)?;
 
     // Clear proposal state.
@@ -376,6 +387,8 @@ pub fn cancel_verifier_upgrade(
         return Err(errors::make_error(errors::NO_UPGRADE_PENDING));
     }
 
+    // §6.2 step 0 (E-49): the payload binds this call.
+    require_bound(bind::gov_cancel_verifier_upgrade(&governance_payload, pending_addr.as_slice()))?;
     verify_governance_quorum(contract, ROOT_POLICY_BODY, &governance_payload, &governance_sigs)?;
 
     // Clear proposal state.

@@ -132,7 +132,8 @@ describe('registry write gate step 8 (E-49) on the devnode', () => {
     logic = deployment.contracts.logic_contract;
     storage = deployment.contracts.storage_contract;
     const vars = parseDevVars(join(REPO_ROOT, 'integration_tests/env/press/.dev.vars'));
-    const gasKey = (vars.PRESS_GAS_WALLET_PRIVATE_KEY.startsWith('0x') ? vars.PRESS_GAS_WALLET_PRIVATE_KEY : `0x${vars.PRESS_GAS_WALLET_PRIVATE_KEY}`) as Hex;
+    const rawGas = vars.PRESS_GAS_WALLET_PRIVATE_KEY!;
+    const gasKey = (rawGas.startsWith('0x') ? rawGas : `0x${rawGas}`) as Hex;
     walletClient = createWalletClient({ account: privateKeyToAccount(gasKey), chain: arbitrumSepolia, transport: http(ARBITRUM_RPC_URL) });
 
     await ensureGovernanceBootstrap({
@@ -142,7 +143,7 @@ describe('registry write gate step 8 (E-49) on the devnode', () => {
       policyAddress: policy,
       pressAddress: press,
       pressSecp256r1PrivateKey: Buffer.from(pressKey).toString('hex'),
-      pressMlDsa44PrivateKey: base64UrlToBytes(vars.PRESS_MLDSA44_PRIVATE_KEY),
+      pressMlDsa44PrivateKey: base64UrlToBytes(vars.PRESS_MLDSA44_PRIVATE_KEY!),
       governanceKeypair: deployment.dev_governance_keypair,
       pressGasWalletPrivateKey: gasKey,
       contractsScriptsDir: join(REPO_ROOT, 'contracts/scripts'),
@@ -197,7 +198,7 @@ describe('registry write gate step 8 (E-49) on the devnode', () => {
     }
     const newA = cid('batch-a');
     const newB = cid('batch-b');
-    const items = [
+    const items: { card: Hex; prev: Uint8Array; next: Uint8Array }[] = [
       { card: cardA, prev: nextA, next: newA },
       { card: cardB, prev: genesisB, next: newB },
     ];
@@ -207,9 +208,9 @@ describe('registry write gate step 8 (E-49) on the devnode', () => {
     });
     const args = (list: typeof items) => [policy, press, list.map((u) => u.card), list.map((u) => Array.from(u.prev)), list.map((u) => Array.from(u.next)), payload, sig] as const;
 
-    expect(await tryCall('batchUpdateCardHeads', args([items[1], items[0]]))).toBe(E49); // reordered
-    expect(await tryCall('batchUpdateCardHeads', args([items[0]]))).toBe(E49); // shorter
-    expect(await tryCall('batchUpdateCardHeads', args([items[0], { ...items[1], next: cid('junk') }]))).toBe(E49); // one item changed
+    expect(await tryCall('batchUpdateCardHeads', args([items[1]!, items[0]!]))).toBe(E49); // reordered
+    expect(await tryCall('batchUpdateCardHeads', args([items[0]!]))).toBe(E49); // shorter
+    expect(await tryCall('batchUpdateCardHeads', args([items[0]!, { ...items[1]!, next: cid('junk') }]))).toBe(E49); // one item changed
 
     await send('batchUpdateCardHeads', args(items));
     expect(await head(cardA)).toBe(Buffer.from(newA).toString());

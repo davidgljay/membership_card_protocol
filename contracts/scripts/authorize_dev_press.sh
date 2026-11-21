@@ -95,8 +95,10 @@ if [[ "$CURRENT_COUNT" != "3" ]]; then
 fi
 echo ""
 
+# Every action field is bound to the calldata (registry_contract.md §6.2 step 0).
 PAYLOAD=$(build_gov_payload --op authorize_press --version "$CURRENT_VERSION" \
-  --policy "$POLICY_ADDRESS" --press "$PRESS_ADDR" --press-pubkey "$PRESS_PUBKEY")
+  --b64 policy_address="$POLICY_ADDRESS" --b64 press_address="$PRESS_ADDR" \
+  --b64 press_pubkey="$PRESS_PUBKEY" --b64 mldsa44_key_hash="$MLDSA_HASH")
 
 # Quorum = 2: sign with DEV_TESTS_PRESS_GOV_PRIVKEY_1 and _2.
 SIG1=$(sign_with_key "$DEV_TESTS_PRESS_GOV_PRIVKEY_1" "$PAYLOAD")

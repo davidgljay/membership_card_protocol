@@ -519,7 +519,7 @@ These functions implement the targeted card issuance flow (`card_offering_and_ac
 **Steps:**
 
 1. Confirm gas balance (see `checkGasBalance`).
-2. Build and sign the `ClaimOpenOffer` press payload (same structure as `RegisterCardPayload` with `"op": "claim_open_offer"`, plus `offer_id`, `max_acceptances`, `expires_at`).
+2. Build and sign the `ClaimOpenOffer` press payload (same structure as `RegisterCardPayload` with `"op": "claim_open_offer"`, plus `offer_id`, `max_acceptances`, `expires_at`). Write `null` for an unconstrained limit, never the sentinel number, and refuse a limit above 2^53−1 (`registry_contract.md §4.5`, 6.4b W4, decided by David 2026-11-20).
 3. Call `ClaimOpenOffer(offer_id, max_acceptances, expires_at, card_address, card_cid, policy_address, payload_bytes, press_signature)` on the registry contract.
 4. If the transaction reverts with `E-12` (offer expired) or `E-13` (offer at capacity), surface that error to the caller. Do not retry.
 

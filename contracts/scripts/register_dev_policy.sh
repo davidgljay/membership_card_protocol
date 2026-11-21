@@ -83,7 +83,9 @@ if [[ "$CURRENT_COUNT" != "3" ]]; then
 fi
 echo ""
 
-PAYLOAD=$(build_gov_payload --op register_policy --version "$CURRENT_VERSION")
+# Every action field is bound to the calldata (registry_contract.md §6.2 step 0).
+PAYLOAD=$(build_gov_payload --op register_policy --version "$CURRENT_VERSION" \
+  --b64 policy_address="$POLICY_ADDRESS" --b64 authorizer_pubkey="$AUTHORIZER_PUBKEY")
 
 # Quorum = 2: sign with DEV_TESTS_POLICY_GOV_PRIVKEY_1 and _2.
 SIG1=$(sign_with_key "$DEV_TESTS_POLICY_GOV_PRIVKEY_1" "$PAYLOAD")

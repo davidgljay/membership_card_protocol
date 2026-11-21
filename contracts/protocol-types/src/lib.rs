@@ -946,6 +946,235 @@ pub mod calldata_binding {
             && b64_field(payload, b"card_address", card_address)
             && b64_field(payload, b"press_address", press_address)
     }
+
+    // ── Numbers (notary step 6.4b) ───────────────────────────────────────────
+
+    /// The largest integer a JavaScript number holds exactly (2^53 − 1).
+    pub const JS_SAFE_MAX: u64 = (1u64 << 53) - 1;
+
+    /// True iff `tok` is `v` in shortest decimal form (no sign, no leading zero,
+    /// no fraction or exponent), so exactly one token matches each value.
+    pub fn is_decimal_of(tok: &[u8], v: u64) -> bool {
+        let mut buf = [0u8; 20];
+        let mut i = buf.len();
+        let mut n = v;
+        loop {
+            i -= 1;
+            buf[i] = b'0' + (n % 10) as u8;
+            n /= 10;
+            if n == 0 {
+                break;
+            }
+        }
+        tok == &buf[i..]
+    }
+
+    /// The number field `name` equals `v`.
+    pub fn num_field(payload: &[u8], name: &[u8], v: u64) -> bool {
+        matches!(find_member(payload, name), Some((Kind::Bare, t)) if is_decimal_of(t, v))
+    }
+
+    /// §4.5 W4: `null` stands for the calldata sentinel and nothing else; a
+    /// number must equal the calldata, must not be the sentinel, and must not
+    /// exceed [`JS_SAFE_MAX`].
+    pub fn limit_field(payload: &[u8], name: &[u8], v: u64, sentinel: u64) -> bool {
+        match find_member(payload, name) {
+            Some((Kind::Bare, b"null")) => v == sentinel,
+            Some((Kind::Bare, t)) => v != sentinel && v <= JS_SAFE_MAX && is_decimal_of(t, v),
+            _ => false,
+        }
+    }
+
+    /// §4.5 ClaimOpenOffer with the signed limits (6.4b, W4). Replaces
+    /// [`claim_open_offer`] in the contract.
+    #[allow(clippy::too_many_arguments)]
+    pub fn claim_open_offer_with_limits(
+        payload: &[u8],
+        offer_id: &[u8],
+        max_acceptances: u64,
+        expires_at: u64,
+        card_address: &[u8],
+        initial_log_cid: &[u8],
+        policy_address: &[u8],
+        press_address: &[u8],
+    ) -> bool {
+        limit_field(payload, b"max_acceptances", max_acceptances, u64::MAX)
+            && limit_field(payload, b"expires_at", expires_at, 0)
+            && claim_open_offer(payload, offer_id, card_address, initial_log_cid, policy_address, press_address)
+    }
+
+    // ── Governance payloads (§6.2 step 0, notary step 6.4b) ──────────────────
+    //
+    // Each function checks `op` and every action field of the operation's
+    // payload (registry_contract.md §4). `governance_version` and `nonce` are
+    // checked by the quorum steps; `timestamp` is not checked.
+
+    fn op(payload: &[u8], name: &[u8]) -> bool {
+        super::payload_parser::verify_op(payload, name)
+    }
+
+    /// §4.6 RegisterPolicy.
+    pub fn gov_register_policy(payload: &[u8], policy_address: &[u8], authorizer_pubkey: &[u8]) -> bool {
+        op(payload, b"register_policy")
+            && b64_field(payload, b"policy_address", policy_address)
+            && b64_field(payload, b"authorizer_pubkey", authorizer_pubkey)
+    }
+
+    /// §4.6a DeregisterPolicy.
+    pub fn gov_deregister_policy(payload: &[u8], policy_address: &[u8]) -> bool {
+        op(payload, b"deregister_policy") && b64_field(payload, b"policy_address", policy_address)
+    }
+
+    /// §4.7 AuthorizePress.
+    pub fn gov_authorize_press(payload: &[u8], policy_address: &[u8], press_address: &[u8], press_pubkey: &[u8], mldsa44_key_hash: &[u8]) -> bool {
+        op(payload, b"authorize_press")
+            && b64_field(payload, b"policy_address", policy_address)
+            && b64_field(payload, b"press_address", press_address)
+            && b64_field(payload, b"press_pubkey", press_pubkey)
+            && b64_field(payload, b"mldsa44_key_hash", mldsa44_key_hash)
+    }
+
+    /// §4.8 RevokePress.
+    pub fn gov_revoke_press(payload: &[u8], policy_address: &[u8], press_address: &[u8]) -> bool {
+        op(payload, b"revoke_press")
+            && b64_field(payload, b"policy_address", policy_address)
+            && b64_field(payload, b"press_address", press_address)
+    }
+
+    /// §4.9 RotateAuthorizerKey.
+    pub fn gov_rotate_authorizer_key(payload: &[u8], policy_address: &[u8], new_authorizer_key: &[u8]) -> bool {
+        op(payload, b"rotate_authorizer_key")
+            && b64_field(payload, b"policy_address", policy_address)
+            && b64_field(payload, b"new_authorizer_key", new_authorizer_key)
+    }
+
+    /// §4.10 RotateGovernanceKeys. `new_keys` is `new_keys_flat` split into
+    /// `new_key_count` equal keys, same order.
+    pub fn gov_rotate_governance_keys(payload: &[u8], body_id: u8, new_keys_flat: &[u8], new_key_count: u8, new_quorum: u8) -> bool {
+        let n = new_key_count as usize;
+        if n == 0 || new_keys_flat.len() % n != 0 {
+            return false;
+        }
+        let size = new_keys_flat.len() / n;
+        if !(op(payload, b"rotate_governance_keys")
+            && num_field(payload, b"body_id", body_id as u64)
+            && num_field(payload, b"new_quorum", new_quorum as u64))
+        {
+            return false;
+        }
+        let arr = match find_member(payload, b"new_keys") {
+            Some((Kind::Array, arr)) => arr,
+            _ => return false,
+        };
+        let count = for_each_element(arr, |i, kind, item| {
+            i < n && kind == Kind::String && is_b64url_of(item, &new_keys_flat[i * size..(i + 1) * size])
+        });
+        count == Some(n)
+    }
+
+    /// §4.25 SetProtocolVersion.
+    pub fn gov_set_protocol_version(payload: &[u8], new_version: &[u8]) -> bool {
+        op(payload, b"set_protocol_version") && text_field(payload, b"new_version", new_version)
+    }
+
+    /// §4.16 DisablePolicyDeletePermanently (no calldata: `op` is the binding).
+    pub fn gov_disable_policy_delete_permanently(payload: &[u8]) -> bool {
+        op(payload, b"disable_policy_delete_permanently")
+    }
+
+    /// §4.14 ProposeLogicUpgrade.
+    pub fn gov_propose_logic_upgrade(payload: &[u8], new_logic_address: &[u8]) -> bool {
+        op(payload, b"propose_logic_upgrade") && b64_field(payload, b"new_logic_address", new_logic_address)
+    }
+
+    /// §4.14 ConfirmLogicUpgrade.
+    pub fn gov_confirm_logic_upgrade(payload: &[u8], proposed_logic_address: &[u8]) -> bool {
+        op(payload, b"confirm_logic_upgrade") && b64_field(payload, b"proposed_logic_address", proposed_logic_address)
+    }
+
+    /// §4.14 CancelLogicUpgrade: `pending` is the pending proposal's address.
+    pub fn gov_cancel_logic_upgrade(payload: &[u8], pending: &[u8]) -> bool {
+        op(payload, b"cancel_logic_upgrade") && b64_field(payload, b"proposed_logic_address", pending)
+    }
+
+    /// §4.14a ProposeVerifierUpgrade.
+    pub fn gov_propose_verifier_upgrade(payload: &[u8], new_verifier_address: &[u8]) -> bool {
+        op(payload, b"propose_verifier_upgrade") && b64_field(payload, b"new_verifier_address", new_verifier_address)
+    }
+
+    /// §4.14a ConfirmVerifierUpgrade.
+    pub fn gov_confirm_verifier_upgrade(payload: &[u8], proposed_verifier_address: &[u8]) -> bool {
+        op(payload, b"confirm_verifier_upgrade") && b64_field(payload, b"proposed_verifier_address", proposed_verifier_address)
+    }
+
+    /// §4.14a CancelVerifierUpgrade: `pending` is the pending proposal's address.
+    pub fn gov_cancel_verifier_upgrade(payload: &[u8], pending: &[u8]) -> bool {
+        op(payload, b"cancel_verifier_upgrade") && b64_field(payload, b"proposed_verifier_address", pending)
+    }
+
+    /// §4.17 RegisterDomain.
+    pub fn gov_register_domain(payload: &[u8], domain: &[u8], admin_card_address: &[u8], admin_secp256r1_key: &[u8]) -> bool {
+        op(payload, b"register_domain")
+            && text_field(payload, b"domain", domain)
+            && b64_field(payload, b"admin_card_address", admin_card_address)
+            && b64_field(payload, b"admin_secp256r1_key", admin_secp256r1_key)
+    }
+
+    /// §4.18 DeregisterDomain.
+    pub fn gov_deregister_domain(payload: &[u8], domain: &[u8]) -> bool {
+        op(payload, b"deregister_domain") && text_field(payload, b"domain", domain)
+    }
+
+    /// §4.20 RemovePolicyAddress, governance path (path B).
+    pub fn gov_remove_policy_address(payload: &[u8], domain: &[u8], path: &[u8]) -> bool {
+        op(payload, b"governance_remove_policy_address")
+            && text_field(payload, b"domain", domain)
+            && text_field(payload, b"path", path)
+    }
+
+    /// §4.21 ClearDomainEntries: same paths, same order.
+    pub fn gov_clear_domain_entries<P: AsRef<[u8]>>(payload: &[u8], domain: &[u8], paths: &[P]) -> bool {
+        if !(op(payload, b"clear_domain_entries") && text_field(payload, b"domain", domain)) {
+            return false;
+        }
+        let arr = match find_member(payload, b"paths") {
+            Some((Kind::Array, arr)) => arr,
+            _ => return false,
+        };
+        let n = paths.len();
+        let count = for_each_element(arr, |i, kind, item| {
+            i < n && kind == Kind::String && !item.contains(&b'\\') && item == paths[i].as_ref()
+        });
+        count == Some(n)
+    }
+
+    /// §4.22 FlagDomainFraudRisk.
+    pub fn gov_flag_domain_fraud_risk(payload: &[u8], domain: &[u8], fraud_risk: u8, suspension_expires_at: u64) -> bool {
+        op(payload, b"flag_domain_fraud_risk")
+            && text_field(payload, b"domain", domain)
+            && num_field(payload, b"fraud_risk", fraud_risk as u64)
+            && num_field(payload, b"suspension_expires_at", suspension_expires_at)
+    }
+
+    /// §4.23 GovernanceSetPolicyAddress.
+    pub fn gov_set_policy_address(payload: &[u8], domain: &[u8], path: &[u8], policy_card_address: &[u8]) -> bool {
+        op(payload, b"governance_set_policy_address")
+            && text_field(payload, b"domain", domain)
+            && text_field(payload, b"path", path)
+            && b64_field(payload, b"policy_card_address", policy_card_address)
+    }
+
+    /// §4.24 SetDnsGovernancePolicyAddress.
+    pub fn gov_set_dns_governance_policy_address(payload: &[u8], new_policy_address: &[u8]) -> bool {
+        op(payload, b"set_dns_governance_policy_address") && b64_field(payload, b"new_policy_address", new_policy_address)
+    }
+}
+
+/// §4.19 path rule (6.4a W6, decided by David 2026-11-19): a DNS path may not
+/// contain a character JSON escapes (`"`, `\`, 0x00–0x1F), so it is always
+/// written in a payload as-is and step 8 can compare it byte for byte.
+pub fn dns_path_chars_ok(path: &[u8]) -> bool {
+    !path.iter().any(|&b| b == b'"' || b == b'\\' || b < 0x20)
 }
 
 #[cfg(test)]

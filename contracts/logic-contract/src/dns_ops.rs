@@ -37,6 +37,7 @@ use stylus_sdk::{
     evm,
 };
 
+use protocol_types::calldata_binding as bind;
 use crate::{
     errors,
     current_timestamp,
@@ -161,6 +162,8 @@ pub fn register_domain(
     }
 
     // Quorum verification (marks nonce as used).
+    // §6.2 step 0 (E-49): the payload binds this call.
+    require_bound(bind::gov_register_domain(&governance_payload, &domain, admin_card_address.as_slice(), &admin_secp256r1_key))?;
     verify_governance_quorum(contract, DNS_GOVERNANCE_BODY, &governance_payload, &governance_sigs)?;
 
     let ts = current_timestamp();
@@ -225,6 +228,8 @@ pub fn deregister_domain(
         require_domain_exists(storage_addr, d_hash)?;
 
     // Quorum verification.
+    // §6.2 step 0 (E-49): the payload binds this call.
+    require_bound(bind::gov_deregister_domain(&governance_payload, &domain))?;
     verify_governance_quorum(contract, DNS_GOVERNANCE_BODY, &governance_payload, &governance_sigs)?;
 
     let ts = current_timestamp();
@@ -290,6 +295,11 @@ pub fn set_policy_address(
 ) -> Result<(), Vec<u8>> {
     validate_domain(&domain)?;
     if path.len() > MAX_PATH_LEN {
+        return Err(errors::make_error(errors::INVALID_DNS_PARAMETER));
+    }
+    // §4.19 path rule (6.4a W6): no character JSON escapes (E-43), checked
+    // before step 8 so the error names the cause.
+    if !protocol_types::dns_path_chars_ok(&path) {
         return Err(errors::make_error(errors::INVALID_DNS_PARAMETER));
     }
 
@@ -468,6 +478,8 @@ pub fn remove_policy_address(
         ))?;
     } else {
         // Path B: governance quorum.
+        // §6.2 step 0 (E-49): the payload binds this call.
+        require_bound(bind::gov_remove_policy_address(&governance_payload, &domain, &path))?;
         verify_governance_quorum(contract, DNS_GOVERNANCE_BODY, &governance_payload, &governance_sigs)?;
     }
 
@@ -515,6 +527,8 @@ pub fn clear_domain_entries(
     require_domain_exists(storage_addr, d_hash)?;
 
     // Quorum verification.
+    // §6.2 step 0 (E-49): the payload binds this call.
+    require_bound(bind::gov_clear_domain_entries(&governance_payload, &domain, &paths))?;
     verify_governance_quorum(contract, DNS_GOVERNANCE_BODY, &governance_payload, &governance_sigs)?;
 
     let mut paths_cleared: u32 = 0;
@@ -587,6 +601,8 @@ pub fn flag_domain_fraud_risk(
         require_domain_exists(storage_addr, d_hash)?;
 
     // Quorum verification.
+    // §6.2 step 0 (E-49): the payload binds this call.
+    require_bound(bind::gov_flag_domain_fraud_risk(&governance_payload, &domain, fraud_risk, suspension_expires_at))?;
     verify_governance_quorum(contract, DNS_GOVERNANCE_BODY, &governance_payload, &governance_sigs)?;
 
     let mut storage_mut = IStorage::new(storage_addr);
@@ -631,6 +647,11 @@ pub fn governance_set_policy_address(
     governance_sigs: Vec<Vec<u8>>,
 ) -> Result<(), Vec<u8>> {
     validate_domain(&domain)?;
+    // §4.23 path rule (6.4a W6): a non-clearing write refuses a path with a
+    // character JSON escapes (E-43); clearing doesn't apply it.
+    if policy_card_address != B256::ZERO && !protocol_types::dns_path_chars_ok(&path) {
+        return Err(errors::make_error(errors::INVALID_DNS_PARAMETER));
+    }
 
     let storage_addr = contract.storage_contract.get();
     let d_hash = domain_hash(&domain);
@@ -650,6 +671,8 @@ pub fn governance_set_policy_address(
     }
 
     // Quorum verification.
+    // §6.2 step 0 (E-49): the payload binds this call.
+    require_bound(bind::gov_set_policy_address(&governance_payload, &domain, &path, policy_card_address.as_slice()))?;
     verify_governance_quorum(contract, DNS_GOVERNANCE_BODY, &governance_payload, &governance_sigs)?;
 
     let key = policy_address_key(&domain, &path);
@@ -719,6 +742,8 @@ pub fn set_dns_governance_policy_address(
     }
 
     // Quorum verification.
+    // §6.2 step 0 (E-49): the payload binds this call.
+    require_bound(bind::gov_set_dns_governance_policy_address(&governance_payload, new_policy_address.as_slice()))?;
     verify_governance_quorum(contract, DNS_GOVERNANCE_BODY, &governance_payload, &governance_sigs)?;
 
     let mut storage_mut = IStorage::new(storage_addr);

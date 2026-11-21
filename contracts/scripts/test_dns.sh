@@ -196,9 +196,9 @@ else
     REG_DOM_PAYLOAD=$(build_gov_payload \
         --op register_domain \
         --version "$DNS_VER" \
-        --policy "$TEST_DOMAIN" \
-        --press "$ADMIN_CARD_ADDR" \
-        --press-pubkey "$DEPLOYER_SECP256R1_PUBKEY")
+        --str domain="$TEST_DOMAIN" \
+        --b64 admin_card_address="$ADMIN_CARD_ADDR" \
+        --b64 admin_secp256r1_key="$DEPLOYER_SECP256R1_PUBKEY")
     REG_DOM_SIG=$(sign_payload_with "$REG_DOM_PAYLOAD")
     REG_DOM_PAYLOAD_ARR=$(to_uint8_array "0x$(hex_encode "$REG_DOM_PAYLOAD")")
     REG_DOM_SIG_ARR=$(to_uint8_array "$REG_DOM_SIG")
@@ -258,11 +258,12 @@ fi
 
 echo "[5/6] RemovePolicyAddress — remove via DnsGovernanceBody quorum"
 
+# Path B has its own op (registry_contract.md §4.20, 6.4b).
 REM_PAYLOAD=$(build_gov_payload \
-    --op remove_policy_address \
+    --op governance_remove_policy_address \
     --version "$DNS_VER" \
-    --policy "$TEST_DOMAIN" \
-    --press "$TEST_PATH")
+    --str domain="$TEST_DOMAIN" \
+    --str path="$TEST_PATH")
 REM_SIG=$(sign_payload_with "$REM_PAYLOAD")
 REM_PAYLOAD_ARR=$(to_uint8_array "0x$(hex_encode "$REM_PAYLOAD")")
 REM_SIG_ARR=$(to_uint8_array "$REM_SIG")

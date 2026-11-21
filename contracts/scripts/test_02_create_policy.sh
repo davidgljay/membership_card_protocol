@@ -84,8 +84,9 @@ else
     echo "Policy not yet registered. Building governance payload..."
     echo ""
 
-    NONCE=$(xxd -p -l 32 /dev/urandom | tr -d '\n')
-    GOV_PAYLOAD="{\"governance_version\":${ROOT_GOV_VER},\"nonce\":\"${NONCE}\",\"op\":\"register_policy\"}"
+    # Every action field is bound to the calldata (registry_contract.md §6.2 step 0).
+    GOV_PAYLOAD=$(cargo run --manifest-path "$CARGO_MANIFEST" --bin build_governance_payload --quiet -- --op register_policy --version "$ROOT_GOV_VER" \
+        --b64 policy_address="$POLICY_ADDR" --b64 authorizer_pubkey="$DEPLOYER_SECP256R1_PUBKEY")
     GOV_PAYLOAD_HEX="0x$(echo -n "$GOV_PAYLOAD" | xxd -p | tr -d '\n')"
     GOV_SIG=$(cargo run --manifest-path "$CARGO_MANIFEST" --bin sign_payload --quiet -- \
         --key-hex "$SECP256R1_PRIVKEY" --payload "$GOV_PAYLOAD")

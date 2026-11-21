@@ -127,7 +127,8 @@ if [[ "$POLICY_EXISTS" == "true" ]]; then
 else
     echo ""
     echo "--- RegisterPolicy (DNS governance policy) ---"
-    PAYLOAD=$(build_gov_payload --op register_policy --version "$ROOT_VER")
+    PAYLOAD=$(build_gov_payload --op register_policy --version "$ROOT_VER" \
+        --b64 policy_address="$DNS_POLICY_ADDR" --b64 authorizer_pubkey="$DEPLOYER_SECP256R1_PUBKEY")
     SIG=$(sign_gov_payload "$PAYLOAD")
     PAYLOAD_ARR=$(to_uint8_array "0x$(hex_encode "$PAYLOAD")")
     SIG_ARR=$(to_uint8_array "$SIG")
@@ -160,7 +161,9 @@ if [[ "$PRESS_ACTIVE" == "true" ]]; then
 else
     echo ""
     echo "--- AuthorizePress (DNS governance press) ---"
-    PAYLOAD=$(build_gov_payload --op authorize_press --version "$PRESS_VER")
+    PAYLOAD=$(build_gov_payload --op authorize_press --version "$PRESS_VER" \
+        --b64 policy_address="$DNS_POLICY_ADDR" --b64 press_address="$DNS_PRESS_ADDR" \
+        --b64 press_pubkey="$DEPLOYER_SECP256R1_PUBKEY" --b64 mldsa44_key_hash="$MLDSA_HASH")
     SIG=$(sign_gov_payload "$PAYLOAD")
     PAYLOAD_ARR=$(to_uint8_array "0x$(hex_encode "$PAYLOAD")")
     SIG_ARR=$(to_uint8_array "$SIG")
@@ -194,10 +197,9 @@ if [[ "$(echo "$CURRENT_DNS_POLICY" | tr '[:upper:]' '[:lower:]')" == "$(echo "$
 else
     echo ""
     echo "--- SetDnsGovernancePolicyAddress ---"
-    POLICY_B64=$(hex32_to_b64url "$DNS_POLICY_ADDR")
     PAYLOAD=$(build_gov_payload --op set_dns_governance_policy_address \
         --version "$DNS_VER" \
-        --address "$DNS_POLICY_ADDR")
+        --b64 new_policy_address="$DNS_POLICY_ADDR")
     SIG=$(sign_gov_payload "$PAYLOAD")
     PAYLOAD_ARR=$(to_uint8_array "0x$(hex_encode "$PAYLOAD")")
     SIG_ARR=$(to_uint8_array "$SIG")

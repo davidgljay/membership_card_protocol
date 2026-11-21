@@ -221,9 +221,10 @@ export async function authorizeDevPressUnderPolicy(policyAddress: Hex): Promise<
   const mldsaHash = keccak256(mldsaPubkey as Hex);
   const { payload, signatures } = await buildAndSignGovernanceOp('press', [
     '--op', 'authorize_press',
-    '--policy', policyAddress,
-    '--press', pressAddress,
-    '--press-pubkey', pressPubkey,
+    '--b64', `policy_address=${policyAddress}`,
+    '--b64', `press_address=${pressAddress}`,
+    '--b64', `press_pubkey=${pressPubkey}`,
+    '--b64', `mldsa44_key_hash=${mldsaHash}`,
   ]);
 
   await submitGovernanceTx('authorizePress', AUTHORIZE_PRESS_ABI, [

@@ -174,12 +174,14 @@ else
         --rpc-url "$ARBITRUM_SEPOLIA_RPC")
     PRESS_GOV_VER=$(parse_gov_keyset_version "$PRESS_KEYSET_RAW")
 
-    NONCE=$(xxd -p -l 32 /dev/urandom | tr -d '\n')
-    GOV_PAYLOAD="{\"governance_version\":${PRESS_GOV_VER},\"nonce\":\"${NONCE}\",\"op\":\"authorize_press\"}"
+    MLDSA_HASH="0x0000000000000000000000000000000000000000000000000000000000000000"
+    # Every action field is bound to the calldata (registry_contract.md §6.2 step 0).
+    GOV_PAYLOAD=$(cargo run --manifest-path "$CARGO_MANIFEST" --bin build_governance_payload --quiet -- --op authorize_press --version "$PRESS_GOV_VER" \
+        --b64 policy_address="$POLICY_ADDR" --b64 press_address="$PRESS_ADDR" \
+        --b64 press_pubkey="$PRESS_PUBKEY" --b64 mldsa44_key_hash="$MLDSA_HASH")
     GOV_PAYLOAD_HEX="0x$(echo -n "$GOV_PAYLOAD" | xxd -p | tr -d '\n')"
     GOV_SIG=$(cargo run --manifest-path "$CARGO_MANIFEST" --bin sign_payload --quiet -- \
         --key-hex "$SECP256R1_PRIVKEY" --payload "$GOV_PAYLOAD")
-    MLDSA_HASH="0x0000000000000000000000000000000000000000000000000000000000000000"
 
     PUBKEY_ARR=$(hex_to_uint8_array "$PRESS_PUBKEY")
     PAYLOAD_ARR=$(hex_to_uint8_array "$GOV_PAYLOAD_HEX")
@@ -238,7 +240,9 @@ PYEOF
     fi
     echo ""
 
-    PRESS_PAYLOAD="{\"op\":\"register_card\",\"sequence\":${SEQ}}"
+    # Write-gate step 8 (registry_contract.md §6.1, E-49): every field equals the calldata.
+    b64url() { echo -n "${1#0x}" | xxd -r -p | base64 | tr '+/' '-_' | tr -d '=\n'; }
+    PRESS_PAYLOAD="{\"card_address\":\"$(b64url "$CARD_ADDR")\",\"initial_log_cid\":\"$(b64url "$INITIAL_CID")\",\"op\":\"register_card\",\"policy_address\":\"$(b64url "$POLICY_ADDR")\",\"press_address\":\"$(b64url "$PRESS_ADDR")\",\"sequence\":${SEQ}}"
     PRESS_PAYLOAD_HEX="0x$(echo -n "$PRESS_PAYLOAD" | xxd -p | tr -d '\n')"
     PRESS_SIG=$(cargo run --manifest-path "$CARGO_MANIFEST" --bin sign_payload --quiet -- \
         --key-hex "$PRESS_PRIVKEY" --payload "$PRESS_PAYLOAD")

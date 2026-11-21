@@ -152,7 +152,7 @@ describe('dns_governance_verifier.md (live dev deployment)', () => {
     if (currentDnsPolicy.toLowerCase() !== dnsPolicyAddress.toLowerCase()) {
       const { payload, signatures } = await buildAndSignGovernanceOp('dns', [
         '--op', 'set_dns_governance_policy_address',
-        '--address', dnsPolicyAddress,
+        '--b64', `new_policy_address=${dnsPolicyAddress}`,
       ]);
       await submitGovernanceTx('setDnsGovernancePolicyAddress', LOGIC_ABI, [
         dnsPolicyAddress,
@@ -190,9 +190,9 @@ describe('dns_governance_verifier.md (live dev deployment)', () => {
   it('Stage A2 (RegisterDomain, registry_contract.md §4.17): registers a domain admin card on-chain', async () => {
     const { payload, signatures } = await buildAndSignGovernanceOp('dns', [
       '--op', 'register_domain',
-      '--policy', domain,
-      '--press', adminCardAddress,
-      '--press-pubkey', '0x' + Buffer.from(adminSecpPubkeyXY).toString('hex'),
+      '--str', `domain=${domain}`,
+      '--b64', `admin_card_address=${adminCardAddress}`,
+      '--b64', `admin_secp256r1_key=0x${Buffer.from(adminSecpPubkeyXY).toString('hex')}`,
     ]);
 
     await submitGovernanceTx('registerDomain', LOGIC_ABI, [
@@ -304,7 +304,7 @@ describe('dns_governance_verifier.md (live dev deployment)', () => {
   it('Script B (DeregisterDomain, registry_contract.md §4.18): clears the domain admin pointer and the admin secp256r1 key', async () => {
     const { payload, signatures } = await buildAndSignGovernanceOp('dns', [
       '--op', 'deregister_domain',
-      '--policy', domain,
+      '--str', `domain=${domain}`,
     ]);
 
     await submitGovernanceTx('deregisterDomain', LOGIC_ABI, [

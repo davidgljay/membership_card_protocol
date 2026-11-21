@@ -23,11 +23,10 @@
  * `bootstrap.sh` itself shells out to — reusing them via `cargo run`
  * avoids a second, independent (and therefore riskier) implementation of
  * RFC 8785 canonicalization and RFC 6979 deterministic ECDSA signing.
- * `verify_governance_quorum` (write_gate.rs) only checks the payload's
- * `governance_version`/`nonce` fields and the signature over the raw
- * payload bytes — it never cross-validates the payload's informational
- * `policy`/`press`/`press_pubkey` fields against the actual call
- * arguments, so this module doesn't need to match those exactly either.
+ * Since notary step 6.4b the contract binds every governance payload to its
+ * call (`registry_contract.md §6.2` step 0, E-49): `op` and every action
+ * field must equal the calldata. Each call below therefore passes the same
+ * values to the builder as to the contract.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -115,16 +114,22 @@ function hexToBytesArg(hex: string): number[] {
   return bytesToUint8Array(bytes);
 }
 
+/** `fields` are the builder's field flags, e.g. `['--b64', 'policy_address=0x…']`. */
 function buildGovernancePayload(
   scriptsDir: string,
   op: 'register_policy' | 'authorize_press' | 'set_dns_governance_policy_address' | 'register_domain' | 'flag_domain_fraud_risk',
-  version: number
+  version: number,
+  fields: string[]
 ): string {
   return execFileSync(
     'cargo',
-    ['run', '--manifest-path', `${scriptsDir}/Cargo.toml`, '--bin', 'build_governance_payload', '--quiet', '--', '--op', op, '--version', String(version)],
+    ['run', '--manifest-path', `${scriptsDir}/Cargo.toml`, '--bin', 'build_governance_payload', '--quiet', '--', '--op', op, '--version', String(version), ...fields],
     { encoding: 'utf-8' }
   ).trim();
+}
+
+function hexOf(bytes: Uint8Array): string {
+  return '0x' + Buffer.from(bytes).toString('hex');
 }
 
 function signPayload(scriptsDir: string, privateKeyHex: string, payload: string): string {
@@ -172,10 +177,12 @@ export async function ensureGovernanceBootstrap(options: EnsureGovernanceBootstr
     });
     const version = keyset.version;
 
-    const payload = buildGovernancePayload(options.contractsScriptsDir, 'register_policy', version);
-    const sigHex = signPayload(options.contractsScriptsDir, options.governanceKeypair.private_key, payload);
-
     const authorizerPubkey = hexToBytesArg(options.governanceKeypair.public_key);
+    const payload = buildGovernancePayload(options.contractsScriptsDir, 'register_policy', version, [
+      '--b64', `policy_address=${policyAddressHex}`,
+      '--b64', `authorizer_pubkey=${normalizeHexKey(options.governanceKeypair.public_key)}`,
+    ]);
+    const sigHex = signPayload(options.contractsScriptsDir, options.governanceKeypair.private_key, payload);
 
     const hash = await walletClient.writeContract({
       address: options.logicAddress,
@@ -207,12 +214,17 @@ export async function ensureGovernanceBootstrap(options: EnsureGovernanceBootstr
     });
     const version = keyset.version;
 
-    const payload = buildGovernancePayload(options.contractsScriptsDir, 'authorize_press', version);
-    const sigHex = signPayload(options.contractsScriptsDir, options.governanceKeypair.private_key, payload);
-
     const pressPubkeyXY = p256PublicKeyXY(options.pressSecp256r1PrivateKey);
     const mldsa44Pubkey = mlDsa44GetPublicKey(options.pressMlDsa44PrivateKey);
     const mldsa44KeyHash = ('0x' + keccak256(mldsa44Pubkey)) as Hex;
+
+    const payload = buildGovernancePayload(options.contractsScriptsDir, 'authorize_press', version, [
+      '--b64', `policy_address=${policyAddressHex}`,
+      '--b64', `press_address=${options.pressAddress}`,
+      '--b64', `press_pubkey=${hexOf(pressPubkeyXY)}`,
+      '--b64', `mldsa44_key_hash=${mldsa44KeyHash}`,
+    ]);
+    const sigHex = signPayload(options.contractsScriptsDir, options.governanceKeypair.private_key, payload);
 
     const hash = await walletClient.writeContract({
       address: options.logicAddress,
@@ -248,10 +260,10 @@ function clients(rpcUrl: string) {
   return { publicClient, walletClient };
 }
 
-async function dnsQuorum(options: DnsGovernanceOptions, op: 'set_dns_governance_policy_address' | 'register_domain' | 'flag_domain_fraud_risk') {
+async function dnsQuorum(options: DnsGovernanceOptions, op: 'set_dns_governance_policy_address' | 'register_domain' | 'flag_domain_fraud_risk', fields: string[]) {
   const { publicClient } = clients(options.rpcUrl);
   const keyset = await publicClient.readContract({ address: options.storageAddress, abi: STORAGE_ABI, functionName: 'getGovernanceKeyset', args: [DNS_GOVERNANCE_BODY] });
-  const payload = buildGovernancePayload(options.contractsScriptsDir, op, keyset.version);
+  const payload = buildGovernancePayload(options.contractsScriptsDir, op, keyset.version, fields);
   const sigHex = signPayload(options.contractsScriptsDir, options.governanceKeypair.private_key, payload);
   return { payload: Array.from(new TextEncoder().encode(payload)), sigs: [hexToBytesArg(sigHex)] };
 }
@@ -266,7 +278,7 @@ export async function ensureDnsGovernancePolicy(options: DnsGovernanceOptions & 
   const { publicClient, walletClient } = clients(options.rpcUrl);
   const current = await publicClient.readContract({ address: options.storageAddress, abi: STORAGE_ABI, functionName: 'getDnsGovernancePolicyAddress', args: [] });
   if (BigInt(current) === BigInt(normalizeHexKey(options.policyAddress))) return;
-  const { payload, sigs } = await dnsQuorum(options, 'set_dns_governance_policy_address');
+  const { payload, sigs } = await dnsQuorum(options, 'set_dns_governance_policy_address', ['--b64', `new_policy_address=${normalizeHexKey(options.policyAddress)}`]);
   const hash = await walletClient.writeContract({ address: options.logicAddress, abi: LOGIC_ABI, functionName: 'setDnsGovernancePolicyAddress', args: [normalizeHexKey(options.policyAddress) as Hex, payload, sigs] });
   await publicClient.waitForTransactionReceipt({ hash, timeout: 120_000 });
 }
@@ -275,7 +287,11 @@ export async function ensureDnsGovernancePolicy(options: DnsGovernanceOptions & 
 export async function registerDomain(options: DnsGovernanceOptions & { domain: string; adminCardAddress: string }): Promise<void> {
   const { publicClient, walletClient } = clients(options.rpcUrl);
   const adminSecp = p256.getPublicKey(p256.utils.randomPrivateKey(), false).slice(1);
-  const { payload, sigs } = await dnsQuorum(options, 'register_domain');
+  const { payload, sigs } = await dnsQuorum(options, 'register_domain', [
+    '--str', `domain=${options.domain}`,
+    '--b64', `admin_card_address=${normalizeHexKey(options.adminCardAddress)}`,
+    '--b64', `admin_secp256r1_key=${hexOf(adminSecp)}`,
+  ]);
   const hash = await walletClient.writeContract({
     address: options.logicAddress, abi: LOGIC_ABI, functionName: 'registerDomain',
     args: [Array.from(new TextEncoder().encode(options.domain)), normalizeHexKey(options.adminCardAddress) as Hex, Array.from(adminSecp), payload, sigs],
@@ -286,7 +302,11 @@ export async function registerDomain(options: DnsGovernanceOptions & { domain: s
 /** FlagDomainFraudRisk (dns_resolution.md §7). */
 export async function flagDomainFraudRisk(options: DnsGovernanceOptions & { domain: string; fraudRisk: 0 | 1 | 2; suspensionExpiresAt: bigint }): Promise<void> {
   const { publicClient, walletClient } = clients(options.rpcUrl);
-  const { payload, sigs } = await dnsQuorum(options, 'flag_domain_fraud_risk');
+  const { payload, sigs } = await dnsQuorum(options, 'flag_domain_fraud_risk', [
+    '--str', `domain=${options.domain}`,
+    '--num', `fraud_risk=${options.fraudRisk}`,
+    '--num', `suspension_expires_at=${options.suspensionExpiresAt}`,
+  ]);
   const hash = await walletClient.writeContract({
     address: options.logicAddress, abi: LOGIC_ABI, functionName: 'flagDomainFraudRisk',
     args: [Array.from(new TextEncoder().encode(options.domain)), options.fraudRisk, options.suspensionExpiresAt, payload, sigs],

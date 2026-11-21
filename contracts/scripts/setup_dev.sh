@@ -108,8 +108,9 @@ if [[ "$POLICY_EXISTS" == "true" ]]; then
 else
     echo ""
     echo "--- RegisterPolicy ---"
-    NONCE=$(xxd -p -l 32 /dev/urandom | tr -d '\n')
-    PAYLOAD="{\"governance_version\":$GOV_VER,\"nonce\":\"$NONCE\",\"op\":\"register_policy\"}"
+    # Every action field is bound to the calldata (registry_contract.md §6.2 step 0).
+    PAYLOAD=$(cargo run --manifest-path "$CARGO_MANIFEST" --bin build_governance_payload --quiet -- --op register_policy --version "$GOV_VER" \
+        --b64 policy_address="$DEV_POLICY_ADDR" --b64 authorizer_pubkey="$DEPLOYER_SECP256R1_PUBKEY")
     SIG=$(sign_payload "$PAYLOAD")
     PAYLOAD_HEX="0x$(hex_encode "$PAYLOAD")"
 
@@ -145,11 +146,12 @@ if [[ "$PRESS_ACTIVE" == "true" ]]; then
 else
     echo ""
     echo "--- AuthorizePress ---"
-    NONCE=$(xxd -p -l 32 /dev/urandom | tr -d '\n')
-    PAYLOAD="{\"governance_version\":$PRESS_GOV_VER,\"nonce\":\"$NONCE\",\"op\":\"authorize_press\"}"
+    MLDSA_HASH="0x0000000000000000000000000000000000000000000000000000000000000000"
+    PAYLOAD=$(cargo run --manifest-path "$CARGO_MANIFEST" --bin build_governance_payload --quiet -- --op authorize_press --version "$PRESS_GOV_VER" \
+        --b64 policy_address="$DEV_POLICY_ADDR" --b64 press_address="$DEV_PRESS_ADDR" \
+        --b64 press_pubkey="$DEPLOYER_SECP256R1_PUBKEY" --b64 mldsa44_key_hash="$MLDSA_HASH")
     SIG=$(sign_payload "$PAYLOAD")
     PAYLOAD_HEX="0x$(hex_encode "$PAYLOAD")"
-    MLDSA_HASH="0x0000000000000000000000000000000000000000000000000000000000000000"
 
     echo "Payload: $PAYLOAD"
     echo "Sig:     $SIG"

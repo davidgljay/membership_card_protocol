@@ -325,7 +325,7 @@ Goal: one end-to-end path running in the simulator: a job is announced with an a
   - **Done when**: the E-49 tests pass, existing contract tests still pass, and the devnode stack uses the new contract.
   - **Done 2026-11-15** (CP7 approved for the devnode only). The checks live in `protocol_types::calldata_binding`, and the logic contract calls them; the verifier module needed no change. 10 Rust unit tests; `integration_tests/suites/core/registry_write_gate.spec.ts` passes on the devnode, and so do the other 19 suites. Foundry: 162 pass; the 6 failures are `SepoliaIntegration.t.sol`, which needs a Sepolia fork RPC. Decisions and findings for David: `plans/notary-questions-6.4a.md` (W1–W9).
 
-- [ ] **6.4b Governance payload binding** *(added 2026-11-15 from 6.4a finding W1; CP7 approved by David 2026-11-20 for the local devnode only)*
+- [x] **6.4b Governance payload binding** *(added 2026-11-15 from 6.4a finding W1; CP7 approved by David 2026-11-20 for the local devnode only)*
   - **What**: Close the governance counterpart of the step 8 gap: `verify_governance_quorum` (§6.2) checks the version, nonce and signatures, but neither `op` nor any action parameter, so a quorum-signed payload can be submitted once with any calldata for any operation of the same body. In order:
     1. **Inventory.** List every quorum-gated call (`governance_ops.rs`, `upgrade_ops.rs`, `dns_ops.rs`, `key_scheme_ops.rs`) with its body, its calldata, its §4 payload, and every script or fixture that builds that payload.
     2. **Spec.** Write the missing payload definitions (for example §4.8 `RevokePress`, §4.10 `RotateGovernanceKeys`, §4.16, §4.25, `DeregisterPolicy`, the cancel and verifier-upgrade operations, and `RemovePolicyAddress` path B), and add a step to §6.2: `op` must equal the operation, and every action-parameter field must equal the calldata. Bring the spec changes to David before code.
@@ -338,6 +338,12 @@ Goal: one end-to-end path running in the simulator: a job is announced with an a
   - **Context needed**: `registry_contract.md §4.6–4.25, §6.1, §6.2`; `dns_resolution.md` §2; `plans/notary-questions-6.4a.md` W1, W4, W6, W8; 6.4a's `calldata_binding` and `registry_write_gate.spec.ts` as the pattern
   - **Done when**: for every quorum-gated operation, unit tests show that a wrong `op` and each altered parameter are refused, and that the spec payload is accepted; a devnode suite shows that swapped calldata reverts for at least `AuthorizePress`, `RotateGovernanceKeys` and `ProposeLogicUpgrade`; every payload builder writes the spec format; a `ClaimOpenOffer` with altered `max_acceptances` or `expires_at` is refused in unit tests and on the devnode; a forbidden path character is refused with E-43 on set and accepted on removal, in unit tests and on the devnode; the pre-upgrade scan's result is recorded in `plans/notary-questions-6.4a.md`; and all integration suites pass on the devnode.
   - **Not blocking**: 6.4 does not depend on it. It must land before any Sepolia or mainnet upgrade.
+  - **Done 2026-11-21** (CP7 approved for the devnode only).
+    - **Built:** items 1–6. Q1–Q8 were answered by David.
+    - **Rust:** `protocol-types` has 17 tests, with negative controls.
+    - **Devnode:** the new `core/governance_payload_binding.spec.ts` passes 5 of 5, and all integration suites pass.
+    - **Item 7:** the read-only scan of Sepolia and mainnet found no path or domain that breaks the rule. Rerun it just before the W8 upgrade.
+    - **Details:** `plans/notary-questions-6.4b.md`. Deploying beyond the devnode is still W8, a separate CP7 approval.
 
 - [x] **6.4 Derived-card template**
   - **What**: Build the `derive` template and policy: per-input mode with key rotation each period, `dup_tag` (including re-seeding by generation), the anonymity-set check, batched issuance through the notary acting as press, `expires_at` with renewal, and the `source_kind` refusal. Depends on 5.3a and 6.4a.
