@@ -28,6 +28,7 @@ impl HostIo for WorldHost {
                 Some(serde_json::to_vec(&json!({ "head_cid": c["log_head_cid"], "events": c["events"] })).unwrap())
             }
             "subcard" => Some(serde_json::to_vec(w["subcards"].get(arg)?).unwrap()),
+            "press_auth" => Some(serde_json::to_vec(w.get("press_auth")?.get(arg)?).unwrap()),
             _ => None,
         }
     }
@@ -245,4 +246,62 @@ fn source_presses_are_read_per_policy_and_an_entry_check_reads_nothing() {
     assert_eq!(host.reads, after_first, "not again before the refresh interval");
     oracle.refresh_source_presses(&mut host, &policy_id, now + PRESS_REFRESH_MS);
     assert!(host.reads > after_first, "read again after it");
+}
+
+/// D9 (decided by David 2026-11-21: the spec check plus `AuthorizePress`): template-scope P3 passes only when the notary
+/// card checks pass (notary-cards `template_notary`) **and** `AuthorizePress(T, card)` is active with the card's
+/// `chain_pubkey`. Each refusal is checked against an otherwise passing world.
+#[test]
+fn template_handoff_needs_the_card_checks_and_an_active_authorize_press_with_the_cards_chain_key() {
+    use notary_crypto::MlDsaKey;
+    use notary_types::formats;
+    let (root, template, notary) = (MlDsaKey::generate(), MlDsaKey::generate(), MlDsaKey::generate());
+    let addr = |k: &MlDsaKey| formats::card_pointer(k.public_key());
+    let chain_key = [0x5au8; 64];
+    let mut ipfs = serde_json::Map::new();
+    let mut put = |bytes: Vec<u8>| {
+        let cid = formats::cid_of_bytes(&bytes);
+        ipfs.insert(cid.clone(), json!(b64u::encode(&bytes)));
+        cid
+    };
+    let seal = |k: &MlDsaKey, v: &Value| notary_cards::support::aes_gcm_encrypt(&notary_cards::support::content_key(k.public_key()), &serde_json::to_vec(v).unwrap());
+    let template_id = put(serde_json::to_vec(&json!({ "recipient_pubkey": b64u::encode(template.public_key()) })).unwrap());
+    let template_head = put(seal(&template, &json!({ "approved_notaries": [addr(&notary)] })));
+    let notary_head = put(seal(&notary, &json!({
+        "recipient_pubkey": b64u::encode(notary.public_key()),
+        "ancestry_pubkeys": [b64u::encode(root.public_key())],
+        "issuer_card": addr(&template),
+        "chain_pubkey": b64u::encode(&chain_key[..]),
+    })));
+    let card = |cid: &str| json!({ "log_head_cid": cid, "events": [{ "cid": cid, "timestamp": "2027-01-01T00:00:00Z" }] });
+    let auth_key = format!("{},{}", addr(&template), addr(&notary));
+    let world = |auth: Value| {
+        json!({
+            "cards": { addr(&template): card(&template_head), addr(&notary): card(&notary_head) },
+            "subcards": {},
+            "ipfs": ipfs.clone(),
+            "press_auth": { auth_key.clone(): auth },
+        })
+    };
+    let pins = CardPins {
+        trusted_roots: vec![addr(&root)],
+        app_certification_root: String::new(),
+        login_service_root: String::new(),
+        max_chain_depth: 8,
+        list_cards: vec![],
+        list_holder_key: vec![],
+        list_press_key: vec![],
+    };
+    let now = 1_800_000_000_000;
+    let serves = |auth: Value, who: &MlDsaKey| {
+        let mut oracle = SnapshotOracle::new(pins.clone());
+        let mut host = WorldHost { world: world(auth), ipfs_fetches: 0 };
+        oracle.serves_template(&mut host, who.public_key(), &template_id, now)
+    };
+    let good = json!({ "active": true, "next_sequence": 0, "press_public_key": b64u::encode(&chain_key[..]) });
+    assert!(serves(good.clone(), &notary), "listed, issued for T, and authorized with its chain key");
+    assert!(!serves(json!({ "active": false, "next_sequence": 0, "press_public_key": b64u::encode(&chain_key[..]) }), &notary), "AuthorizePress revoked");
+    assert!(!serves(json!({ "active": true, "next_sequence": 0, "press_public_key": b64u::encode(&[0x11u8; 64][..]) }), &notary), "authorized with another key");
+    assert!(!serves(Value::Null, &notary), "no AuthorizePress entry");
+    assert!(!serves(good, &MlDsaKey::generate()), "a peer whose K_id has no notary card");
 }

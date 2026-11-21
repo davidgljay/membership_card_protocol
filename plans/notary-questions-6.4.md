@@ -87,4 +87,18 @@ The TypeScript verifier's Stages 3, 4 and 6 (`CardVerifier.verifyCard`) and Stag
 
 - **2026-11-19, David:** the security recommendations are approved: **D1** (the output equals the projected values), **D2** (protocol fields refused; a unique policy field held back only by the anonymity set), **D4** (the template key is seeded once by an explicit operator action), **D8** (protocol version and press sequence are untrusted host reads; re-signing up to three times).
 - **2026-11-19, David:** the interface items are approved: **D5** (a stale offer is replaced on resubmission; wallet polling to be specified with the wallet SDK), **D6** (the countersign codes), **D7** (the `dup_tag` encodings as written and in `vectors/dup_tag/cases.json`).
-- Still open: D3 (scope), D9 (what P3 checks for a template-scope handoff), D10 (report), D11 (scope).
+- **2026-11-21, David:** **D9**: the spec check plus `AuthorizePress`. My premise in D9 was wrong: a notary card's `issuer_card` field is the policy it serves (`protocol-objects.md §20`), so `issuer_card == T` is checkable.
+  - **What P3 now checks for template scope:**
+    - the peer proves it holds `K_id`;
+    - its notary card is registered at `keccak256(K_id)` and binds that key;
+    - the card has `issuer_card == T`;
+    - it is in `T.approved_notaries` at T's current head;
+    - it chains to a trusted root and isn't revoked;
+    - `PressAuthorizations[T][card]` is active, with the card's `chain_pubkey`.
+  - **Where it's built:**
+    - `notary_cards::policy::template_notary` (8 tests);
+    - `SnapshotOracle::serves_template` (`cards_oracle.rs` test).
+    - The trait now takes the proven `K_id` and the attested time. With no clock, P3 refuses.
+  - **Negative controls:** I removed the list check, the `issuer_card` check, the `active` check and the key check, one at a time; each made a test fail.
+  - **Spec:** P3 amended in `notary_replication_and_recovery.md` §3.
+- Still open: D3 (scope), D10 (report), D11 (scope).

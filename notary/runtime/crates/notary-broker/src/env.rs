@@ -98,9 +98,11 @@ pub trait CardOracle {
     /// 6.0a: whether the contributor's master card and signing sub-card come from a snapshot of one of `policies`
     /// (runtime §9, `fetch`: a contributor's own cards are never read through the per-card fallback).
     fn contributor_from_snapshot(&self, master_card: &str, sub_card: &str, policies: &[String]) -> bool;
-    /// Template-scope handoff check P3: the card's `issuer_card` is the template `T` and it is in `T.approved_notaries`.
-    /// Read like any registry state (limit L4). Fails closed by default; step 6.4 implements it for template policies.
-    fn serves_template(&mut self, _io: &mut dyn HostIo, _card: &str, _template: &str) -> bool {
+    /// Template-scope handoff check P3 (D9, decided by David 2026-11-21) for the peer that proved it holds `id_pubkey`:
+    /// its notary card verifies, names `T` as `issuer_card` and is in `T.approved_notaries` at T's current head, and
+    /// `AuthorizePress(T, card)` is active with the card's `chain_pubkey`. Read like any registry state (limit L4). Fails
+    /// closed by default.
+    fn serves_template(&mut self, _io: &mut dyn HostIo, _id_pubkey: &[u8], _template: &str, _now_ms: i64) -> bool {
         false
     }
     /// `policy_snapshot` / `policy_updates` from the host (never filtered; host §8).

@@ -189,8 +189,9 @@ impl CardOracle for Oracle {
     fn contributor_from_snapshot(&self, _: &str, _: &str, policies: &[String]) -> bool {
         policies == ["bafkreisource"]
     }
-    fn serves_template(&mut self, _: &mut dyn HostIo, card: &str, template: &str) -> bool {
-        self.0.lock().unwrap().template_cards.contains(&(card.to_string(), template.to_string()))
+    fn serves_template(&mut self, _: &mut dyn HostIo, id_pubkey: &[u8], template: &str, _: i64) -> bool {
+        let card = notary_types::formats::card_pointer(id_pubkey);
+        self.0.lock().unwrap().template_cards.contains(&(card, template.to_string()))
     }
     fn on_snapshot(&mut self, _: &str, _: &Value) {}
     fn on_updates(&mut self, _: &str, _: &Value) {}

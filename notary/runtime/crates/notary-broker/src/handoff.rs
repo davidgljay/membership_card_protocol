@@ -214,9 +214,14 @@ impl Broker {
 
     /// P3's key proof: `id_pubkey` hashes to the card and signed the challenge.
     fn proves_card(body: &Value, chal: &[u8; 32]) -> Option<String> {
+        Self::proves_key(body, chal).map(|pk| formats::card_pointer(&pk))
+    }
+
+    /// The `K_id` the peer proved it holds by signing `chal`.
+    fn proves_key(body: &Value, chal: &[u8; 32]) -> Option<Vec<u8>> {
         let pk = b64_bytes(body.get("id_pubkey"))?;
         let sig = b64_bytes(body.get("id_proof"))?;
-        mldsa_verify(&pk, chal, &sig).then(|| formats::card_pointer(&pk))
+        mldsa_verify(&pk, chal, &sig).then_some(pk)
     }
 
     // ---- sender ------------------------------------------------------------------------------------------------
@@ -318,11 +323,13 @@ impl Broker {
                 card.clone()
             }
             HScope::Template { template } => {
-                let card = Self::proves_card(body, &chal_s).ok_or("HANDOFF_SCOPE_DENIED")?;
-                if !self.oracle.serves_template(io, &card, template) {
+                let pk = Self::proves_key(body, &chal_s).ok_or("HANDOFF_SCOPE_DENIED")?;
+                // no clock, no check: a time of 0 would make every revocation look not yet effective
+                let now = self.tick_ms.or_else(|| self.attested_now_ms().ok()).ok_or("HANDOFF_SCOPE_DENIED")?;
+                if !self.oracle.serves_template(io, &pk, template, now) {
                     return Err("HANDOFF_SCOPE_DENIED");
                 }
-                card
+                formats::card_pointer(&pk)
             }
         };
         // P4 (job scope): R's purpose-0x04 attestation binds the same program, job, epoch and isolation; same ABI;
@@ -663,7 +670,10 @@ impl Broker {
                 }
             }
             HScope::Template { template } => {
-                if !self.oracle.serves_template(io, &s_card, template) {
+                let pk = Self::proves_key(body, &r.chal_r).ok_or("HANDOFF_SCOPE_DENIED")?;
+                // no clock, no check: a time of 0 would make every revocation look not yet effective
+                let now = self.tick_ms.or_else(|| self.attested_now_ms().ok()).ok_or("HANDOFF_SCOPE_DENIED")?;
+                if !self.oracle.serves_template(io, &pk, template, now) {
                     return Err("HANDOFF_SCOPE_DENIED");
                 }
             }

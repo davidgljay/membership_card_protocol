@@ -204,3 +204,46 @@ pub fn entry_press_signed(entry: &Value, certified: &[Vec<u8>]) -> Result<(), &'
     }
     if certified.contains(&pk) { Ok(()) } else { Err("PRESS_NOT_CERTIFIED") }
 }
+
+/// What a template-scope handoff needs to finish P3 (`notary_replication_and_recovery.md` §3) after the card checks:
+/// the registry entry to read is `PressAuthorizations[template_address][card_address]`, and it must bind `chain_pubkey`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TemplateNotary {
+    pub template_address: String,
+    pub card_address: String,
+    pub chain_pubkey: Vec<u8>,
+}
+
+/// D9 (decided by David 2026-11-21: the spec check plus `AuthorizePress`): the card checks of template-scope P3. The peer
+/// proved it holds `id_pubkey` (`K_id`); its notary card (address `keccak256(K_id)`) must be registered, bind that key,
+/// name the template `template_id` as its `issuer_card`, be listed in `approved_notaries` at the template's **current**
+/// head, and verify (chain to a trusted root, not revoked). The caller then also requires an active
+/// `AuthorizePress(T, card)` whose key is the returned `chain_pubkey`, so withdrawing either authorization stops the
+/// template key from moving further.
+pub fn template_notary(src: &dyn CardSource, id_pubkey: &[u8], template_id: &str, roots: &Roots<'_>, now_ms: i64) -> Result<TemplateNotary, &'static str> {
+    const DENIED: &str = "HANDOFF_SCOPE_DENIED";
+    let template_pk = src
+        .fetch(template_id)
+        .and_then(|b| parse_object(&b))
+        .and_then(|g| g.get("recipient_pubkey").and_then(Value::as_str).and_then(|k| b64u::decode_len(k, notary_crypto::MLDSA44_PUBLIC_KEY_LEN).ok()))
+        .ok_or(DENIED)?;
+    let template_address = address_of(&template_pk);
+    let card_address = address_of(id_pubkey);
+    let template = src
+        .card(&template_address)
+        .and_then(|e| read_head(src, &e.log_head_cid, &content_key(&template_pk)))
+        .ok_or(DENIED)?;
+    let listed = template.get("approved_notaries").and_then(Value::as_array).into_iter().flatten().any(|a| a.as_str() == Some(card_address.as_str()));
+    if !listed {
+        return Err(DENIED);
+    }
+    let entry = src.card(&card_address).ok_or(DENIED)?;
+    let head = read_head(src, &entry.log_head_cid, &content_key(id_pubkey)).ok_or(DENIED)?;
+    let binds = head.get("recipient_pubkey").and_then(Value::as_str).is_some_and(|r| crate::support::b64_lenient(r) == id_pubkey);
+    if !binds || head.get("issuer_card").and_then(Value::as_str) != Some(template_address.as_str()) {
+        return Err(DENIED);
+    }
+    let chain_pubkey = head.get("chain_pubkey").and_then(Value::as_str).map(crate::support::b64_lenient).filter(|k| k.len() == 64).ok_or(DENIED)?;
+    chain_ok(src, head, &card_address, roots, now_ms).ok_or(DENIED)?;
+    Ok(TemplateNotary { template_address, card_address, chain_pubkey })
+}

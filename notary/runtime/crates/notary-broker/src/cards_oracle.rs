@@ -258,6 +258,21 @@ impl CardOracle for SnapshotOracle {
         notary_cards::policy::entry_press_signed(entry, keys)
     }
 
+    fn serves_template(&mut self, io: &mut dyn HostIo, id_pubkey: &[u8], template: &str, now: i64) -> bool {
+        let roots = self.roots();
+        let checked = {
+            let src = Source { cache: &self.cache, io: RefCell::new(&mut *io), evidence: BTreeMap::new(), snap: &self.snap };
+            notary_cards::policy::template_notary(&src, id_pubkey, template, &roots, now)
+        };
+        let Ok(t) = checked else { return false };
+        // AuthorizePress(T, card): active, and its key is the card's chain_pubkey (registry_contract §4.7).
+        let Some(auth) = io.fetch(&format!("press_auth:{},{}", t.template_address, t.card_address)).and_then(|b| serde_json::from_slice::<Value>(&b).ok()) else {
+            return false;
+        };
+        auth.get("active").and_then(Value::as_bool) == Some(true)
+            && auth.get("press_public_key").and_then(Value::as_str).map(notary_cards::support::b64_lenient) == Some(t.chain_pubkey)
+    }
+
     fn policy_public_key(&self, policy_id: &str) -> Option<Vec<u8>> {
         self.policy_keys.get(policy_id).cloned()
     }
