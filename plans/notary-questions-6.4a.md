@@ -94,4 +94,5 @@ The change is under `contracts/`. It has been built and deployed only to the loc
 - **2026-11-20, David:** **W1**: 6.4b approved under CP7 for the local devnode only. Deploying elsewhere remains W8, a separate CP7 approval.
 - **2026-11-20, David:** **W2** and **W3** ratified as built. The DNS-client `op` audit is added to the W8 checklist.
 - **2026-11-20, David:** **W4** included in 6.4b (item 5): the press signs `max_acceptances` and `expires_at`, and the contract binds them.
-- Still open: W7–W9 (reports, CP7).
+- **2026-11-21, David:** **W8**: deploy once the rest of the work is complete. Planned as step 8.3, which will need its own CP7 approval.
+- Still open: W7 and W9 (reports, to acknowledge).

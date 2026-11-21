@@ -359,6 +359,23 @@ Goal: one end-to-end path running in the simulator: a job is announced with an a
   - **Done when**: tests cover revocation within the batching window, refusal of a rolled-back blob, and lapse at expiry for `expiry_only`.
   - **Done 2026-11-19.** "On-chain anchoring" above contradicts the approved spec (replication §8, protocol-objects §31: no on-chain anchor; rollback is refused by versions in heartbeats and handoffs). The spec was followed (`plans/notary-questions-6.5.md` E5). `notary-broker/src/propagation.rs`; tests in `tests/derive.rs`: `a_source_revocation_is_propagated_within_the_batching_window_with_the_mapped_code`, `revocations_below_the_minimum_batch_are_held_and_dropped_at_expiry`, `the_successor_rule_and_a_fixed_derived_code`, `expiry_only_keeps_no_link_and_the_card_lapses_at_expiry`, `the_state_blob_survives_the_enclave_and_a_rolled_back_blob_is_refused` (negative controls for the delay and the rollback checks fail as expected); `notary/e2e/test/derived-revoked.test.ts` reads the propagated revocations through the TypeScript verifier. The wallet's sealed-link disclosure already existed (6.0a) and is tested. Questions E1–E11 for David.
 
+- [ ] **6.5a Derived-card field control and the "former member" template** *(added 2026-11-21; decided by David, `plans/notary-derived-card-issuer-control.md` options C and D)*
+  - **What**:
+    1. **Spec (field control, C).** A `derivable` attribute on source-policy field definitions (default `true`). Re-read at the source policy's current head at job open and per input. A job may project only derivable fields. The bare membership claim, with no projected fields, is never vetoable.
+    2. **Spec (template, D).** A "member as of date" template: `revocation_propagation.mode: "expiry_only"` or `propagated_codes: ["9xx"]`, and a long period. Fired holders keep proof of past membership; fraud still revokes.
+    3. **Spec (disclosure).** New consent-screen lines stating:
+       - that the source issuer can end the derived card by ending the source card (unless the template propagates only fraud);
+       - that the issuer can see that a job over its policy exists, but not who took part.
+    4. **Code.** The template's job checks, the broker's per-input check, the wallet consent screen, and conformance vectors.
+  - **Who**: Claude (Opus suggested: it changes what a derived card may reveal). Spec text comes to David before code.
+  - **Context needed**: `plans/notary-derived-card-issuer-control.md`; `card_protocol_spec.md §1`; `protocol-objects.md §2.2`; `derived_card_revocation_propagation.md`; `notary_lifecycle.md` Appendix A.7
+  - **Done when**:
+    - a job projecting a non-derivable field is refused, at job open and when the field becomes non-derivable later;
+    - a bare-membership job can't be refused by the source issuer;
+    - the "member as of date" card survives a source 8xx but not a 9xx;
+    - the consent lines appear, with tests for each;
+    - all suites pass.
+
 - [ ] **6.6 Phase 6 Milestone Review**
   - **What**: Check the four use cases for consistency (shared runtime paths, objects and receipts), and map tests to the strategic-plan objectives under G1 and G4.
   - **Who**: Claude
@@ -428,6 +445,17 @@ Goal: one end-to-end path running in the simulator: a job is announced with an a
   - **Who**: Claude
   - **Context needed**: integration suite from 7.1; `notary/OPERATOR.md`
   - **Done when**: all four pass, the numbers are recorded, instances are shut down, and the deferred objective is ticked.
+
+- [ ] **8.3 Deploy the write-gate and governance binding (6.4a, 6.4b) to Sepolia and mainnet** *(W8; CP7)*
+  - **When**: once the rest of the work is complete (David, 2026-11-21). It needs its own CP7 approval at that time.
+  - **What**: one logic-contract upgrade on each chain, carrying 6.4a and 6.4b, through `ProposeLogicUpgrade` and its 7-day timelock. Checklist from `plans/notary-questions-6.4a.md` W8 and `plans/notary-questions-6.4b.md`:
+    1. Rerun the item 7 path and domain scan just before proposing.
+    2. Check the logic contract's size against the chain's limit.
+    3. Audit every DNS admin client for `op` and `master_card_address` (W3).
+    4. Redeploy the press with the W4 payload alongside the upgrade.
+    5. Update the dev-tests DNS suite (W7).
+    6. Before confirming, check that the pending address is the audited build (Q8).
+  - **Done when**: both chains run the new logic, the checklist is recorded, and the dev-tests suites pass on Sepolia.
 
 ---
 

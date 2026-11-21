@@ -1,6 +1,6 @@
 # Derived cards: how much control the source issuer has
 
-**Status:** an open question for David, written 2026-11-21. No spec or code changes yet.
+**Status:** decided by David 2026-11-21: options **C and D** (see Answers at the end). Planned as step 6.5a. No spec or code changes yet.
 
 **Question.** Should the holder of a source policy (an employer, say) be able to stop, restrict or detect derived cards made from the cards it issued? The current design says no (design decision D9, 2026-11-11). This note sets out what that means technically and the options for changing it.
 
@@ -119,3 +119,15 @@ Independent of A–C. Make templates whose derived cards attest "held a card und
 - Specs: `card_protocol_spec.md §1` (`field_definitions` attribute), `protocol-objects.md §2.2` and §34 examples, `derived_card_revocation_propagation.md` (consent lines), `notary_lifecycle.md` Appendix A.7 (algorithm R).
 - Code: the derive template's job checks, the broker's per-input check, the wallet consent screen, and conformance vectors.
 - Placement: as a Phase 7 item, or before 6.6 if you want the milestone review to cover it.
+
+---
+
+## Answers
+
+- **2026-11-21, David:** go with the suggestions.
+  - **Q1:** **C** (field-level `derivable`, with the bare membership claim never vetoable) and **D** (a "member as of date" template).
+  - **Q2:** no class of policies may make bare membership non-derivable. That would be option B again.
+  - **Q3:** the D template propagates only 9xx (fraud). Other templates keep today's default.
+  - **Q4:** yes, add the disclosure lines.
+  - Q2–Q4 follow from the recommended direction. Correct any of them if that's not what you meant.
+- Planned as step 6.5a in `plans/notary-implementation-plan.md`, before the Phase 6 milestone review so the review covers it.

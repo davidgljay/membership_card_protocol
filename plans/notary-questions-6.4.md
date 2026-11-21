@@ -101,4 +101,5 @@ The TypeScript verifier's Stages 3, 4 and 6 (`CardVerifier.verifyCard`) and Stag
     - The trait now takes the proven `K_id` and the attested time. With no clock, P3 refuses.
   - **Negative controls:** I removed the list check, the `issuer_card` check, the `active` check and the key check, one at a time; each made a test fail.
   - **Spec:** P3 amended in `notary_replication_and_recovery.md` §3.
-- Still open: D3 (scope), D10 (report), D11 (scope).
+- **2026-11-21, David:** **D3** settled: `sealed_link` shipped in 6.5, and one replica per derived-card job is a v1 limit (6.5 E11).
+- Still open: D10 (report, to acknowledge), D11 (scope, to acknowledge; its end-to-end work stays in 7.1).
