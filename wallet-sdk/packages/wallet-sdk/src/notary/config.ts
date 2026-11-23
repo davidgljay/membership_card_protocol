@@ -8,6 +8,9 @@ export interface NotaryConfig {
   /** List card addresses (protocol-objects.md §34); both lists must pass algorithm L before use. */
   acceptedRuntimesCard: string;
   programAllowlistCard: string;
+  /** Each list card's ML-DSA-44 public key (base64url), pinned; `keccak256(pubkey)` must equal the address (wallet_sdk.md §7b.1, F4a). */
+  acceptedRuntimesCardPubkey: string;
+  programAllowlistCardPubkey: string;
   /** NotaryCardPolicy CID. */
   notaryCardPolicy: string;
   acceptedKems: ["x-wing-draft-06"];

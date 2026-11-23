@@ -10,7 +10,7 @@ import {
 import { decryptCardHead } from "./head.js";
 import { canonicalize } from "./canonicalize.js";
 import { PROTOCOL_VERSION_0_1 } from "./constants.js";
-import { keccak256, hkdfSha3256, aes256gcmDecrypt, base64UrlToBytes } from "./crypto.js";
+import { keccak256, hkdfSha3256, aes256gcmDecrypt, base64UrlToBytes, bytesToBase64Url } from "./crypto.js";
 import { CardProtocolError } from "./errors.js";
 import { evaluatePolicyMatch } from "./policy-match.js";
 import { verifyStage1 } from "./stages/stage1.js";
@@ -369,6 +369,7 @@ export class CardVerifier {
     let policyCompliant: boolean | null | "skipped" = "skipped";
     let pressSubsequentlyRevoked = false;
     let nonComplianceReported = false;
+    let notaryResult: SignatureVerificationResult["notary"];
 
     if (cardEntry?.exists) {
       const rawBytes = await this.config.ipfs.fetch(cardEntry.log_head_cid);
@@ -380,8 +381,27 @@ export class CardVerifier {
         rawBytes,
         this.config.rpc,
         this.config.ipfs,
-        { registryEndpoint: this.config.registryEndpoint }
+        { registryEndpoint: this.config.registryEndpoint },
+        // Step 3a. The notary code is injected (`config.notary.stage5Hook`); the core only recognises the shape of a
+        // derived card, to say a check was not made (card_verifier.md §7.5, F4b).
+        async () => {
+          const hook = this.config.notary?.stage5Hook;
+          if (hook) {
+            return hook({
+              cardDoc: startDoc as unknown as Record<string, unknown>, cardAddress: startAddress, rpc: this.config.rpc, ipfs: this.config.ipfs, nowMs: Date.now(),
+              listCardTrusted: async (address, pubkey) => {
+                const r = await this.verifyCard(address, { pubkey: bytesToBase64Url(pubkey) });
+                return r.errors.length === 0 && r.chain_reaches_trusted_root === true;
+              },
+            });
+          }
+          const d = startDoc as unknown as Record<string, unknown>;
+          return typeof d["press_card"] === "string" && d["issuer_card"] === d["press_card"] && typeof d["dup_tag"] === "string"
+            ? { ok: true as const, warnings: ["NOTARY_CONFIG_MISSING"], derived: {} }
+            : null;
+        }
       );
+      notaryResult = stage5.notary;
       errors.push(...stage5.errors);
       policyCompliant = stage5.policy_compliant;
       pressSubsequentlyRevoked = stage5.press_subsequently_revoked;
@@ -422,6 +442,7 @@ export class CardVerifier {
       addressed_to_verifier: false,
       errors,
       annotations: stage6.annotations,
+      ...(notaryResult ? { notary: notaryResult } : {}),
       ...(this.config.returnChain ? { chain: stage3.chain } : {}),
     };
   }

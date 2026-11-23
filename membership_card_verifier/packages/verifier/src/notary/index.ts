@@ -15,3 +15,4 @@ export * from "./contributor.js";
 export * from "./quorum.js";
 export * from "./policy.js";
 export * from "./policySet.js";
+export * from "./cardVerifierAdapter.js";

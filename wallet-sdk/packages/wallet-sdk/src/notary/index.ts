@@ -8,3 +8,4 @@ export * from "./submit.js";
 export * from "./link.js";
 export * from "./job.js";
 export * from "./watch.js";
+export * from "./derived.js";

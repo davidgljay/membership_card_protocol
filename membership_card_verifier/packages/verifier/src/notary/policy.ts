@@ -112,20 +112,70 @@ export async function readPolicy(o: { policyId: string; stateCid: string; replic
   return { ok: true, policyAddress: address, notary: head["notary"], approvedNotaries: approved };
 }
 
+/**
+ * 6.5a: the names of a source policy's fields marked `derivable: false` (card_protocol_spec.md §1). Only an explicit
+ * boolean `false` blocks a field; absent, `true` or any other value leaves it derivable. The reference for
+ * `notary-cards` `policy::non_derivable_in`, kept in step by `notary/vectors/field_control/cases.json`.
+ */
+export function nonDerivableIn(policy: Record<string, unknown>): string[] {
+  const defs = policy["field_definitions"];
+  if (!Array.isArray(defs)) return [];
+  return defs.flatMap((d) => (d !== null && typeof d === "object" && (d as Record<string, unknown>)["derivable"] === false && typeof (d as Record<string, unknown>)["name"] === "string" ? [(d as Record<string, string>)["name"]!] : []));
+}
+
+/**
+ * The same read the enclave makes at D5 and job open (`notary-cards` `policy::non_derivable_fields`), for a wallet's
+ * W6b: the source policy's genesis gives its key, the registry gives its **current head**, and the head's chain must
+ * reach a pinned root and not be revoked. `null` if any of that fails (the caller treats the policy as unreadable).
+ */
+export async function readNonDerivableFields(o: { policyId: string; world: CardWorld; config: PolicyReadConfig }): Promise<string[] | null> {
+  const { world: w } = o;
+  const gBytes = fetchChecked(w, o.policyId);
+  const genesis = gBytes ? parseObject(gBytes) : null;
+  if (!genesis || typeof genesis["recipient_pubkey"] !== "string") return null;
+  let pub: Uint8Array;
+  try { pub = b64uDecode(genesis["recipient_pubkey"] as string, 1312); } catch { return null; }
+  const address = keccak256(pub);
+  const entry = w.cards[address];
+  if (!entry) return null;
+  const head = await readHead(w, entry.log_head_cid, hkdfSha3256(pub, "card-content-v1"));
+  if (!head) return null;
+  const c = await chainOk(w, head, address, pub, o.config);
+  return c.ok ? nonDerivableIn(head) : null;
+}
+
+/**
+ * Q6: a card's chain, read through the verifier's own Stages 3–4 (reaches a trusted root, no `HISTORY_MISMATCH`, not revoked
+ * as of `config.nowIso`). Null when the card is unregistered, unreadable, not the key's card, or its chain fails.
+ */
+async function readChain(o: { card: string; pubkey: Uint8Array; world: CardWorld; config: PolicyReadConfig }) {
+  if (keccak256(o.pubkey) !== o.card) return null;
+  const entry = o.world.cards[o.card];
+  if (!entry) return null;
+  const head = await readHead(o.world, entry.log_head_cid, hkdfSha3256(o.pubkey, "card-content-v1"));
+  if (!head) return null;
+  try {
+    const c = await chainOk(o.world, head, o.card, o.pubkey, o.config);
+    return c.ok ? c : null;
+  } catch { return null; } // a card document the walk cannot parse (e.g. no `ancestry_pubkeys`) is not a valid chain
+}
+
+/** Q6: `chainValid` for a notary-side read: the card's chain reaches a trusted root and is not revoked. */
+export async function cardChainValid(o: { card: string; pubkey: Uint8Array; world: CardWorld; config: PolicyReadConfig }): Promise<boolean> {
+  return (await readChain(o)) !== null;
+}
+
+/** Q6, W5/R5: `predicate` holds over the card's verified chain (`is_holder` iff `card === policyAddress`). False on any failure. */
+export async function cardSatisfies(o: { predicate: unknown; card: string; pubkey: Uint8Array; policyAddress?: string; parameters?: Record<string, unknown>; world: CardWorld; config: PolicyReadConfig }): Promise<boolean> {
+  const c = await readChain(o);
+  if (!c) return false;
+  return evaluatePredicate(o.predicate, { chain: c.chain, addresses: c.addresses, parameters: o.parameters ?? {}, isHolder: o.policyAddress !== undefined && o.card === o.policyAddress });
+}
+
 /** R5: the requester's chain satisfies `job_requester_predicate`; `is_holder` iff the requester holds the policy card. */
 export async function requesterAllowed(o: { job: Record<string, unknown>; predicate: unknown; policyAddress: string; world: CardWorld; config: PolicyReadConfig }): Promise<boolean> {
-  const { world: w } = o;
   let pub: Uint8Array;
   try { pub = b64uDecode(String(o.job["requester_pubkey"]), 1312); } catch { return false; }
-  const card = String(o.job["requester_card"]);
-  if (keccak256(pub) !== card) return false;
-  const entry = w.cards[card];
-  if (!entry) return false;
-  const head = await readHead(w, entry.log_head_cid, hkdfSha3256(pub, "card-content-v1"));
-  if (!head) return false;
-  const c = await chainOk(w, head, card, pub, o.config);
-  if (!c.ok) return false;
-  const params = (o.job["parameters"] as Record<string, unknown> | undefined) ?? {};
-  return evaluatePredicate(o.predicate, { chain: c.chain, addresses: c.addresses, parameters: params, isHolder: card === o.policyAddress });
+  return cardSatisfies({ predicate: o.predicate, card: String(o.job["requester_card"]), pubkey: pub, policyAddress: o.policyAddress, parameters: (o.job["parameters"] as Record<string, unknown> | undefined) ?? {}, world: o.world, config: o.config });
 }
 

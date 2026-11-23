@@ -169,6 +169,21 @@ export interface FieldRequirement {
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 
+/** What Stage 5 step 3a hands the injected notary check (card_verifier.md §5, §7.5). */
+export interface NotaryStage5Context {
+  cardDoc: Record<string, unknown>;
+  cardAddress: string;
+  rpc: RpcProvider;
+  ipfs: IpfsProvider;
+  nowMs: number;
+  /** Stages 3–5 on a list card by address and pinned key (`CardVerifier.verifyCard`). */
+  listCardTrusted(address: string, pubkey: Uint8Array): Promise<boolean>;
+}
+export type NotaryStage5Result =
+  | { ok: true; warnings: string[]; derived: Record<string, string | undefined> }
+  | { ok: false; code: string; detail: string };
+export type NotaryStage5Hook = (ctx: NotaryStage5Context) => Promise<NotaryStage5Result | null>;
+
 export interface VerifierConfig {
   rpc: RpcProvider;
   ipfs: IpfsProvider;
@@ -213,8 +228,17 @@ export interface VerifierConfig {
     /** protocol-objects.md §34; both lists are checked with algorithm L before use. */
     acceptedRuntimesCard: string;
     programAllowlistCard: string;
+    /** Each list card's ML-DSA-44 public key (base64url), pinned; `keccak256(pubkey)` must equal the address (card_verifier.md §5, F4a). */
+    acceptedRuntimesCardPubkey: string;
+    programAllowlistCardPubkey: string;
     /** NotaryCardPolicy CID. */
     notaryCardPolicy: string;
+    /**
+     * Added 2026-11-21 (Phase 7, F5). The Stage 5 step 3a implementation. The core never imports notary code, so it
+     * is injected: build it with `notaryStage5Hook(config)` from `@membership-card-protocol/verifier/notary`. Absent:
+     * a card that looks derived gets the warning `NOTARY_CONFIG_MISSING` and no notary checks.
+     */
+    stage5Hook?: NotaryStage5Hook;
   };
 }
 
@@ -294,6 +318,8 @@ export interface SignatureVerificationResult {
   errors: VerificationError[];
   annotations: EasAnnotation[];
   chain?: ChainLink[];
+  /** Stage 5 step 3a (card_verifier.md §7.5): present for a notary-issued (derived) card, or a card that looks derived with no notary config (warning `NOTARY_CONFIG_MISSING`). `dup_tag` is returned, not checked. */
+  notary?: { warnings: string[]; derived: Record<string, string | undefined> };
 }
 
 export interface CardVerificationResult
