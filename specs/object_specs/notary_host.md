@@ -248,7 +248,7 @@ Alerts never contain job data. They cover:
 - `close_mismatch`;
 - `LIST_VERSION_REGRESSION`.
 
-The host raises the first, second, fourth and fifth itself, every 30 seconds, and repeats one at most every five minutes. It also raises `storage_failure`, `delivery_failed`, `close_failed`, `enclave_lost` and `need_replica_failed` where those happen, and forwards the alerts its enclaves send.
+The host raises the first, second, fourth and fifth itself, every 30 seconds, and repeats one at most every five minutes. It also raises `storage_failure`, `delivery_failed`, `close_failed`, `enclave_lost` and `need_replica_failed` where those happen, and forwards the alerts its enclaves send (for example `press_unreadable`, when a listed press pointer in a source policy cannot be read; that press is skipped, the rest still count).
 
 Heartbeats themselves stay between enclaves and are never published.
 

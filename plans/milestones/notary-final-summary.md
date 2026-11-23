@@ -72,7 +72,7 @@ Decisions made with David during Phase 7: derived-card issuer control (C+D), E11
 
 ### Reported by the cross-check, not verified by me
 
-5. `cards_oracle.rs` turns `PRESS_UNREADABLE` into "no certified presses" (it drops the whole list on the first read), and no signal reaches the operator; a pointer whose key hashes to another address is skipped silently. Documented in `OPERATOR.md`. **Open.**
+5. **Fixed.** An unreadable `approved_presses` pointer is now skipped and counted (`read_certified_presses`), the other presses still count, and the enclave raises a `press_unreadable` alert (host `ALERT_CODES`). Spec wording amended in `card_protocol_spec.md` §1 and `derived_card_revocation_propagation.md` (approved 2026-11-23). A pointer whose key hashes to another address is still skipped silently.
 6. **Fixed:** `notary_host.md` §4, §5, §13, §14 and the status lines (host and runtime), the write-gate "until then" note, and the `derived_card_revocation_propagation.md` step 2 wording.
 7. Smaller, **open**: the code plan names `suites/notary/aggregation.spec.ts`, `vote.spec.ts` and an `adversarial/` directory that do not exist (the mapping is the e2e phases and `e2e/hostile/`); `templates/build.sh` comment says `.cid`, it writes `.sha256`; `run.sh` checks `aggregate vote vote-yna` modules but not `derive`, and CI has no template check; the e2e CI job builds without `--locked`; `notary-questions-phase-7.md` says "none changes a spec" though F2, F4, F5 and F7 did; some dates read 2026-11-23 (UTC) where the local date was 2026-11-22.
 

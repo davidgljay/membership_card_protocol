@@ -1,7 +1,7 @@
 //! Step 6.5, E4: a linked source card's new head counts only if a certified press of the source policy signed it.
 //! `policy::certified_press_keys` reads the policy's certified presses (per policy, never per update);
 //! `policy::entry_press_signed` checks one entry against them. Each refusal is checked against an otherwise valid world.
-use notary_cards::policy::{certified_press_keys, entry_press_signed};
+use notary_cards::policy::{certified_press_keys, entry_press_signed, read_certified_presses, PressRead};
 use notary_cards::stages::Roots;
 use notary_cards::support::{address_of, aes_gcm_encrypt, content_key};
 use notary_cards::world::{CardEntry, Event, World};
@@ -65,6 +65,12 @@ fn keys(f: &Fixture) -> Result<Vec<Vec<u8>>, &'static str> {
     let trusted = [address_of(f.root.public_key())];
     let roots = Roots { trusted: &trusted, app_certification: "", login_service: "", max_depth: 8 };
     certified_press_keys(&f.world, &f.policy_id, &roots, NOW)
+}
+
+fn read(f: &Fixture) -> Result<PressRead, &'static str> {
+    let trusted = [address_of(f.root.public_key())];
+    let roots = Roots { trusted: &trusted, app_certification: "", login_service: "", max_depth: 8 };
+    read_certified_presses(&f.world, &f.policy_id, &roots, NOW)
 }
 
 fn check(f: &Fixture, e: &Value) -> Result<(), &'static str> {
@@ -161,12 +167,19 @@ fn an_unreadable_source_policy_is_refused() {
 }
 
 #[test]
-fn a_pointer_to_a_card_whose_genesis_is_encrypted_is_an_error_not_a_silent_skip() {
-    // F8.6: registry heads are sealed, so a pointer to a press card only works if its first event is the plain document
+fn an_unreadable_pointer_is_skipped_and_counted_while_the_good_presses_still_count() {
+    // F8.6: registry heads are sealed, so a pointer to a press card only works if its first event is the plain document.
+    // One such entry must not drop the list: it is skipped (fail closed for that press) and counted, so the operator is told.
     let mut f = fixture();
-    let press = MlDsaKey::generate();
-    let sealed_genesis = sealed(&mut f.world, press.public_key(), &json!({ "recipient_pubkey": b64u::encode(press.public_key()) }));
-    register(&mut f.world, press.public_key(), &[sealed_genesis]);
-    approve(&mut f, vec![address_of(press.public_key())]);
-    assert_eq!(keys(&f), Err("PRESS_UNREADABLE"));
+    let (good, bad) = (MlDsaKey::generate(), MlDsaKey::generate());
+    let good_cid = press_card(&mut f.world, &good, f.root.public_key());
+    let sealed_genesis = sealed(&mut f.world, bad.public_key(), &json!({ "recipient_pubkey": b64u::encode(bad.public_key()) }));
+    register(&mut f.world, bad.public_key(), &[sealed_genesis]);
+    approve(&mut f, vec![good_cid.clone(), address_of(bad.public_key())]);
+    assert_eq!(keys(&f).unwrap().len(), 1, "the good press is kept");
+    assert_eq!(check(&f, &entry(&good)), Ok(()));
+    assert_eq!(check(&f, &entry(&bad)), Err("PRESS_NOT_CERTIFIED"), "the unreadable press certifies nothing");
+    assert_eq!(read(&f).unwrap().unreadable, 1);
+    approve(&mut f, vec![good_cid]);
+    assert_eq!(read(&f).unwrap().unreadable, 0, "control: a clean list counts none");
 }

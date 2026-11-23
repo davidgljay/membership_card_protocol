@@ -141,7 +141,7 @@ only a level, a code and counts, never job data (`notary_host.md` §13). The hos
 most every five minutes: `enclaves_attested` (fewer live enclave sessions than configured), `replicas_below_min_live` (a live job
 with fewer live replicas than its `min_live`), `gas_balance_low` (the gas wallet below `GAS_BALANCE_LOW_WEI`, default 0.01 ETH, or
 unreadable; production chain only) and `snapshot_lag` (no full snapshot pass for more than three refresh intervals). It also raises
-`anchor_backlog`, `storage_failure`, `delivery_failed`, `close_failed`, `enclave_lost` and `need_replica_failed` where they happen,
+`anchor_backlog`, `storage_failure`, `delivery_failed`, `close_failed`, `enclave_lost` and `need_replica_failed` where they happen (and forwards the enclave's `press_unreadable`),
 and forwards its enclaves' alerts. With no gas the host cannot register derived cards or anchor job logs, and a job's enclave stops
 signing a log it has no anchor receipt for.
 
@@ -174,9 +174,9 @@ Stopping an old enclave destroys its keys (they exist only in enclave memory), s
 - **`sealed_link` revocation does nothing.** The enclave reads a source card's update only if the entry is **canonical
   JSON (RFC 8785)** and signed by a press the source policy lists in `approved_presses` **by the CID of the press card's
   published document**. An entry that is not canonical is ignored. A listed press pointer whose card cannot be read
-  returns `PRESS_UNREADABLE` for the **whole list**, and the host treats a failed read as "no certified presses", so no
-  source update counts for that policy until the list is fixed; the only sign is later `SOURCE_UPDATE_UNCERTIFIED` alerts.
-  Tell the source policy's issuer.
+  (for example a sealed genesis) is **skipped**, so that press certifies nothing, and the enclave raises a `press_unreadable`
+  alert (once per change in the count, not repeated). The other listed presses still count. Tell the source policy's issuer
+  to list that press by the CID of its published document.
 - **The host will not start.** It prints every configuration problem at once. Common ones: `memory:` storage with a
   production chain, `CHAIN_PROVIDER=rpc` without `IPFS_PROVIDER=kubo`, a missing `REGISTRY_STORAGE_ADDRESS` or
   `NOTARY_DELIVERY_URL`.

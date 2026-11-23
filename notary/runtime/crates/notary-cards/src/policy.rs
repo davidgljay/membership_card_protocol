@@ -177,6 +177,21 @@ pub fn non_derivable_in(policy: &Doc) -> Vec<String> {
 /// linked (§6 step 2). A forger needs a governance-certified press key, not just the source card's public key (from which
 /// its content key is derived). The policy head and the registry reads come through the host (L4).
 pub fn certified_press_keys(src: &dyn CardSource, policy_id: &str, roots: &Roots<'_>, now_ms: i64) -> Result<Vec<Vec<u8>>, &'static str> {
+    read_certified_presses(src, policy_id, roots, now_ms).map(|r| r.keys)
+}
+
+/// The certified presses of a source policy, and how many listed entries could not be read at all.
+#[derive(Debug, PartialEq, Eq)]
+pub struct PressRead {
+    pub keys: Vec<Vec<u8>>,
+    /// Entries naming a registered card whose first registry entry is not a readable press document (a pointer to a card whose
+    /// genesis is sealed, F8.6). Each certifies nobody; the others are unaffected, and the caller reports the count.
+    pub unreadable: usize,
+}
+
+/// Like `certified_press_keys`, but one entry that cannot be read does not make the whole list unreadable: it is skipped
+/// (it certifies nobody, so this stays fail-closed for that press) and counted in `unreadable`, for the operator to be told.
+pub fn read_certified_presses(src: &dyn CardSource, policy_id: &str, roots: &Roots<'_>, now_ms: i64) -> Result<PressRead, &'static str> {
     let genesis = src.fetch(policy_id).and_then(|b| parse_object(&b)).ok_or("SOURCE_POLICY_UNREADABLE")?;
     let policy_pk = genesis
         .get("recipient_pubkey")
@@ -186,13 +201,17 @@ pub fn certified_press_keys(src: &dyn CardSource, policy_id: &str, roots: &Roots
     let policy_entry = src.card(&address_of(&policy_pk)).ok_or("SOURCE_POLICY_UNREADABLE")?;
     let policy = read_head(src, &policy_entry.log_head_cid, &content_key(&policy_pk)).ok_or("SOURCE_POLICY_UNREADABLE")?;
     let mut keys: Vec<Vec<u8>> = vec![];
+    let mut unreadable = 0usize;
     for a in policy.get("approved_presses").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str) {
         let by_pointer = src.card(a);
         // a pointer names a registered card: its genesis (first event) is the published press card document
         let doc_cid = match &by_pointer {
             Some(e) => match e.events.first() {
                 Some(g) => g.cid.as_str(),
-                None => return Err("PRESS_UNREADABLE"),
+                None => {
+                    unreadable += 1;
+                    continue;
+                }
             },
             None => a,
         };
@@ -206,7 +225,7 @@ pub fn certified_press_keys(src: &dyn CardSource, policy_id: &str, roots: &Roots
             // so a pointer only works if the genesis was published plain) would certify nobody: say so, don't skip it.
             // A name that resolves to nothing at all stays a skip (a press not yet registered is not an error).
             if by_pointer.is_some() {
-                return Err("PRESS_UNREADABLE");
+                unreadable += 1;
             }
             continue;
         };
@@ -221,7 +240,7 @@ pub fn certified_press_keys(src: &dyn CardSource, policy_id: &str, roots: &Roots
             keys.push(pk);
         }
     }
-    Ok(keys)
+    Ok(PressRead { keys, unreadable })
 }
 
 /// Step 6.5, E4: `entry`'s `press_signature` verifies, under the key it names, over the entry without it, and that key is

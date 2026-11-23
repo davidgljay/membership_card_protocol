@@ -60,6 +60,8 @@ pub struct SnapshotOracle {
     policy_addresses: BTreeMap<String, String>,
     /// policy_id → the policy card's public key, from the same read.
     policy_keys: BTreeMap<String, Vec<u8>>,
+    /// How many `approved_presses` entries of each source policy could not be read at the last refresh (alerted when it changes).
+    press_unreadable: BTreeMap<String, usize>,
     /// source policy → (when read, the certified presses' ML-DSA-44 keys): step 6.5, E4.
     source_presses: BTreeMap<String, (i64, Vec<Vec<u8>>)>,
     /// source policy → (when read, its `derivable: false` field names): step 6.5a.
@@ -81,7 +83,7 @@ impl SnapshotOracle {
     }
 
     pub fn new(pins: CardPins) -> Self {
-        Self { pins, snap: Snapshots::default(), policy_addresses: BTreeMap::new(), policy_keys: BTreeMap::new(), source_presses: BTreeMap::new(), field_control: BTreeMap::new(), cache: RefCell::new(IpfsCache::default()) }
+        Self { pins, snap: Snapshots::default(), policy_addresses: BTreeMap::new(), policy_keys: BTreeMap::new(), press_unreadable: BTreeMap::new(), source_presses: BTreeMap::new(), field_control: BTreeMap::new(), cache: RefCell::new(IpfsCache::default()) }
     }
 }
 
@@ -250,11 +252,19 @@ impl CardOracle for SnapshotOracle {
         }
         let src = Source { cache: &self.cache, io: RefCell::new(io), evidence: BTreeMap::new(), snap: &self.snap };
         // a failed read keeps the last good set (withholding reads is the host's to do anyway, L4)
-        let keys = notary_cards::policy::certified_press_keys(&src, policy_id, &self.roots(), now_ms).ok();
+        let read = notary_cards::policy::read_certified_presses(&src, policy_id, &self.roots(), now_ms).ok();
+        drop(src);
         let entry = self.source_presses.entry(policy_id.to_string()).or_insert((now_ms, vec![]));
         entry.0 = now_ms;
-        if let Some(k) = keys {
-            entry.1 = k;
+        if let Some(r) = read {
+            entry.1 = r.keys;
+            // one unreadable entry no longer drops the others, but the operator is told (once per change in the count)
+            if self.press_unreadable.get(policy_id).copied().unwrap_or(0) != r.unreadable {
+                self.press_unreadable.insert(policy_id.to_string(), r.unreadable);
+                if r.unreadable > 0 {
+                    io.send(serde_json::json!({ "kind": "alert", "req_id": format!("press-unreadable-{policy_id}"), "level": "warn", "code": "press_unreadable" }));
+                }
+            }
         }
     }
 

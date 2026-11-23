@@ -5,7 +5,7 @@
 import type { Monitor } from "../services.js";
 
 export const ALERT_CODES = ["enclaves_attested", "replicas_below_min_live", "anchor_backlog", "gas_balance_low", "snapshot_lag", "close_mismatch",
-  "LIST_VERSION_REGRESSION", "key_exposed", "need_replica_failed", "enclave_lost", "storage_failure"] as const;
+  "LIST_VERSION_REGRESSION", "key_exposed", "need_replica_failed", "enclave_lost", "storage_failure", "press_unreadable"] as const;
 
 export function sanitizeAlert(level: string, code: string, counts: Record<string, number> = {}): { level: string; code: string; counts: Record<string, number> } {
   const safeCounts: Record<string, number> = {};

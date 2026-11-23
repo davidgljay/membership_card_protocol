@@ -195,15 +195,16 @@ fn source_presses_are_read_per_policy_and_an_entry_check_reads_nothing() {
     struct Counting {
         inner: WorldHost,
         reads: usize,
+        sent: Vec<Value>,
     }
     impl HostIo for Counting {
-        fn send(&mut self, _msg: Value) {}
+        fn send(&mut self, msg: Value) { self.sent.push(msg); }
         fn fetch(&mut self, what: &str) -> Option<Vec<u8>> {
             self.reads += 1;
             self.inner.fetch(what)
         }
     }
-    let (root, policy, press, forger) = (MlDsaKey::generate(), MlDsaKey::generate(), MlDsaKey::generate(), MlDsaKey::generate());
+    let (root, policy, press, forger, bad) = (MlDsaKey::generate(), MlDsaKey::generate(), MlDsaKey::generate(), MlDsaKey::generate(), MlDsaKey::generate());
     let addr = |k: &MlDsaKey| formats::card_pointer(k.public_key());
     let mut ipfs = serde_json::Map::new();
     let mut put = |bytes: Vec<u8>| {
@@ -215,10 +216,12 @@ fn source_presses_are_read_per_policy_and_an_entry_check_reads_nothing() {
     let press_doc = put(serde_json::to_vec(&json!({ "recipient_pubkey": b64u::encode(press.public_key()), "ancestry_pubkeys": [b64u::encode(root.public_key())] })).unwrap());
     let policy_head = put(notary_cards::support::aes_gcm_encrypt(
         &notary_cards::support::content_key(policy.public_key()),
-        &serde_json::to_vec(&json!({ "approved_presses": [press_doc] })).unwrap(),
+        &serde_json::to_vec(&json!({ "approved_presses": [press_doc, addr(&bad)] })).unwrap(),
     ));
+    // a listed pointer to a card whose first entry is not a readable press document (a sealed genesis, say)
+    let bad_head = put(b"not a press document".to_vec());
     let card = |cid: &str| json!({ "log_head_cid": cid, "events": [{ "cid": cid, "timestamp": "2027-01-01T00:00:00Z" }] });
-    let world = json!({ "cards": { addr(&policy): card(&policy_head), addr(&press): card(&press_doc) }, "subcards": {}, "ipfs": ipfs });
+    let world = json!({ "cards": { addr(&policy): card(&policy_head), addr(&press): card(&press_doc), addr(&bad): card(&bad_head) }, "subcards": {}, "ipfs": ipfs });
     let mut oracle = SnapshotOracle::new(CardPins {
         trusted_roots: vec![addr(&root)],
         app_certification_root: String::new(),
@@ -228,7 +231,7 @@ fn source_presses_are_read_per_policy_and_an_entry_check_reads_nothing() {
         list_holder_key: vec![],
         list_press_key: vec![],
     });
-    let mut host = Counting { inner: WorldHost { world, ipfs_fetches: 0 }, reads: 0 };
+    let mut host = Counting { inner: WorldHost { world, ipfs_fetches: 0 }, reads: 0, sent: vec![] };
     let now = 1_800_000_000_000;
     let sign = |k: &MlDsaKey| {
         let mut e = json!({ "code": 901, "entry_type": "revocation", "card_state": {}, "version": 2 });
@@ -239,13 +242,16 @@ fn source_presses_are_read_per_policy_and_an_entry_check_reads_nothing() {
     oracle.refresh_source_presses(&mut host, &policy_id, now);
     let after_first = host.reads;
     assert!(after_first > 0);
-    assert_eq!(oracle.source_entry_certified(&policy_id, &sign(&press)), Ok(()));
+    assert_eq!(oracle.source_entry_certified(&policy_id, &sign(&press)), Ok(()), "the good press still counts beside the unreadable entry");
+    let alerts = |h: &Counting| h.sent.iter().filter(|m| m["code"] == "press_unreadable").count();
+    assert_eq!(alerts(&host), 1, "the operator is alerted to the unreadable entry");
     assert_eq!(oracle.source_entry_certified(&policy_id, &sign(&forger)), Err("PRESS_NOT_CERTIFIED"));
     assert_eq!(host.reads, after_first, "an entry check reads nothing");
     oracle.refresh_source_presses(&mut host, &policy_id, now + PRESS_REFRESH_MS - 1);
     assert_eq!(host.reads, after_first, "not again before the refresh interval");
     oracle.refresh_source_presses(&mut host, &policy_id, now + PRESS_REFRESH_MS);
     assert!(host.reads > after_first, "read again after it");
+    assert_eq!(alerts(&host), 1, "the same unreadable entry is not alerted twice");
 }
 
 /// D9 (decided by David 2026-11-21: the spec check plus `AuthorizePress`): template-scope P3 passes only when the notary
