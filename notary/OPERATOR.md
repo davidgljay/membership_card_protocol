@@ -176,7 +176,7 @@ Stopping an old enclave destroys its keys (they exist only in enclave memory), s
   published document**. An entry that is not canonical is ignored. A listed press pointer whose card cannot be read
   (for example a sealed genesis) is **skipped**, so that press certifies nothing, and the enclave raises a `press_unreadable`
   alert (once per change in the count, not repeated). The other listed presses still count. Tell the source policy's issuer
-  to list that press by the CID of its published document.
+  to list that press by the CID of its published document. `notary-lint` warns about this beforehand (`LINT_PRESS_POINTER`) for any pointer in the policy's `approved_presses`.
 - **The host will not start.** It prints every configuration problem at once. Common ones: `memory:` storage with a
   production chain, `CHAIN_PROVIDER=rpc` without `IPFS_PROVIDER=kubo`, a missing `REGISTRY_STORAGE_ADDRESS` or
   `NOTARY_DELIVERY_URL`.

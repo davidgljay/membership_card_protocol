@@ -220,6 +220,7 @@ The ceilings in A2, A5, A7 and A10 are provisional until the capacity benchmark 
 
 **Lint warnings** (non-fatal, `notary-lint` only):
 - `LINT_WEAK_GRANULARITY`: an integer output field has neither `round_to` nor `buckets`, and `k_min < 10`.
+- `LINT_PRESS_POINTER` (added 2026-11-23): the policy document's `approved_presses` lists a 64-hex card pointer instead of the CID of the press card's published document. A pointer works only where the card's first registry entry is the plain document; otherwise the enclave skips that press and raises `press_unreadable`. Lint cannot see the registry, so it flags every pointer.
 (`LINT_NO_SNAPSHOT_POLICY` was retired on 2026-11-14: a predicate that names no policy is now refused by A12.)
 
 ---
@@ -447,6 +448,7 @@ The host can't read enclave memory in any case. Zeroization limits what a later 
 | `IDENTITY_LOG_PENDING` | §9 `create_job` | The notary card's identity-log `seq` 0 isn't anchored yet (`notary_lifecycle.md` step 9); nothing opened, and the host anchors it and retries |
 | `LIST_APPROVAL_*` | §12 | A list version isn't validly approved by members (`notary_lifecycle.md` Appendix A.5); refused, and the last verified version is kept |
 | `LINT_WEAK_GRANULARITY` | `notary-lint` | Warning |
+| `LINT_PRESS_POINTER` | `notary-lint` | Warning |
 | `ADM_CONTRIBUTOR_SET_OPEN` | A12 | The contributor predicate doesn't restrict contributors to a finite list of policies (`notary-lint` reports it as an error) |
 | `JOB_KEY_MISSING` | §9 attestation request | An attestation was requested for a job key this enclave does not hold (added 2026-11-21, notary step 6.6, decided by David: `plans/notary-questions-6.6.md` R2) |
 | `RECIPIENT_UNREADABLE` | §11 private output | A recipient's primary card, or its head, cannot be read or decrypted; no output is sealed for it (added 2026-11-21, notary step 6.6, decided by David: `plans/notary-questions-6.6.md` R2) |

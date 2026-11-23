@@ -1,6 +1,6 @@
 //! Algorithm A: one test per reject code (runtime §6, A1–A11), the deferred-feature refusals (§11, §16), the lint
 //! warnings, and acceptance of a well-formed program that then runs under the notary-worker engine.
-use notary_admission::{admit, lint_warnings, AllowlistEntry, Isolation, RuntimeContext};
+use notary_admission::{admit, lint_policy_warnings, lint_warnings, AllowlistEntry, Isolation, RuntimeContext};
 use notary_types::{formats, jcs};
 use serde_json::{json, Value};
 
@@ -255,4 +255,13 @@ fn a12_the_contributor_set_must_be_closed() {
         p["contributor_predicate"] = closed;
         assert_eq!(code(&b, &p, &ctx()), "OK");
     }
+}
+
+#[test]
+fn a_press_card_pointer_in_approved_presses_is_flagged_but_a_cid_is_not() {
+    let pointer = notary_types::formats::card_pointer(&[7u8; 32]);
+    let cid = notary_types::formats::cid_of_bytes(b"a press card document");
+    assert!(lint_policy_warnings(&json!({})).is_empty(), "no list, nothing to flag");
+    assert!(lint_policy_warnings(&json!({ "approved_presses": [cid.clone()] })).is_empty(), "a CID is the form the spec asks for");
+    assert_eq!(lint_policy_warnings(&json!({ "approved_presses": [cid, pointer] })), vec!["LINT_PRESS_POINTER"], "one pointer among CIDs is enough");
 }

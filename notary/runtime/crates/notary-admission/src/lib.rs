@@ -365,3 +365,17 @@ pub fn lint_warnings(notary: &Value) -> Vec<&'static str> {
     }
     w
 }
+
+/// Warnings about a whole policy document (its `approved_presses`), not its `notary` section. Non-fatal.
+///
+/// An entry should be the CID of the press card's published document. A 64-hex card pointer is accepted only where that
+/// card's first registry entry is the plain document; registry heads are sealed, so otherwise the enclave cannot read it,
+/// skips that press (it certifies nothing) and raises `press_unreadable`. Lint cannot see the registry, so it flags every pointer.
+pub fn lint_policy_warnings(policy: &Value) -> Vec<&'static str> {
+    let mut w = Vec::new();
+    let pointer = |e: &Value| e.as_str().is_some_and(|s| s.len() == 64 && s.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)));
+    if policy.get("approved_presses").and_then(Value::as_array).is_some_and(|a| a.iter().any(pointer)) {
+        w.push("LINT_PRESS_POINTER");
+    }
+    w
+}
