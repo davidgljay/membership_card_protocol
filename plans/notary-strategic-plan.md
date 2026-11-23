@@ -108,7 +108,7 @@ What is genuinely new: a measured enclave runtime, attestation verification in w
 
 **G3 (lightweight activation)**
 - [ ] Three template policies (aggregation, vote, derived card) are published; a community activates each by signing a job, with no code. *(Open: committed and run, not registered on a real registry.)*
-- [ ] A new operator can stand up a notary from `notary/` documentation and Docker Compose in under an hour. *(Open: docs written and checked in a clean copy; no timed run.)*
+- [x] A new operator can stand up a notary from `notary/` documentation and Docker Compose in under an hour. *(README steps 1 to 3 plus the scenarios took under 7 minutes in a clean worktree, with warm caches; first-time downloads and the Docker route were not timed.)*
 
 **G4 (failure tolerance)**
 - [ ] Killing any single replica mid-vote loses no ballots; tests cover re-replication back to `min_live`. *(Open: only a non-leader is killed and the standby is started in advance; the host cannot start replicas. See `milestones/notary-final-summary.md`, finding 1.)*

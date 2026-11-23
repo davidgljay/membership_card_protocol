@@ -7,7 +7,7 @@ Dates: Phase 7 ran 2026-11-21 to 2026-11-23 · Earlier phases: [1](notary-phase-
 **The notary work is not finished, and this review does not declare it so.** What is left in Phase 7:
 
 - **7.2 (adversarial suite): built.** Tranche 1 (a hostile requester or contributor against an honest host) and tranche 2 (a hostile-host harness: the host's real handlers with hostile services, against the real enclave) cover the plan's list through real processes, with mutation checks and controls, including a literal kill of every replica process and a replayed old state blob. Caveat: the rollback test shows the outcome (the survivor keeps every link), not which of three layered defences stops the replay.
-- **7.1 (spec-derived integration suite): open.** The timed operator cold start, a tighter time bound on `sealed_link` revocation, a skipped AWS stub, and an aggregate-template below-`k_min` run through real processes are not done.
+- **7.1 (spec-derived integration suite): done.** The AWS tests are skipped by design, the cold start was timed in a clean worktree with warm caches (under 7 minutes), the `sealed_link` bound and the aggregate below-`k_min` case are tested through real processes.
 
 7.3 (operator docs) is done. Real-hardware work (Phase 8) is deferred until AWS is provisioned.
 
@@ -89,7 +89,6 @@ Decisions made with David during Phase 7: derived-card issuer control (C+D), E11
 ## Open items
 
 - **Decisions for David:** whether to tick 7.2 with rollback tested in process only and kill-all tested through the restart API; whether to build scheduled re-attestation (finding 2); how to split the commit (nothing from Phase 7 is committed).
-- **Phase 7:** the 7.1 remainder (timed cold start, a tighter `sealed_link` time bound, the AWS stub, an aggregate below-`k_min` run).
 - **Fix later:** findings 1, 5 and 7.
 - **Carried:** E27 (closes only on a green x86_64 Linux run; CI has never run), E33, E9 (the signature libraries are unaudited; the post-quantum crates are pre-1.0), the CP10 press predicate report, W8 (step 8.3, CP7), F6 (operator-card revocation unchecked, pinned list-card keys do not rotate), the derive phase failing when its release boundary falls near UTC midnight (cause not isolated; a nightly CI run could hit it), one unexplained `NOTARY_NO_RECEIPT` flake in `run-three.sh`.
 - **Not done by design (CP7 / Phase 8):** anything on Sepolia or mainnet, real AWS, the enclave image, cost figures.

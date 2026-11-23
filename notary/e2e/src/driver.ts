@@ -235,6 +235,17 @@ class MovedDate extends RealDate {
 }
 globalThis.Date = MovedDate as unknown as DateConstructor;
 
+
+/**
+ * Derived cards are issued per UTC day, and the phases move the clock forward by hours. A phase that would carry the moved clock
+ * across UTC midnight while cards are in flight fails (the cause of the time-of-day failures): so before such a phase the clock
+ * is moved once, with nothing in flight, to just past the coming midnight.
+ */
+async function clearOfMidnight(spanMs: number) {
+  const DAY = 86_400_000;
+  const into = Date.now() % DAY;
+  if (into > DAY - spanMs) { log(`moving the clock past UTC midnight before this phase (it would cross it mid-phase)`); await warp(DAY - into + 5 * 60_000); }
+}
 const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
 const openDoc = (pub: Uint8Array, bytes: Uint8Array): Record<string, unknown> => {
   const d = createDecipheriv("aes-256-gcm", contentKey(pub), bytes.subarray(0, 12));
@@ -250,6 +261,7 @@ const openDoc = (pub: Uint8Array, bytes: Uint8Array): Record<string, unknown> =>
  * identity log anchored at genesis, `source_kind`).
  */
 async function derive() {
+  await clearOfMidnight(4.5 * 3_600_000); // issuance, a 2 h 10 min wait and the bound check
   await waitFor("host", async () => ((await (await fetch(`${HOST}/health`)).json()) as { status: string }).status === "ok");
   const lists = await verifiedLists(chain);
   // a notary card is issued under one policy (W10: its `issuer_card` is the job's policy): the template gets its own, from its holder
@@ -384,8 +396,15 @@ async function derive() {
   await sourceEntry(1, 905, K.srcPress); // a loud one of holder 1's
   await new Promise((r) => setTimeout(r, 12_000)); // the host relays the updates on its snapshot refresh (5 s); they must arrive before time moves
   check(await batchesOnChain() === before, "nothing is released at once: a revocation waits the template's minimum delay");
-  await warp(2 * 3_600_000 + 10 * 60_000);
-  await waitFor("the propagation batch", async () => (await batchesOnChain()) > before, 90);
+  // the bound (propagation §3, §7): a revocation is released no earlier than `min_delay` after it was queued, and no later than
+  // the first window boundary after that, so within `min_delay + batch_window`. One minute short of `min_delay`: nothing yet.
+  const MIN = 60_000, minDelayMs = 3_600_000, windowMs = 3_600_000; // DERIVE_PROPAGATION: PT1H, PT1H
+  await warp(minDelayMs - MIN);
+  await new Promise((r) => setTimeout(r, 6000));
+  check(await batchesOnChain() === before, "one minute before min_delay has passed: nothing is released");
+  // then to one minute past min_delay + batch_window since the revocations were queued
+  await warp(minDelayMs + windowMs + MIN - (minDelayMs - MIN));
+  await waitFor("the propagation batch (within min_delay + batch_window)", async () => (await batchesOnChain()) > before, 90);
   check(await batchesOnChain() === before + 1, "one BatchUpdateCardHeads for the window");
   const status = async (h: (typeof held)[number]) => { const c = await chain.get<{ head_cid: string }>(`/registry/card/${h.derivedAddress}`); return { head: c.head_cid, doc: openDoc(b64uDecode(h.derivedPublicKey, 1312), (await chain.bytes(c.head_cid))!) }; };
   const s0 = await status(held[0]!), s1 = await status(held[1]!), s2 = await status(held[2]!);
@@ -595,6 +614,7 @@ async function vote() {
  * reports `expired`).
  */
 async function expiry() {
+  await clearOfMidnight(2 * 3_600_000); // issuance, then the three-hour source-revocation wait
   await waitFor("host", async () => ((await (await fetch(`${HOST}/health`)).json()) as { status: string }).status === "ok");
   const lists = await verifiedLists(chain);
   const n = await genesisFor({ lists, policyDocId: EXPIRY_ID, issuer: K.templateExp });

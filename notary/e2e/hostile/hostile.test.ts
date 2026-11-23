@@ -138,6 +138,25 @@ describe("a hostile host against the enclave", () => {
     const res = await verifyNotarization(cid, notarizationReads(chain, notary, lists, ATT), { attest: attestCfg, modules: [simulator], acceptedRuntimes: lists.acceptedRuntimes });
     console.log("[dropped input] algorithm N:", JSON.stringify(res).slice(0, 220));
   });
+
+  it("an aggregate job with fewer contributors than k_min releases nothing but the fact (insufficient participation)", async () => {
+    // card_protocol_spec §9 G1: with fewer than k_min contributors the notarization says so and carries no result
+    chainLead = Math.max(0, (await chainNow()) - Date.now());
+    const job = signedJob(9_000);
+    const jobHash = H(job);
+    await handleCreateJob(hostA.ctx, { job, program_cid: PROGRAM_CID });
+    const ann = await waitFor("the announcement", async () => { try { return await handleGetAnnouncement(hostA.ctx, jobHash); } catch { return null; } }) as { job_public_key: string; epoch: number };
+    const ref = await recentBlock();
+    for (const [i, v] of [[0, 3], [1, 7]] as const) expect((await contribute(hostA, jobHash, ann, i, v, ref)).receipt?.status).toBe("accepted"); // k_min is 3
+    const cid = await waitFor("the notarized record", () => notarizationOf(jobHash), 120);
+    const nz = JSON.parse(new TextDecoder().decode((await chain.bytes(cid))!)) as { accepted: number; suppressed: boolean; output: unknown };
+    console.log("[below k_min] accepted", nz.accepted, "suppressed", nz.suppressed, "output", JSON.stringify(nz.output).slice(0, 120));
+    expect(nz).toMatchObject({ accepted: 2, suppressed: true });
+    expect(JSON.stringify(nz.output)).not.toMatch(/count|sum|bucket/);
+    const notary = { card: nA.card, kId: nA.kId, genesisAttestation: nA.genesisAttestation };
+    const res = await verifyNotarization(cid, notarizationReads(chain, notary, lists, ATT), { attest: attestCfg, modules: [simulator], acceptedRuntimes: lists.acceptedRuntimes });
+    expect(res.valid).toBe(true);
+  });
 });
 
 describe("a hostile host feeding the enclave a chain the real one never had", () => {

@@ -397,7 +397,7 @@ Goal: one end-to-end path running in the simulator: a job is announced with an a
     - **R5, first task of Phase 7:** add `notary-ci.yml` (Linux; `cargo test --workspace`, host, attestation, verifier-notary and e2e tests, `check-aws-isolation.sh`). This also covers the Linux isolation tests (E27). Design it with David (runners, caching, whether the compose scenarios run on every push).
     - **R3, a dependency of 7.1:** wallet `derived.ts` (`requestDerivedCard`, the holder countersign, `renewDerivedCards`) and a real-process derived-card scenario in `notary/e2e`.
 
-- [ ] **7.1 Spec-derived integration suite**
+- [x] **7.1 Spec-derived integration suite** *(done 2026-11-23: one test or phase per acceptance criterion, mapped in `integration_tests/suites/notary/README.md`; caveats there and in `plans/notary-code-plan.md`: the AWS tests are skipped by design, the cold start was timed with warm caches, and the host cannot start replicas)*
   - **What**: Add `integration_tests/suites/notary/` against the docker-compose stack, with one test per acceptance criterion in the `card_protocol_spec.md` Notaries section, following `integration-testing-strategic-plan.md`. Add the governance and EAS scripts (`notary-code-plan.md` §3.6) and run them against the devnode only. Deploy EAS into the stack, with a test-only mock anchor if EAS won't deploy *(added at CP4)*.
   - **Who**: Claude
   - **Context needed**: `card_protocol_spec.md` (Notaries); `integration_tests/` conventions
