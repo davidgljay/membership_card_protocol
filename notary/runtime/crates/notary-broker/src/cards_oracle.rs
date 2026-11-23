@@ -299,6 +299,18 @@ impl CardOracle for SnapshotOracle {
         self.policy_keys.get(policy_id).cloned()
     }
 
+    fn learn_policy_key(&mut self, io: &mut dyn HostIo, policy_id: &str) -> Option<Vec<u8>> {
+        if let Some(k) = self.policy_keys.get(policy_id) {
+            return Some(k.clone());
+        }
+        // the policy's plain document, checked against its CID (the host is not trusted); its `recipient_pubkey` is the key
+        let bytes = io.fetch(&format!("ipfs:{policy_id}")).filter(|b| formats::cid_of_bytes(b) == policy_id)?;
+        let doc: Value = serde_json::from_slice(&bytes).ok()?;
+        let key = b64u::decode_len(doc.get("recipient_pubkey")?.as_str()?, notary_crypto::MLDSA44_PUBLIC_KEY_LEN).ok()?;
+        self.policy_keys.insert(policy_id.to_string(), key.clone());
+        Some(key)
+    }
+
     fn card_policy(&self, card: &str) -> Option<String> {
         self.snap.card_policy.get(card).cloned()
     }

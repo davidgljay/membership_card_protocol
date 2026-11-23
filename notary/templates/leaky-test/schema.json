@@ -1,0 +1,1 @@
+[{"clamp":[0,100],"description":"Sum of the values, coarsened","name":"score","required":true,"round_to":10,"type":"integer"}]

@@ -159,3 +159,14 @@ fn an_unreadable_source_policy_is_refused() {
     f.world.cards.clear();
     assert_eq!(keys(&f), Err("SOURCE_POLICY_UNREADABLE"));
 }
+
+#[test]
+fn a_pointer_to_a_card_whose_genesis_is_encrypted_is_an_error_not_a_silent_skip() {
+    // F8.6: registry heads are sealed, so a pointer to a press card only works if its first event is the plain document
+    let mut f = fixture();
+    let press = MlDsaKey::generate();
+    let sealed_genesis = sealed(&mut f.world, press.public_key(), &json!({ "recipient_pubkey": b64u::encode(press.public_key()) }));
+    register(&mut f.world, press.public_key(), &[sealed_genesis]);
+    approve(&mut f, vec![address_of(press.public_key())]);
+    assert_eq!(keys(&f), Err("PRESS_UNREADABLE"));
+}

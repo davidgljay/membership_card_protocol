@@ -894,6 +894,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "notary-template-leaky-test"
+version = "0.1.0"
+dependencies = [
+ "notary-guest",
+]
+
+[[package]]
 name = "notary-template-normalize"
 version = "0.1.0"
 dependencies = [

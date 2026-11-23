@@ -1,0 +1,2 @@
+# test-only modules (templates/leaky-test, the adversarial suite): built on demand, never committed
+leaky-test.*

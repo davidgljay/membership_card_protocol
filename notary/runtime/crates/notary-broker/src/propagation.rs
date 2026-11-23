@@ -369,7 +369,8 @@ impl Broker {
             self.derive.get_mut(key).expect("book").last_rev_boundary_ms = boundary;
             return false;
         }
-        let Some(policy_address) = self.oracle.policy_public_key(&key.1).map(|k| formats::card_pointer(&k)) else { return false };
+        let known = self.oracle.policy_public_key(&key.1);
+        let Some(policy_address) = known.or_else(|| self.oracle.learn_policy_key(io, &key.1)).map(|k| formats::card_pointer(&k)) else { return false };
         // the press's next sequence under T, read through the host; without it the batch waits for the next boundary
         let Some(mut sequence) = self.press_sequence(io, &policy_address, &key.0) else { return false };
         self.derive.get_mut(key).expect("book").last_rev_boundary_ms = boundary;

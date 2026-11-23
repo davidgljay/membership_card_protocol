@@ -390,15 +390,22 @@ impl Net {
 
     /// Genesis on node `i` (lifecycle Phase 0): a fresh notary card, identity-log `seq` 0 anchored, approved.
     pub fn genesis(&mut self, i: usize) -> String {
+        // The notary policy the card serves: a plain policy document whose key is the policy card's (lifecycle A.7 R1). The
+        // notary card's `issuer_card` is that card's address (E11), so a verifier can bind the request's `policy_id` to it.
+        let policy_key = MlDsaKey::generate();
+        let policy_doc = json!({ "recipient_pubkey": b64u::encode(policy_key.public_key()) }).to_string().into_bytes();
+        let notary_policy = formats::cid_of_bytes(&policy_doc);
+        let policy_card: String = notary_crypto::keccak256(policy_key.public_key()).iter().map(|b| format!("{b:02x}")).collect();
+        self.ipfs.insert(notary_policy.clone(), policy_doc);
         let req = json!({ "chain_pubkey": "HOST", "id_pubkey": "HOST", "nonce": b64u::encode(&[i as u8; 16]), "operator_card": format!("{:064x}", i + 1),
-            "operator_host_pubkey": b64u::encode(MlDsaKey::generate().public_key()), "platform": "simulator", "policy_id": "bafkreipolicy",
+            "operator_host_pubkey": b64u::encode(MlDsaKey::generate().public_key()), "platform": "simulator", "policy_id": notary_policy,
             "requested_at": "2027-01-15T00:00:00.000Z", "type": "notary.genesis_request.v1" });
         let out = self.call(i, json!({ "kind": "genesis", "req_id": "g", "request": req }));
         let ready = find(&out, "genesis_ready").expect("genesis_ready").clone();
         let card = ready["notary_card"].as_str().unwrap().to_string();
         self.nodes[i].chain_pubkey = b64u::decode(ready["chain_pubkey"].as_str().unwrap()).unwrap();
         let att_cid = formats::cid_of_bytes(&b64u::decode(ready["attestation"].as_str().unwrap()).unwrap());
-        let offer = json!({ "chain_pubkey": ready["chain_pubkey"], "genesis_attestation": att_cid, "issuer_card": "c".repeat(64), "operator_card": format!("{:064x}", i + 1),
+        let offer = json!({ "chain_pubkey": ready["chain_pubkey"], "genesis_attestation": att_cid, "issuer_card": policy_card, "operator_card": format!("{:064x}", i + 1),
             "platform": "simulator", "policy_id": "bafkreinotarycardpolicy", "recipient_pubkey": ready["id_pubkey"], "issuer_signature": "sig" });
         let signed = self.call(i, json!({ "kind": "countersign_notary_card", "req_id": "c", "offer": offer }));
         self.geneses.insert(card.clone(), json!({ "request": ready["request"], "attestation": ready["attestation"], "offer": find(&signed, "countersigned").map(|c| c["offer"].clone()), "id_pubkey": ready["id_pubkey"], "chain_pubkey": ready["chain_pubkey"] }));

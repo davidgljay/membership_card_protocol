@@ -1,0 +1,13 @@
+[package]
+name = "notary-template-leaky-test"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+description = "TEST ONLY: a deliberately leaky notary_v1 program for the adversarial suite (Phase 7.2). Never allowlisted, never committed under templates/modules/."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+notary-guest = { path = "../../guest", features = ["program", "raw_output"] }

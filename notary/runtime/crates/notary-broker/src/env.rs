@@ -64,6 +64,11 @@ pub trait CardOracle {
     }
     /// The policy card's ML-DSA-44 public key, from the last verified read of `policy_id` (a derived card's `ancestry_pubkeys`
     /// ends with it, protocol-objects §2.2).
+    /// A policy's public key when this enclave has not opened a job under it (a holder that took a template over by handoff
+    /// and now leads the sealed-link watch): the plain policy document at `policy_id` names it (E11). Default: not known.
+    fn learn_policy_key(&mut self, _io: &mut dyn HostIo, _policy_id: &str) -> Option<Vec<u8>> {
+        None
+    }
     fn policy_public_key(&self, _policy_id: &str) -> Option<Vec<u8>> {
         None
     }

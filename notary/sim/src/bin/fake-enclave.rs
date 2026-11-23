@@ -1,6 +1,6 @@
 //! `fake-enclave`: the simulator's fake enclave service as a process (step 5.5, docker-compose.sim.yml).
 //!
-//!   fake-enclave --listen 0.0.0.0:7100 [--pcr0-seed 66]   # serve attestations and the attested clock (real time)
+//!   fake-enclave --listen 0.0.0.0:7100 [--pcr0-seed 66] [--debug]   # serve attestations and the attested clock (real time)
 //!   fake-enclave --print-root                           # the test root certificate, base64url (for a pins file)
 //!   fake-enclave --print-pcr0 [--pcr0-seed 66]          # the PCR0 this service reports, base64url
 //!
@@ -25,10 +25,10 @@ fn main() {
         return;
     }
     let Some(listen) = arg(&args, "--listen") else {
-        eprintln!("usage: fake-enclave --listen HOST:PORT [--pcr0-seed N] | --print-root | --print-pcr0");
+        eprintln!("usage: fake-enclave --listen HOST:PORT [--pcr0-seed N] [--debug] | --print-root | --print-pcr0");
         std::process::exit(2);
     };
-    let svc = FakeEnclave::start_tcp(&listen, EnclaveConfig { pcr0_seed: seed, debug: false, clock_ms: None }).unwrap_or_else(|e| {
+    let svc = FakeEnclave::start_tcp(&listen, EnclaveConfig { pcr0_seed: seed, debug: args.iter().any(|a| a == "--debug"), clock_ms: None }).unwrap_or_else(|e| {
         eprintln!("fake-enclave: {listen}: {e}");
         std::process::exit(1);
     });

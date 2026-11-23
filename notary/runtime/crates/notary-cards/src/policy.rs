@@ -192,7 +192,7 @@ pub fn certified_press_keys(src: &dyn CardSource, policy_id: &str, roots: &Roots
         let doc_cid = match &by_pointer {
             Some(e) => match e.events.first() {
                 Some(g) => g.cid.as_str(),
-                None => continue,
+                None => return Err("PRESS_UNREADABLE"),
             },
             None => a,
         };
@@ -202,6 +202,12 @@ pub fn certified_press_keys(src: &dyn CardSource, policy_id: &str, roots: &Roots
             .and_then(|d| d.get("recipient_pubkey").and_then(Value::as_str).map(crate::support::b64_lenient))
             .filter(|k| k.len() == notary_crypto::MLDSA44_PUBLIC_KEY_LEN)
         else {
+            // F8.6: a registered card whose first event isn't a readable press document (registry heads are encrypted,
+            // so a pointer only works if the genesis was published plain) would certify nobody: say so, don't skip it.
+            // A name that resolves to nothing at all stays a skip (a press not yet registered is not an error).
+            if by_pointer.is_some() {
+                return Err("PRESS_UNREADABLE");
+            }
             continue;
         };
         let addr = address_of(&pk);

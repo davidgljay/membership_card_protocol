@@ -52,7 +52,11 @@ pub fn pcr0_of(seed: u8) -> Vec<u8> {
 }
 
 fn wall_ms() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64
+    let real = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+    // Test use only: `FAKE_ENCLAVE_OFFSET_FILE` names a file holding a number of milliseconds to add to the real clock,
+    // so an end-to-end run can move the attested clock across an hour or a period boundary (e2e `POST /warp`).
+    let offset = std::env::var("FAKE_ENCLAVE_OFFSET_FILE").ok().and_then(|f| std::fs::read_to_string(f).ok()).and_then(|t| t.trim().parse::<u64>().ok()).unwrap_or(0);
+    real + offset
 }
 
 /// A running fake enclave service. Dropping it does not stop the listener thread (it exits with the process).
