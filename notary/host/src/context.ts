@@ -6,7 +6,7 @@ import { blobStore, inputStore, jobStore, logStore, receiptStore, snapshotStore 
 import type { HostConfig } from "./config.js";
 import type { KvStore } from "./kv.js";
 import type { EnclaveSession } from "./enclave/transport.js";
-import type { ChainReader, ChainSubmitter, DeliveryClient, EasAnchorer, IpfsService, Monitor, PeerClient, PolicyReader, ReplicaStarter } from "./services.js";
+import type { ChainReader, ChainSubmitter, GasReader, DeliveryClient, EasAnchorer, IpfsService, Monitor, PeerClient, PolicyReader, ReplicaStarter } from "./services.js";
 
 export interface HostDeps {
   config: Pick<HostConfig, "NOTARY_CARD_ADDRESSES" | "NOTARY_HOST_MLDSA44_SEED" | "NOTARY_OHTTP_PRIVATE_KEY" | "NOTARY_RELAY_TARGET_ID" | "NOTARY_PUBLIC_BASE_URL" | "PEER_HOSTS" | "NOTARY_ADMIN_TOKEN">;
@@ -20,6 +20,8 @@ export interface HostDeps {
   delivery: DeliveryClient;
   replicas: ReplicaStarter;
   monitor: Monitor;
+  /** The gas wallet's balance (absent on the simulated chain: no `gas_balance_low` alert there). */
+  gas?: GasReader;
   /** Live enclave sessions, keyed by vsock CID (or simulator id). */
   sessions: Map<string, EnclaveSession>;
   now?: () => number;

@@ -27,6 +27,9 @@ export interface PolicyReader {
   notary(policyId: string, stateCid: string): Promise<{ notary: NotarySection; approvedNotaries: string[] } | null>;
 }
 
+/** The gas wallet's balance, for the `gas_balance_low` alert (notary_host.md §13). */
+export interface GasReader { balanceWei(): Promise<bigint> }
+
 /** Per-card chain reads, answered only for ancestors outside snapshotted policies and the disclosed fallback. */
 export interface ChainReader {
   cardHead(address: string): Promise<Uint8Array | null>;

@@ -20,6 +20,10 @@ export interface HostConfig {
   ARBITRUM_RPC_URL: string;
   EXPECTED_CHAIN_ID: number;
   REGISTRY_CONTRACT_ADDRESS: string;
+  /** The registry's storage contract (the logic contract above is `REGISTRY_CONTRACT_ADDRESS`). Required with `CHAIN_PROVIDER=rpc`. */
+  REGISTRY_STORAGE_ADDRESS: string | undefined;
+  /** The wallet service `notary_output` messages are sent through (`POST /messages`). Required with `CHAIN_PROVIDER=rpc`. */
+  NOTARY_DELIVERY_URL: string | undefined;
   EAS_CONTRACT_ADDRESS: string;
   NOTARY_EAS_SCHEMA_UID: string;
   IPFS_PROVIDER: "mock" | "kubo" | "sim";
@@ -33,6 +37,8 @@ export interface HostConfig {
   PEER_HOSTS: string[];
   SNAPSHOT_REFRESH_SECONDS: number;
   REATTEST_INTERVAL_SECONDS: number;
+  /** The gas wallet balance, in wei, below which `gas_balance_low` is raised. Default 0.01 ETH. */
+  GAS_BALANCE_LOW_WEI: bigint;
   ALERT_WEBHOOK_URL: string | undefined;
   NOTARY_ADMIN_TOKEN: string;
   NOTARY_RELAY_TARGET_ID: string;
@@ -68,6 +74,13 @@ export function loadConfig(env: Env): HostConfig {
   if ((chainProvider === "sim" || provider === "sim") && !env["SIM_CHAIN_URL"]) problems.push("SIM_CHAIN_URL is required with the simulated chain");
   if (provider === "sim" && chainProvider !== "sim") problems.push("IPFS_PROVIDER=sim requires CHAIN_PROVIDER=sim");
   if (provider === "kubo" && !env["KUBO_API_URL"]) problems.push("KUBO_API_URL is required when IPFS_PROVIDER=kubo");
+  const storageAddr = env["REGISTRY_STORAGE_ADDRESS"] || undefined;
+  if (storageAddr && !/^0x[0-9a-fA-F]{40}$/.test(storageAddr)) problems.push("REGISTRY_STORAGE_ADDRESS must be a 0x-prefixed 20-byte address");
+  if (chainProvider === "rpc" && !storageAddr) problems.push("REGISTRY_STORAGE_ADDRESS is required with CHAIN_PROVIDER=rpc");
+  const deliveryUrl = env["NOTARY_DELIVERY_URL"] || undefined;
+  if (chainProvider === "rpc" && !deliveryUrl) problems.push("NOTARY_DELIVERY_URL is required with CHAIN_PROVIDER=rpc");
+  const gasLow = env["GAS_BALANCE_LOW_WEI"] ?? "10000000000000000";
+  if (!/^\d+$/.test(gasLow)) problems.push("GAS_BALANCE_LOW_WEI must be a non-negative integer (wei)");
   const cids = list("ENCLAVE_CIDS");
   const endpoints: EnclaveEndpoint[] = [];
   for (const e of list("ENCLAVE_ENDPOINTS", false)) {
@@ -81,11 +94,11 @@ export function loadConfig(env: Env): HostConfig {
   const cfg: HostConfig = {
     NOTARY_CARD_ADDRESSES: cards, NOTARY_HOST_MLDSA44_SEED: key32("NOTARY_HOST_MLDSA44_PRIVATE_KEY"), NOTARY_OHTTP_PRIVATE_KEY: key32("NOTARY_OHTTP_PRIVATE_KEY"),
     NOTARY_GAS_WALLET_PRIVATE_KEY: gas, ARBITRUM_RPC_URL: req("ARBITRUM_RPC_URL"), EXPECTED_CHAIN_ID: int("EXPECTED_CHAIN_ID", 42161),
-    REGISTRY_CONTRACT_ADDRESS: addr("REGISTRY_CONTRACT_ADDRESS"), EAS_CONTRACT_ADDRESS: addr("EAS_CONTRACT_ADDRESS"), NOTARY_EAS_SCHEMA_UID: schema,
+    REGISTRY_CONTRACT_ADDRESS: addr("REGISTRY_CONTRACT_ADDRESS"), REGISTRY_STORAGE_ADDRESS: storageAddr, NOTARY_DELIVERY_URL: deliveryUrl, EAS_CONTRACT_ADDRESS: addr("EAS_CONTRACT_ADDRESS"), NOTARY_EAS_SCHEMA_UID: schema,
     IPFS_PROVIDER: provider === "kubo" ? "kubo" : provider === "sim" ? "sim" : "mock",
     CHAIN_PROVIDER: chainProvider === "sim" ? "sim" : "rpc", SIM_CHAIN_URL: env["SIM_CHAIN_URL"] || undefined, KUBO_API_URL: env["KUBO_API_URL"], EXTERNAL_KV_URL: req("EXTERNAL_KV_URL"),
     ENCLAVE_CIDS: cids, ENCLAVE_ENDPOINTS: endpoints, PEER_HOSTS: list("PEER_HOSTS", false), SNAPSHOT_REFRESH_SECONDS: int("SNAPSHOT_REFRESH_SECONDS", 30),
-    REATTEST_INTERVAL_SECONDS: int("REATTEST_INTERVAL_SECONDS", 21_600), ALERT_WEBHOOK_URL: env["ALERT_WEBHOOK_URL"] || undefined,
+    REATTEST_INTERVAL_SECONDS: int("REATTEST_INTERVAL_SECONDS", 21_600), GAS_BALANCE_LOW_WEI: /^\d+$/.test(gasLow) ? BigInt(gasLow) : 0n, ALERT_WEBHOOK_URL: env["ALERT_WEBHOOK_URL"] || undefined,
     NOTARY_ADMIN_TOKEN: admin, NOTARY_RELAY_TARGET_ID: req("NOTARY_RELAY_TARGET_ID"), NOTARY_PUBLIC_BASE_URL: req("NOTARY_PUBLIC_BASE_URL"),
   };
   if (problems.length > 0) throw new ConfigError(problems);

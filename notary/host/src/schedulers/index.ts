@@ -30,9 +30,12 @@ export interface SchedulerState {
   snapshotting: boolean;
   /** 6.3: jobs whose local replica answered `close_pending` (the result comes from the leader). */
   closePending: Set<string>;
+  /** When the last full snapshot pass finished, and when each alert was last raised (an alert repeats at most every five minutes). */
+  lastSnapshotOkMs: number;
+  alerted: Map<string, number>;
 }
 
-export const newSchedulerState = (): SchedulerState => ({ newestHeader: 0, chainTimeMs: 0, sentPolicies: new Map(), closing: new Set(), snapshotting: false, closePending: new Set() });
+export const newSchedulerState = (): SchedulerState => ({ newestHeader: 0, chainTimeMs: 0, sentPolicies: new Map(), closing: new Set(), snapshotting: false, closePending: new Set(), lastSnapshotOkMs: 0, alerted: new Map() });
 
 export async function headersTick(ctx: HostContext, feed: ChainFeed, st: SchedulerState): Promise<void> {
   const hs = await feed.headersAfter(st.newestHeader);
@@ -147,6 +150,7 @@ async function runSnapshots(ctx: HostContext, feed: ChainFeed, st: SchedulerStat
     st.sentPolicies.set(policy, r.block);
     if ([...ctx.sessions.values()].some((s) => !s.closed)) ctx.snapshotsSent.add(policy);
   }
+  if (!onlyNew) st.lastSnapshotOkMs = ctx.now();
 }
 
 export async function closeTick(ctx: HostContext, st: SchedulerState): Promise<void> {
@@ -205,7 +209,40 @@ export async function endTick(ctx: HostContext, st: SchedulerState): Promise<voi
 }
 
 /** Runs the three schedulers on timers. Returns a stop function. */
-export function startSchedulers(ctx: HostContext, feed: ChainFeed, o: { headerMs?: number; snapshotSeconds: number; closeMs?: number; tickMs?: number; directoryMs?: number }): () => void {
+/** Re-raise an alert at most this often. */
+const ALERT_EVERY_MS = 5 * 60_000;
+
+/**
+ * The monitoring checks of notary_host.md §13 that are the host's to make: the enclaves it has attested against the ones it
+ * is configured for, each live job's replicas against its `min_live`, the gas wallet's balance, and how long ago a full
+ * snapshot pass last finished. Alerts carry a code and counts only. (`anchor_backlog`, `close_mismatch` and the rest are
+ * raised where they happen.)
+ */
+export async function monitorTick(ctx: HostContext, st: SchedulerState, o: { snapshotSeconds: number; gasLowWei?: bigint }): Promise<void> {
+  const now = ctx.now();
+  const raise = async (code: string, counts: Record<string, number>) => {
+    if (now - (st.alerted.get(code) ?? -Infinity) < ALERT_EVERY_MS) return;
+    st.alerted.set(code, now);
+    await ctx.monitor.alert("warn", code, counts);
+  };
+  const configured = ctx.sessions.size;
+  const attested = [...ctx.sessions.values()].filter((s) => !s.closed).length;
+  if (attested < configured) await raise("enclaves_attested", { attested, configured });
+  for (const hash of await ctx.jobs.list()) {
+    const j = await ctx.jobs.get(hash);
+    if (!j || j.state === "finalized" || j.state === "ended" || j.state === "aborted") continue;
+    const min = Number((j.job as { min_live?: number }).min_live ?? 0);
+    const live = j.replicas.filter((id) => { const s = ctx.instances.get(id); return s && !s.closed; }).length;
+    if (j.replicas.length > 0 && live < min) await raise("replicas_below_min_live", { live, min_live: min });
+  }
+  if (ctx.gas && o.gasLowWei !== undefined) {
+    try { const bal = await ctx.gas.balanceWei(); if (bal < o.gasLowWei) await raise("gas_balance_low", { balance_gwei: Number(bal / 1_000_000_000n) }); }
+    catch { await raise("gas_balance_low", { unreadable: 1 }); }
+  }
+  if (st.lastSnapshotOkMs > 0 && now - st.lastSnapshotOkMs > 3 * o.snapshotSeconds * 1000) await raise("snapshot_lag", { seconds: Math.floor((now - st.lastSnapshotOkMs) / 1000) });
+}
+
+export function startSchedulers(ctx: HostContext, feed: ChainFeed, o: { headerMs?: number; snapshotSeconds: number; closeMs?: number; tickMs?: number; directoryMs?: number; monitorMs?: number; gasLowWei?: bigint }): () => void {
   const st = newSchedulerState();
   const guard = (f: () => Promise<void>) => { let busy = false; return async () => { if (busy) return; busy = true; try { await f(); } catch { /* next tick */ } finally { busy = false; } }; };
   const timers = [
@@ -217,6 +254,7 @@ export function startSchedulers(ctx: HostContext, feed: ChainFeed, o: { headerMs
     // 6.3: ticks (Q6) and the peer directory (Q5)
     setInterval(guard(() => tickTick(ctx)), o.tickMs ?? 1000),
     setInterval(guard(() => directoryTick(ctx)), o.directoryMs ?? 5000),
+    setInterval(guard(() => monitorTick(ctx, st, { snapshotSeconds: o.snapshotSeconds, ...(o.gasLowWei !== undefined ? { gasLowWei: o.gasLowWei } : {}) })), o.monitorMs ?? 30_000),
   ];
   return () => timers.forEach(clearInterval);
 }

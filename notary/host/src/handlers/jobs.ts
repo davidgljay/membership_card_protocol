@@ -110,6 +110,19 @@ export async function handleJobStatus(ctx: HostContext, jobHash: string): Promis
  * `epoch_started` and announces only after that record is anchored; until then the host serves no announcement, so no
  * wallet can seal to a key that is gone.
  */
+/**
+ * The enclave that restarts a job. Normally one of the job's recorded replicas. After a total loss none of them is alive, and
+ * the restart is exactly what the operator needs: any live local enclave that holds the identity of one of the job's notary
+ * cards can start the next epoch (replication §7: "the host asks an enclave"), so a surviving identity holder is used.
+ */
+function restartSession(ctx: HostContext, j: { job: unknown; replicas: string[] }): EnclaveSession {
+  try { return liveSession(ctx, j.replicas); } catch (e) {
+    const cards = new Set(((j.job as { replica_set?: { notary_card: string }[] }).replica_set ?? []).map((r) => r.notary_card));
+    for (const [id, s] of ctx.instances) if (!s.closed && cards.has(ctx.instanceCards.get(id) ?? "")) return s;
+    throw e;
+  }
+}
+
 export async function handleRestartJob(ctx: HostContext, authorization: string | undefined, jobHash: string, body: { reason?: string }): Promise<{ job_hash: string; epoch: number; status: string }> {
   requireOperator(ctx, authorization);
   const j = await ctx.jobs.get(jobHash);
@@ -122,7 +135,7 @@ export async function handleRestartJob(ctx: HostContext, authorization: string |
   if (lastLog === null) throw new HostError("NH_JOB_UNKNOWN", "the host holds no job-log record for this job yet", 409);
   const program = await ctx.ipfs.fetch(j.programCid);
   if (!program) throw new HostError("JOB_MALFORMED", "program not available from IPFS");
-  const session = liveSession(ctx, j.replicas);
+  const session = restartSession(ctx, j);
   let reply;
   try {
     reply = await session.call("create_job", {
@@ -132,6 +145,6 @@ export async function handleRestartJob(ctx: HostContext, authorization: string |
   } catch (e) { if (e instanceof EnclaveError) throw new HostError(e.code, e.message, e.code === "NH_ENCLAVE_UNAVAILABLE" ? 503 : 400); throw e; }
   if (reply.kind === "job_rejected") throw new HostError(String(reply["code"]), "the enclave refused the restart");
   const epoch = Number(reply["epoch"]);
-  await ctx.jobs.put({ ...j, epoch, announcement: null, state: "keyed" });
+  await ctx.jobs.put({ ...j, epoch, announcement: null, state: "keyed", replicas: instanceIdOf(ctx, session) });
   return { job_hash: jobHash, epoch, status: "keyed" };
 }

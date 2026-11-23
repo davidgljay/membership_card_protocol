@@ -24,5 +24,6 @@ export function encodeAnchorData(a: { scopeId: string; seq: number; recordCid: s
 
 /** An `EasAnchorer` over an injected attest function (the viem call in production). */
 export function easAnchorer(attest: (schemaUid: string, data: string) => Promise<{ txHash: string }>, schemaUid: string): EasAnchorer {
-  return { anchor: (a) => attest(schemaUid, encodeAnchorData(a)) };
+  // async: a bad scope is a rejected promise, like every other failure, not a throw before the caller's `await`
+  return { anchor: async (a) => attest(schemaUid, encodeAnchorData(a)) };
 }

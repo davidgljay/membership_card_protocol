@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { defineNitroConfig } from 'nitropack';
 
 // The host runs on the operator's enclave-capable EC2 parent instance, so the node-server preset is the default
@@ -10,6 +11,8 @@ export default defineNitroConfig({
   // The dependency tree needs two major versions of @noble/hashes (the verifier uses 1.x, @noble/post-quantum 0.5 uses 2.x).
   // Tracing externals flattens them to one version and breaks the other at runtime; bundling resolves each import per importer.
   noExternals: true,
+  // ws's optional native accelerators (see stubs/not-installed.mjs): viem imports ws for a WebSocket transport the host does not use
+  alias: { bufferutil: fileURLToPath(new URL('./stubs/not-installed.mjs', import.meta.url)), 'utf-8-validate': fileURLToPath(new URL('./stubs/not-installed.mjs', import.meta.url)) },
   routeRules: {},
   // Storage `notary` is mounted at startup (server/plugins/startup.ts) from EXTERNAL_KV_URL, read at run time:
   // a `storage` entry here would bake the build machine's URL into the image.

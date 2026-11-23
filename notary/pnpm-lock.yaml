@@ -120,9 +120,6 @@ importers:
       hpke-js:
         specifier: ^1.8.0
         version: 1.8.1
-      nitropack:
-        specifier: ^2.11.0
-        version: 2.13.6(bare-buffer@3.7.1)(vite@7.3.8(@types/node@22.20.5)(jiti@2.7.0)(terser@5.51.2))
       unstorage:
         specifier: 1.17.6
         version: 1.17.6(db0@0.3.4)(ioredis@5.11.1)
@@ -133,6 +130,9 @@ importers:
       '@types/node':
         specifier: ^22.0.0
         version: 22.20.5
+      nitropack:
+        specifier: ^2.11.0
+        version: 2.13.6(bare-buffer@3.7.1)(vite@7.3.8(@types/node@22.20.5)(jiti@2.7.0)(terser@5.51.2))
       typescript:
         specifier: ^5.8.3
         version: 5.9.3

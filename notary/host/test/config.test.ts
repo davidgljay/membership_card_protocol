@@ -7,6 +7,7 @@ const good: Record<string, string> = {
   ARBITRUM_RPC_URL: "http://rpc", EXPECTED_CHAIN_ID: "412346", REGISTRY_CONTRACT_ADDRESS: "0x" + "12".repeat(20), EAS_CONTRACT_ADDRESS: "0x" + "34".repeat(20),
   NOTARY_EAS_SCHEMA_UID: "0x" + "56".repeat(32), IPFS_PROVIDER: "mock", EXTERNAL_KV_URL: "redis://redis:6379", ENCLAVE_CIDS: "16,17",
   ENCLAVE_ENDPOINTS: "16=127.0.0.1:7001,17=unix:/run/enclave-17.sock", NOTARY_ADMIN_TOKEN: "x".repeat(40), NOTARY_RELAY_TARGET_ID: "notary-a", NOTARY_PUBLIC_BASE_URL: "https://n.example",
+  REGISTRY_STORAGE_ADDRESS: "0x" + "78".repeat(20), NOTARY_DELIVERY_URL: "http://wallet-service:3000",
 };
 
 describe("host configuration (notary_host.md §4)", () => {

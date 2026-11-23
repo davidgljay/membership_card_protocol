@@ -4,7 +4,7 @@ import { b64uDecode, canonicalNotary, cidOfBytes, H } from "@membership-card-pro
 import { handleCreateJob, handleGetAnnouncement, handleJobStatus, handleRestartJob } from "../src/handlers/jobs.js";
 import { handleSubmitInput, MAX_SEALED_INPUT } from "../src/handlers/inputs.js";
 import { HostError } from "../src/context.js";
-import { harness, job, JOB_HASH, sealed, flush, PROGRAM, hostPublicKey } from "./helpers.js";
+import { harness, job, JOB_HASH, sealed, flush, PROGRAM, hostPublicKey, kEnclaveInst } from "./helpers.js";
 import { vec } from "./helpers.js";
 
 const code = async (p: Promise<unknown>) => { try { await p; return "ok"; } catch (e) { return e instanceof HostError ? e.code : `other:${(e as Error).message}`; } };
@@ -205,5 +205,17 @@ describe("POST /jobs/{hash}/restart (replication §7, steps 25–26)", () => {
     const refused = await harness({ createJob: () => ({ reject: "JOB_MALFORMED" }) });
     await put(refused);
     await expect(handleRestartJob(refused.ctx, `Bearer ${TOKEN}`, JOB_HASH, {})).rejects.toMatchObject({ code: "JOB_MALFORMED" });
+  });
+
+  it("after a total loss, a surviving enclave that holds the notary identity restarts the job; one that does not, cannot", async () => {
+    const reply = { createJob: (m: Record<string, unknown>) => ({ epoch: (m["restart"] as { prev_epoch: number }).prev_epoch + 1, job_public_key: "TkVX", attestation: "QVRU" }) };
+    const h = await harness(reply);
+    await put(h, { replicas: ["the-dead-instance"] }); // every recorded replica is gone
+    // control: the live enclave does not serve any card of this job, so nothing may restart it
+    await expect(handleRestartJob(h.ctx, `Bearer ${TOKEN}`, JOB_HASH, {})).rejects.toMatchObject({ code: "NH_ENCLAVE_UNAVAILABLE" });
+    // it holds the identity of the job's notary card (an identity handoff): it can start the next epoch, and becomes the job's replica
+    h.ctx.instanceCards.set(kEnclaveInst, (job["replica_set"] as { notary_card: string }[])[0]!.notary_card);
+    expect(await handleRestartJob(h.ctx, `Bearer ${TOKEN}`, JOB_HASH, {})).toEqual({ job_hash: JOB_HASH, epoch: 1, status: "keyed" });
+    expect((await h.ctx.jobs.get(JOB_HASH))!.replicas).toEqual([kEnclaveInst]);
   });
 });
