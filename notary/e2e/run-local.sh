@@ -7,20 +7,26 @@ cd "$(dirname "$0")/.."
 LOGS=${LOGS:-$(mktemp -d)}
 echo "logs in $LOGS"
 pids=()
-cleanup() { for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done; }
+cleanup() { [ -n "${HOLD:-}" ] && sleep "$HOLD"; for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done; }
 trap cleanup EXIT
 set -a; . e2e/sim.env; set +a
-export SIM_CHAIN_URL=http://127.0.0.1:8545 HOST_URL=http://127.0.0.1:3000 STATE_FILE="$LOGS/state.json"
+# HOST_PORT / SIM_PORT move the host and the simulated chain off 3000 / 8545 where something else (the integration stack's relay) has them
+HOST_PORT=${HOST_PORT:-3000}; SIM_PORT=${SIM_PORT:-8545}
+export SIM_CHAIN_URL=http://127.0.0.1:$SIM_PORT HOST_URL=http://127.0.0.1:$HOST_PORT STATE_FILE="$LOGS/state.json"
+export ENCLAVE_OFFSET_FILE="$LOGS/enclave-offset" FAKE_ENCLAVE_OFFSET_FILE="$LOGS/enclave-offset"
+echo 0 > "$ENCLAVE_OFFSET_FILE"
 export ATTESTATION_ROOT=$(target/debug/fake-enclave --print-root)
 export EXTERNAL_KV_URL=memory:// ENCLAVE_CIDS=sim-1 ENCLAVE_ENDPOINTS=sim-1=127.0.0.1:7001 NOTARY_PUBLIC_BASE_URL=$HOST_URL
 
-node --experimental-strip-types e2e/src/sim-chain.ts >"$LOGS/sim-chain.log" 2>&1 & pids+=($!)
+SIM_CHAIN_PORT=$SIM_PORT node --experimental-strip-types e2e/src/sim-chain.ts >"$LOGS/sim-chain.log" 2>&1 & pids+=($!)
 target/debug/fake-enclave --listen 127.0.0.1:7100 >"$LOGS/fake-enclave.log" 2>&1 & pids+=($!)
 sleep 1
 target/debug/notary-runtime --mode broker --listen tcp:127.0.0.1:7001 --attest sim:tcp:127.0.0.1:7100 --pins e2e/fixtures/pins.json >"$LOGS/runtime.log" 2>&1 & pids+=($!)
 sleep 1
 
 # no NOTARY_CARD_ADDRESSES: the host serves the card it creates through /genesis
-PORT=3000 node host/.output/server/index.mjs >>"$LOGS/host.log" 2>&1 & pids+=($!)
-node --experimental-strip-types e2e/src/driver.ts --phase setup | tee "$LOGS/setup.log"
-node --experimental-strip-types e2e/src/driver.ts --phase job | tee "$LOGS/job.log"
+PORT=$HOST_PORT node host/.output/server/index.mjs >>"$LOGS/host.log" 2>&1 & pids+=($!)
+# PHASES="setup derive" runs just those (setup is always first); HOLD=seconds keeps the stack up on exit, for poking at it by hand
+for phase in ${PHASES:-setup job vote adversarial derive expiry}; do
+  node --experimental-strip-types e2e/src/driver.ts --phase "$phase" | tee "$LOGS/$phase.log"
+done

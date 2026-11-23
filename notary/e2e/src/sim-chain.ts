@@ -48,12 +48,14 @@ export function createSimChain(o: { blockMs?: number; startMs?: number } = {}) {
   /** `PressAuthorizations`: "policyHex:pressHex" → the press's secp256r1 key (x||y), next sequence. Test setup stands for `AuthorizePress`. */
   const pressAuths = new Map<string, { key: Uint8Array; next: number; active: boolean }>();
   let lastTs = 0;
+  /** Test time warp (`POST /warp`): added to wall time for every block, so a run can cross an hour or a period boundary. */
+  let warpMs = 0;
 
   function mine(): Block {
     const parent = blocks.length ? hexToBytes(blocks[blocks.length - 1]!.hash as `0x${string}`) : new Uint8Array(32);
     const number = blocks.length + 1;
     // strictly increasing whole seconds, at or after wall time
-    const ts = Math.max(Math.floor((o.startMs ?? Date.now()) / 1000), Math.floor(Date.now() / 1000), lastTs + 1);
+    const ts = Math.max(Math.floor((o.startMs ?? Date.now() + warpMs) / 1000), Math.floor((Date.now() + warpMs) / 1000), lastTs + 1);
     lastTs = ts;
     const z = (n: number) => bytesToHex(new Uint8Array(n));
     const rlp = toRlp([bytesToHex(parent), z(32), z(20), bytesToHex(keccak_256(new TextEncoder().encode(`state-${number}`))), z(32), z(32), z(256),
@@ -182,6 +184,9 @@ export function createSimChain(o: { blockMs?: number; startMs?: number } = {}) {
         return { tx_hash: bytesToHex(digest) };
       } catch (e) { return { failed: `MALFORMED: ${(e as Error).message}` }; }
     },
+    /** Moves chain time forward by `ms` (test only); the next block carries the new time. */
+    warpedMs() { return warpMs; },
+    warp(ms: number) { warpMs += ms; mine(); return warpMs; },
     stop() { clearInterval(timer); },
   };
   return api;
@@ -205,7 +210,8 @@ export function serveSimChain(chain: SimChain, port: number, host = "0.0.0.0") {
       const url = new URL(req.url ?? "/", "http://x");
       const p = url.pathname.split("/").filter(Boolean);
       const m = req.method ?? "GET";
-      if (m === "GET" && p[0] === "time") return send(res, 200, { ms: Date.now(), block: chain.blocks.length });
+      if (m === "GET" && p[0] === "time") return send(res, 200, { ms: Date.now() + chain.warpedMs(), block: chain.blocks.length });
+      if (m === "POST" && p[0] === "warp") return send(res, 200, { warp_ms: chain.warp(Number((JSON.parse((await body(req)).toString()) as { ms: number }).ms)) });
       if (m === "PUT" && p[0] === "ipfs") return send(res, 200, { cid: chain.pin(new Uint8Array(await body(req))) });
       if (m === "GET" && p[0] === "ipfs" && p[1]) { const b = chain.ipfs.get(p[1]); return b ? send(res, 200, b) : send(res, 404, { error: "not found" }); }
       if (m === "POST" && p[0] === "registry" && p[1] === "card") return send(res, 200, chain.registerCard(JSON.parse((await body(req)).toString())));
@@ -228,6 +234,8 @@ export function serveSimChain(chain: SimChain, port: number, host = "0.0.0.0") {
       if (m === "POST" && p[0] === "tx") { const r = chain.submitTx(JSON.parse((await body(req)).toString())); return send(res, "failed" in r ? 409 : 200, r); }
       if (m === "POST" && p[0] === "registry" && p[1] === "press-auth") { const b = JSON.parse((await body(req)).toString()) as { policy: string; press: string; key: string }; chain.authorizePress(b.policy, b.press, b64uDecode(b.key)); return send(res, 200, { ok: true }); }
       if (m === "GET" && p[0] === "registry" && p[1] === "press" && p[2] && p[3]) { const a = chain.pressAuth(p[2], p[3]); return a ? send(res, 200, a) : send(res, 404, { error: "not found" }); }
+      if (m === "GET" && p[0] === "registry" && p[1] === "policies") return send(res, 200, Object.fromEntries(chain.policyCards));
+      if (m === "GET" && p[0] === "txs") return send(res, 200, chain.txs);
       if (m === "GET" && p[0] === "registry" && p[1] === "protocol-version") return send(res, 200, { version: "0.1" });
       return send(res, 404, { error: "no route" });
     } catch (e) { return send(res, 500, { error: (e as Error).message }); }

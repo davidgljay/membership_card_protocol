@@ -11,9 +11,9 @@ services:
     build: { context: ../.., dockerfile: notary/deploy/Dockerfile.e2e }
     image: notary-e2e:dev
     environment: { SIM_CHAIN_PORT: "8545" }
-  redis-a: { image: "redis:7-alpine" }
-  redis-b: { image: "redis:7-alpine" }
-  redis-c: { image: "redis:7-alpine" }
+  redis-a: { image: "redis:7-alpine@sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe" }
+  redis-b: { image: "redis:7-alpine@sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe" }
+  redis-c: { image: "redis:7-alpine@sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe" }
   enclave-a: { build: { context: .., dockerfile: deploy/Dockerfile.runtime-sim }, image: notary-runtime-sim:dev }
   enclave-b: { image: notary-runtime-sim:dev }
   enclave-c1: { image: notary-runtime-sim:dev }

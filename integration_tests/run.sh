@@ -13,6 +13,11 @@
 # Flags:
 #   --unit-only         run (a) only, skip (b)-(d)
 #   --integration-only   skip (a), run (b)-(d)
+#   --with-notary        also run the Digital Notaries tests (notary-code-plan.md §7.1): fetches EAS (integrity-checked, devnode
+#                         only) so suites/notary/eas_anchor runs, then the notary processes end to end (the simulated-chain
+#                         scenarios and the three-host Docker scenario) and the AWS-isolation tests-ran check. Slow (about
+#                         15 minutes: cargo builds and the three-host run) and needs cargo, node >= 22, pnpm and Docker.
+#                         Without this flag suites/notary/ still runs in `npm test`; its EAS suite skips.
 #   --suite <name>       run only one suite file within (c), e.g.
 #                         `core/card_signing` or `extended/oblivious_transport`
 #                         (path relative to suites/, .spec.ts optional).
@@ -34,6 +39,7 @@ INTEGRATION_DIR="$ROOT/integration_tests"
 RUN_UNIT=1
 RUN_INTEGRATION=1
 SUITE_FILTER=""
+WITH_NOTARY=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -45,6 +51,10 @@ while [[ $# -gt 0 ]]; do
       RUN_UNIT=0
       shift
       ;;
+    --with-notary)
+      WITH_NOTARY=1
+      shift
+      ;;
     --suite)
       SUITE_FILTER="${2:?--suite requires a suite name}"
       RUN_UNIT=0
@@ -52,7 +62,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     *)
       echo "run.sh: unknown argument '$1'" >&2
-      echo "usage: run.sh [--unit-only] [--integration-only] [--suite <name>]" >&2
+      echo "usage: run.sh [--unit-only] [--integration-only] [--with-notary] [--suite <name>]" >&2
       exit 2
       ;;
   esac
@@ -261,6 +271,18 @@ run_integration() {
   step "suites: npm ci" npm ci
   step "suites: typecheck" npm run typecheck
 
+  # Digital Notaries (notary-code-plan.md §7.1). EAS is deployed on the stack's devnode by suites/notary/eas_anchor from EAS
+  # 1.9.0's compiled contracts, fetched here with a pinned SHA-512 (env/notary/fetch-eas-contracts.sh).
+  if [[ "$WITH_NOTARY" -eq 1 ]]; then
+    local eas_dir
+    if eas_dir="$("$INTEGRATION_DIR/env/notary/fetch-eas-contracts.sh" "${NOTARY_EAS_CACHE:-$INTEGRATION_DIR/.cache/eas-contracts}")"; then
+      export EAS_CONTRACTS_DIR="$eas_dir"
+    else
+      echo "!!! FAILED: notary: fetch EAS contracts" >&2
+      FAILURES+=("notary: fetch EAS contracts")
+    fi
+  fi
+
   if [[ -n "$SUITE_FILTER" ]]; then
     local suite_path="$SUITE_FILTER"
     [[ "$suite_path" == *.spec.ts ]] || suite_path="${suite_path}.spec.ts"
@@ -282,6 +304,33 @@ run_integration() {
     cd "$INTEGRATION_DIR/harnesses/rn"
     step "harness: rn (jest)" bash -c "npm ci && npm test"
   fi
+
+  if [[ "$WITH_NOTARY" -eq 1 && -z "$SUITE_FILTER" ]]; then
+    run_notary_processes
+  fi
+}
+
+# The notary processes end to end (README: notary/e2e/README.md). Host ports are moved off the stack's relay (3000); the
+# three-host scenario runs in its own Docker network and publishes no ports. Each is one step, so one failing scenario does
+# not hide the next.
+run_notary_processes() {
+  echo ""
+  echo "########## Notary end to end (--with-notary) ##########"
+  step "notary: install and build (host, workspace)" \
+    bash -c "cd '$ROOT/notary' && pnpm install --frozen-lockfile --filter ./host... --filter ./e2e... && pnpm --filter ./host run build"
+  step "notary: cargo build (runtime, simulator)" \
+    bash -c "cd '$ROOT/notary' && cargo build --locked -p notary-runtime -p notary-sim"
+  step "notary: e2e vitest" \
+    bash -c "cd '$ROOT/notary/e2e' && pnpm exec vitest run"
+  step "notary: hostile-host harness (the host's real handlers with a hostile operator's services, against the real enclave)" \
+    bash -c "cd '$ROOT/notary' && bash e2e/hostile/run-hostile.sh"
+  step "notary: processes on the simulated chain (setup, job, vote, adversarial, derive, expiry)" \
+    bash -c "cd '$ROOT/notary' && HOST_PORT=3100 SIM_PORT=8645 bash e2e/run-local.sh"
+  step "notary: three hosts, a replica killed mid-vote (Docker)" \
+    bash -c "bash '$ROOT/notary/e2e/run-three.sh'"
+  # the isolation tests exist only on Linux (E27); elsewhere the script exits 1 by design, so say so and skip
+  step "notary: isolation tests ran unskipped (E27, Linux only)" \
+    bash -c "if [ \"\$(uname)\" = Linux ]; then '$ROOT/notary/scripts/check-isolation-tests-ran.sh'; else echo 'skipped: not Linux (\$(uname)); the AWS-isolation tests run in CI on Linux'; fi"
 }
 
 if [[ "$RUN_UNIT" -eq 1 ]]; then

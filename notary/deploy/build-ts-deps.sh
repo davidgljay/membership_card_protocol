@@ -1,15 +1,22 @@
 #!/bin/sh
 # Builds the TypeScript packages the notary host and the e2e tooling depend on, inside an image (build context: the
-# repository root, copied to /repo). The wallet SDK's two provider devDependencies (React Native / web Matrix crypto)
-# are dropped: they are used only by its own tests, and nothing under its src/ imports them.
+# repository root, copied to /repo, or any checkout with REPO_ROOT set). Every install is `--frozen-lockfile`: the workspace's own lockfile decides what is
+# installed, and a lockfile that does not match its manifests fails the build instead of being re-resolved.
+#
+# Each workspace's root files (package.json, pnpm-lock.yaml, pnpm-workspace.yaml) are copied by the Dockerfile with the
+# packages named here. `--filter "./<pkg>..."` installs that package and what it depends on, so a lockfile entry for a
+# package that is not in the image (another workspace member) is ignored.
 set -e
-cd /repo
-b() { (cd "$1" && pnpm install --frozen-lockfile=false && pnpm run build); }
-b membership_card_verifier/packages/verifier
-# outside its own pnpm workspace, the provider's `workspace:*` reference to the verifier is the sibling directory
-sed -i 's|"@membership-card-protocol/verifier": "workspace:\*"|"@membership-card-protocol/verifier": "file:../verifier"|' membership_card_verifier/packages/verifier-ipfs-provider/package.json
-b membership_card_verifier/packages/verifier-ipfs-provider
-b app-sdk/packages/app-sdk
-b notary/attestation-ts
-(cd wallet-sdk/packages/wallet-sdk && npm pkg delete "devDependencies.@membership-card-protocol/sdk-providers-rn" "devDependencies.@membership-card-protocol/sdk-providers-web")
-b wallet-sdk/packages/wallet-sdk
+cd "${REPO_ROOT:-/repo}"
+# b <workspace root> <package dir>...: a locked install of those packages, then their builds, in the order given
+b() {
+  root=$1; shift
+  filters=""
+  for p in "$@"; do filters="$filters --filter ./$p..."; done
+  (cd "$root" && pnpm install --frozen-lockfile $filters)
+  for p in "$@"; do (cd "$root" && pnpm --filter "./$p" run build); done
+}
+b membership_card_verifier packages/verifier packages/verifier-ipfs-provider
+b app-sdk packages/app-sdk
+b notary attestation-ts
+b wallet-sdk packages/wallet-sdk

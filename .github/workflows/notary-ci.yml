@@ -1,0 +1,180 @@
+name: Notary CI
+
+# Notary plan R5 (decided 2026-11-21; plans/notary-questions-phase-7.md Q1-Q3). Three tiers:
+#   1. every push and pull request touching the notary, the wallet SDK or the verifier: Rust, TypeScript, G5 isolation grep,
+#      and the Linux isolation tests (E27);
+#   2. the same trigger: notary/e2e/run-local.sh (about a minute, no compose);
+#   3. nightly, on demand, or on a pull request labelled `notary-e2e`: notary/e2e/run-three.sh (about seven minutes, compose).
+# The nightly differential fuzz job is its own workflow (notary-fuzz.yml). Nothing here touches a chain, AWS or money.
+on:
+  push:
+    paths:
+      - 'notary/**'
+      - 'wallet-sdk/**'
+      - 'app-sdk/**'
+      - 'membership_card_verifier/packages/**'
+      - 'specs/**'
+      - '.github/workflows/notary-ci.yml'
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+    paths:
+      - 'notary/**'
+      - 'wallet-sdk/**'
+      - 'app-sdk/**'
+      - 'membership_card_verifier/packages/**'
+      - 'specs/**'
+      - '.github/workflows/notary-ci.yml'
+  schedule:
+    - cron: '47 2 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: notary-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  rust:
+    name: Rust workspace and Linux isolation tests
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.0
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: notary
+      - name: cargo test --workspace
+        working-directory: notary
+        run: cargo test --workspace --no-fail-fast
+      - name: Isolation tests ran on Linux (E27)
+        run: bash notary/scripts/check-isolation-tests-ran.sh
+
+  typescript:
+    name: TypeScript suites and G5 grep
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: |
+            notary/pnpm-lock.yaml
+            wallet-sdk/pnpm-lock.yaml
+            membership_card_verifier/packages/verifier/pnpm-lock.yaml
+      - name: Build the file dependencies, in order
+        run: |
+          set -e
+          build() { (cd "$1" && pnpm install --frozen-lockfile && pnpm run build); }
+          build membership_card_verifier/packages/verifier
+          build membership_card_verifier/packages/verifier-ipfs-provider
+          build app-sdk/packages/app-sdk
+          build sdk-providers-rn/packages/sdk-providers-rn
+          build sdk-providers-web/packages/sdk-providers-web
+          (cd notary && pnpm install --frozen-lockfile --filter "@membership-card-protocol/notary-attestation..." && pnpm --filter @membership-card-protocol/notary-attestation run build)
+          (cd wallet-sdk && pnpm install --frozen-lockfile)
+          (cd wallet-sdk/packages/wallet-sdk && pnpm run build)
+      - name: Install the notary workspace
+        working-directory: notary
+        run: pnpm install --frozen-lockfile
+      - name: G5 isolation grep and terminology
+        run: bash notary/scripts/check-aws-isolation.sh
+      - name: Card vectors are up to date
+        working-directory: notary/vectors-tools
+        run: pnpm run check
+      - name: vectors-tools
+        working-directory: notary/vectors-tools
+        run: pnpm test
+      - name: attestation-ts
+        working-directory: notary/attestation-ts
+        run: pnpm test
+      - name: host
+        working-directory: notary/host
+        run: pnpm test
+      - name: e2e (vitest)
+        working-directory: notary/e2e
+        run: pnpm test
+      - name: verifier
+        working-directory: membership_card_verifier/packages/verifier
+        run: pnpm test
+      - name: wallet SDK typecheck and tests
+        working-directory: wallet-sdk/packages/wallet-sdk
+        run: pnpm run typecheck && pnpm test
+
+  e2e-local:
+    name: Real-process scenario (run-local.sh)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.0
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: notary
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: |
+            notary/pnpm-lock.yaml
+            wallet-sdk/pnpm-lock.yaml
+            membership_card_verifier/packages/verifier/pnpm-lock.yaml
+      - name: Build the file dependencies, in order
+        run: |
+          set -e
+          build() { (cd "$1" && pnpm install --frozen-lockfile && pnpm run build); }
+          build membership_card_verifier/packages/verifier
+          build membership_card_verifier/packages/verifier-ipfs-provider
+          build app-sdk/packages/app-sdk
+          build sdk-providers-rn/packages/sdk-providers-rn
+          build sdk-providers-web/packages/sdk-providers-web
+          (cd notary && pnpm install --frozen-lockfile --filter "@membership-card-protocol/notary-attestation..." && pnpm --filter @membership-card-protocol/notary-attestation run build)
+          (cd wallet-sdk && pnpm install --frozen-lockfile)
+          (cd wallet-sdk/packages/wallet-sdk && pnpm run build)
+      - name: Build the host and the runtime
+        working-directory: notary
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm -C host build
+          cargo build -p notary-runtime -p notary-sim
+      - name: run-local.sh
+        working-directory: notary
+        run: bash e2e/run-local.sh
+
+  e2e-three:
+    name: Three operators in docker-compose (run-three.sh)
+    # nightly, on demand, or a pull request labelled notary-e2e
+    if: >-
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'notary-e2e'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: run-three.sh
+        run: bash notary/e2e/run-three.sh
+      - name: Keep the host logs on failure
+        if: failure()
+        run: cp /tmp/notary-three-logs.txt "$RUNNER_TEMP/" 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: notary-three-logs
+          path: ${{ runner.temp }}/notary-three-logs.txt
+          if-no-files-found: ignore

@@ -1,0 +1,77 @@
+# Dependency updates for what the notary branch builds and ships (see plans/notary-dependency-audit.md).
+#
+# Dependabot only opens pull requests; CI (notary-ci.yml) tests them and a person reviews and merges. Images build from the
+# lockfiles (`--frozen-lockfile`, `--locked`), so nothing changes until one of these PRs is merged.
+#
+# Scope: the notary workspace, the sibling workspaces its images build (verifier, app-sdk, wallet-sdk), its Dockerfiles and
+# compose files (base images are pinned by digest, which Dependabot updates), and GitHub Actions. Other components of the
+# repository are not covered here.
+#
+# The post-quantum crates and wasmi are exactly pinned on purpose. An update to any of them is a security review, and it
+# changes the enclave's PCR0, so version updates for them are ignored here: a person bumps them deliberately. (Whether
+# security advisories still open PRs for ignored dependencies is up to GitHub; the notary CI audit is the backstop.)
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /notary
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+    commit-message: { prefix: "deps(notary)" }
+    groups:
+      rust-routine: { update-types: [minor, patch] }
+    ignore:
+      - dependency-name: hpke
+      - dependency-name: x-wing
+      - dependency-name: ml-kem
+      - dependency-name: ml-dsa
+      - dependency-name: wasmi
+      - dependency-name: wasmparser
+
+  - package-ecosystem: npm
+    directory: /notary
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+    commit-message: { prefix: "deps(notary)" }
+    groups:
+      js-routine: { update-types: [minor, patch] }
+
+  - package-ecosystem: npm
+    directory: /wallet-sdk
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 3
+    commit-message: { prefix: "deps(wallet-sdk)" }
+    groups:
+      js-routine: { update-types: [minor, patch] }
+
+  - package-ecosystem: npm
+    directory: /membership_card_verifier
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 3
+    commit-message: { prefix: "deps(verifier)" }
+    groups:
+      js-routine: { update-types: [minor, patch] }
+
+  - package-ecosystem: npm
+    directory: /app-sdk
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 3
+    commit-message: { prefix: "deps(app-sdk)" }
+    groups:
+      js-routine: { update-types: [minor, patch] }
+
+  - package-ecosystem: docker
+    directory: /notary/deploy
+    schedule: { interval: weekly, day: monday }
+    commit-message: { prefix: "deps(notary-images)" }
+
+  - package-ecosystem: docker-compose
+    directory: /notary/deploy
+    schedule: { interval: weekly, day: monday }
+    commit-message: { prefix: "deps(notary-images)" }
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly, day: monday }
+    commit-message: { prefix: "deps(ci)" }
+    groups:
+      actions-routine: { update-types: [minor, patch] }

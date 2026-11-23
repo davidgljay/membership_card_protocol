@@ -15,13 +15,13 @@ services:
     depends_on: [redis, vsock-proxy]
     restart: unless-stopped
   redis:
-    image: redis:7-alpine
+    image: redis:7-alpine@sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe
     command: ["redis-server", "--appendonly", "yes"]
     volumes: ["redis-data:/data"]
     restart: unless-stopped
   vsock-proxy:
     # TCP <-> vsock bridge: Node has no native vsock, so the host speaks the framed protocol to this proxy.
-    image: alpine/socat
+    image: alpine/socat@sha256:5aa280c6fc5bee94dbd2bbdf2a58d30f50396eaa110be84b03636945b157ae68
     command: ["TCP-LISTEN:7001,fork,reuseaddr", "VSOCK-CONNECT:16:5000"]
     # needs /dev/vsock on the parent instance
     devices: ["/dev/vsock:/dev/vsock"]
