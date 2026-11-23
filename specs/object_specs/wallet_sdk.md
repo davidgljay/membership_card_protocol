@@ -488,6 +488,11 @@ interface NotaryConfig {
   acceptedRuntimesCard: string;            // list card address (protocol-objects.md §34); both lists must pass
                                            // algorithm L against the on-chain PressRegistryBody keyset
   programAllowlistCard: string;
+  // Added 2026-11-21 (Phase 7, F4a): each list card's ML-DSA-44 public key, base64url, pinned in config.
+  // `keccak256(pubkey)` must equal the address. Needed because card content is encrypted under a key derived from
+  // the public key (ADR-006), and an address is only its hash.
+  acceptedRuntimesCardPubkey: string;
+  programAllowlistCardPubkey: string;
   notaryCardPolicy: string;                // NotaryCardPolicy CID
   acceptedKems: ["x-wing-draft-06"];
   maxAttestationAgeSeconds?: number;       // default 86400
@@ -581,7 +586,7 @@ function requestDerivedCard(options: {
 
 ### 7b.8 Error codes
 
-These are the `ATT_*`, `ANN_*`, `JOB_*`, `INPUT_*`, `DERIVE_*` and `NOT_*` codes in `notary_lifecycle.md` §Error Paths and `derived_card_revocation_propagation.md` §Error Paths, plus `NOTARY_NO_RECEIPT` (no validation receipt after retries).
+These are the `ATT_*`, `ANN_*`, `JOB_*`, `INPUT_*`, `DERIVE_*` and `NOT_*` codes in `notary_lifecycle.md` §Error Paths and `derived_card_revocation_propagation.md` §Error Paths, plus `NOTARY_NO_RECEIPT` (no validation receipt after retries), `DERIVE_OFFER_MISSING` (an accepted request whose validation receipt carries no `derived_offer`) and `DERIVE_OFFER_INVALID` (the offer differs from what the holder consented to at step 1, or its `issuer_signature` does not verify; the wallet does not countersign).
 
 ---
 

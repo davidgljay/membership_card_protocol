@@ -406,7 +406,7 @@ Example — a student card policy with three fields:
 
 If an auditor card is revoked or removed from `auditors`, the press simply stops sending them future `PressIssuanceRecord`s (resolved from the current policy snapshot at each issuance); there is no retroactive change to notifications already delivered.
 
-**`approved_presses`** is a `card-pointer-array` listing the mutable pointers of press sub-cards authorized to issue under this policy. A press whose sub-card pointer does not appear here must not be accepted by the smart contract.
+**`approved_presses`** is a `card-pointer-array` listing the press sub-cards authorized to issue under this policy. Each entry is the **CID of the press card's published `CardDocument`** — the same value a card carries as `press_card` (`press.md` §2) — which is readable without a content key, so a reader can take the press's public key from it. (A mutable pointer is also accepted where the press card's genesis was published in plain form; a listed pointer whose card can't be read is an error, `PRESS_UNREADABLE`, never a silent skip.) A press whose card does not appear here must not be accepted by the smart contract.
 
 **`allow_open_offers`** is a boolean flag that, when `true`, permits issuers to create open card offers under this policy — pre-signed batch authorizations that any bearer may claim up to a stated limit or expiry window, without individual issuer review at claim time. When absent or `false`, only targeted issuance (press-initiated, addressed to a specific recipient) is permitted. See §2 for the open offer issuance flow.
 
@@ -488,14 +488,14 @@ This walk is independent of the standard chain walk used for card issuance. It t
 
 **Enforcement note on regex subsumption.** Exactly verifying that one regex is "at least as restrictive" as another is computationally hard in the general case. The press performs a conservative best-effort check (e.g., literal string matching for simple enumerations). Definitive enforcement happens at card issuance time: when cards are issued under the policy, field values are checked against the policy's regex directly — if the policy's regex would allow a value that the ancestor's `policy_creation` constraint forbids, the issuance fails. Press reputation is at stake if it accepts non-compliant policies; independent verifiers can re-check compliance post-hoc.
 
-**Press authorization.** The policy card holder authorizes presses by issuing a **press sub-card** — a sub-card of the policy card — to each press operator. The press operator countersigns, explicitly accepting authorization and responsibility. The press sub-card's mutable pointer is added to `approved_presses`. Revoking a press sub-card removes the press's ability to issue under this policy; previously-issued cards are unaffected (they pre-date the revocation's effective date).
+**Press authorization.** The policy card holder authorizes presses by issuing a **press sub-card** — a sub-card of the policy card — to each press operator. The press operator countersigns, explicitly accepting authorization and responsibility. The CID of the press card's published document (the `press_card` value) is added to `approved_presses`. Revoking a press sub-card removes the press's ability to issue under this policy; previously-issued cards are unaffected (they pre-date the revocation's effective date).
 
 **Policy creation flow:**
 1. The drafter assembles the policy JSON.
 2. The drafter submits the proposed policy to the authorizer out of band.
 3. The authorizer reviews and, if approved, issues the policy card to the administrator (the holder). The policy JSON is the card's IPFS content.
 4. The policy card is published to IPFS. Its Arbitrum One registry entry is created.
-5. The administrator registers one or more presses by issuing press sub-cards and adding their pointers to `approved_presses`.
+5. The administrator registers one or more presses by issuing press sub-cards and adding the CIDs of their published press card documents to `approved_presses`.
 6. The policy is live. The press begins accepting issuance requests.
 
 **Acceptance criteria:**
@@ -661,7 +661,7 @@ Every card issuance under a policy is reported point-to-point with a `PressIssua
 
 **Acceptance criteria:**
 
-- [ ] A press whose sub-card pointer does not appear in `approved_presses` cannot write to the Arbitrum One registry.
+- [ ] A press whose press card does not appear in `approved_presses` cannot write to the Arbitrum One registry.
 - [ ] A press whose sub-card is revoked with an effective date at or before now cannot write to the Arbitrum One registry.
 - [ ] A completed card contains all three signatures — the offerer's `issuer_signature`, the recipient's `holder_signature`, and the press's `press_signature` — and any verifier can confirm all three independently without contacting the press.
 - [ ] For every issuance, the issuing card and the policy card each receive a `PressIssuanceRecord` containing the issued card's `recipient_pubkey`, so that both can address and message the issued card. When the issuer card and the policy card are the same, or either is also an auditor, it receives one record.

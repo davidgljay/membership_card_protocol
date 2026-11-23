@@ -388,7 +388,7 @@ Goal: one end-to-end path running in the simulator: a job is announced with an a
 
 ## Phase 7: Integration, conformance and docs — *Sonnet (7.4 Opus)*
 
-- [ ] **7.0 Phase 7 questions**
+- [x] **7.0 Phase 7 questions** *(answered 2026-11-21, `plans/notary-questions-phase-7.md`)*
   - **What**: Same as 5.0, for Phase 7. **Wait for answers** (**CP5**).
   - **Who**: Claude, then David
   - **Context needed**: Phase 6 summary; `integration_tests/README.md`
@@ -403,7 +403,7 @@ Goal: one end-to-end path running in the simulator: a job is announced with an a
   - **Context needed**: `card_protocol_spec.md` (Notaries); `integration_tests/` conventions
   - **Done when**: every acceptance criterion has a passing test.
 
-- [ ] **7.2 Adversarial suite**
+- [x] **7.2 Adversarial suite** *(done 2026-11-23, with caveats in `plans/notary-code-plan.md` rows 7.2: every attack in the list is refused or detected through real processes, mutation-checked where the defence is a single line; the state-blob rollback test shows the outcome but not which of three layered defences stops it; timing correlation is measured and disclosed, not claimed unlinkable)*
   - **What**: Add hostile-operator tests:
     - wrong PCR0, debug attestation, mismatched program, replayed nonce
     - a non-allowlisted program asking for shared isolation
@@ -417,7 +417,7 @@ Goal: one end-to-end path running in the simulator: a job is announced with an a
   - **Context needed**: `notary-design-decisions.md` (threat assumptions); the process specs
   - **Done when**: each attack is either refused or detected, as the spec says it should be.
 
-- [ ] **7.3 Operator docs**
+- [x] **7.3 Operator docs** — done 2026-11-23: `notary/README.md` and `notary/OPERATOR.md`. Checked by following the README's steps 1 to 3 in a copy of the working tree with no build output (the notary branch is uncommitted, so not a git checkout): the TypeScript dependency builds, the host build, `cargo build --locked` and `run-local.sh` all passed, with all four scenario lines. Not checked: step 4 (the test commands) in the clean copy, the Docker routes from it, and the under-one-hour operator criterion (needs a timed run). The guide says plainly that nothing has run on real Nitro and gives no cost figures.
   - **What**: Write `notary/README.md` (what's in the directory, how to run it locally) and `notary/OPERATOR.md` (standing up a notary, sizing and cost, monitoring, upgrading the runtime when governance updates the PCR0 list), modeled on `press/OPERATOR.md`.
   - **Who**: Claude
   - **Context needed**: `press/OPERATOR.md`; `notary_host.md`; capacity numbers from 5.6

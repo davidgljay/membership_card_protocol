@@ -423,7 +423,16 @@ interface VerifierConfig {
     acceptedRuntimesCard: string;          // protocol-objects.md §34; both lists are checked with
                                            // algorithm L (notary_lifecycle.md A.5) before use
     programAllowlistCard: string;
+    // Added 2026-11-21 (Phase 7, F4a). Card content is encrypted under a key derived from the card's public key
+    // (ADR-006), and an address is only its hash, so each list card's ML-DSA-44 public key (base64url) is pinned
+    // here, like the roots. `keccak256(pubkey)` must equal the address, else NOTARY_CONFIG_MISSING.
+    acceptedRuntimesCardPubkey: string;
+    programAllowlistCardPubkey: string;
     notaryCardPolicy: string;              // NotaryCardPolicy CID
+    // Added 2026-11-21 (Phase 7, F5). The Stage 5 step 3a implementation, injected because the core entry point
+    // never imports notary code. Build it with `notaryStage5Hook(config)` from `@membership-card-protocol/verifier/notary`.
+    // Absent: a card that looks derived gets the warning NOTARY_CONFIG_MISSING (§7.5 step 3a).
+    stage5Hook?: (ctx: NotaryStage5Context) => Promise<NotaryStage5Result | null>;
   };
 }
 ```
@@ -742,6 +751,9 @@ The head content tells us *what* the current state is (revoked or not, which fie
    - Confirm `issuer_card == press_card`, and that `ancestry_pubkeys` matches `[notary card key, template key]`. Failure → `NOTARY_DERIVED_SHAPE`.
    - Run algorithm E (`notary_lifecycle.md` Appendix A.6) on the issuing notary card, with `t` = the derived card's `CardRegistered` timestamp. An exposure at or before `t` → `policy_compliant: false`, code `NOTARY_KEY_EXPOSED`. An exposure after `t` → warning `notary_key_exposed_later`. A broken identity log → `NOTARY_LINEAGE_INCOMPLETE` (added 2026-11-12).
    - Confirm the template's `notary.derived_card.source_kind` is absent or `"card"`. Any other value, including the reserved `"web_evidence"`, isn't supported by this version → `policy_compliant: false`, code `NOTARY_DERIVED_SHAPE` (added 2026-11-12).
+   - *(Added 2026-11-21, Phase 7, F4b.)* If `config.notary` is not set, the verifier cannot tell whether `press_card` is a notary card, so step 3a is skipped. When the card's own shape says it is a derived card (`issuer_card == press_card` and a `dup_tag` field), the result carries the **warning** `NOTARY_CONFIG_MISSING` (not a failure): the notary checks were not made. A verifier that must trust derived cards configures `config.notary`.
+   - *(Added 2026-11-21, Phase 7, F7.1.)* The notary policy the card serves is the genesis request's `policy_id`. The verifier resolves it as algorithm R does (`notary_lifecycle.md` A.7, R1, and E11): the plain policy document at that CID carries a `recipient_pubkey`, and `keccak256` of it must equal the notary card's `issuer_card`. Otherwise → `NOTARY_GENESIS_INVALID`.
+   - *(2026-11-21, F5.)* The result carries these as `notary: { warnings, derived: { source_policy, projected, dup_tag, expires_at } }` on the signature result, present only for a notary-issued card or a card that looks derived.
    - `dup_tag` is returned in the result (`derived: { source_policy, projected, dup_tag, expires_at }`), so callers that need one card per person per period can compare tags. It is not checked here.
 4. **Corrected 2026-07-16 (Tier 1 item 7):** if `VerifierConfig.conditions` (§5) is configured — construction-time config, not a call-site option; an earlier draft of this section described a call-site `requiredPredicate`/`requiredPolicy` shape that was never implemented and is not the correct API — evaluate it against the signer's resolved chain. Predicate failure sets `policy_match: false` but does not affect `policy_compliant`. If no `conditions` is configured, `policy_match` is `null` (not evaluated), regardless of the signer's actual compliance.
 5. **Non-compliance reporting:** If `policy_compliant: false`, the package automatically POSTs a non-compliance report to the Press Registry Body endpoint (see §7.8). This is not optional and requires no caller action. The result field `non_compliance_reported` reflects whether the POST succeeded.
@@ -990,7 +1002,7 @@ The package distinguishes three classes of error:
 | `NOTARY_KEY_EXPOSED` | 5 | The notary card that issued a derived card had its key in a runtime retired as `"vulnerable"` before the card was registered (added 2026-11-12) |
 | `NOTARY_LINEAGE_INCOMPLETE` | 5 | The issuing notary card's identity log has a gap or fork (added 2026-11-12) |
 | `NOTARY_DERIVED_SHAPE` | 5 | A notary-issued card's issuer, press or ancestry don't match the derived-card shape (added 2026-11-11) |
-| `NOTARY_CONFIG_MISSING` | 5, §6.5 | A notary check was needed but `config.notary` is not set (added 2026-11-11) |
+| `NOTARY_CONFIG_MISSING` | 5, §6.5 | A notary check was needed but `config.notary` is not set, or a pinned list-card key does not hash to its address (added 2026-11-11). In Stage 5 for a card that looks derived, without `config.notary`, it is a warning, not a failure (2026-11-21) |
 
 **Notary codes.** `verifyNotarization` (§6.5) returns the `ATT_*` and `NOT_*` codes defined in `process_specs/notary_lifecycle.md §Error Paths`.
 

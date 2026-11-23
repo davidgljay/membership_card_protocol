@@ -2,7 +2,7 @@
 
 **Version:** 0.1 (draft)  
 **Date:** 2026-11-11  
-**Status:** Draft. Specified, not implemented.  
+**Status:** Draft. Implemented (`notary/runtime`, 2026-11) against the simulated attestation backend; the AWS Nitro Enclaves backend and the enclave image are Phase 8.  
 **Architecture:** `ARCHITECTURE.md` ADR-013 · **Processes:** `process_specs/notary_lifecycle.md`, `notary_replication_and_recovery.md`, `derived_card_revocation_propagation.md` · **Objects:** `protocol-objects.md` §20–§34 · **Design record:** `plans/notary-design-decisions.md` §2.3, §2.4
 **Amended 2026-11-12:** §9 `create_job` reads the policy with algorithm R through `fetch`; `genesis_ready` adds `request` and `notary_card`. §12 pins list-card public keys and reads list history through `fetch`. §16 adds `CLOSE_NOT_DUE`. Source: `plans/notary-spec-wording-e31.md`, approved by David 2026-11-12.
 

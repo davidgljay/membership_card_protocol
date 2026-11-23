@@ -72,8 +72,8 @@ What is genuinely new: a measured enclave runtime, attestation verification in w
 
 ## Goals
 
-- [ ] **G1. Communities can run trusted analyses over members' signed data and get results anyone can verify.** Aggregation, voting, derived cards and revocation propagation all work end to end.
-- [ ] **G2. Contributors can confirm, before sharing anything, exactly what code will run on their data, who gets the result, and that the operator cannot read it.**
+- [x] **G1. Communities can run trusted analyses over members' signed data and get results anyone can verify.** Aggregation, voting, derived cards and revocation propagation all work end to end. *(Met in the simulator; the AWS run is deferred.)*
+- [x] **G2. Contributors can confirm, before sharing anything, exactly what code will run on their data, who gets the result, and that the operator cannot read it.**
 - [ ] **G3. Activating a notary is lightweight.** A community uses a template policy and an existing operator, with no code and no new infrastructure of its own.
 - [ ] **G4. Long-running jobs survive enclave failures, and any data loss is visible and attributable.**
 - [ ] **G5. The specs remain the source of truth.** Notaries are fully specified before they are built, tested against the specs, and the AWS dependency is isolated so it can be replaced later.
@@ -93,32 +93,32 @@ What is genuinely new: a measured enclave runtime, attestation verification in w
 ## Key Objectives
 
 **G1 (trusted analyses)**
-- [ ] An aggregation job with ≥ k contributors produces a notarization that an independent verifier accepts using only CIDs and chain data; with < k contributors it outputs "insufficient participation."
-- [ ] A vote across a voting period produces a tally matching the cast ballots, finalized only after `closes_at` per chain time.
-- [ ] A derived card is issued containing only the projected fields, passes standard card verification, and cannot be linked to the source card by the host's records.
-- [ ] With `sealed_link`, revoking a source card revokes its derived card within the policy's batching window, and the host's records alone cannot match the two; with `expiry_only`, the derived card lapses at `valid_until`.
+- [x] An aggregation job with ≥ k contributors produces a notarization that an independent verifier accepts using only CIDs and chain data; with < k contributors it outputs "insufficient participation." *(Met in the simulator; the below-k case is not run on an aggregate job through real processes: see the final summary.)*
+- [x] A vote across a voting period produces a tally matching the cast ballots, finalized only after `closes_at` per chain time.
+- [x] A derived card is issued containing only the projected fields, passes standard card verification, and cannot be linked to the source card by the host's records. *(Real-process scan covers chain transactions; the host-records scan is a Rust test.)*
+- [x] With `sealed_link`, revoking a source card revokes its derived card within the policy's batching window, and the host's records alone cannot match the two; with `expiry_only`, the derived card lapses at `valid_until`. *(No explicit upper-bound assertion on the batching window.)*
 - [ ] *(Deferred until David provisions AWS)* All four use cases run on real AWS Nitro Enclaves at least once, not only in the local simulator.
 
 **G2 (contributor assurance)**
-- [ ] The wallet SDK rejects each of: wrong PCR0, debug-mode attestation, program hash ≠ `program_cid`, stale or mismatched nonce, notary not in `approved_notaries`, parameters outside `parameter_bounds` — each covered by a test.
-- [ ] Contributors can verify inclusion of their input in `input_commitment` using their receipt.
-- [ ] The consent screen content is derived entirely from the policy and job; a test confirms requester-supplied text is shown only as labeled requester text.
-- [ ] The runtime rejects each class of non-compliant program (disallowed import, threads/shared memory, non-deterministic features, oversize limits, schema mismatch), and refuses to run a non-allowlisted program `shared` — each covered by a test.
-- [ ] A deliberately leaky test program cannot exceed the policy's privacy bounds, because k-suppression, clamping and noise are applied by the runtime.
+- [x] The wallet SDK rejects each of: wrong PCR0, debug-mode attestation, program hash ≠ `program_cid`, stale or mismatched nonce, notary not in `approved_notaries`, parameters outside `parameter_bounds` — each covered by a test. *(All six in unit tests; five against a real announcement. Debug-mode and nonce-mismatch need a forged attestation.)*
+- [x] Contributors can verify inclusion of their input in `input_commitment` using their receipt.
+- [x] The consent screen content is derived entirely from the policy and job; a test confirms requester-supplied text is shown only as labeled requester text.
+- [x] The runtime rejects each class of non-compliant program (disallowed import, threads/shared memory, non-deterministic features, oversize limits, schema mismatch), and refuses to run a non-allowlisted program `shared` — each covered by a test.
+- [x] A deliberately leaky test program cannot exceed the policy's privacy bounds, because k-suppression, clamping and noise are applied by the runtime.
 
 **G3 (lightweight activation)**
-- [ ] Three template policies (aggregation, vote, derived card) are published; a community activates each by signing a job, with no code.
-- [ ] A new operator can stand up a notary from `notary/` documentation and Docker Compose in under an hour.
+- [ ] Three template policies (aggregation, vote, derived card) are published; a community activates each by signing a job, with no code. *(Open: committed and run, not registered on a real registry.)*
+- [ ] A new operator can stand up a notary from `notary/` documentation and Docker Compose in under an hour. *(Open: docs written and checked in a clean copy; no timed run.)*
 
 **G4 (failure tolerance)**
-- [ ] Killing any single replica mid-vote loses no ballots; tests cover re-replication back to `min_live`.
-- [ ] Killing all replicas triggers a new epoch, wallets resubmit stored ballots, and the final tally is correct for online voters, counting each card's latest valid ballot.
-- [ ] Every key handoff appears in the job log; voters hold enclave-signed receipts proving valid submission.
+- [ ] Killing any single replica mid-vote loses no ballots; tests cover re-replication back to `min_live`. *(Open: only a non-leader is killed and the standby is started in advance; the host cannot start replicas. See `milestones/notary-final-summary.md`, finding 1.)*
+- [x] Killing all replicas triggers a new epoch, wallets resubmit stored ballots, and the final tally is correct for online voters, counting each card's latest valid ballot. *(Through the operator restart API; no enclave process is killed.)*
+- [x] Every key handoff appears in the job log; voters hold enclave-signed receipts proving valid submission.
 
 **G5 (spec-first)**
-- [ ] `specs/` contains the notary process and object specs, an ADR in `ARCHITECTURE.md`, and a README section, reviewed before code starts.
-- [ ] Integration tests derived from the spec pass against the local simulator and against Nitro.
-- [ ] No module outside the attestation verifier and runtime packaging references Nitro-specific formats.
+- [x] `specs/` contains the notary process and object specs, an ADR in `ARCHITECTURE.md`, and a README section, reviewed before code starts.
+- [ ] Integration tests derived from the spec pass against the local simulator and against Nitro. *(Open: simulator only; Nitro deferred.)*
+- [x] No module outside the attestation verifier and runtime packaging references Nitro-specific formats. *(`check-aws-isolation.sh` passes; E27 closes only on an x86_64 Linux run.)*
 
 ## Open Questions
 

@@ -229,8 +229,8 @@ A policy card is a CardDocument whose content defines the rules for a class of c
   ],
   "recipient_predicate":   { "<optional card predicate expression>" },
   "requester_predicate":   { "<optional card predicate expression>" },
-  "auditors":              ["<base64url card-pointer>", "..."],
-  "approved_presses":      ["<base64url card-pointer>", "..."],
+  "auditors":              ["<press card document CID>", "..."],
+  "approved_presses":      ["<press card document CID>", "..."],
   "approved_notaries":     ["<base64url card-pointer — optional; notary cards, §20>", "..."],
   "notary":                { "<optional — notary section, §2.1>": "..." },
   "valid_until":           "<ISO 8601 timestamp — optional>",
@@ -263,7 +263,7 @@ A policy card is a CardDocument whose content defines the rules for a class of c
 | `recipient_predicate` | predicate | No | Chain predicate the recipient must satisfy; absent = unconstrained |
 | `requester_predicate` | predicate | No | Chain predicate the requester must satisfy; absent = unconstrained |
 | `auditors` | `card-pointer-array` | No | Card addresses that the press notifies at issuance time by delivering a `PressIssuanceRecord` via E2E encrypted message. See `PressIssuanceRecord` §11 and press spec §5.6. |
-| `approved_presses` | `card-pointer-array` | No | Presses whose sub-card pointers may write to this policy's cards |
+| `approved_presses` | `card-pointer-array` | No | Presses that may write to this policy's cards, each by the CID of its published press card document (the `press_card` value); see `card_protocol_spec.md` §1 |
 | `valid_until` | `timestamp` | No | Press rejects issuance requests after this time |
 | `allow_open_offers` | `boolean` | No | Default `false`; must be `true` to permit open card offers under this policy |
 | `revocation_permissions` | object | No | Predicates controlling who may post 8xx and 9xx entries; defaults to holder-or-issuer for 8xx, issuer-only for 9xx |

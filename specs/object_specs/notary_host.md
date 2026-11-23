@@ -2,7 +2,7 @@
 
 **Version:** 0.1 (draft)  
 **Date:** 2026-11-11  
-**Status:** Draft. Specified, not implemented.  
+**Status:** Draft. Implemented (`notary/host`, 2026-11) and run against the simulator and, for the chain, EAS and IPFS clients, a local devnode; not run on real hardware. Known gaps, in `OPERATOR.md`: no replica starter (§11 `need_replica`), no scheduled re-attestation (§11).  
 **Architecture:** `ARCHITECTURE.md` ADR-013 · **Runtime:** `object_specs/notary_runtime.md` · **Processes:** `process_specs/notary_lifecycle.md`, `notary_replication_and_recovery.md`, `derived_card_revocation_propagation.md`
 **Amended 2026-11-12:** §8 snapshot entries carry head-event history and `sub_card_doc_cid`; per-card fetch shapes defined; policy, requester and list-card reads use per-card fetches. Source: `plans/notary-spec-wording-e31.md`, approved by David 2026-11-12.
 
@@ -16,6 +16,8 @@
 
 **Amended 2026-11-14 (6.0a):** §8 `policy_head_cid`; snapshots go out when a job is created and gate its announcement. A consequence of the approved Q2 wording, found while implementing it; **for David's review** (`plans/notary-questions-phase-6.md`, Q2).
 
+**Amended 2026-11-23 (7.4 review, documenting what the code does):** §4 `ENCLAVE_ENDPOINTS` entries are matched to `ENCLAVE_CIDS` by CID; `IPFS_PROVIDER` is `mock`, `kubo` or `sim`; `GAS_BALANCE_LOW_WEI`; `EXPECTED_CHAIN_ID` is checked against the RPC at start; §5 `POST /operator/template-seed`; §13 which alerts the host raises; §14 `NH_MALFORMED`.  
+**Amended 2026-11-23 (Phase 7, Q7):** §4 `CHAIN_PROVIDER=rpc` starts with the production clients; `REGISTRY_STORAGE_ADDRESS`, `NOTARY_DELIVERY_URL`; header feed needs `debug_getRawHeader`.  
 **Amended 2026-11-13 (5.7 review):** §4 `NOTARY_CARD_ADDRESSES` is optional and genesis cards are served automatically (Q4); §4 `CHAIN_PROVIDER`, `SIM_CHAIN_URL` and the start-up refusal; §14 `NOT_REACHABLE`, `ENCLAVE_ERROR` (Q5, Q6). Source: `plans/notary-questions-5.7.md`, David approved 2026-11-13 (`plans/notary-questions-5.7.md`).
 
 **Amended 2026-11-12 (batch 2):** §4 adds `ENCLAVE_ENDPOINTS`, `NOTARY_ADMIN_TOKEN`, `NOTARY_RELAY_TARGET_ID` and `NOTARY_PUBLIC_BASE_URL`, and `K_host` is a 32-byte seed; §5 genesis routes use the admin token; §9 anchor encoding; §14 adds `NH_UNAUTHORIZED` (E18, E3, E16). Source: `plans/notary-spec-wording-batch2.md`, approved by David 2026-11-12.
@@ -101,20 +103,23 @@ All configuration is through environment variables.
 | `NOTARY_HOST_MLDSA44_PRIVATE_KEY` | Yes | `K_host`, for host receipts, as a 32-byte ML-DSA-44 seed (base64url). Its public key must equal `operator_host_pubkey` on each notary card. |
 | `NOTARY_OHTTP_PRIVATE_KEY` | Yes | X25519 HPKE key for the gateway (§6) |
 | `NOTARY_GAS_WALLET_PRIVATE_KEY` | Yes | Pays gas for derived-card writes and EAS anchors |
-| `ARBITRUM_RPC_URL`, `EXPECTED_CHAIN_ID`, `REGISTRY_CONTRACT_ADDRESS` | Yes | As in `press.md §3.2` |
+| `ARBITRUM_RPC_URL`, `EXPECTED_CHAIN_ID`, `REGISTRY_CONTRACT_ADDRESS` | Yes | As in `press.md §3.2`. `REGISTRY_CONTRACT_ADDRESS` is the registry's **logic** contract (writes and events). The chain feed's header RLP needs an RPC endpoint with the `debug_getRawHeader` method. |
+| `REGISTRY_STORAGE_ADDRESS` | With `CHAIN_PROVIDER=rpc` | The registry's storage contract (card entries, press authorizations, sub-cards). |
+| `NOTARY_DELIVERY_URL` | With `CHAIN_PROVIDER=rpc` | The wallet service the host sends `notary_output` messages through (`POST /messages`). On `410 card_migrated` the envelope is sent once to the endpoint the answer names. The host does not look up a recipient's wallet service in the peer registry. |
 | `EAS_CONTRACT_ADDRESS`, `NOTARY_EAS_SCHEMA_UID` | Yes | The EAS job-log schema |
-| `IPFS_PROVIDER` and provider variables | Yes | As in `press.md §3.2` |
+| `IPFS_PROVIDER` and provider variables | Yes | `kubo` (with `KUBO_API_URL`), `mock` (in memory, for tests) or `sim` (the simulated chain's). Unlike the press, there is no `filebase` provider, and `kubo` is the production one. |
 | `EXTERNAL_KV_URL` | Yes | Redis, for durable host state (§7) |
 | `ENCLAVE_CIDS` | Yes | vsock context IDs of local enclaves |
-| `ENCLAVE_ENDPOINTS` | Yes | How to reach each `ENCLAVE_CIDS` entry, in the same order: the vsock proxy address in production, a local socket in the simulator |
+| `ENCLAVE_ENDPOINTS` | Yes | How to reach each `ENCLAVE_CIDS` entry: comma-separated `cid=unix:/path` or `cid=host:port` entries, matched to `ENCLAVE_CIDS` by `cid` (the vsock proxy address in production, a local socket in the simulator) |
 | `NOTARY_ADMIN_TOKEN` | Yes | Bearer token for the operator-authenticated routes (§5). Compared in constant time. |
 | `NOTARY_RELAY_TARGET_ID` | Yes | The `target_id` registered with the relay, put in announcement `transport` hints |
 | `NOTARY_PUBLIC_BASE_URL` | Yes | This host's public URL, put in announcement `transport` hints |
 | `PEER_HOSTS` | No | URLs of other operators' hosts, for cross-operator replicas (§11) |
 | `SNAPSHOT_REFRESH_SECONDS` | No | Default 30 |
-| `REATTEST_INTERVAL_SECONDS` | No | Default 21600 (6 hours) |
+| `REATTEST_INTERVAL_SECONDS` | No | Default 21600 (6 hours). **Read but not used yet:** see §11 "Re-attestation". |
+| `GAS_BALANCE_LOW_WEI` | No | The gas wallet balance, in wei, below which the `gas_balance_low` alert is raised. Default 10000000000000000 (0.01 ETH). With `CHAIN_PROVIDER=rpc` only. |
 | `ALERT_WEBHOOK_URL` | No | Operator alerting |
-| `CHAIN_PROVIDER`, `SIM_CHAIN_URL` | No | `CHAIN_PROVIDER` is `rpc` (default) or `sim`. `sim` and `SIM_CHAIN_URL` select the simulated chain, EAS and IPFS and are for the simulator stack only. Until the production chain, EAS, gas-wallet and Kubo clients exist (Phase 7) the host **refuses to start** with `CHAIN_PROVIDER=rpc` or `IPFS_PROVIDER=kubo`, and with a `memory:` `EXTERNAL_KV_URL` unless `CHAIN_PROVIDER=sim`. It never falls back to in-memory services. A host running simulated components says so in a warning at start-up. |
+| `CHAIN_PROVIDER`, `SIM_CHAIN_URL` | No | `CHAIN_PROVIDER` is `rpc` (default) or `sim`. `sim` and `SIM_CHAIN_URL` select the simulated chain, EAS and IPFS and are for the simulator stack only. `rpc` runs the production clients (`notary/host/src/chain/rpc.ts`: registry reads and chain feed, gas-wallet submitter, EAS anchorer; Kubo for IPFS; a wallet-service delivery client) and **requires** `IPFS_PROVIDER=kubo`, `REGISTRY_STORAGE_ADDRESS` and `NOTARY_DELIVERY_URL`. The host **refuses to start** with `CHAIN_PROVIDER=rpc` and any other `IPFS_PROVIDER`, with `IPFS_PROVIDER=kubo` and `CHAIN_PROVIDER=sim`, and with a `memory:` `EXTERNAL_KV_URL` unless `CHAIN_PROVIDER=sim`. It never falls back to in-memory services. A host running simulated components says so in a warning at start-up. |
 
 ---
 
@@ -128,6 +133,7 @@ All configuration is through environment variables.
 | `POST` | `/jobs/{job_hash}/inputs` | Oblivious | Body is a `SealedInput` (`protocol-objects.md §24`). Stores it, signs a `HostReceipt`, forwards it to a local enclave, and returns `{ host_receipt, receipt_sealed }`. |
 | `POST` | `/jobs` | Direct, from the job requester | Body: `{ job, program_cid }`. The host fetches the program and sends `create_job`. Returns `{ job_hash, status }`. *(6.3, approved by David 2026-11-15, `plans/notary-questions-6.3.md` R12:)* with N > 1 only the host serving the first `replica_set` card sends `create_job`; another host records the job and answers `status: "awaiting_handoff"`. |
 | `POST` | `/operator/handoff` | Direct, `NOTARY_ADMIN_TOKEN` | *(6.3, approved by David 2026-11-15, R5)* Body `{ scope, card, template?, from_instance?, to_instance }`: an identity or template handoff between instances (`start_handoff`) |
+| `POST` | `/operator/template-seed` | Direct, `NOTARY_ADMIN_TOKEN` | *(6.4)* Body `{ template, notary_card, nullifier_period }`: seeds the template's `dup_tag` key in the first enclave serving it (`seed_template`). Returns `{ status: "seeded", generation }`. |
 | `POST` | `/operator/shutdown` | Direct, `NOTARY_ADMIN_TOKEN` | *(6.3, approved by David 2026-11-15, R5)* Body `{ instance }`: the instance tells its peers it stops (`shutdown`) |
 | `POST` | `/jobs/{job_hash}/restart` | Direct, `NOTARY_ADMIN_TOKEN` | Body `{ reason }` (default `total_loss`). The operator reports that no replica holds the job key. The host sends `create_job` with `restart { prev_epoch, last_log, reason }` (the epoch it holds and its newest job-log record) to a local enclave, stops serving the old announcement, and serves the new epoch's only after the enclave announces it (`notary_replication_and_recovery.md` §7). Returns `{ job_hash, epoch, status }`. |
 | `GET` | `/jobs/{job_hash}/status` | Direct | Public status only: state, epoch, live replica count, job-log head CID |
@@ -202,7 +208,7 @@ For derived-card template policies only:
 - The host submits them from the gas wallet **unchanged**, using the calldata the enclave specified (`chain_submit`).
 - The host reports the result as `chain_result`.
 
-**Prerequisite.** The write gate must bind each signed payload to its calldata (`registry_contract.md §6.1`) before derived cards ship. Until then, a host could resubmit a signed payload with other calldata.
+**Prerequisite (met on the devnode).** The write gate binds each signed payload to its calldata (`registry_contract.md §6.1`, step 6.4a), so a host cannot resubmit a signed payload with other calldata. Deploying that gate beyond the devnode is W8.
 
 ---
 
@@ -214,7 +220,7 @@ For derived-card template policies only:
 - **Ticks** *(added 2026-11-14, Q6)*. The host sends each enclave `tick {}` about once a second. Withholding ticks only slows the enclave's timers.
 - **Ciphertext sync** *(added 2026-11-14, Q8)*. On `need_inputs { job_hash, hashes }` the host fetches each missing `SealedInput` from peer hosts through `/peer`, checks `H(sealed) == input_hash` itself, and stores it under `input:` (§7). A host can withhold an input, never inject one. On `store_input` it stores an input its enclave acknowledged for a peer, with the same check (approved by David 2026-11-15 (`plans/notary-questions-6.3.md`, R4)).
 - **Log records** (approved by David 2026-11-15 (`plans/notary-questions-6.3.md`, R2)). The host relays every job-log and identity-log record its enclave publishes to the other hosts of the replica set, and gives its enclave the records the others wrote (`log_record`, and `anchor_receipt` with `record` once anchored).
-- **Re-attestation.** Every `REATTEST_INTERVAL_SECONDS` the host asks each enclave to re-attest its live jobs, then serves the re-issued announcement.
+- **Re-attestation.** Every `REATTEST_INTERVAL_SECONDS` the host asks each enclave to re-attest its live jobs, then serves the re-issued announcement. *(Not implemented: the enclave has no request for it. An announcement's attestation is re-issued at an epoch change or a handoff. Wallets refuse an announcement whose attestation is older than their `maxAttestationAgeSeconds` (86,400 by default), so a job that runs longer than that needs this. Open: it needs a new host-to-enclave message, so a runtime change.)*
 - **Restarts.** After a total loss, the operator may restart a job (`create_job` with `restart`, `notary_replication_and_recovery.md` §7). The resulting epoch change is public.
 - **Stalled close** *(added 2026-11-15, R9)*. When a leader is lost mid-close and no live replica holds its card's key (`notary_replication_and_recovery.md` step 19a), the job can't produce a result. The operators:
   1. **Notice it.** Replicas raise `close_conflicting_body`, the job log has no `notarized` record well after `closes_at`, and its last records show the leader's `replica_lost` after close began.
@@ -234,13 +240,15 @@ For private `statement` outputs, the enclave produces `notary_output` messages a
 ## 13. Monitoring
 
 Alerts never contain job data. They cover:
-- the number of attested enclaves;
-- per-job live replica counts against `min_live`;
-- anchor backlog;
-- gas balance;
-- snapshot lag;
+- the number of attested enclaves (`enclaves_attested`: fewer live sessions than configured);
+- per-job live replica counts against `min_live` (`replicas_below_min_live`);
+- anchor backlog (`anchor_backlog`);
+- gas balance (`gas_balance_low`: below `GAS_BALANCE_LOW_WEI`, or unreadable; the production chain only);
+- snapshot lag (`snapshot_lag`: no full snapshot pass for more than three refresh intervals);
 - `close_mismatch`;
 - `LIST_VERSION_REGRESSION`.
+
+The host raises the first, second, fourth and fifth itself, every 30 seconds, and repeats one at most every five minutes. It also raises `storage_failure`, `delivery_failed`, `close_failed`, `enclave_lost` and `need_replica_failed` where those happen, and forwards the alerts its enclaves send.
 
 Heartbeats themselves stay between enclaves and are never published.
 
@@ -256,6 +264,7 @@ Heartbeats themselves stay between enclaves and are never published.
 | `NH_ENCLAVE_UNAVAILABLE` | No local enclave holds the job; retry |
 | `NH_INPUT_TOO_LARGE` | `SealedInput` larger than 256 KiB |
 | `NH_STORAGE_FAILED` | The ciphertext couldn't be stored; no receipt is issued |
+| `NH_MALFORMED` | A replication request (`POST /peer`, `kind` bodies) had a missing or malformed field |
 | `NH_UNAUTHORIZED` | An operator-authenticated route was called without a valid token (HTTP 401) |
 | `NOT_REACHABLE` | A request through the gateway named a route that isn't an oblivious route (HTTP 404) |
 | `ENCLAVE_ERROR` | The enclave answered with an error that carried no code |
