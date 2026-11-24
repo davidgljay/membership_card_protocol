@@ -118,7 +118,7 @@ What is genuinely new: a measured enclave runtime, attestation verification in w
 **G5 (spec-first)**
 - [x] `specs/` contains the notary process and object specs, an ADR in `ARCHITECTURE.md`, and a README section, reviewed before code starts.
 - [ ] Integration tests derived from the spec pass against the local simulator and against Nitro. *(Open: simulator only; Nitro deferred.)*
-- [x] No module outside the attestation verifier and runtime packaging references Nitro-specific formats. *(`check-aws-isolation.sh` passes; E27 closes only on an x86_64 Linux run.)*
+- [x] No module outside the attestation verifier and runtime packaging references Nitro-specific formats. *(`check-aws-isolation.sh` passes; E27 closed 2026-11-23 by a green x86_64 Linux CI run.)*
 
 ## Open Questions
 

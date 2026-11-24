@@ -59,7 +59,7 @@ Decisions made with David during Phase 7: derived-card issuer control (C+D), E11
 | **G4** handoffs in the job log, signed receipts | `run-three.sh`, `replication.rs`, every submit checks its receipts | Met |
 | **G5** specs, ADR, README section | specs and ADR-013 exist and were reviewed before code | Met. Some spec status lines are stale (finding 8) |
 | **G5** integration tests pass against the simulator and Nitro | simulator: yes; Nitro: none | **Deferred** |
-| **G5** no AWS formats outside the attestation modules | `check-aws-isolation.sh` passes | Met. E27 (the Linux isolation tests) closes only on an x86_64 Linux run, and CI has never run |
+| **G5** no AWS formats outside the attestation modules | `check-aws-isolation.sh` passes | Met. E27 closed 2026-11-23: Notary CI run 45261624814 ran `worker_speaks_the_section_8_protocol_over_pipes` and `a_running_worker_is_sandboxed` on GitHub's x86_64 Linux runner and both passed (`check-isolation-tests-ran.sh`: "isolation tests ran on x86_64 Linux"). A hosted runner, not the production image |
 
 ## Findings
 
@@ -90,7 +90,7 @@ Decisions made with David during Phase 7: derived-card issuer control (C+D), E11
 
 - **Decisions for David:** whether to tick 7.2 with rollback tested in process only and kill-all tested through the restart API; whether to build scheduled re-attestation (finding 2); how to split the commit (nothing from Phase 7 is committed).
 - **Fix later:** findings 1, 5 and 7.
-- **Carried:** E27 (closes only on a green x86_64 Linux run; CI has never run), E33, E9 (the signature libraries are unaudited; the post-quantum crates are pre-1.0), the CP10 press predicate report, W8 (step 8.3, CP7), F6 (operator-card revocation unchecked, pinned list-card keys do not rotate), the derive phase failing when its release boundary falls near UTC midnight (cause not isolated; a nightly CI run could hit it), one unexplained `NOTARY_NO_RECEIPT` flake in `run-three.sh`.
+- **Carried:** E33, E9 (the signature libraries are unaudited; the post-quantum crates are pre-1.0), the CP10 press predicate report, W8 (step 8.3, CP7), F6 (operator-card revocation unchecked, pinned list-card keys do not rotate), the derive phase failing when its release boundary falls near UTC midnight (cause not isolated; a nightly CI run could hit it), one unexplained `NOTARY_NO_RECEIPT` flake in `run-three.sh`.
 - **Not done by design (CP7 / Phase 8):** anything on Sepolia or mainnet, real AWS, the enclave image, cost figures.
 
 ## Tests (run at the end of the review)
@@ -112,4 +112,4 @@ Decisions made with David during Phase 7: derived-card issuer control (C+D), E11
 
 Also run during Phase 7 (not re-run here): `integration_tests/suites/notary` against the devnode (`rpc_chain` 8, `eas_anchor` 7, through `run.sh --with-notary --suite`).
 
-Not run: the Linux container isolation tests (E27), the nightly fuzz job, a full `run.sh --with-notary`, the notary CI workflow on GitHub, anything on Sepolia or mainnet or real AWS.
+Not run: the nightly fuzz job, the three-operator job (`run-three.sh`) on GitHub (it runs only on schedule or manual dispatch; it passed locally), a full `run.sh --with-notary`, anything on Sepolia or mainnet or real AWS.
